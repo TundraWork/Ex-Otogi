@@ -19,12 +19,16 @@ const (
 
 // SubscriptionSpec configures a single consumer subscription.
 type SubscriptionSpec struct {
-	Name           string
-	Filter         InterestSet
-	Buffer         int
-	Workers        int
+	// Name is the stable identifier used for diagnostics and lifecycle operations.
+	Name string
+	// Buffer is the per-subscription queue capacity before backpressure handling applies.
+	Buffer int
+	// Workers is the number of handler goroutines consuming from this subscription.
+	Workers int
+	// HandlerTimeout bounds each handler invocation when greater than zero.
 	HandlerTimeout time.Duration
-	Backpressure   BackpressurePolicy
+	// Backpressure defines how publish behaves when Buffer is full.
+	Backpressure BackpressurePolicy
 }
 
 // Subscription controls an active event stream registration.
@@ -39,7 +43,7 @@ type Subscription interface {
 type EventBus interface {
 	EventSink
 	// Subscribe registers a handler with bounded buffering semantics.
-	Subscribe(ctx context.Context, spec SubscriptionSpec, handler EventHandler) (Subscription, error)
+	Subscribe(ctx context.Context, interest InterestSet, spec SubscriptionSpec, handler EventHandler) (Subscription, error)
 	// Close shuts down the bus and all active subscriptions.
 	Close(ctx context.Context) error
 }

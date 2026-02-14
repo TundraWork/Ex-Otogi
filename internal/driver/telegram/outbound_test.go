@@ -1,0 +1,390 @@
+package telegram
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+
+	"ex-otogi/pkg/otogi"
+
+	"github.com/gotd/td/tg"
+)
+
+func TestOutboundDispatcherSendMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		request     otogi.SendMessageRequest
+		rpcErr      error
+		wantErr     bool
+		wantMessage string
+	}{
+		{
+			name: "successful send",
+			request: otogi.SendMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				Text: "pong",
+			},
+			wantMessage: "901",
+		},
+		{
+			name: "invalid request",
+			request: otogi.SendMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "unsupported platform",
+			request: otogi.SendMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: "discord",
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				Text: "pong",
+			},
+			wantErr: true,
+		},
+		{
+			name: "rpc failure",
+			request: otogi.SendMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				Text: "pong",
+			},
+			rpcErr:  errors.New("send failed"),
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			cache := NewPeerCache()
+			cache.RememberConversation(
+				ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+				&tg.InputPeerChat{ChatID: 42},
+			)
+
+			rpc := &stubOutboundRPC{sendID: 901, sendErr: testCase.rpcErr}
+			dispatcher, err := newOutboundDispatcherWithRPC(rpc, cache)
+			if err != nil {
+				t.Fatalf("new dispatcher failed: %v", err)
+			}
+
+			outboundMessage, err := dispatcher.SendMessage(context.Background(), testCase.request)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if outboundMessage == nil {
+				t.Fatal("expected outbound message")
+			}
+			if outboundMessage.ID != testCase.wantMessage {
+				t.Fatalf("message id = %s, want %s", outboundMessage.ID, testCase.wantMessage)
+			}
+			if rpc.sendCalls != 1 {
+				t.Fatalf("send calls = %d, want 1", rpc.sendCalls)
+			}
+		})
+	}
+}
+
+func TestOutboundDispatcherSetReaction(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		&tg.InputPeerChat{ChatID: 42},
+	)
+
+	tests := []struct {
+		name                 string
+		request              otogi.SetReactionRequest
+		wantErr              bool
+		wantReactionLen      int
+		wantReactionType     string
+		wantCustomDocument   int64
+		wantReactionEmoticon string
+	}{
+		{
+			name: "add emoji reaction",
+			request: otogi.SetReactionRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				MessageID: "10",
+				Emoji:     "👍",
+				Action:    otogi.ReactionActionAdd,
+			},
+			wantReactionLen:      1,
+			wantReactionType:     "*tg.ReactionEmoji",
+			wantReactionEmoticon: "👍",
+		},
+		{
+			name: "add custom reaction",
+			request: otogi.SetReactionRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				MessageID: "10",
+				Emoji:     "custom:123",
+				Action:    otogi.ReactionActionAdd,
+			},
+			wantReactionLen:    1,
+			wantReactionType:   "*tg.ReactionCustomEmoji",
+			wantCustomDocument: 123,
+		},
+		{
+			name: "remove reaction",
+			request: otogi.SetReactionRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				MessageID: "10",
+				Action:    otogi.ReactionActionRemove,
+			},
+			wantReactionLen: 0,
+		},
+		{
+			name: "invalid message id",
+			request: otogi.SetReactionRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				MessageID: "bad",
+				Emoji:     "👍",
+				Action:    otogi.ReactionActionAdd,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			rpc := &stubOutboundRPC{}
+			dispatcher, err := newOutboundDispatcherWithRPC(rpc, cache)
+			if err != nil {
+				t.Fatalf("new dispatcher failed: %v", err)
+			}
+
+			err = dispatcher.SetReaction(context.Background(), testCase.request)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if rpc.reactionCalls != 1 {
+				t.Fatalf("reaction calls = %d, want 1", rpc.reactionCalls)
+			}
+			if len(rpc.reactions) != testCase.wantReactionLen {
+				t.Fatalf("reaction len = %d, want %d", len(rpc.reactions), testCase.wantReactionLen)
+			}
+			if len(rpc.reactions) == 0 {
+				return
+			}
+			gotType := typeName(rpc.reactions[0])
+			if gotType != testCase.wantReactionType {
+				t.Fatalf("reaction type = %s, want %s", gotType, testCase.wantReactionType)
+			}
+
+			if emoji, ok := rpc.reactions[0].(*tg.ReactionEmoji); ok {
+				if emoji.Emoticon != testCase.wantReactionEmoticon {
+					t.Fatalf("emoticon = %s, want %s", emoji.Emoticon, testCase.wantReactionEmoticon)
+				}
+			}
+			if custom, ok := rpc.reactions[0].(*tg.ReactionCustomEmoji); ok {
+				if custom.DocumentID != testCase.wantCustomDocument {
+					t.Fatalf("custom document id = %d, want %d", custom.DocumentID, testCase.wantCustomDocument)
+				}
+			}
+		})
+	}
+}
+
+func TestOutboundDispatcherDeleteMessage(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeChannel},
+		&tg.InputPeerChannel{ChannelID: 42, AccessHash: 100},
+	)
+
+	tests := []struct {
+		name    string
+		request otogi.DeleteMessageRequest
+		wantErr bool
+	}{
+		{
+			name: "revoke channel delete succeeds",
+			request: otogi.DeleteMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeChannel,
+					},
+				},
+				MessageID: "5",
+				Revoke:    true,
+			},
+		},
+		{
+			name: "non-revoke channel delete fails",
+			request: otogi.DeleteMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeChannel,
+					},
+				},
+				MessageID: "5",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			rpc := &stubOutboundRPC{}
+			dispatcher, err := newOutboundDispatcherWithRPC(rpc, cache)
+			if err != nil {
+				t.Fatalf("new dispatcher failed: %v", err)
+			}
+
+			err = dispatcher.DeleteMessage(context.Background(), testCase.request)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if rpc.deleteCalls != 1 {
+				t.Fatalf("delete calls = %d, want 1", rpc.deleteCalls)
+			}
+		})
+	}
+}
+
+type stubOutboundRPC struct {
+	sendID        int
+	sendErr       error
+	sendCalls     int
+	editCalls     int
+	deleteCalls   int
+	reactionCalls int
+	reactions     []tg.ReactionClass
+}
+
+func (s *stubOutboundRPC) SendText(
+	_ context.Context,
+	_ tg.InputPeerClass,
+	_ otogi.SendMessageRequest,
+) (int, error) {
+	s.sendCalls++
+	if s.sendErr != nil {
+		return 0, s.sendErr
+	}
+
+	return s.sendID, nil
+}
+
+func (s *stubOutboundRPC) EditText(
+	_ context.Context,
+	_ tg.InputPeerClass,
+	_ int,
+	_ otogi.EditMessageRequest,
+) error {
+	s.editCalls++
+	return nil
+}
+
+func (s *stubOutboundRPC) DeleteMessage(
+	_ context.Context,
+	peer tg.InputPeerClass,
+	_ int,
+	revoke bool,
+) error {
+	s.deleteCalls++
+	if _, isChannel := peer.(*tg.InputPeerChannel); isChannel && !revoke {
+		return otogi.ErrOutboundUnsupported
+	}
+
+	return nil
+}
+
+func (s *stubOutboundRPC) SetReaction(
+	_ context.Context,
+	_ tg.InputPeerClass,
+	_ int,
+	reactions []tg.ReactionClass,
+) error {
+	s.reactionCalls++
+	s.reactions = reactions
+	return nil
+}
+
+func typeName(value any) string {
+	return fmt.Sprintf("%T", value)
+}

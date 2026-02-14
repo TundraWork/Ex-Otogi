@@ -16,7 +16,8 @@ func TestGotdUpdateChannelUpdatesNilContext(t *testing.T) {
 		t.Fatalf("new gotd update channel failed: %v", err)
 	}
 
-	if _, err := stream.Updates(nil); err == nil {
+	var nilCtx context.Context
+	if _, err := stream.Updates(nilCtx); err == nil {
 		t.Fatal("expected nil context error")
 	}
 }

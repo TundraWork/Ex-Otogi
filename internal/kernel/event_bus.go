@@ -52,7 +52,7 @@ func (b *EventBus) Publish(ctx context.Context, event *otogi.Event) error {
 
 	var publishErrs []error
 	for _, sub := range subs {
-		if !sub.spec.Filter.Matches(event) {
+		if !sub.interest.Matches(event) {
 			continue
 		}
 		if err := sub.enqueue(ctx, event); err != nil {
@@ -74,6 +74,7 @@ func (b *EventBus) Publish(ctx context.Context, event *otogi.Event) error {
 // Subscribe registers a bounded asynchronous consumer.
 func (b *EventBus) Subscribe(
 	ctx context.Context,
+	interest otogi.InterestSet,
 	spec otogi.SubscriptionSpec,
 	handler otogi.EventHandler,
 ) (otogi.Subscription, error) {
@@ -86,7 +87,7 @@ func (b *EventBus) Subscribe(
 
 	subID := atomic.AddInt64(&b.nextID, 1)
 	spec = b.normalizeSpec(spec, subID)
-	sub := newBusSubscription(subID, spec, handler, b)
+	sub := newBusSubscription(subID, interest, spec, handler, b)
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -198,40 +199,56 @@ func (b *EventBus) reportAsyncError(ctx context.Context, scope string, err error
 // busSubscription owns queueing and worker lifecycle for a single subscriber.
 // Queue closure is driven by context cancellation rather than channel close.
 type busSubscription struct {
-	id      int64
-	spec    otogi.SubscriptionSpec
-	handler otogi.EventHandler
-	queue   chan *otogi.Event
-	ctx     context.Context
-	cancel  context.CancelFunc
-	done    chan struct{}
-	closed  atomic.Bool
-	once    sync.Once
-	bus     *EventBus
+	id       int64
+	interest otogi.InterestSet
+	spec     otogi.SubscriptionSpec
+	handler  otogi.EventHandler
+	queue    chan *otogi.Event
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{}
+	closed   atomic.Bool
+	once     sync.Once
+	bus      *EventBus
 }
 
 // newBusSubscription creates and starts workers immediately.
 func newBusSubscription(
 	subID int64,
+	interest otogi.InterestSet,
 	spec otogi.SubscriptionSpec,
 	handler otogi.EventHandler,
 	bus *EventBus,
 ) *busSubscription {
 	subCtx, cancel := context.WithCancel(context.Background())
 	sub := &busSubscription{
-		id:      subID,
-		spec:    spec,
-		handler: handler,
-		queue:   make(chan *otogi.Event, spec.Buffer),
-		ctx:     subCtx,
-		cancel:  cancel,
-		done:    make(chan struct{}),
-		bus:     bus,
+		id:       subID,
+		interest: cloneInterestSet(interest),
+		spec:     spec,
+		handler:  handler,
+		queue:    make(chan *otogi.Event, spec.Buffer),
+		ctx:      subCtx,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		bus:      bus,
 	}
 
 	sub.startWorkers()
 
 	return sub
+}
+
+// cloneInterestSet copies owned slices so caller mutation does not affect matching.
+func cloneInterestSet(interest otogi.InterestSet) otogi.InterestSet {
+	cloned := interest
+	if len(interest.Kinds) > 0 {
+		cloned.Kinds = append([]otogi.EventKind(nil), interest.Kinds...)
+	}
+	if len(interest.MediaTypes) > 0 {
+		cloned.MediaTypes = append([]otogi.MediaType(nil), interest.MediaTypes...)
+	}
+
+	return cloned
 }
 
 // Name returns the stable subscription name.

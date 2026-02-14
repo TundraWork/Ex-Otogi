@@ -72,7 +72,8 @@ func (k *Kernel) RegisterService(name string, service any) error {
 	return nil
 }
 
-// RegisterModule registers a lifecycle-aware module and runs OnRegister.
+// RegisterModule registers a lifecycle-aware module, runs optional registration,
+// and wires declarative handlers.
 func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error {
 	if module == nil {
 		return fmt.Errorf("register module: nil module")
@@ -81,11 +82,15 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 	if name == "" {
 		return fmt.Errorf("register module: empty module name")
 	}
+	moduleSpec := module.Spec()
+	if err := validateModuleSpec(moduleSpec); err != nil {
+		return fmt.Errorf("register module %s: %w", name, err)
+	}
 
 	record := &moduleRecord{
 		name:         name,
 		module:       module,
-		capabilities: module.Capabilities(),
+		capabilities: moduleSpec.Capabilities(),
 	}
 	if err := k.validateCapabilityDependencies(record.capabilities); err != nil {
 		return fmt.Errorf("register module %s: %w", name, err)
@@ -110,9 +115,17 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 	hookCtx, cancel := context.WithTimeout(ctx, k.cfg.moduleHookTimeout)
 	defer cancel()
 
-	if err := runSafely("module "+name+" OnRegister", func() error {
-		return module.OnRegister(hookCtx, runtime)
-	}); err != nil {
+	registrar, hasRegistrar := module.(otogi.ModuleRegistrar)
+	if hasRegistrar {
+		if err := runSafely("module "+name+" OnRegister", func() error {
+			return registrar.OnRegister(hookCtx, runtime)
+		}); err != nil {
+			k.rollbackModuleRegistration(ctx, name, record)
+			return fmt.Errorf("register module %s: %w", name, err)
+		}
+	}
+
+	if err := k.registerDeclaredHandlers(hookCtx, name, runtime, moduleSpec.Handlers); err != nil {
 		k.rollbackModuleRegistration(ctx, name, record)
 		return fmt.Errorf("register module %s: %w", name, err)
 	}
@@ -410,6 +423,65 @@ func (k *Kernel) validateCapabilityDependencies(capabilities []otogi.Capability)
 				)
 			}
 		}
+	}
+
+	return nil
+}
+
+// registerDeclaredHandlers binds all declarative handlers from ModuleSpec.
+func (k *Kernel) registerDeclaredHandlers(
+	ctx context.Context,
+	moduleName string,
+	runtime *moduleRuntime,
+	handlers []otogi.ModuleHandler,
+) error {
+	for idx, declared := range handlers {
+		capabilityName := declared.Capability.Name
+		spec := declared.Subscription
+		if spec.Name == "" {
+			spec.Name = fmt.Sprintf("%s-handler-%d", moduleName, idx+1)
+		}
+		if _, err := runtime.Subscribe(ctx, declared.Capability.Interest, spec, declared.Handler); err != nil {
+			return fmt.Errorf("register handler %s for capability %s: %w", spec.Name, capabilityName, err)
+		}
+	}
+
+	return nil
+}
+
+// validateModuleSpec ensures declarative module definitions are coherent.
+func validateModuleSpec(spec otogi.ModuleSpec) error {
+	seenCapabilities := make(map[string]struct{}, len(spec.Handlers)+len(spec.AdditionalCapabilities))
+	seenSubscriptions := make(map[string]struct{}, len(spec.Handlers))
+
+	for idx, handler := range spec.Handlers {
+		if handler.Capability.Name == "" {
+			return fmt.Errorf("module handler %d: empty capability name", idx)
+		}
+		if _, exists := seenCapabilities[handler.Capability.Name]; exists {
+			return fmt.Errorf("module handler %d: duplicate capability name %s", idx, handler.Capability.Name)
+		}
+		seenCapabilities[handler.Capability.Name] = struct{}{}
+
+		if handler.Handler == nil {
+			return fmt.Errorf("module handler %s: nil handler", handler.Capability.Name)
+		}
+		if handler.Subscription.Name != "" {
+			if _, exists := seenSubscriptions[handler.Subscription.Name]; exists {
+				return fmt.Errorf("module handler %s: duplicate subscription name %s", handler.Capability.Name, handler.Subscription.Name)
+			}
+			seenSubscriptions[handler.Subscription.Name] = struct{}{}
+		}
+	}
+
+	for idx, capability := range spec.AdditionalCapabilities {
+		if capability.Name == "" {
+			return fmt.Errorf("additional capability %d: empty capability name", idx)
+		}
+		if _, exists := seenCapabilities[capability.Name]; exists {
+			return fmt.Errorf("additional capability %d: duplicate capability name %s", idx, capability.Name)
+		}
+		seenCapabilities[capability.Name] = struct{}{}
 	}
 
 	return nil

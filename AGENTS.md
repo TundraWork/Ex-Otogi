@@ -51,7 +51,19 @@ Rules:
 - Keep functions small and composable.
 - Avoid hidden global state.
 - Prefer explicit constructors and dependency injection.
+- Every exported symbol must have Godoc:
+  - exported package-level functions/types/vars/consts,
+  - exported methods,
+  - exported interface methods,
+  - exported struct fields.
+- Godoc must describe behavior and semantics, not restate obvious names.
 - Public APIs in `pkg/otogi` require doc comments and stable semantics.
+
+## Agent Ownership and Architectural Discretion
+- The agent must execute each task with project-owner responsibility, not just local patching.
+- Always evaluate impact on the full system architecture (`pkg/otogi` -> `internal/kernel` -> `internal/driver`) before changing code.
+- Prefer solutions that improve long-term maintainability, testability, and boundary clarity over short-term convenience.
+- When multiple implementations are possible, choose the option that is most architecture-safe and future-proof.
 
 ## Trae Execution Checklist
 Before proposing or committing code, Trae must verify:
@@ -59,4 +71,8 @@ Before proposing or committing code, Trae must verify:
 2. Context propagation and goroutine shutdown paths are explicit.
 3. Errors are wrapped with `%w` and never dropped.
 4. Tests include table-driven coverage and race-safe behavior.
-5. Lint, format, and tests pass.
+5. Exported symbols follow required Godoc standards.
+6. After each task, quality checks are run via Makefile commands:
+   - `make lint`
+   - `make arch-check`
+   - `make test`

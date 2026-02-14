@@ -18,6 +18,8 @@ import (
 	"ex-otogi/internal/driver/telegram"
 	"ex-otogi/internal/kernel"
 	"ex-otogi/modules/demo"
+	"ex-otogi/modules/pingpong"
+	"ex-otogi/pkg/otogi"
 
 	"github.com/gotd/td/session"
 	gotdtelegram "github.com/gotd/td/telegram"
@@ -88,6 +90,11 @@ type fileTelegramConfig struct {
 	SessionFile    string `json:"session_file"`
 }
 
+type telegramRuntime struct {
+	driver   *telegram.Driver
+	outbound otogi.OutboundDispatcher
+}
+
 func run() error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -97,13 +104,17 @@ func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 
 	kernelRuntime := buildKernelRuntime(logger, cfg)
-	if err := registerRuntimeServices(kernelRuntime, logger); err != nil {
+	telegramRuntime, err := buildTelegramRuntime(logger, cfg)
+	if err != nil {
+		return err
+	}
+	if err := registerRuntimeServices(kernelRuntime, logger, telegramRuntime.outbound); err != nil {
 		return err
 	}
 	if err := registerRuntimeModules(context.Background(), kernelRuntime); err != nil {
 		return err
 	}
-	if err := registerRuntimeDrivers(kernelRuntime, logger, cfg); err != nil {
+	if err := registerRuntimeDrivers(kernelRuntime, telegramRuntime.driver); err != nil {
 		return err
 	}
 
@@ -361,9 +372,18 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) *kernel.Kernel {
 	)
 }
 
-func registerRuntimeServices(kernelRuntime *kernel.Kernel, logger *slog.Logger) error {
+func registerRuntimeServices(
+	kernelRuntime *kernel.Kernel,
+	logger *slog.Logger,
+	outbound otogi.OutboundDispatcher,
+) error {
 	if err := kernelRuntime.RegisterService(demo.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
+	}
+	if outbound != nil {
+		if err := kernelRuntime.RegisterService(otogi.ServiceOutboundDispatcher, outbound); err != nil {
+			return fmt.Errorf("register outbound dispatcher service: %w", err)
+		}
 	}
 
 	return nil
@@ -374,15 +394,15 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) e
 	if err := kernelRuntime.RegisterModule(ctx, demoModule); err != nil {
 		return fmt.Errorf("register demo module: %w", err)
 	}
+	pingPongModule := pingpong.New()
+	if err := kernelRuntime.RegisterModule(ctx, pingPongModule); err != nil {
+		return fmt.Errorf("register pingpong module: %w", err)
+	}
 
 	return nil
 }
 
-func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, logger *slog.Logger, cfg appConfig) error {
-	telegramDriver, err := buildTelegramDriver(logger, cfg)
-	if err != nil {
-		return fmt.Errorf("build telegram driver: %w", err)
-	}
+func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, telegramDriver *telegram.Driver) error {
 	if err := kernelRuntime.RegisterDriver(telegramDriver); err != nil {
 		return fmt.Errorf("register telegram driver: %w", err)
 	}
@@ -390,10 +410,38 @@ func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, logger *slog.Logger, c
 	return nil
 }
 
-func buildTelegramDriver(logger *slog.Logger, cfg appConfig) (*telegram.Driver, error) {
-	source, err := buildGotdSource(logger, cfg)
+func buildTelegramRuntime(logger *slog.Logger, cfg appConfig) (telegramRuntime, error) {
+	updateChannel, err := telegram.NewGotdUpdateChannel(cfg.telegramUpdateBuffer)
 	if err != nil {
-		return nil, err
+		return telegramRuntime{}, fmt.Errorf("new gotd update channel: %w", err)
+	}
+
+	sessionStorage, err := newGotdSessionStorage(cfg.telegramSessionFile)
+	if err != nil {
+		return telegramRuntime{}, fmt.Errorf("new gotd session storage: %w", err)
+	}
+
+	client, err := gotdtelegram.ClientFromEnvironment(gotdtelegram.Options{
+		UpdateHandler:  updateChannel,
+		SessionStorage: sessionStorage,
+	})
+	if err != nil {
+		return telegramRuntime{}, fmt.Errorf("new gotd client from environment: %w", err)
+	}
+
+	peers := telegram.NewPeerCache()
+	source, err := telegram.NewGotdUserbotSource(
+		gotdAuthenticatedClient{
+			client: client,
+			authenticate: func(ctx context.Context) error {
+				return authenticateGotdClient(ctx, logger, client, cfg)
+			},
+		},
+		updateChannel,
+		telegram.NewDefaultGotdUpdateMapper(telegram.WithPeerCache(peers)),
+	)
+	if err != nil {
+		return telegramRuntime{}, fmt.Errorf("new gotd userbot source: %w", err)
 	}
 
 	driver, err := telegram.NewDriver(
@@ -405,46 +453,22 @@ func buildTelegramDriver(logger *slog.Logger, cfg appConfig) (*telegram.Driver, 
 		}),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("new telegram driver: %w", err)
+		return telegramRuntime{}, fmt.Errorf("new telegram driver: %w", err)
 	}
 
-	return driver, nil
-}
-
-func buildGotdSource(logger *slog.Logger, cfg appConfig) (*telegram.GotdUserbotSource, error) {
-	updateChannel, err := telegram.NewGotdUpdateChannel(cfg.telegramUpdateBuffer)
-	if err != nil {
-		return nil, fmt.Errorf("new gotd update channel: %w", err)
-	}
-
-	sessionStorage, err := newGotdSessionStorage(cfg.telegramSessionFile)
-	if err != nil {
-		return nil, fmt.Errorf("new gotd session storage: %w", err)
-	}
-
-	client, err := gotdtelegram.ClientFromEnvironment(gotdtelegram.Options{
-		UpdateHandler:  updateChannel,
-		SessionStorage: sessionStorage,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("new gotd client from environment: %w", err)
-	}
-
-	source, err := telegram.NewGotdUserbotSource(
-		gotdAuthenticatedClient{
-			client: client,
-			authenticate: func(ctx context.Context) error {
-				return authenticateGotdClient(ctx, logger, client, cfg)
-			},
-		},
-		updateChannel,
-		telegram.NewDefaultGotdUpdateMapper(),
+	outbound, err := telegram.NewOutboundDispatcher(
+		client,
+		peers,
+		telegram.WithOutboundTimeout(cfg.telegramPublishTimeout),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("new gotd userbot source: %w", err)
+		return telegramRuntime{}, fmt.Errorf("new telegram outbound dispatcher: %w", err)
 	}
 
-	return source, nil
+	return telegramRuntime{
+		driver:   driver,
+		outbound: outbound,
+	}, nil
 }
 
 func newGotdSessionStorage(path string) (*session.FileStorage, error) {
@@ -470,6 +494,7 @@ type gotdAuthenticatedClient struct {
 	authenticate func(ctx context.Context) error
 }
 
+// Run executes client runtime and performs authentication before invoking fn.
 func (c gotdAuthenticatedClient) Run(ctx context.Context, fn func(runCtx context.Context) error) error {
 	if c.client == nil {
 		return fmt.Errorf("run gotd authenticated client: nil client")
@@ -537,7 +562,7 @@ func authenticateGotdClient(
 		return fmt.Errorf("telegram phone number is required for user login; configure telegram.phone in %s or set %s", defaultConfigFilePath, envTelegramPhone)
 	}
 
-	codeAuthenticator := auth.CodeAuthenticatorFunc(func(ctx context.Context, _ *tg.AuthSentCode) (string, error) {
+	codeAuthenticator := auth.CodeAuthenticatorFunc(func(_ context.Context, _ *tg.AuthSentCode) (string, error) {
 		code, err := telegramAuthCode(cfg.telegramCodeEnv)
 		if err != nil {
 			return "", fmt.Errorf("resolve login code: %w", err)

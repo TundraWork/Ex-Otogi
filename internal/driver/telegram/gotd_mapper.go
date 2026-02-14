@@ -18,18 +18,37 @@ const (
 )
 
 // DefaultGotdUpdateMapper maps gotd updates into adapter DTO updates.
-type DefaultGotdUpdateMapper struct{}
+type DefaultGotdUpdateMapper struct {
+	peerCache *PeerCache
+}
+
+// GotdUpdateMapperOption mutates DefaultGotdUpdateMapper behavior.
+type GotdUpdateMapperOption func(*DefaultGotdUpdateMapper)
+
+// WithPeerCache records entity-derived peer mappings for outbound dispatch.
+func WithPeerCache(cache *PeerCache) GotdUpdateMapperOption {
+	return func(mapper *DefaultGotdUpdateMapper) {
+		if cache != nil {
+			mapper.peerCache = cache
+		}
+	}
+}
 
 // NewDefaultGotdUpdateMapper creates the default gotd mapper.
-func NewDefaultGotdUpdateMapper() DefaultGotdUpdateMapper {
-	return DefaultGotdUpdateMapper{}
+func NewDefaultGotdUpdateMapper(options ...GotdUpdateMapperOption) DefaultGotdUpdateMapper {
+	mapper := DefaultGotdUpdateMapper{}
+	for _, option := range options {
+		option(&mapper)
+	}
+
+	return mapper
 }
 
 // Map converts a gotd raw update value into an adapter update.
 func (m DefaultGotdUpdateMapper) Map(ctx context.Context, raw any) (Update, bool, error) {
 	select {
 	case <-ctx.Done():
-		return Update{}, false, ctx.Err()
+		return Update{}, false, fmt.Errorf("map gotd update context: %w", ctx.Err())
 	default:
 	}
 
@@ -37,6 +56,7 @@ func (m DefaultGotdUpdateMapper) Map(ctx context.Context, raw any) (Update, bool
 	if err != nil {
 		return Update{}, false, fmt.Errorf("map gotd raw update: %w", err)
 	}
+	m.rememberEnvelope(envelope)
 
 	if envelope.reaction != nil {
 		return m.mapReactionDelta(envelope)
@@ -71,6 +91,18 @@ func (m DefaultGotdUpdateMapper) Map(ctx context.Context, raw any) (Update, bool
 		return m.mapChannelParticipant(update, envelope)
 	default:
 		return Update{}, false, nil
+	}
+}
+
+func (m DefaultGotdUpdateMapper) rememberEnvelope(envelope gotdUpdateEnvelope) {
+	if m.peerCache != nil {
+		m.peerCache.RememberEnvelope(envelope)
+	}
+}
+
+func (m DefaultGotdUpdateMapper) rememberConversationPeer(chat ChatRef, peer tg.InputPeerClass) {
+	if m.peerCache != nil {
+		m.peerCache.RememberConversation(chat, peer)
 	}
 }
 
@@ -150,6 +182,7 @@ func (m DefaultGotdUpdateMapper) mapMessage(
 	if occurredAt.IsZero() {
 		occurredAt = envelope.occurredAt
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(message.PeerID, envelope))
 
 	return Update{
 		ID:         composeUpdateID(UpdateTypeMessage, chat.ID, payload.ID, occurredAt),
@@ -179,6 +212,7 @@ func (m DefaultGotdUpdateMapper) mapServiceMessage(
 	if occurredAt.IsZero() {
 		occurredAt = envelope.occurredAt
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(message.PeerID, envelope))
 
 	switch action := message.Action.(type) {
 	case *tg.MessageActionChatAddUser:
@@ -301,6 +335,7 @@ func (m DefaultGotdUpdateMapper) mapEditMessage(
 	if occurredAt.IsZero() {
 		occurredAt = envelope.occurredAt
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(typed.PeerID, envelope))
 
 	return Update{
 		ID:         composeUpdateID(UpdateTypeEdit, chat.ID, strconv.Itoa(typed.ID), occurredAt),
@@ -364,6 +399,7 @@ func (m DefaultGotdUpdateMapper) mapDeleteChannelMessages(
 	if occurredAt.IsZero() {
 		occurredAt = time.Now().UTC()
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerByChannelID(update.ChannelID, envelope))
 
 	return Update{
 		ID:         composeUpdateID(UpdateTypeDelete, chat.ID, strconv.Itoa(update.Messages[0]), occurredAt),
@@ -394,6 +430,7 @@ func (m DefaultGotdUpdateMapper) mapReactionDelta(envelope gotdUpdateEnvelope) (
 	if occurredAt.IsZero() {
 		occurredAt = time.Now().UTC()
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(delta.peer, envelope))
 
 	return Update{
 		ID:         composeUpdateID(delta.action, chat.ID, strconv.Itoa(delta.messageID), delta.emoji, occurredAt),
@@ -424,6 +461,7 @@ func (m DefaultGotdUpdateMapper) mapChatParticipantAdd(
 	if occurredAt.IsZero() {
 		occurredAt = envelope.occurredAt
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerByChatID(update.ChatID))
 
 	return Update{
 		ID:         composeUpdateID(UpdateTypeMemberJoin, chat.ID, member.ID, occurredAt),
@@ -455,6 +493,7 @@ func (m DefaultGotdUpdateMapper) mapChatParticipantDelete(
 	if occurredAt.IsZero() {
 		occurredAt = time.Now().UTC()
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerByChatID(update.ChatID))
 
 	return Update{
 		ID:         composeUpdateID(UpdateTypeMemberLeave, chat.ID, member.ID, occurredAt),
@@ -484,6 +523,7 @@ func (m DefaultGotdUpdateMapper) mapChatParticipantAdmin(
 	if occurredAt.IsZero() {
 		occurredAt = time.Now().UTC()
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerByChatID(update.ChatID))
 
 	oldRole := "member"
 	newRole := "member"
@@ -524,6 +564,7 @@ func (m DefaultGotdUpdateMapper) mapChatParticipant(
 	if occurredAt.IsZero() {
 		occurredAt = envelope.occurredAt
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerByChatID(update.ChatID))
 
 	prevParticipant, prevExists := update.GetPrevParticipant()
 	newParticipant, newExists := update.GetNewParticipant()
@@ -599,6 +640,7 @@ func (m DefaultGotdUpdateMapper) mapChannelParticipant(
 	if occurredAt.IsZero() {
 		occurredAt = envelope.occurredAt
 	}
+	m.rememberConversationPeer(chat, resolveInputPeerByChannelID(update.ChannelID, envelope))
 
 	prevParticipant, prevExists := update.GetPrevParticipant()
 	newParticipant, newExists := update.GetNewParticipant()
@@ -675,8 +717,9 @@ type gotdReactionDelta struct {
 }
 
 type gotdChatInfo struct {
-	title string
-	kind  otogi.ConversationType
+	title     string
+	kind      otogi.ConversationType
+	inputPeer tg.InputPeerClass
 }
 
 func indexGotdUsers(users []tg.UserClass) map[int64]*tg.User {
@@ -713,13 +756,17 @@ func indexGotdChats(chats []tg.ChatClass) map[int64]gotdChatInfo {
 		switch typed := chat.(type) {
 		case *tg.Chat:
 			out[typed.ID] = gotdChatInfo{
-				title: typed.Title,
-				kind:  otogi.ConversationTypeGroup,
+				title:     typed.Title,
+				kind:      otogi.ConversationTypeGroup,
+				inputPeer: typed.AsInputPeer(),
 			}
 		case *tg.ChatForbidden:
 			out[typed.ID] = gotdChatInfo{
 				title: typed.Title,
 				kind:  otogi.ConversationTypeGroup,
+				inputPeer: &tg.InputPeerChat{
+					ChatID: typed.ID,
+				},
 			}
 		case *tg.Channel:
 			kind := otogi.ConversationTypeChannel
@@ -727,8 +774,9 @@ func indexGotdChats(chats []tg.ChatClass) map[int64]gotdChatInfo {
 				kind = otogi.ConversationTypeGroup
 			}
 			out[typed.ID] = gotdChatInfo{
-				title: typed.Title,
-				kind:  kind,
+				title:     typed.Title,
+				kind:      kind,
+				inputPeer: typed.AsInputPeer(),
 			}
 		case *tg.ChannelForbidden:
 			kind := otogi.ConversationTypeChannel
@@ -738,6 +786,10 @@ func indexGotdChats(chats []tg.ChatClass) map[int64]gotdChatInfo {
 			out[typed.ID] = gotdChatInfo{
 				title: typed.Title,
 				kind:  kind,
+				inputPeer: &tg.InputPeerChannel{
+					ChannelID:  typed.ID,
+					AccessHash: typed.AccessHash,
+				},
 			}
 		}
 	}
@@ -850,6 +902,53 @@ func resolveActorByUserID(userID int64, envelope gotdUpdateEnvelope) ActorRef {
 		DisplayName: displayName,
 		IsBot:       user.Bot,
 	}
+}
+
+func resolveInputPeerFromPeer(peer tg.PeerClass, envelope gotdUpdateEnvelope) tg.InputPeerClass {
+	switch typed := peer.(type) {
+	case *tg.PeerUser:
+		return resolveInputPeerByUserID(typed.UserID, envelope)
+	case *tg.PeerChat:
+		return resolveInputPeerByChatID(typed.ChatID)
+	case *tg.PeerChannel:
+		return resolveInputPeerByChannelID(typed.ChannelID, envelope)
+	default:
+		return nil
+	}
+}
+
+func resolveInputPeerByUserID(userID int64, envelope gotdUpdateEnvelope) tg.InputPeerClass {
+	if userID == 0 {
+		return nil
+	}
+
+	user, ok := envelope.usersByID[userID]
+	if !ok || user == nil {
+		return nil
+	}
+
+	return user.AsInputPeer()
+}
+
+func resolveInputPeerByChatID(chatID int64) tg.InputPeerClass {
+	if chatID == 0 {
+		return nil
+	}
+
+	return &tg.InputPeerChat{ChatID: chatID}
+}
+
+func resolveInputPeerByChannelID(channelID int64, envelope gotdUpdateEnvelope) tg.InputPeerClass {
+	if channelID == 0 {
+		return nil
+	}
+
+	info, ok := envelope.chatsByID[channelID]
+	if !ok || info.inputPeer == nil {
+		return nil
+	}
+
+	return cloneInputPeer(info.inputPeer)
 }
 
 func lookupChatTitle(chatID int64, envelope gotdUpdateEnvelope) string {

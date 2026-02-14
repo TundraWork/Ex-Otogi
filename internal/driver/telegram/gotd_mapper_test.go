@@ -284,6 +284,55 @@ func TestDefaultGotdUpdateMapperMapContextCancel(t *testing.T) {
 	}
 }
 
+func TestDefaultGotdUpdateMapperMapRecordsPeerCache(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	mapper := NewDefaultGotdUpdateMapper(WithPeerCache(cache))
+
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewMessage{
+			Message: &tg.Message{
+				ID:      123,
+				PeerID:  &tg.PeerChat{ChatID: 100},
+				FromID:  &tg.PeerUser{UserID: 42},
+				Date:    1_700_000_000,
+				Message: "hello",
+			},
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			100: {
+				title:     "group-chat",
+				kind:      otogi.ConversationTypeGroup,
+				inputPeer: &tg.InputPeerChat{ChatID: 100},
+			},
+		},
+		updateClass: "updateNewMessage",
+	})
+	if err != nil {
+		t.Fatalf("map failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted update")
+	}
+
+	peer, err := cache.Resolve(otogi.Conversation{
+		ID:   "100",
+		Type: otogi.ConversationTypeGroup,
+	})
+	if err != nil {
+		t.Fatalf("resolve cached peer failed: %v", err)
+	}
+	if got := typeName(peer); got != "*tg.InputPeerChat" {
+		t.Fatalf("peer type = %s, want *tg.InputPeerChat", got)
+	}
+}
+
 func newTGUser(id int64, username, firstName, lastName string, isBot bool) *tg.User {
 	user := &tg.User{ID: id}
 	user.Bot = isBot

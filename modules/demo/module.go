@@ -51,100 +51,66 @@ func (m *Module) Name() string {
 	return "demo"
 }
 
-// Capabilities declares event interests and required services.
-func (m *Module) Capabilities() []otogi.Capability {
-	return []otogi.Capability{
-		{
-			Name:        "mutation-observer",
-			Description: "handles message edit/retraction events",
-			Interest: otogi.InterestSet{
-				Kinds:           []otogi.EventKind{otogi.EventKindMessageEdited, otogi.EventKindMessageRetracted},
-				RequireMutation: true,
-			},
-			RequiredServices: []string{ServiceLogger},
-		},
-		{
-			Name:        "media-observer",
-			Description: "handles rich media messages",
-			Interest: otogi.InterestSet{
-				Kinds:      []otogi.EventKind{otogi.EventKindMessageCreated},
-				MediaTypes: []otogi.MediaType{otogi.MediaTypePhoto, otogi.MediaTypeVideo, otogi.MediaTypeDocument},
-			},
-			RequiredServices: []string{ServiceLogger},
-		},
-		{
-			Name:        "state-observer",
-			Description: "handles reactions and membership/role/chat state changes",
-			Interest: otogi.InterestSet{
-				Kinds: []otogi.EventKind{
-					otogi.EventKindReactionAdded,
-					otogi.EventKindReactionRemoved,
-					otogi.EventKindMemberJoined,
-					otogi.EventKindMemberLeft,
-					otogi.EventKindRoleUpdated,
-					otogi.EventKindChatMigrated,
+// Spec declares module capabilities and subscription wiring in one place.
+func (m *Module) Spec() otogi.ModuleSpec {
+	return otogi.ModuleSpec{
+		Handlers: []otogi.ModuleHandler{
+			{
+				Capability: otogi.Capability{
+					Name:        "mutation-observer",
+					Description: "handles message edit/retraction events",
+					Interest: otogi.InterestSet{
+						Kinds:           []otogi.EventKind{otogi.EventKindMessageEdited, otogi.EventKindMessageRetracted},
+						RequireMutation: true,
+					},
+					RequiredServices: []string{ServiceLogger},
 				},
+				Subscription: defaultSubscription("demo-mutations"),
+				Handler:      m.handleEvent,
 			},
-			RequiredServices: []string{ServiceLogger},
+			{
+				Capability: otogi.Capability{
+					Name:        "media-observer",
+					Description: "handles rich media messages",
+					Interest: otogi.InterestSet{
+						Kinds:      []otogi.EventKind{otogi.EventKindMessageCreated},
+						MediaTypes: []otogi.MediaType{otogi.MediaTypePhoto, otogi.MediaTypeVideo, otogi.MediaTypeDocument},
+					},
+					RequiredServices: []string{ServiceLogger},
+				},
+				Subscription: defaultSubscription("demo-media"),
+				Handler:      m.handleEvent,
+			},
+			{
+				Capability: otogi.Capability{
+					Name:        "state-observer",
+					Description: "handles reactions and membership/role/chat state changes",
+					Interest: otogi.InterestSet{
+						Kinds: []otogi.EventKind{
+							otogi.EventKindReactionAdded,
+							otogi.EventKindReactionRemoved,
+							otogi.EventKindMemberJoined,
+							otogi.EventKindMemberLeft,
+							otogi.EventKindRoleUpdated,
+							otogi.EventKindChatMigrated,
+						},
+					},
+					RequiredServices: []string{ServiceLogger},
+				},
+				Subscription: defaultSubscription("demo-state"),
+				Handler:      m.handleEvent,
+			},
 		},
 	}
 }
 
-// OnRegister binds module subscriptions and resolves dependencies.
-func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) error {
+// OnRegister resolves module dependencies before runtime start.
+func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
 	logger, err := otogi.ResolveAs[*slog.Logger](runtime.Services(), ServiceLogger)
 	if err != nil {
 		return fmt.Errorf("demo module resolve logger: %w", err)
 	}
 	m.logger = logger
-
-	subscriptions := []otogi.SubscriptionSpec{
-		{
-			Name: "demo-mutations",
-			Filter: otogi.InterestSet{
-				Kinds:           []otogi.EventKind{otogi.EventKindMessageEdited, otogi.EventKindMessageRetracted},
-				RequireMutation: true,
-			},
-			Buffer:         128,
-			Workers:        2,
-			HandlerTimeout: 2 * time.Second,
-			Backpressure:   otogi.BackpressureDropNewest,
-		},
-		{
-			Name: "demo-media",
-			Filter: otogi.InterestSet{
-				Kinds:      []otogi.EventKind{otogi.EventKindMessageCreated},
-				MediaTypes: []otogi.MediaType{otogi.MediaTypePhoto, otogi.MediaTypeVideo, otogi.MediaTypeDocument},
-			},
-			Buffer:         128,
-			Workers:        2,
-			HandlerTimeout: 2 * time.Second,
-			Backpressure:   otogi.BackpressureDropNewest,
-		},
-		{
-			Name: "demo-state",
-			Filter: otogi.InterestSet{
-				Kinds: []otogi.EventKind{
-					otogi.EventKindReactionAdded,
-					otogi.EventKindReactionRemoved,
-					otogi.EventKindMemberJoined,
-					otogi.EventKindMemberLeft,
-					otogi.EventKindRoleUpdated,
-					otogi.EventKindChatMigrated,
-				},
-			},
-			Buffer:         128,
-			Workers:        2,
-			HandlerTimeout: 2 * time.Second,
-			Backpressure:   otogi.BackpressureDropNewest,
-		},
-	}
-
-	for _, spec := range subscriptions {
-		if _, err := runtime.Subscribe(ctx, spec, m.handleEvent); err != nil {
-			return fmt.Errorf("demo module subscribe %s: %w", spec.Name, err)
-		}
-	}
 
 	return nil
 }
@@ -269,4 +235,14 @@ func (m *Module) increment(eventKind otogi.EventKind) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.counters[eventKind]++
+}
+
+func defaultSubscription(name string) otogi.SubscriptionSpec {
+	return otogi.SubscriptionSpec{
+		Name:           name,
+		Buffer:         128,
+		Workers:        2,
+		HandlerTimeout: 2 * time.Second,
+		Backpressure:   otogi.BackpressureDropNewest,
+	}
 }

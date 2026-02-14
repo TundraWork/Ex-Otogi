@@ -3,6 +3,8 @@ SHELL := /bin/sh
 GO ?= go
 MAIN_PKG ?= ./cmd/bot
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
+GO_BUILD_CACHE ?= $(CURDIR)/.cache/go-build
+GOLANGCI_LINT ?= golangci-lint
 
 .PHONY: tools lint arch-check test dev generate
 
@@ -15,8 +17,8 @@ tools: ## Install local development and CI tooling
 		echo "pre-commit not found. Install with: pipx install pre-commit"
 
 lint: ## Run static analysis and architecture checks
-	@mkdir -p $(GOLANGCI_LINT_CACHE)
-	GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE) golangci-lint run ./...
+	@mkdir -p $(GOLANGCI_LINT_CACHE) $(GO_BUILD_CACHE)
+	GOCACHE=$(GO_BUILD_CACHE) GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE) $(GOLANGCI_LINT) run ./...
 	$(MAKE) arch-check
 
 arch-check: ## Enforce dependency direction for core layers

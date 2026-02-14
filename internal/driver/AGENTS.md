@@ -20,6 +20,17 @@
 - Recover panics at SDK callback boundaries and pass failures upstream.
 - Never swallow driver errors; wrap and return with operation context.
 
+## Documentation Rules
+- Exported methods, exported interface methods, and exported struct fields must have Godoc.
+- Exported package-level functions/types/vars/consts must also have Godoc.
+- Comments should communicate behavior and integration contracts.
+
 ## Testing
 - Use interface mocks for kernel boundaries.
 - Add integration tests with fake clients for Telegram/session behavior when feasible.
+
+## Quality Checks
+- After each task, run:
+  - `make lint`
+  - `make arch-check`
+  - `make test`

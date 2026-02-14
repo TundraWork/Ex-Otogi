@@ -2,19 +2,29 @@ package otogi
 
 // Capability describes what a module can process and what resources it requires.
 type Capability struct {
-	Name             string
-	Description      string
-	Interest         InterestSet
+	// Name is a stable capability identifier within the module.
+	Name string
+	// Description explains the capability intent for operators and tooling.
+	Description string
+	// Interest declares which neutral events the capability can process.
+	Interest InterestSet
+	// RequiredServices lists service registry keys required before activation.
 	RequiredServices []string
-	Metadata         map[string]string
+	// Metadata stores optional extension attributes used by runtime tooling.
+	Metadata map[string]string
 }
 
 // InterestSet describes event selection criteria for capability negotiation.
 type InterestSet struct {
-	Kinds              []EventKind
-	MediaTypes         []MediaType
-	RequireMutation    bool
-	RequireReaction    bool
+	// Kinds restricts matching to specific event kinds when non-empty.
+	Kinds []EventKind
+	// MediaTypes restricts matching to events carrying at least one listed media type.
+	MediaTypes []MediaType
+	// RequireMutation requires mutation payload presence.
+	RequireMutation bool
+	// RequireReaction requires reaction payload presence.
+	RequireReaction bool
+	// RequireStateChange requires state-change payload presence.
 	RequireStateChange bool
 }
 

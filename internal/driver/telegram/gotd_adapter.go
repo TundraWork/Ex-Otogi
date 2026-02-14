@@ -92,7 +92,7 @@ func (s *GotdUpdateChannel) publish(ctx context.Context, item gotdUpdateEnvelope
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("publish gotd update: %w", ctx.Err())
 	case s.updates <- item:
 		return nil
 	}

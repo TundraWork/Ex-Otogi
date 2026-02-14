@@ -59,17 +59,18 @@ func (r *moduleRuntime) Services() otogi.ServiceRegistry {
 // Subscribe registers a module-owned subscription after capability checks.
 func (r *moduleRuntime) Subscribe(
 	ctx context.Context,
+	interest otogi.InterestSet,
 	spec otogi.SubscriptionSpec,
 	handler otogi.EventHandler,
 ) (otogi.Subscription, error) {
-	if err := assertSubscriptionAllowed(r.record.capabilities, spec); err != nil {
-		return nil, fmt.Errorf("module %s subscribe %s: %w", r.moduleName, spec.Name, err)
-	}
 	if spec.Name == "" {
 		spec.Name = fmt.Sprintf("%s-subscription", r.moduleName)
 	}
+	if err := assertSubscriptionAllowed(r.record.capabilities, spec.Name, interest); err != nil {
+		return nil, fmt.Errorf("module %s subscribe %s: %w", r.moduleName, spec.Name, err)
+	}
 
-	subscription, err := r.bus.Subscribe(ctx, spec, handler)
+	subscription, err := r.bus.Subscribe(ctx, interest, spec, handler)
 	if err != nil {
 		return nil, fmt.Errorf("module %s subscribe %s: %w", r.moduleName, spec.Name, err)
 	}
@@ -80,14 +81,14 @@ func (r *moduleRuntime) Subscribe(
 }
 
 // assertSubscriptionAllowed enforces capability negotiation at registration time.
-// A module can only subscribe to filters covered by at least one declared capability.
-func assertSubscriptionAllowed(capabilities []otogi.Capability, spec otogi.SubscriptionSpec) error {
+// A module can only subscribe to interests covered by at least one declared capability.
+func assertSubscriptionAllowed(capabilities []otogi.Capability, subscriptionName string, interest otogi.InterestSet) error {
 	if len(capabilities) == 0 {
-		return nil
+		return fmt.Errorf("subscription %s requires at least one declared capability", subscriptionName)
 	}
 
 	for _, capability := range capabilities {
-		if capability.Interest.Allows(spec.Filter) {
+		if capability.Interest.Allows(interest) {
 			return nil
 		}
 	}

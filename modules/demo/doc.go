@@ -1,3 +1,3 @@
-// Package demo contains a reference module demonstrating lifecycle hooks,
-// capability negotiation, and multi-event handling against the otogi contracts.
+// Package demo contains a reference module demonstrating declarative handler
+// specs, optional registration hooks, and multi-event handling.
 package demo

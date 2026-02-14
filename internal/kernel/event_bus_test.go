@@ -19,11 +19,10 @@ func TestEventBusPublishDeliversMatchingSubscriptions(t *testing.T) {
 	})
 
 	received := make(chan *otogi.Event, 1)
-	_, err := bus.Subscribe(context.Background(), otogi.SubscriptionSpec{
+	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
+		Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+	}, otogi.SubscriptionSpec{
 		Name: "match",
-		Filter: otogi.InterestSet{
-			Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
-		},
 	}, func(_ context.Context, event *otogi.Event) error {
 		received <- event
 		return nil
@@ -83,14 +82,13 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 			var first sync.Once
 			var mu sync.Mutex
 
-			_, err := bus.Subscribe(context.Background(), otogi.SubscriptionSpec{
+			_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
+				Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+			}, otogi.SubscriptionSpec{
 				Name:         "policy",
 				Workers:      1,
 				Buffer:       1,
 				Backpressure: testCase.policy,
-				Filter: otogi.InterestSet{
-					Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
-				},
 			}, func(_ context.Context, event *otogi.Event) error {
 				first.Do(func() {
 					blocked <- struct{}{}

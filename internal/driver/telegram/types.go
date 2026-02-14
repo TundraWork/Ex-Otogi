@@ -32,112 +32,172 @@ const (
 
 // Update is the Telegram adapter's internal DTO before neutral decoding.
 type Update struct {
-	ID         string
-	Type       UpdateType
+	// ID is a stable identifier for the mapped Telegram update.
+	ID string
+	// Type identifies the mapped update semantic category.
+	Type UpdateType
+	// OccurredAt is the Telegram-side timestamp for the update.
 	OccurredAt time.Time
-	Chat       ChatRef
-	Actor      ActorRef
-	Message    *MessagePayload
-	Edit       *EditPayload
-	Delete     *DeletePayload
-	Reaction   *ReactionPayload
-	Member     *MemberPayload
-	Role       *RolePayload
-	Migration  *MigrationPayload
-	Metadata   map[string]string
+	// Chat identifies where the update occurred.
+	Chat ChatRef
+	// Actor identifies who initiated the update when known.
+	Actor ActorRef
+	// Message carries payload for message updates.
+	Message *MessagePayload
+	// Edit carries payload for message edit updates.
+	Edit *EditPayload
+	// Delete carries payload for message deletion updates.
+	Delete *DeletePayload
+	// Reaction carries payload for reaction updates.
+	Reaction *ReactionPayload
+	// Member carries payload for member join/leave updates.
+	Member *MemberPayload
+	// Role carries payload for role mutation updates.
+	Role *RolePayload
+	// Migration carries payload for chat migration updates.
+	Migration *MigrationPayload
+	// Metadata stores additional mapper-specific attributes.
+	Metadata map[string]string
 }
 
 // ChatRef identifies Telegram chat context.
 type ChatRef struct {
-	ID    string
+	// ID is the Telegram chat identifier.
+	ID string
+	// Title is the Telegram chat title when available.
 	Title string
-	Type  otogi.ConversationType
+	// Type is the normalized conversation type.
+	Type otogi.ConversationType
 }
 
 // ActorRef identifies Telegram actor context.
 type ActorRef struct {
-	ID          string
-	Username    string
+	// ID is the Telegram user/account identifier.
+	ID string
+	// Username is the Telegram handle when available.
+	Username string
+	// DisplayName is the human-readable Telegram display name.
 	DisplayName string
-	IsBot       bool
+	// IsBot reports whether the actor is a bot account.
+	IsBot bool
 }
 
 // MessagePayload represents a Telegram message projection.
 type MessagePayload struct {
-	ID        string
-	ThreadID  string
+	// ID is the Telegram message identifier.
+	ID string
+	// ThreadID is the optional topic/thread identifier.
+	ThreadID string
+	// ReplyToID is the replied-to message identifier when present.
 	ReplyToID string
-	Text      string
-	Entities  []otogi.TextEntity
-	Media     []MediaPayload
+	// Text is the normalized message text.
+	Text string
+	// Entities carries rich-text entity ranges.
+	Entities []otogi.TextEntity
+	// Media carries normalized media attachments.
+	Media []MediaPayload
 }
 
 // MediaPayload represents Telegram media metadata.
 type MediaPayload struct {
-	ID        string
-	Type      otogi.MediaType
-	MIMEType  string
-	FileName  string
+	// ID is the attachment identifier.
+	ID string
+	// Type is the normalized media category.
+	Type otogi.MediaType
+	// MIMEType is the attachment MIME type.
+	MIMEType string
+	// FileName is the original attachment filename.
+	FileName string
+	// SizeBytes is the attachment size in bytes when known.
 	SizeBytes int64
-	Caption   string
-	URI       string
-	Preview   *MediaPreviewPayload
+	// Caption is the optional media caption text.
+	Caption string
+	// URI is an optional retrievable location for the media.
+	URI string
+	// Preview carries optional lightweight preview data.
+	Preview *MediaPreviewPayload
 }
 
 // MediaPreviewPayload contains optional preview bytes and dimensions.
 type MediaPreviewPayload struct {
+	// MIMEType is the preview content type.
 	MIMEType string
-	Bytes    []byte
-	Width    int
-	Height   int
+	// Bytes holds preview bytes when available.
+	Bytes []byte
+	// Width is the preview width in pixels.
+	Width int
+	// Height is the preview height in pixels.
+	Height int
+	// Duration is preview duration for time-based media.
 	Duration time.Duration
 }
 
 // EditPayload captures before/after message content for edits.
 type EditPayload struct {
+	// MessageID identifies the edited Telegram message.
 	MessageID string
-	Before    *SnapshotPayload
-	After     *SnapshotPayload
-	Reason    string
+	// Before captures the message snapshot before the edit.
+	Before *SnapshotPayload
+	// After captures the message snapshot after the edit.
+	After *SnapshotPayload
+	// Reason carries optional platform context for the edit.
+	Reason string
 }
 
 // SnapshotPayload captures immutable message snapshots.
 type SnapshotPayload struct {
-	Text  string
+	// Text is the immutable message text snapshot.
+	Text string
+	// Media is the immutable media snapshot.
 	Media []MediaPayload
 }
 
 // DeletePayload captures message deletion metadata.
 type DeletePayload struct {
+	// MessageID identifies the deleted/retracted message.
 	MessageID string
-	Reason    string
+	// Reason carries optional platform context for deletion.
+	Reason string
 }
 
 // ReactionPayload captures emoji reaction metadata.
 type ReactionPayload struct {
+	// MessageID identifies the message receiving the reaction update.
 	MessageID string
-	Emoji     string
+	// Emoji is the normalized emoji token.
+	Emoji string
 }
 
 // MemberPayload captures join/leave transitions.
 type MemberPayload struct {
-	Member   ActorRef
-	Inviter  *ActorRef
-	Reason   string
+	// Member identifies the member affected by the update.
+	Member ActorRef
+	// Inviter identifies who invited the member when available.
+	Inviter *ActorRef
+	// Reason carries optional platform context for membership transition.
+	Reason string
+	// JoinedAt is the member join timestamp when provided.
 	JoinedAt time.Time
 }
 
 // RolePayload captures role mutation metadata.
 type RolePayload struct {
-	MemberID  string
-	OldRole   string
-	NewRole   string
+	// MemberID identifies the member whose role changed.
+	MemberID string
+	// OldRole is the previous role value.
+	OldRole string
+	// NewRole is the resulting role value.
+	NewRole string
+	// ChangedBy identifies who performed the role change.
 	ChangedBy ActorRef
 }
 
 // MigrationPayload captures Telegram chat migration metadata.
 type MigrationPayload struct {
+	// FromChatID is the prior Telegram chat identifier.
 	FromChatID string
-	ToChatID   string
-	Reason     string
+	// ToChatID is the replacement Telegram chat identifier.
+	ToChatID string
+	// Reason carries optional platform context for migration.
+	Reason string
 }

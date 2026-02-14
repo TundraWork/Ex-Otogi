@@ -26,6 +26,7 @@ func (NoopSource) Consume(ctx context.Context, _ UpdateHandler) error {
 
 // ChannelSource reads updates from a channel.
 type ChannelSource struct {
+	// Updates is the owned input stream consumed by the source loop.
 	Updates <-chan Update
 }
 

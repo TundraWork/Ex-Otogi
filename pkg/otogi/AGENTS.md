@@ -16,9 +16,19 @@
 
 ## Design Rules
 - Keep interfaces minimal and behavior-focused.
-- Document exported types/functions with clear semantics.
+- All exported symbols require Godoc, including:
+  - exported package-level methods/functions/types/vars/consts,
+  - exported interface methods,
+  - exported struct fields.
+- Godoc should define behavior and contract semantics clearly.
 - Favor small interfaces that are easy to mock.
 - Changes in this package are API changes; preserve backward compatibility where possible.
+
+## Quality Checks
+- After each task, run:
+  - `make lint`
+  - `make arch-check`
+  - `make test`
 
 ## Testing
 - Contract tests should validate interface expectations and serialization invariants.
