@@ -20,10 +20,12 @@ Dependency direction: `internal/driver -> internal/kernel -> pkg/otogi`.
    ```sh
    cp config/bot.example.json config/bot.json
    ```
-2. Set Telegram API credentials required by `github.com/gotd/td/telegram.ClientFromEnvironment`.
-3. Configure one auth path:
-   - bot: set `OTOGI_TELEGRAM_BOT_TOKEN`
-   - user: set `OTOGI_TELEGRAM_PHONE` and provide `OTOGI_TELEGRAM_CODE` (or enter code interactively)
+2. Edit `config/bot.json` and set Telegram API credentials:
+   - `telegram.app_id`
+   - `telegram.app_hash`
+3. Configure one auth path in the same file:
+   - bot: set `telegram.bot_token`
+   - user: set `telegram.phone` and optionally `telegram.code` (or enter code interactively)
 4. Run:
    ```sh
    go run ./cmd/bot

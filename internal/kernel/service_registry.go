@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 
 	"ex-otogi/pkg/otogi"
@@ -25,7 +26,7 @@ func (r *ServiceRegistry) Register(name string, service any) error {
 	if name == "" {
 		return fmt.Errorf("register service: empty name")
 	}
-	if service == nil {
+	if isNilService(service) {
 		return fmt.Errorf("register service %s: nil service", name)
 	}
 
@@ -39,6 +40,20 @@ func (r *ServiceRegistry) Register(name string, service any) error {
 	r.services[name] = service
 
 	return nil
+}
+
+func isNilService(service any) bool {
+	if service == nil {
+		return true
+	}
+
+	value := reflect.ValueOf(service)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // Resolve returns a registered named service.

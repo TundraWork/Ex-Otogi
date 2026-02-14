@@ -7,11 +7,13 @@
     "subscription_workers": 2
   },
   "telegram": {
+    "app_id": 0,
+    "app_hash": "",
     "publish_timeout": "2s",
     "update_buffer": 256,
     "auth_timeout": "3m",
-    "code_env": "OTOGI_TELEGRAM_CODE",
-    "bot_token_env": "OTOGI_TELEGRAM_BOT_TOKEN",
+    "code": "",
+    "bot_token": "",
     "phone": "+15550001111",
     "password": "",
     "session_file": ".cache/telegram/session.json"

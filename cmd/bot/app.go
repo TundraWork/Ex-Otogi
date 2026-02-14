@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,16 +28,8 @@ import (
 
 const (
 	envConfigFile               = "OTOGI_CONFIG_FILE"
-	envLogLevel                 = "OTOGI_LOG_LEVEL"
-	envTelegramPublishTimeout   = "OTOGI_TELEGRAM_PUBLISH_TIMEOUT"
-	envTelegramUpdateBuffer     = "OTOGI_TELEGRAM_UPDATE_BUFFER"
-	envTelegramAuthTimeout      = "OTOGI_TELEGRAM_AUTH_TIMEOUT"
-	envTelegramCode             = "OTOGI_TELEGRAM_CODE"
-	envTelegramBotToken         = "OTOGI_TELEGRAM_BOT_TOKEN"
-	envTelegramPhone            = "OTOGI_TELEGRAM_PHONE"
-	envTelegramPassword         = "OTOGI_TELEGRAM_PASSWORD"
-	envTelegramSessionFile      = "OTOGI_TELEGRAM_SESSION_FILE"
 	defaultConfigFilePath       = "config/bot.json"
+	alternateConfigFilePath     = "bin/config/bot.json"
 	defaultTelegramSessionFile  = ".cache/telegram/session.json"
 	defaultModuleHookTimeout    = 3 * time.Second
 	defaultShutdownTimeout      = 10 * time.Second
@@ -56,11 +47,13 @@ type appConfig struct {
 	subscriptionBuffer  int
 	subscriptionWorkers int
 
+	telegramAppID          int
+	telegramAppHash        string
 	telegramPublishTimeout time.Duration
 	telegramUpdateBuffer   int
 	telegramAuthTimeout    time.Duration
-	telegramCodeEnv        string
-	telegramBotTokenEnv    string
+	telegramCode           string
+	telegramBotToken       string
 	telegramPhone          string
 	telegramPassword       string
 	telegramSessionFile    string
@@ -80,11 +73,13 @@ type fileKernelConfig struct {
 }
 
 type fileTelegramConfig struct {
+	AppID          *int   `json:"app_id"`
+	AppHash        string `json:"app_hash"`
 	PublishTimeout string `json:"publish_timeout"`
 	UpdateBuffer   *int   `json:"update_buffer"`
 	AuthTimeout    string `json:"auth_timeout"`
-	CodeEnv        string `json:"code_env"`
-	BotTokenEnv    string `json:"bot_token_env"`
+	Code           string `json:"code"`
+	BotToken       string `json:"bot_token"`
 	Phone          string `json:"phone"`
 	Password       string `json:"password"`
 	SessionFile    string `json:"session_file"`
@@ -130,28 +125,46 @@ func run() error {
 
 func loadConfig() (appConfig, error) {
 	cfg := defaultAppConfig()
-	configFile := strings.TrimSpace(os.Getenv(envConfigFile))
-	if configFile == "" {
-		configFile = defaultConfigFilePath
+	configFile, err := resolveConfigFilePath()
+	if err != nil {
+		return appConfig{}, err
 	}
 
-	if err := applyConfigFile(&cfg, configFile, os.Getenv(envConfigFile) != ""); err != nil {
+	if err := applyConfigFile(&cfg, configFile); err != nil {
 		return appConfig{}, err
 	}
-	if err := applyEnvOverrides(&cfg); err != nil {
-		return appConfig{}, err
+	if err := validateAppConfig(cfg); err != nil {
+		return appConfig{}, fmt.Errorf("validate config file %s: %w", configFile, err)
 	}
 
 	return cfg, nil
 }
 
-func loadConfigFromEnv() (appConfig, error) {
-	cfg := defaultAppConfig()
-	if err := applyEnvOverrides(&cfg); err != nil {
-		return appConfig{}, err
+func resolveConfigFilePath() (string, error) {
+	if configFile := strings.TrimSpace(os.Getenv(envConfigFile)); configFile != "" {
+		return configFile, nil
 	}
 
-	return cfg, nil
+	candidates := []string{defaultConfigFilePath, alternateConfigFilePath}
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil {
+			if info.IsDir() {
+				return "", fmt.Errorf("config file %s is a directory", candidate)
+			}
+			return candidate, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("stat config file %s: %w", candidate, err)
+		}
+	}
+
+	return "", fmt.Errorf(
+		"config file not found; create %s or %s, or set %s",
+		defaultConfigFilePath,
+		alternateConfigFilePath,
+		envConfigFile,
+	)
 }
 
 func defaultAppConfig() appConfig {
@@ -163,90 +176,27 @@ func defaultAppConfig() appConfig {
 		subscriptionBuffer:  defaultSubscriptionBuffer,
 		subscriptionWorkers: defaultSubscriptionWorkers,
 
+		telegramAppID:          0,
+		telegramAppHash:        "",
 		telegramPublishTimeout: defaultTelegramPublishDelay,
 		telegramUpdateBuffer:   defaultSubscriptionBuffer,
 		telegramAuthTimeout:    defaultTelegramAuthTimeout,
-		telegramCodeEnv:        envTelegramCode,
-		telegramBotTokenEnv:    envTelegramBotToken,
+		telegramCode:           "",
+		telegramBotToken:       "",
 		telegramSessionFile:    defaultTelegramSessionFile,
 	}
 }
 
-func applyEnvOverrides(cfg *appConfig) error {
-	if cfg == nil {
-		return fmt.Errorf("apply env overrides: nil config")
-	}
-
-	if rawLevel := strings.TrimSpace(os.Getenv(envLogLevel)); rawLevel != "" {
-		level, err := parseLogLevel(rawLevel)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", envLogLevel, err)
-		}
-		cfg.logLevel = level
-	}
-
-	if rawTimeout := strings.TrimSpace(os.Getenv(envTelegramPublishTimeout)); rawTimeout != "" {
-		timeout, err := time.ParseDuration(rawTimeout)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", envTelegramPublishTimeout, err)
-		}
-		if timeout <= 0 {
-			return fmt.Errorf("parse %s: must be > 0", envTelegramPublishTimeout)
-		}
-		cfg.telegramPublishTimeout = timeout
-	}
-
-	if rawTimeout := strings.TrimSpace(os.Getenv(envTelegramAuthTimeout)); rawTimeout != "" {
-		timeout, err := time.ParseDuration(rawTimeout)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", envTelegramAuthTimeout, err)
-		}
-		if timeout <= 0 {
-			return fmt.Errorf("parse %s: must be > 0", envTelegramAuthTimeout)
-		}
-		cfg.telegramAuthTimeout = timeout
-	}
-
-	if rawBuffer := strings.TrimSpace(os.Getenv(envTelegramUpdateBuffer)); rawBuffer != "" {
-		buffer, err := strconv.Atoi(rawBuffer)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", envTelegramUpdateBuffer, err)
-		}
-		if buffer <= 0 {
-			return fmt.Errorf("parse %s: must be > 0", envTelegramUpdateBuffer)
-		}
-		cfg.telegramUpdateBuffer = buffer
-	}
-
-	if rawPhone := strings.TrimSpace(os.Getenv(envTelegramPhone)); rawPhone != "" {
-		cfg.telegramPhone = rawPhone
-	}
-	if rawPassword := strings.TrimSpace(os.Getenv(envTelegramPassword)); rawPassword != "" {
-		cfg.telegramPassword = rawPassword
-	}
-	if rawSessionFile := strings.TrimSpace(os.Getenv(envTelegramSessionFile)); rawSessionFile != "" {
-		cfg.telegramSessionFile = rawSessionFile
-	}
-
-	return nil
-}
-
-func applyConfigFile(cfg *appConfig, path string, required bool) error {
+func applyConfigFile(cfg *appConfig, path string) error {
 	if cfg == nil {
 		return fmt.Errorf("apply config file: nil config")
 	}
 	if strings.TrimSpace(path) == "" {
-		if required {
-			return fmt.Errorf("config file path is required")
-		}
-		return nil
+		return fmt.Errorf("config file path is required")
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) && !required {
-			return nil
-		}
 		return fmt.Errorf("read config file %s: %w", path, err)
 	}
 
@@ -299,6 +249,16 @@ func applyConfigFile(cfg *appConfig, path string, required bool) error {
 		cfg.subscriptionWorkers = *parsed.Kernel.SubscriptionWorkers
 	}
 
+	if parsed.Telegram.AppID != nil {
+		if *parsed.Telegram.AppID <= 0 {
+			return fmt.Errorf("parse telegram.app_id: must be > 0")
+		}
+		cfg.telegramAppID = *parsed.Telegram.AppID
+	}
+	if appHash := strings.TrimSpace(parsed.Telegram.AppHash); appHash != "" {
+		cfg.telegramAppHash = appHash
+	}
+
 	if rawTimeout := strings.TrimSpace(parsed.Telegram.PublishTimeout); rawTimeout != "" {
 		timeout, err := time.ParseDuration(rawTimeout)
 		if err != nil {
@@ -328,11 +288,11 @@ func applyConfigFile(cfg *appConfig, path string, required bool) error {
 		cfg.telegramAuthTimeout = timeout
 	}
 
-	if codeEnv := strings.TrimSpace(parsed.Telegram.CodeEnv); codeEnv != "" {
-		cfg.telegramCodeEnv = codeEnv
+	if code := strings.TrimSpace(parsed.Telegram.Code); code != "" {
+		cfg.telegramCode = code
 	}
-	if botTokenEnv := strings.TrimSpace(parsed.Telegram.BotTokenEnv); botTokenEnv != "" {
-		cfg.telegramBotTokenEnv = botTokenEnv
+	if botToken := strings.TrimSpace(parsed.Telegram.BotToken); botToken != "" {
+		cfg.telegramBotToken = botToken
 	}
 	if phone := strings.TrimSpace(parsed.Telegram.Phone); phone != "" {
 		cfg.telegramPhone = phone
@@ -342,6 +302,17 @@ func applyConfigFile(cfg *appConfig, path string, required bool) error {
 	}
 	if sessionFile := strings.TrimSpace(parsed.Telegram.SessionFile); sessionFile != "" {
 		cfg.telegramSessionFile = sessionFile
+	}
+
+	return nil
+}
+
+func validateAppConfig(cfg appConfig) error {
+	if cfg.telegramAppID <= 0 {
+		return fmt.Errorf("telegram.app_id must be > 0")
+	}
+	if strings.TrimSpace(cfg.telegramAppHash) == "" {
+		return fmt.Errorf("telegram.app_hash is required")
 	}
 
 	return nil
@@ -421,13 +392,10 @@ func buildTelegramRuntime(logger *slog.Logger, cfg appConfig) (telegramRuntime, 
 		return telegramRuntime{}, fmt.Errorf("new gotd session storage: %w", err)
 	}
 
-	client, err := gotdtelegram.ClientFromEnvironment(gotdtelegram.Options{
+	client := gotdtelegram.NewClient(cfg.telegramAppID, cfg.telegramAppHash, gotdtelegram.Options{
 		UpdateHandler:  updateChannel,
 		SessionStorage: sessionStorage,
 	})
-	if err != nil {
-		return telegramRuntime{}, fmt.Errorf("new gotd client from environment: %w", err)
-	}
 
 	peers := telegram.NewPeerCache()
 	source, err := telegram.NewGotdUserbotSource(
@@ -460,6 +428,7 @@ func buildTelegramRuntime(logger *slog.Logger, cfg appConfig) (telegramRuntime, 
 		client,
 		peers,
 		telegram.WithOutboundTimeout(cfg.telegramPublishTimeout),
+		telegram.WithOutboundLogger(logger),
 	)
 	if err != nil {
 		return telegramRuntime{}, fmt.Errorf("new telegram outbound dispatcher: %w", err)
@@ -549,7 +518,7 @@ func authenticateGotdClient(
 		return nil
 	}
 
-	if botToken := strings.TrimSpace(os.Getenv(cfg.telegramBotTokenEnv)); botToken != "" {
+	if botToken := strings.TrimSpace(cfg.telegramBotToken); botToken != "" {
 		if _, err := client.Auth().Bot(authCtx, botToken); err != nil {
 			return fmt.Errorf("authenticate bot: %w", err)
 		}
@@ -559,11 +528,15 @@ func authenticateGotdClient(
 
 	phone := strings.TrimSpace(cfg.telegramPhone)
 	if phone == "" {
-		return fmt.Errorf("telegram phone number is required for user login; configure telegram.phone in %s or set %s", defaultConfigFilePath, envTelegramPhone)
+		return fmt.Errorf(
+			"telegram phone number is required for user login; configure telegram.phone in %s or %s",
+			defaultConfigFilePath,
+			alternateConfigFilePath,
+		)
 	}
 
 	codeAuthenticator := auth.CodeAuthenticatorFunc(func(_ context.Context, _ *tg.AuthSentCode) (string, error) {
-		code, err := telegramAuthCode(cfg.telegramCodeEnv)
+		code, err := telegramAuthCode(cfg.telegramCode)
 		if err != nil {
 			return "", fmt.Errorf("resolve login code: %w", err)
 		}
@@ -585,8 +558,8 @@ func authenticateGotdClient(
 	return nil
 }
 
-func telegramAuthCode(codeEnv string) (string, error) {
-	if code := strings.TrimSpace(os.Getenv(codeEnv)); code != "" {
+func telegramAuthCode(configuredCode string) (string, error) {
+	if code := strings.TrimSpace(configuredCode); code != "" {
 		return code, nil
 	}
 
@@ -595,11 +568,7 @@ func telegramAuthCode(codeEnv string) (string, error) {
 		return "", fmt.Errorf("read stdin status: %w", err)
 	}
 	if stdinInfo.Mode()&os.ModeCharDevice == 0 {
-		return "", fmt.Errorf(
-			"%s is not set and stdin is not interactive; set %s to proceed",
-			codeEnv,
-			codeEnv,
-		)
+		return "", fmt.Errorf("telegram.code is empty and stdin is not interactive")
 	}
 
 	fmt.Fprint(os.Stdout, "Enter Telegram login code: ")

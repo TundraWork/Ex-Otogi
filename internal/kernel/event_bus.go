@@ -41,13 +41,15 @@ func NewEventBus(
 
 // Publish dispatches an event to all matching subscribers.
 func (b *EventBus) Publish(ctx context.Context, event *otogi.Event) error {
+	eventKind := eventKindForLog(event)
+
 	if err := event.Validate(); err != nil {
-		return fmt.Errorf("publish event %s: %w", event.Kind, err)
+		return fmt.Errorf("publish event %s: %w", eventKind, err)
 	}
 
 	subs, err := b.snapshotSubscriptions()
 	if err != nil {
-		return fmt.Errorf("publish event %s: %w", event.Kind, err)
+		return fmt.Errorf("publish event %s: %w", eventKind, err)
 	}
 
 	var publishErrs []error
@@ -65,7 +67,7 @@ func (b *EventBus) Publish(ctx context.Context, event *otogi.Event) error {
 	}
 
 	if len(publishErrs) > 0 {
-		return fmt.Errorf("publish event %s: %w", event.Kind, errors.Join(publishErrs...))
+		return fmt.Errorf("publish event %s: %w", eventKind, errors.Join(publishErrs...))
 	}
 
 	return nil
@@ -354,6 +356,11 @@ func (s *busSubscription) runWorker(workerWG *sync.WaitGroup, workerID int) {
 
 // handleEvent executes one handler call with optional timeout and panic recovery.
 func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *otogi.Event) error {
+	scope := fmt.Sprintf("subscription %s worker %d", s.spec.Name, workerID)
+	if err := event.Validate(); err != nil {
+		return fmt.Errorf("%s handle invalid event: %w", scope, err)
+	}
+
 	handlerCtx := ctx
 	cancel := func() {}
 	if s.spec.HandlerTimeout > 0 {
@@ -363,7 +370,6 @@ func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *
 	}
 	defer cancel()
 
-	scope := fmt.Sprintf("subscription %s worker %d", s.spec.Name, workerID)
 	if err := runSafely(scope, func() error {
 		return s.handler(handlerCtx, event)
 	}); err != nil {
@@ -391,4 +397,15 @@ func (s *busSubscription) shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("shutdown subscription %s: %w", s.spec.Name, ctx.Err())
 	}
+}
+
+func eventKindForLog(event *otogi.Event) string {
+	if event == nil {
+		return "<nil>"
+	}
+	if event.Kind == "" {
+		return "<empty>"
+	}
+
+	return string(event.Kind)
 }

@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,13 @@ func WithOutboundTimeout(timeout time.Duration) OutboundOption {
 	}
 }
 
+// WithOutboundLogger configures structured logging for outbound operations.
+func WithOutboundLogger(logger *slog.Logger) OutboundOption {
+	return func(cfg *outboundConfig) {
+		cfg.logger = logger
+	}
+}
+
 // OutboundDispatcher adapts neutral outbound operations to Telegram RPC calls.
 type OutboundDispatcher struct {
 	cfg      outboundConfig
@@ -38,6 +46,7 @@ type OutboundDispatcher struct {
 
 type outboundConfig struct {
 	rpcTimeout time.Duration
+	logger     *slog.Logger
 }
 
 // NewOutboundDispatcher creates a Telegram outbound dispatcher using gotd client APIs.
@@ -101,6 +110,15 @@ func (d *OutboundDispatcher) SendMessage(
 		return nil, fmt.Errorf("send message to %s: %w", request.Target.Conversation.ID, err)
 	}
 
+	d.logOutbound(
+		ctx,
+		"send_message",
+		"conversation", request.Target.Conversation.ID,
+		"conversation_type", request.Target.Conversation.Type,
+		"message_id", id,
+		"reply_to_message_id", request.ReplyToMessageID,
+	)
+
 	return &otogi.OutboundMessage{
 		ID:     strconv.Itoa(id),
 		Target: request.Target,
@@ -130,6 +148,14 @@ func (d *OutboundDispatcher) EditMessage(ctx context.Context, request otogi.Edit
 		return fmt.Errorf("edit message %s: %w", request.MessageID, err)
 	}
 
+	d.logOutbound(
+		ctx,
+		"edit_message",
+		"conversation", request.Target.Conversation.ID,
+		"conversation_type", request.Target.Conversation.Type,
+		"message_id", request.MessageID,
+	)
+
 	return nil
 }
 
@@ -155,6 +181,15 @@ func (d *OutboundDispatcher) DeleteMessage(ctx context.Context, request otogi.De
 	if err := d.telegram.DeleteMessage(rpcCtx, peer, messageID, request.Revoke); err != nil {
 		return fmt.Errorf("delete message %s: %w", request.MessageID, err)
 	}
+
+	d.logOutbound(
+		ctx,
+		"delete_message",
+		"conversation", request.Target.Conversation.ID,
+		"conversation_type", request.Target.Conversation.Type,
+		"message_id", request.MessageID,
+		"revoke", request.Revoke,
+	)
 
 	return nil
 }
@@ -191,6 +226,16 @@ func (d *OutboundDispatcher) SetReaction(ctx context.Context, request otogi.SetR
 		return fmt.Errorf("set reaction on message %s: %w", request.MessageID, err)
 	}
 
+	d.logOutbound(
+		ctx,
+		"set_reaction",
+		"conversation", request.Target.Conversation.ID,
+		"conversation_type", request.Target.Conversation.Type,
+		"message_id", request.MessageID,
+		"action", request.Action,
+		"emoji", request.Emoji,
+	)
+
 	return nil
 }
 
@@ -213,6 +258,17 @@ func (d *OutboundDispatcher) resolvePeer(target otogi.OutboundTarget) (tg.InputP
 	}
 
 	return peer, nil
+}
+
+func (d *OutboundDispatcher) logOutbound(ctx context.Context, operation string, attrs ...any) {
+	if d.cfg.logger == nil {
+		return
+	}
+
+	values := make([]any, 0, 2+len(attrs))
+	values = append(values, "operation", operation, "platform", otogi.PlatformTelegram)
+	values = append(values, attrs...)
+	d.cfg.logger.InfoContext(ctx, "telegram outbound operation", values...)
 }
 
 func parseMessageID(raw string) (int, error) {

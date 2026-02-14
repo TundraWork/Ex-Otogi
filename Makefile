@@ -2,11 +2,13 @@ SHELL := /bin/sh
 
 GO ?= go
 MAIN_PKG ?= ./cmd/bot
+BUILD_OUT ?= $(CURDIR)/bin/bot
 GOLANGCI_LINT_CACHE ?= $(CURDIR)/.cache/golangci-lint
 GO_BUILD_CACHE ?= $(CURDIR)/.cache/go-build
 GOLANGCI_LINT ?= golangci-lint
+GOFUMPT ?= gofumpt
 
-.PHONY: tools lint arch-check test dev generate
+.PHONY: tools fmt fmt-check lint build arch-check test dev generate
 
 tools: ## Install local development and CI tooling
 	$(GO) install mvdan.cc/gofumpt@latest
@@ -16,10 +18,27 @@ tools: ## Install local development and CI tooling
 	@command -v pre-commit >/dev/null 2>&1 && pre-commit install || \
 		echo "pre-commit not found. Install with: pipx install pre-commit"
 
-lint: ## Run static analysis and architecture checks
+fmt: ## Format Go source files with gofumpt
+	$(GOFUMPT) -w .
+
+fmt-check: ## Verify Go source formatting with gofumpt
+	@out="$$( $(GOFUMPT) -l . )"; \
+	if [ -n "$$out" ]; then \
+		echo "gofumpt formatting issues found:"; \
+		echo "$$out"; \
+		echo "run 'make fmt' to apply formatting"; \
+		exit 1; \
+	fi
+
+lint: ## Run formatting, static analysis, and architecture checks
+	$(MAKE) fmt-check
 	@mkdir -p $(GOLANGCI_LINT_CACHE) $(GO_BUILD_CACHE)
 	GOCACHE=$(GO_BUILD_CACHE) GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE) $(GOLANGCI_LINT) run ./...
 	$(MAKE) arch-check
+
+build: ## Build the bot binary
+	@mkdir -p $(dir $(BUILD_OUT))
+	$(GO) build -o $(BUILD_OUT) $(MAIN_PKG)
 
 arch-check: ## Enforce dependency direction for core layers
 	@! rg -n --glob '*.go' '".*\/internal\/driver' internal/kernel >/dev/null || \

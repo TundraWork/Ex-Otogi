@@ -150,6 +150,20 @@ func TestEventBusCloseRejectsNewPublish(t *testing.T) {
 	}
 }
 
+// TestEventBusPublishNilEventReturnsError verifies nil event publish safety.
+func TestEventBusPublishNilEventReturnsError(t *testing.T) {
+	t.Parallel()
+
+	bus := NewEventBus(8, 1, time.Second, nil)
+	t.Cleanup(func() {
+		_ = bus.Close(context.Background())
+	})
+
+	if err := bus.Publish(context.Background(), nil); err == nil {
+		t.Fatal("expected nil event publish to fail")
+	}
+}
+
 func newTestEvent(id string, kind otogi.EventKind) *otogi.Event {
 	event := &otogi.Event{
 		ID:         id,

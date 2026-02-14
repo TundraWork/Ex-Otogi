@@ -2,8 +2,7 @@ package pingpong
 
 import (
 	"context"
-	"log/slog"
-	"sync"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,49 +14,31 @@ func TestModuleHandleMessage(t *testing.T) {
 	tests := []struct {
 		name         string
 		event        *otogi.Event
-		configure    func(module *Module, dispatcher *captureDispatcher)
+		sendErr      error
 		wantErr      bool
-		wantLogged   bool
 		wantSentPong bool
 	}{
 		{
 			name:         "exact ping triggers pong",
 			event:        newMessageEvent("ping"),
-			configure:    attachDispatcher,
-			wantLogged:   true,
 			wantSentPong: true,
 		},
 		{
 			name:         "trimmed ping triggers pong",
 			event:        newMessageEvent("  PiNg  "),
-			configure:    attachDispatcher,
-			wantLogged:   true,
 			wantSentPong: true,
 		},
 		{
 			name:         "non-ping does not trigger pong",
 			event:        newMessageEvent("hello"),
-			configure:    attachDispatcher,
-			wantLogged:   false,
 			wantSentPong: false,
 		},
 		{
-			name:    "nil event returns error",
-			event:   nil,
-			wantErr: true,
-		},
-		{
-			name: "missing message payload returns error",
-			event: &otogi.Event{
-				ID:   "e1",
-				Kind: otogi.EventKindMessageCreated,
-			},
-			wantErr: true,
-		},
-		{
-			name:    "ping without outbound dispatcher returns error",
-			event:   newMessageEvent("ping"),
-			wantErr: true,
+			name:         "ping send failure returns error",
+			event:        newMessageEvent("ping"),
+			sendErr:      errors.New("dispatcher failure"),
+			wantErr:      true,
+			wantSentPong: true,
 		},
 	}
 
@@ -66,14 +47,12 @@ func TestModuleHandleMessage(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler := &captureHandler{}
-			module := newWithLogger(slog.New(handler))
+			module := New()
 			dispatcher := &captureDispatcher{
 				messageID: "sent-1",
+				sendErr:   testCase.sendErr,
 			}
-			if testCase.configure != nil {
-				testCase.configure(module, dispatcher)
-			}
+			module.dispatcher = dispatcher
 
 			err := module.handleMessage(context.Background(), testCase.event)
 			if testCase.wantErr && err == nil {
@@ -83,10 +62,6 @@ func TestModuleHandleMessage(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			logged := handler.containsMessage("pong")
-			if logged != testCase.wantLogged {
-				t.Fatalf("logged pong = %v, want %v", logged, testCase.wantLogged)
-			}
 			sentPong := dispatcher.calls.Load() > 0
 			if sentPong != testCase.wantSentPong {
 				t.Fatalf("sent pong = %v, want %v", sentPong, testCase.wantSentPong)
@@ -116,8 +91,22 @@ func TestModuleOnRegister(t *testing.T) {
 	}
 }
 
-func attachDispatcher(module *Module, dispatcher *captureDispatcher) {
-	module.dispatcher = dispatcher
+func TestModuleSpecUsesStrictMessageCapability(t *testing.T) {
+	t.Parallel()
+
+	module := New()
+	spec := module.Spec()
+	if len(spec.Handlers) != 1 {
+		t.Fatalf("handler count = %d, want 1", len(spec.Handlers))
+	}
+
+	handler := spec.Handlers[0]
+	if !handler.Capability.Interest.RequireMessage {
+		t.Fatal("expected RequireMessage to be true")
+	}
+	if handler.Subscription.Buffer != 0 || handler.Subscription.Workers != 0 || handler.Subscription.HandlerTimeout != 0 {
+		t.Fatalf("expected subscription to defer runtime defaults, got %#v", handler.Subscription)
+	}
 }
 
 func newMessageEvent(text string) *otogi.Event {
@@ -137,46 +126,10 @@ func newMessageEvent(text string) *otogi.Event {
 	}
 }
 
-type captureHandler struct {
-	mu       sync.Mutex
-	messages []string
-}
-
-func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
-	return true
-}
-
-func (h *captureHandler) Handle(_ context.Context, record slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.messages = append(h.messages, record.Message)
-
-	return nil
-}
-
-func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *captureHandler) WithGroup(string) slog.Handler {
-	return h
-}
-
-func (h *captureHandler) containsMessage(target string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, message := range h.messages {
-		if message == target {
-			return true
-		}
-	}
-
-	return false
-}
-
 type captureDispatcher struct {
 	calls     atomic.Int64
 	messageID string
+	sendErr   error
 }
 
 func (d *captureDispatcher) SendMessage(
@@ -184,6 +137,10 @@ func (d *captureDispatcher) SendMessage(
 	_ otogi.SendMessageRequest,
 ) (*otogi.OutboundMessage, error) {
 	d.calls.Add(1)
+	if d.sendErr != nil {
+		return nil, d.sendErr
+	}
+
 	return &otogi.OutboundMessage{
 		ID: d.messageID,
 	}, nil

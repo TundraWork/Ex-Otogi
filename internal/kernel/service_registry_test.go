@@ -76,6 +76,10 @@ func TestServiceRegistryErrors(t *testing.T) {
 	if err := registry.Register("svc", nil); err == nil {
 		t.Fatal("expected nil service register error")
 	}
+	var nilPointerService *struct{}
+	if err := registry.Register("svc-pointer", nilPointerService); err == nil {
+		t.Fatal("expected nil pointer service register error")
+	}
 	if _, err := registry.Resolve("missing"); !errors.Is(err, otogi.ErrServiceNotFound) {
 		t.Fatalf("resolve missing error = %v, want %v", err, otogi.ErrServiceNotFound)
 	}

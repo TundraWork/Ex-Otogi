@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"ex-otogi/pkg/otogi"
 )
@@ -73,8 +72,9 @@ func (m *Module) Spec() otogi.ModuleSpec {
 					Name:        "media-observer",
 					Description: "handles rich media messages",
 					Interest: otogi.InterestSet{
-						Kinds:      []otogi.EventKind{otogi.EventKindMessageCreated},
-						MediaTypes: []otogi.MediaType{otogi.MediaTypePhoto, otogi.MediaTypeVideo, otogi.MediaTypeDocument},
+						Kinds:          []otogi.EventKind{otogi.EventKindMessageCreated},
+						MediaTypes:     []otogi.MediaType{otogi.MediaTypePhoto, otogi.MediaTypeVideo, otogi.MediaTypeDocument},
+						RequireMessage: true,
 					},
 					RequiredServices: []string{ServiceLogger},
 				},
@@ -138,9 +138,6 @@ func (m *Module) OnShutdown(ctx context.Context) error {
 
 // handleEvent routes each event kind to a specialized handler.
 func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
-	if event == nil {
-		return fmt.Errorf("demo module received nil event")
-	}
 	m.increment(event.Kind)
 
 	switch event.Kind {
@@ -160,10 +157,6 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 
 // handleMutationEvent logs edit/retraction mutation context.
 func (m *Module) handleMutationEvent(ctx context.Context, event *otogi.Event) error {
-	if event.Mutation == nil {
-		return fmt.Errorf("handle mutation event %s: missing mutation payload", event.Kind)
-	}
-
 	m.logger.InfoContext(ctx,
 		"demo mutation",
 		"kind", event.Kind,
@@ -177,10 +170,6 @@ func (m *Module) handleMutationEvent(ctx context.Context, event *otogi.Event) er
 
 // handleMediaEvent records rich-media message events.
 func (m *Module) handleMediaEvent(ctx context.Context, event *otogi.Event) error {
-	if event.Message == nil {
-		return fmt.Errorf("handle media event %s: missing message payload", event.Kind)
-	}
-
 	media := event.MessageMedia()
 	if len(media) == 0 {
 		m.logger.DebugContext(ctx, "demo media handler skipped non-media message", "message_id", event.Message.ID)
@@ -238,11 +227,5 @@ func (m *Module) increment(eventKind otogi.EventKind) {
 }
 
 func defaultSubscription(name string) otogi.SubscriptionSpec {
-	return otogi.SubscriptionSpec{
-		Name:           name,
-		Buffer:         128,
-		Workers:        2,
-		HandlerTimeout: 2 * time.Second,
-		Backpressure:   otogi.BackpressureDropNewest,
-	}
+	return otogi.NewDefaultSubscriptionSpec(name)
 }

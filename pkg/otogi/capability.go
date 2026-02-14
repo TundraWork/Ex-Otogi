@@ -20,6 +20,8 @@ type InterestSet struct {
 	Kinds []EventKind
 	// MediaTypes restricts matching to events carrying at least one listed media type.
 	MediaTypes []MediaType
+	// RequireMessage requires message payload presence.
+	RequireMessage bool
 	// RequireMutation requires mutation payload presence.
 	RequireMutation bool
 	// RequireReaction requires reaction payload presence.
@@ -34,6 +36,9 @@ func (i InterestSet) Matches(event *Event) bool {
 		return false
 	}
 	if len(i.Kinds) > 0 && !containsKind(i.Kinds, event.Kind) {
+		return false
+	}
+	if i.RequireMessage && event.Message == nil {
 		return false
 	}
 	if i.RequireMutation && event.Mutation == nil {
@@ -58,6 +63,9 @@ func (i InterestSet) Allows(filter InterestSet) bool {
 		return false
 	}
 	if len(i.MediaTypes) > 0 && !allMediaTypesIncluded(filter.MediaTypes, i.MediaTypes) {
+		return false
+	}
+	if i.RequireMessage && !filter.RequireMessage {
 		return false
 	}
 	if i.RequireMutation && !filter.RequireMutation {

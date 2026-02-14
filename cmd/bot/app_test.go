@@ -9,6 +9,17 @@ import (
 	"time"
 )
 
+func writeConfigFile(t *testing.T, path string, contents string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+}
+
 func TestParseLogLevel(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -44,73 +55,10 @@ func TestParseLogLevel(t *testing.T) {
 	}
 }
 
-func TestLoadConfigFromEnv(t *testing.T) {
-	t.Setenv(envLogLevel, "debug")
-	t.Setenv(envTelegramPublishTimeout, "5s")
-	t.Setenv(envTelegramAuthTimeout, "2m")
-	t.Setenv(envTelegramUpdateBuffer, "128")
-	t.Setenv(envTelegramPhone, "+15551234567")
-	t.Setenv(envTelegramSessionFile, "tmp/session.json")
-
-	cfg, err := loadConfigFromEnv()
-	if err != nil {
-		t.Fatalf("load config failed: %v", err)
-	}
-
-	if cfg.logLevel != slog.LevelDebug {
-		t.Fatalf("log level = %v, want %v", cfg.logLevel, slog.LevelDebug)
-	}
-	if cfg.telegramPublishTimeout != 5*time.Second {
-		t.Fatalf("publish timeout = %s, want 5s", cfg.telegramPublishTimeout)
-	}
-	if cfg.telegramAuthTimeout != 2*time.Minute {
-		t.Fatalf("auth timeout = %s, want 2m", cfg.telegramAuthTimeout)
-	}
-	if cfg.telegramUpdateBuffer != 128 {
-		t.Fatalf("update buffer = %d, want 128", cfg.telegramUpdateBuffer)
-	}
-	if cfg.telegramPhone != "+15551234567" {
-		t.Fatalf("telegram phone = %q, want +15551234567", cfg.telegramPhone)
-	}
-	if cfg.telegramSessionFile != "tmp/session.json" {
-		t.Fatalf("telegram session file = %q, want tmp/session.json", cfg.telegramSessionFile)
-	}
-}
-
-func TestLoadConfigFromEnvInvalid(t *testing.T) {
-	tests := []struct {
-		name   string
-		key    string
-		value  string
-		hasErr bool
-	}{
-		{name: "invalid log level", key: envLogLevel, value: "trace", hasErr: true},
-		{name: "invalid publish timeout", key: envTelegramPublishTimeout, value: "bad", hasErr: true},
-		{name: "zero publish timeout", key: envTelegramPublishTimeout, value: "0s", hasErr: true},
-		{name: "invalid auth timeout", key: envTelegramAuthTimeout, value: "bad", hasErr: true},
-		{name: "invalid update buffer", key: envTelegramUpdateBuffer, value: "bad", hasErr: true},
-		{name: "non-positive update buffer", key: envTelegramUpdateBuffer, value: "0", hasErr: true},
-	}
-
-	for _, testCase := range tests {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Setenv(testCase.key, testCase.value)
-			_, err := loadConfigFromEnv()
-			if testCase.hasErr && err == nil {
-				t.Fatal("expected error")
-			}
-			if !testCase.hasErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
 func TestLoadConfig(t *testing.T) {
 	t.Run("loads all supported fields from config file", func(t *testing.T) {
 		configPath := filepath.Join(t.TempDir(), "bot.json")
-		if err := os.WriteFile(configPath, []byte(`{
+		writeConfigFile(t, configPath, `{
 			"log_level":"warn",
 			"kernel":{
 				"module_hook_timeout":"7s",
@@ -119,18 +67,18 @@ func TestLoadConfig(t *testing.T) {
 				"subscription_workers":5
 			},
 			"telegram":{
+				"app_id":123456,
+				"app_hash":"sample_hash",
 				"publish_timeout":"11s",
 				"update_buffer":222,
 				"auth_timeout":"4m",
-				"code_env":"CUSTOM_TELEGRAM_CODE",
-				"bot_token_env":"CUSTOM_TELEGRAM_BOT_TOKEN",
+				"code":"998877",
+				"bot_token":"123:abc",
 				"phone":"+15550001111",
 				"password":"secret",
 				"session_file":"state/telegram/session.json"
 			}
-		}`), 0o600); err != nil {
-			t.Fatalf("write config file: %v", err)
-		}
+		}`)
 		t.Setenv(envConfigFile, configPath)
 
 		cfg, err := loadConfig()
@@ -153,6 +101,12 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.subscriptionWorkers != 5 {
 			t.Fatalf("subscription workers = %d, want 5", cfg.subscriptionWorkers)
 		}
+		if cfg.telegramAppID != 123456 {
+			t.Fatalf("telegram app id = %d, want 123456", cfg.telegramAppID)
+		}
+		if cfg.telegramAppHash != "sample_hash" {
+			t.Fatalf("telegram app hash = %q, want sample_hash", cfg.telegramAppHash)
+		}
 		if cfg.telegramPublishTimeout != 11*time.Second {
 			t.Fatalf("telegram publish timeout = %s, want 11s", cfg.telegramPublishTimeout)
 		}
@@ -162,11 +116,11 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.telegramAuthTimeout != 4*time.Minute {
 			t.Fatalf("telegram auth timeout = %s, want 4m", cfg.telegramAuthTimeout)
 		}
-		if cfg.telegramCodeEnv != "CUSTOM_TELEGRAM_CODE" {
-			t.Fatalf("telegram code env = %q, want CUSTOM_TELEGRAM_CODE", cfg.telegramCodeEnv)
+		if cfg.telegramCode != "998877" {
+			t.Fatalf("telegram code = %q, want 998877", cfg.telegramCode)
 		}
-		if cfg.telegramBotTokenEnv != "CUSTOM_TELEGRAM_BOT_TOKEN" {
-			t.Fatalf("telegram bot token env = %q, want CUSTOM_TELEGRAM_BOT_TOKEN", cfg.telegramBotTokenEnv)
+		if cfg.telegramBotToken != "123:abc" {
+			t.Fatalf("telegram bot token = %q, want 123:abc", cfg.telegramBotToken)
 		}
 		if cfg.telegramPhone != "+15550001111" {
 			t.Fatalf("telegram phone = %q, want +15550001111", cfg.telegramPhone)
@@ -179,50 +133,40 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("env overrides config file", func(t *testing.T) {
-		configPath := filepath.Join(t.TempDir(), "bot.json")
-		if err := os.WriteFile(configPath, []byte(`{
-			"log_level":"error",
+	t.Run("loads fallback path bin/config/bot.json when no explicit path is set", func(t *testing.T) {
+		workDir := t.TempDir()
+		configPath := filepath.Join(workDir, "bin", "config", "bot.json")
+		writeConfigFile(t, configPath, `{
 			"telegram":{
-				"publish_timeout":"20s",
-				"auth_timeout":"4m",
-				"update_buffer":333,
-				"phone":"+15550001111",
-				"session_file":"state/telegram/session.json"
+				"app_id":777,
+				"app_hash":"fallback_hash"
 			}
-		}`), 0o600); err != nil {
-			t.Fatalf("write config file: %v", err)
+		}`)
+
+		currentDir, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("get working directory: %v", err)
 		}
-		t.Setenv(envConfigFile, configPath)
-		t.Setenv(envLogLevel, "debug")
-		t.Setenv(envTelegramPublishTimeout, "5s")
-		t.Setenv(envTelegramAuthTimeout, "2m")
-		t.Setenv(envTelegramUpdateBuffer, "128")
-		t.Setenv(envTelegramPhone, "+15552223333")
-		t.Setenv(envTelegramSessionFile, "overrides/session.json")
+		if err := os.Chdir(workDir); err != nil {
+			t.Fatalf("chdir to temp work dir: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := os.Chdir(currentDir); err != nil {
+				t.Fatalf("restore working directory: %v", err)
+			}
+		})
+		t.Setenv(envConfigFile, "")
 
 		cfg, err := loadConfig()
 		if err != nil {
 			t.Fatalf("load config failed: %v", err)
 		}
 
-		if cfg.logLevel != slog.LevelDebug {
-			t.Fatalf("log level = %v, want %v", cfg.logLevel, slog.LevelDebug)
+		if cfg.telegramAppID != 777 {
+			t.Fatalf("telegram app id = %d, want 777", cfg.telegramAppID)
 		}
-		if cfg.telegramPublishTimeout != 5*time.Second {
-			t.Fatalf("publish timeout = %s, want 5s", cfg.telegramPublishTimeout)
-		}
-		if cfg.telegramAuthTimeout != 2*time.Minute {
-			t.Fatalf("auth timeout = %s, want 2m", cfg.telegramAuthTimeout)
-		}
-		if cfg.telegramUpdateBuffer != 128 {
-			t.Fatalf("update buffer = %d, want 128", cfg.telegramUpdateBuffer)
-		}
-		if cfg.telegramPhone != "+15552223333" {
-			t.Fatalf("telegram phone = %q, want +15552223333", cfg.telegramPhone)
-		}
-		if cfg.telegramSessionFile != "overrides/session.json" {
-			t.Fatalf("telegram session file = %q, want overrides/session.json", cfg.telegramSessionFile)
+		if cfg.telegramAppHash != "fallback_hash" {
+			t.Fatalf("telegram app hash = %q, want fallback_hash", cfg.telegramAppHash)
 		}
 	})
 
@@ -234,28 +178,33 @@ func TestLoadConfig(t *testing.T) {
 		}{
 			{
 				name:       "invalid log level",
-				fileJSON:   `{"log_level":"trace"}`,
+				fileJSON:   `{"log_level":"trace","telegram":{"app_id":1,"app_hash":"hash"}}`,
 				wantErrSub: "parse log_level",
 			},
 			{
 				name:       "invalid kernel timeout",
-				fileJSON:   `{"kernel":{"module_hook_timeout":"bad"}}`,
+				fileJSON:   `{"kernel":{"module_hook_timeout":"bad"},"telegram":{"app_id":1,"app_hash":"hash"}}`,
 				wantErrSub: "parse kernel.module_hook_timeout",
 			},
 			{
 				name:       "non-positive kernel buffer",
-				fileJSON:   `{"kernel":{"subscription_buffer":0}}`,
+				fileJSON:   `{"kernel":{"subscription_buffer":0},"telegram":{"app_id":1,"app_hash":"hash"}}`,
 				wantErrSub: "parse kernel.subscription_buffer",
 			},
 			{
 				name:       "invalid telegram timeout",
-				fileJSON:   `{"telegram":{"auth_timeout":"bad"}}`,
+				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash","auth_timeout":"bad"}}`,
 				wantErrSub: "parse telegram.auth_timeout",
 			},
 			{
 				name:       "non-positive telegram update buffer",
-				fileJSON:   `{"telegram":{"update_buffer":0}}`,
+				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash","update_buffer":0}}`,
 				wantErrSub: "parse telegram.update_buffer",
+			},
+			{
+				name:       "non-positive telegram app id",
+				fileJSON:   `{"telegram":{"app_id":0,"app_hash":"hash"}}`,
+				wantErrSub: "parse telegram.app_id",
 			},
 		}
 
@@ -263,9 +212,43 @@ func TestLoadConfig(t *testing.T) {
 			testCase := testCase
 			t.Run(testCase.name, func(t *testing.T) {
 				configPath := filepath.Join(t.TempDir(), "bot.json")
-				if err := os.WriteFile(configPath, []byte(testCase.fileJSON), 0o600); err != nil {
-					t.Fatalf("write config file: %v", err)
+				writeConfigFile(t, configPath, testCase.fileJSON)
+				t.Setenv(envConfigFile, configPath)
+
+				_, err := loadConfig()
+				if err == nil {
+					t.Fatal("expected error")
 				}
+				if !strings.Contains(err.Error(), testCase.wantErrSub) {
+					t.Fatalf("error = %v, want substring %q", err, testCase.wantErrSub)
+				}
+			})
+		}
+	})
+
+	t.Run("missing required app credentials fail", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			fileJSON   string
+			wantErrSub string
+		}{
+			{
+				name:       "app id missing",
+				fileJSON:   `{"telegram":{"app_hash":"hash"}}`,
+				wantErrSub: "telegram.app_id must be > 0",
+			},
+			{
+				name:       "app hash missing",
+				fileJSON:   `{"telegram":{"app_id":1}}`,
+				wantErrSub: "telegram.app_hash is required",
+			},
+		}
+
+		for _, testCase := range tests {
+			testCase := testCase
+			t.Run(testCase.name, func(t *testing.T) {
+				configPath := filepath.Join(t.TempDir(), "bot.json")
+				writeConfigFile(t, configPath, testCase.fileJSON)
 				t.Setenv(envConfigFile, configPath)
 
 				_, err := loadConfig()
