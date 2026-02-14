@@ -1,0 +1,135 @@
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  disable-all: true
+  enable:
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - contextcheck
+    - cyclop
+    - dupl
+    - errcheck
+    - errorlint
+    - exhaustive
+    - funlen
+    - gocognit
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unused
+    - wastedassign
+    - wrapcheck
+
+linters-settings:
+  cyclop:
+    max-complexity: 10
+    package-average: 6.0
+
+  dupl:
+    threshold: 120
+
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  exhaustive:
+    default-signifies-exhaustive: true
+
+  funlen:
+    lines: 80
+    statements: 45
+
+  gocognit:
+    min-complexity: 15
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+      - style
+
+  govet:
+    enable:
+      - appends
+      - asmdecl
+      - assign
+      - atomic
+      - bools
+      - buildtag
+      - cgocall
+      - composites
+      - copylocks
+      - fieldalignment
+      - httpresponse
+      - ifaceassert
+      - loopclosure
+      - lostcancel
+      - nilfunc
+      - nilness
+      - printf
+      - shift
+      - sigchanyzer
+      - stdmethods
+      - stringintconv
+      - structtag
+      - tests
+      - unmarshal
+      - unreachable
+      - unsafeptr
+      - unusedresult
+
+  misspell:
+    locale: US
+
+  revive:
+    confidence: 0.8
+    severity: warning
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: defer
+      - name: early-return
+      - name: empty-lines
+      - name: errorf
+      - name: error-return
+      - name: error-strings
+      - name: if-return
+      - name: increment-decrement
+      - name: range
+      - name: receiver-naming
+      - name: redefines-builtin-id
+      - name: superfluous-else
+      - name: time-naming
+      - name: unexported-return
+      - name: unnecessary-stmt
+      - name: unreachable-code
+      - name: unused-parameter
+
+  staticcheck:
+    checks:
+      - all
+
+  wrapcheck:
+    ignore-package-globs:
+      - errors
+      - fmt
+
+output:
+  sort-results: true

@@ -1,0 +1,19 @@
+{
+  "log_level": "info",
+  "kernel": {
+    "module_hook_timeout": "3s",
+    "shutdown_timeout": "10s",
+    "subscription_buffer": 256,
+    "subscription_workers": 2
+  },
+  "telegram": {
+    "publish_timeout": "2s",
+    "update_buffer": 256,
+    "auth_timeout": "3m",
+    "code_env": "OTOGI_TELEGRAM_CODE",
+    "bot_token_env": "OTOGI_TELEGRAM_BOT_TOKEN",
+    "phone": "+15550001111",
+    "password": "",
+    "session_file": ".cache/telegram/session.json"
+  }
+}
