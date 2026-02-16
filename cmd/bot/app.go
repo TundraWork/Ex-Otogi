@@ -16,7 +16,7 @@ import (
 
 	"ex-otogi/internal/driver/telegram"
 	"ex-otogi/internal/kernel"
-	"ex-otogi/modules/demo"
+	"ex-otogi/modules/eventcache"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/pkg/otogi"
 
@@ -348,7 +348,7 @@ func registerRuntimeServices(
 	logger *slog.Logger,
 	outbound otogi.OutboundDispatcher,
 ) error {
-	if err := kernelRuntime.RegisterService(demo.ServiceLogger, logger); err != nil {
+	if err := kernelRuntime.RegisterService(eventcache.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
 	}
 	if outbound != nil {
@@ -361,9 +361,9 @@ func registerRuntimeServices(
 }
 
 func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) error {
-	demoModule := demo.New()
-	if err := kernelRuntime.RegisterModule(ctx, demoModule); err != nil {
-		return fmt.Errorf("register demo module: %w", err)
+	eventCacheModule := eventcache.New()
+	if err := kernelRuntime.RegisterModule(ctx, eventCacheModule); err != nil {
+		return fmt.Errorf("register event cache module: %w", err)
 	}
 	pingPongModule := pingpong.New()
 	if err := kernelRuntime.RegisterModule(ctx, pingPongModule); err != nil {
@@ -398,6 +398,10 @@ func buildTelegramRuntime(logger *slog.Logger, cfg appConfig) (telegramRuntime, 
 	})
 
 	peers := telegram.NewPeerCache()
+	reactionResolver, err := telegram.NewGotdMessageReactionResolver(client.API())
+	if err != nil {
+		return telegramRuntime{}, fmt.Errorf("new gotd message reaction resolver: %w", err)
+	}
 	source, err := telegram.NewGotdUserbotSource(
 		gotdAuthenticatedClient{
 			client: client,
@@ -406,7 +410,11 @@ func buildTelegramRuntime(logger *slog.Logger, cfg appConfig) (telegramRuntime, 
 			},
 		},
 		updateChannel,
-		telegram.NewDefaultGotdUpdateMapper(telegram.WithPeerCache(peers)),
+		telegram.NewDefaultGotdUpdateMapper(
+			telegram.WithPeerCache(peers),
+			telegram.WithMessageReactionResolver(reactionResolver),
+			telegram.WithMapperLogger(logger),
+		),
 	)
 	if err != nil {
 		return telegramRuntime{}, fmt.Errorf("new gotd userbot source: %w", err)

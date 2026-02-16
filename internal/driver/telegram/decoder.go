@@ -36,14 +36,14 @@ func (d DefaultDecoder) Decode(_ context.Context, update Update) (*otogi.Event, 
 		event.Message = message
 	case UpdateTypeEdit:
 		event.Kind = otogi.EventKindMessageEdited
-		mutation, err := decodeEdit(update.Edit)
+		mutation, err := decodeEdit(update.Edit, update.OccurredAt)
 		if err != nil {
 			return nil, fmt.Errorf("decode edit: %w", err)
 		}
 		event.Mutation = mutation
 	case UpdateTypeDelete:
 		event.Kind = otogi.EventKindMessageRetracted
-		mutation, err := decodeDelete(update.Delete)
+		mutation, err := decodeDelete(update.Delete, update.OccurredAt)
 		if err != nil {
 			return nil, fmt.Errorf("decode delete: %w", err)
 		}
@@ -126,18 +126,24 @@ func decodeMessage(payload *MessagePayload) (*otogi.Message, error) {
 		Text:      payload.Text,
 		Entities:  payload.Entities,
 		Media:     mapMedia(payload.Media),
+		Reactions: append([]otogi.MessageReaction(nil), payload.Reactions...),
 	}, nil
 }
 
 // decodeEdit maps Telegram edit payload into mutation semantics.
-func decodeEdit(payload *EditPayload) (*otogi.Mutation, error) {
+func decodeEdit(payload *EditPayload, occurredAt time.Time) (*otogi.Mutation, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing edit payload")
+	}
+	changedAt := cloneTimePointer(payload.ChangedAt)
+	if changedAt == nil {
+		changedAt = eventTimePointer(occurredAt)
 	}
 
 	return &otogi.Mutation{
 		Type:            otogi.MutationTypeEdit,
 		TargetMessageID: payload.MessageID,
+		ChangedAt:       changedAt,
 		Before:          mapSnapshot(payload.Before),
 		After:           mapSnapshot(payload.After),
 		Reason:          payload.Reason,
@@ -145,14 +151,16 @@ func decodeEdit(payload *EditPayload) (*otogi.Mutation, error) {
 }
 
 // decodeDelete maps Telegram delete payload into retraction mutation semantics.
-func decodeDelete(payload *DeletePayload) (*otogi.Mutation, error) {
+func decodeDelete(payload *DeletePayload, occurredAt time.Time) (*otogi.Mutation, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing delete payload")
 	}
+	changedAt := eventTimePointer(occurredAt)
 
 	return &otogi.Mutation{
 		Type:            otogi.MutationTypeRetraction,
 		TargetMessageID: payload.MessageID,
+		ChangedAt:       changedAt,
 		Reason:          payload.Reason,
 	}, nil
 }
@@ -322,4 +330,22 @@ func mapActor(actor ActorRef) otogi.Actor {
 		DisplayName: actor.DisplayName,
 		IsBot:       actor.IsBot,
 	}
+}
+
+func eventTimePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+
+	utc := value.UTC()
+	return &utc
+}
+
+func cloneTimePointer(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+
+	utc := value.UTC()
+	return &utc
 }

@@ -107,6 +107,17 @@ func TestModuleSpecUsesStrictMessageCapability(t *testing.T) {
 	if handler.Subscription.Buffer != 0 || handler.Subscription.Workers != 0 || handler.Subscription.HandlerTimeout != 0 {
 		t.Fatalf("expected subscription to defer runtime defaults, got %#v", handler.Subscription)
 	}
+
+	required := map[string]bool{}
+	for _, serviceName := range handler.Capability.RequiredServices {
+		required[serviceName] = true
+	}
+	if !required[otogi.ServiceOutboundDispatcher] {
+		t.Fatalf("required services missing %s", otogi.ServiceOutboundDispatcher)
+	}
+	if len(required) != 1 {
+		t.Fatalf("required service count = %d, want 1", len(required))
+	}
 }
 
 func newMessageEvent(text string) *otogi.Event {

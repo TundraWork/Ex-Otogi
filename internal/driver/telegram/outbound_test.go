@@ -36,6 +36,28 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 			wantMessage: "901",
 		},
 		{
+			name: "successful send with entities",
+			request: otogi.SendMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				Text: "click me",
+				Entities: []otogi.TextEntity{
+					{
+						Type:   otogi.TextEntityTypeTextURL,
+						Offset: 0,
+						Length: 8,
+						URL:    "https://example.com",
+					},
+				},
+			},
+			wantMessage: "901",
+		},
+		{
 			name: "invalid request",
 			request: otogi.SendMessageRequest{
 				Target: otogi.OutboundTarget{
@@ -114,6 +136,107 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 			}
 			if rpc.sendCalls != 1 {
 				t.Fatalf("send calls = %d, want 1", rpc.sendCalls)
+			}
+			if len(rpc.lastSendRequest.Entities) != len(testCase.request.Entities) {
+				t.Fatalf(
+					"entity len = %d, want %d",
+					len(rpc.lastSendRequest.Entities),
+					len(testCase.request.Entities),
+				)
+			}
+		})
+	}
+}
+
+func TestOutboundDispatcherEditMessage(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		&tg.InputPeerChat{ChatID: 42},
+	)
+
+	tests := []struct {
+		name    string
+		request otogi.EditMessageRequest
+		wantErr bool
+	}{
+		{
+			name: "successful edit with entities",
+			request: otogi.EditMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				MessageID: "10",
+				Text:      "updated",
+				Entities: []otogi.TextEntity{
+					{
+						Type:   otogi.TextEntityTypeBold,
+						Offset: 0,
+						Length: 7,
+					},
+				},
+			},
+		},
+		{
+			name: "invalid edit entity payload",
+			request: otogi.EditMessageRequest{
+				Target: otogi.OutboundTarget{
+					Platform: otogi.PlatformTelegram,
+					Conversation: otogi.Conversation{
+						ID:   "42",
+						Type: otogi.ConversationTypeGroup,
+					},
+				},
+				MessageID: "10",
+				Text:      "updated",
+				Entities: []otogi.TextEntity{
+					{
+						Type:   otogi.TextEntityTypeCustomEmoji,
+						Offset: 0,
+						Length: 1,
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			rpc := &stubOutboundRPC{}
+			dispatcher, err := newOutboundDispatcherWithRPC(rpc, cache)
+			if err != nil {
+				t.Fatalf("new dispatcher failed: %v", err)
+			}
+
+			err = dispatcher.EditMessage(context.Background(), testCase.request)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if rpc.editCalls != 1 {
+				t.Fatalf("edit calls = %d, want 1", rpc.editCalls)
+			}
+			if len(rpc.lastEditRequest.Entities) != len(testCase.request.Entities) {
+				t.Fatalf(
+					"entity len = %d, want %d",
+					len(rpc.lastEditRequest.Entities),
+					len(testCase.request.Entities),
+				)
 			}
 		})
 	}
@@ -327,22 +450,136 @@ func TestOutboundDispatcherDeleteMessage(t *testing.T) {
 	}
 }
 
+func TestMapOutboundTextEntities(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		text         string
+		entities     []otogi.TextEntity
+		wantErr      bool
+		wantLen      int
+		wantTypeName string
+		wantOffset   int
+		wantLength   int
+	}{
+		{
+			name: "empty entities",
+			text: "hello",
+		},
+		{
+			name: "maps bold",
+			text: "hello",
+			entities: []otogi.TextEntity{
+				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 5},
+			},
+			wantLen:      1,
+			wantTypeName: "*tg.MessageEntityBold",
+			wantOffset:   0,
+			wantLength:   5,
+		},
+		{
+			name: "maps pre language",
+			text: "fmt.Println()",
+			entities: []otogi.TextEntity{
+				{Type: otogi.TextEntityTypePre, Offset: 0, Length: 12, Language: "go"},
+			},
+			wantLen:      1,
+			wantTypeName: "*tg.MessageEntityPre",
+			wantOffset:   0,
+			wantLength:   12,
+		},
+		{
+			name: "maps utf16 offsets",
+			text: "a😀b",
+			entities: []otogi.TextEntity{
+				{Type: otogi.TextEntityTypeBold, Offset: 1, Length: 1},
+			},
+			wantLen:      1,
+			wantTypeName: "*tg.MessageEntityBold",
+			wantOffset:   1,
+			wantLength:   2,
+		},
+		{
+			name: "invalid range fails",
+			text: "hello",
+			entities: []otogi.TextEntity{
+				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 6},
+			},
+			wantErr: true,
+		},
+		{
+			name: "unsupported type fails",
+			text: "hello",
+			entities: []otogi.TextEntity{
+				{Type: "fancy", Offset: 0, Length: 5},
+			},
+			wantErr: true,
+		},
+		{
+			name: "mention_name unsupported",
+			text: "alice",
+			entities: []otogi.TextEntity{
+				{Type: otogi.TextEntityTypeMentionName, Offset: 0, Length: 5, MentionUserID: "123"},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			converted, err := mapOutboundTextEntities(testCase.text, testCase.entities)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(converted) != testCase.wantLen {
+				t.Fatalf("converted len = %d, want %d", len(converted), testCase.wantLen)
+			}
+			if len(converted) == 0 {
+				return
+			}
+
+			if gotType := typeName(converted[0]); gotType != testCase.wantTypeName {
+				t.Fatalf("type = %s, want %s", gotType, testCase.wantTypeName)
+			}
+			if converted[0].GetOffset() != testCase.wantOffset {
+				t.Fatalf("offset = %d, want %d", converted[0].GetOffset(), testCase.wantOffset)
+			}
+			if converted[0].GetLength() != testCase.wantLength {
+				t.Fatalf("length = %d, want %d", converted[0].GetLength(), testCase.wantLength)
+			}
+		})
+	}
+}
+
 type stubOutboundRPC struct {
-	sendID        int
-	sendErr       error
-	sendCalls     int
-	editCalls     int
-	deleteCalls   int
-	reactionCalls int
-	reactions     []tg.ReactionClass
+	sendID          int
+	sendErr         error
+	lastSendRequest otogi.SendMessageRequest
+	lastEditRequest otogi.EditMessageRequest
+	sendCalls       int
+	editCalls       int
+	deleteCalls     int
+	reactionCalls   int
+	reactions       []tg.ReactionClass
 }
 
 func (s *stubOutboundRPC) SendText(
 	_ context.Context,
 	_ tg.InputPeerClass,
-	_ otogi.SendMessageRequest,
+	request otogi.SendMessageRequest,
 ) (int, error) {
 	s.sendCalls++
+	s.lastSendRequest = request
 	if s.sendErr != nil {
 		return 0, s.sendErr
 	}
@@ -354,9 +591,10 @@ func (s *stubOutboundRPC) EditText(
 	_ context.Context,
 	_ tg.InputPeerClass,
 	_ int,
-	_ otogi.EditMessageRequest,
+	request otogi.EditMessageRequest,
 ) error {
 	s.editCalls++
+	s.lastEditRequest = request
 	return nil
 }
 

@@ -32,10 +32,35 @@ func TestOutboundRequestValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "send message valid with entities",
+			check: func() error {
+				return SendMessageRequest{
+					Target: validTarget,
+					Text:   "hello",
+					Entities: []TextEntity{
+						{Type: TextEntityTypeBold, Offset: 0, Length: 5},
+					},
+				}.Validate()
+			},
+		},
+		{
 			name: "send message missing text",
 			check: func() error {
 				return SendMessageRequest{
 					Target: validTarget,
+				}.Validate()
+			},
+			wantErr: true,
+		},
+		{
+			name: "send message invalid entity range",
+			check: func() error {
+				return SendMessageRequest{
+					Target: validTarget,
+					Text:   "hello",
+					Entities: []TextEntity{
+						{Type: TextEntityTypeBold, Offset: 0, Length: 6},
+					},
 				}.Validate()
 			},
 			wantErr: true,
@@ -56,6 +81,20 @@ func TestOutboundRequestValidation(t *testing.T) {
 				return EditMessageRequest{
 					Target: validTarget,
 					Text:   "updated",
+				}.Validate()
+			},
+			wantErr: true,
+		},
+		{
+			name: "edit message invalid text_url payload",
+			check: func() error {
+				return EditMessageRequest{
+					Target:    validTarget,
+					MessageID: "100",
+					Text:      "updated",
+					Entities: []TextEntity{
+						{Type: TextEntityTypeTextURL, Offset: 0, Length: 7},
+					},
 				}.Validate()
 			},
 			wantErr: true,

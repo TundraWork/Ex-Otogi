@@ -3,6 +3,7 @@ package otogi
 import (
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // EventKind identifies a neutral domain event type.
@@ -116,16 +117,132 @@ type Message struct {
 	Entities []TextEntity
 	// Media contains normalized attachments associated with the message.
 	Media []MediaAttachment
+	// Reactions contains the projected reaction summary derived from reaction events.
+	Reactions []MessageReaction
 }
+
+// MessageReaction summarizes projected reaction state for one emoji.
+type MessageReaction struct {
+	// Emoji identifies the reaction emoji token.
+	Emoji string
+	// Count is the number of active reactions for Emoji.
+	Count int
+}
+
+// TextEntityType identifies a normalized rich-text annotation type.
+type TextEntityType string
+
+const (
+	// TextEntityTypeUnknown identifies an unknown or passthrough entity.
+	TextEntityTypeUnknown TextEntityType = "unknown"
+	// TextEntityTypeMention identifies a textual @mention entity.
+	TextEntityTypeMention TextEntityType = "mention"
+	// TextEntityTypeHashtag identifies a hashtag entity.
+	TextEntityTypeHashtag TextEntityType = "hashtag"
+	// TextEntityTypeBotCommand identifies a bot command entity.
+	TextEntityTypeBotCommand TextEntityType = "bot_command"
+	// TextEntityTypeURL identifies an auto-detected URL entity.
+	TextEntityTypeURL TextEntityType = "url"
+	// TextEntityTypeEmail identifies an email entity.
+	TextEntityTypeEmail TextEntityType = "email"
+	// TextEntityTypeBold identifies bold text formatting.
+	TextEntityTypeBold TextEntityType = "bold"
+	// TextEntityTypeItalic identifies italic text formatting.
+	TextEntityTypeItalic TextEntityType = "italic"
+	// TextEntityTypeCode identifies inline monospace formatting.
+	TextEntityTypeCode TextEntityType = "code"
+	// TextEntityTypePre identifies preformatted code block formatting.
+	TextEntityTypePre TextEntityType = "pre"
+	// TextEntityTypeTextURL identifies clickable text with a dedicated URL.
+	TextEntityTypeTextURL TextEntityType = "text_url"
+	// TextEntityTypeMentionName identifies a mention bound to one concrete user ID.
+	TextEntityTypeMentionName TextEntityType = "mention_name"
+	// TextEntityTypePhone identifies a phone-number entity.
+	TextEntityTypePhone TextEntityType = "phone"
+	// TextEntityTypeCashtag identifies a cashtag entity.
+	TextEntityTypeCashtag TextEntityType = "cashtag"
+	// TextEntityTypeBankCard identifies a bank-card-number entity.
+	TextEntityTypeBankCard TextEntityType = "bank_card"
+	// TextEntityTypeUnderline identifies underlined formatting.
+	TextEntityTypeUnderline TextEntityType = "underline"
+	// TextEntityTypeStrike identifies strikethrough formatting.
+	TextEntityTypeStrike TextEntityType = "strike"
+	// TextEntityTypeBlockquote identifies block-quote formatting.
+	TextEntityTypeBlockquote TextEntityType = "blockquote"
+	// TextEntityTypeSpoiler identifies spoiler formatting.
+	TextEntityTypeSpoiler TextEntityType = "spoiler"
+	// TextEntityTypeCustomEmoji identifies custom emoji entity rendering.
+	TextEntityTypeCustomEmoji TextEntityType = "custom_emoji"
+)
 
 // TextEntity marks a rich text fragment.
 type TextEntity struct {
 	// Type identifies the entity class (for example link, mention, or bold).
-	Type string
+	Type TextEntityType
 	// Offset is the zero-based character offset in the message text.
 	Offset int
 	// Length is the character span of the entity.
 	Length int
+	// URL is the destination URL for text_url entities.
+	URL string
+	// Language identifies the programming language tag for pre entities.
+	Language string
+	// MentionUserID identifies the user bound to mention_name entities.
+	MentionUserID string
+	// CustomEmojiID identifies the source custom-emoji identifier.
+	CustomEmojiID string
+	// Collapsed indicates whether blockquote entities should be collapsed by default.
+	Collapsed bool
+}
+
+// ValidateTextEntities validates rich-text entities against one message text body.
+//
+// Offsets and lengths are interpreted as Unicode code-point indexes.
+func ValidateTextEntities(text string, entities []TextEntity) error {
+	if len(entities) == 0 {
+		return nil
+	}
+
+	textRuneCount := utf8.RuneCountInString(text)
+	for index, entity := range entities {
+		if entity.Type == "" {
+			return fmt.Errorf("entity[%d]: missing type", index)
+		}
+		if entity.Offset < 0 {
+			return fmt.Errorf("entity[%d]: invalid negative offset %d", index, entity.Offset)
+		}
+		if entity.Length <= 0 {
+			return fmt.Errorf("entity[%d]: invalid length %d", index, entity.Length)
+		}
+		end := entity.Offset + entity.Length
+		if end > textRuneCount {
+			return fmt.Errorf(
+				"entity[%d]: range [%d,%d) exceeds text length %d",
+				index,
+				entity.Offset,
+				end,
+				textRuneCount,
+			)
+		}
+
+		switch entity.Type {
+		case TextEntityTypeTextURL:
+			if entity.URL == "" {
+				return fmt.Errorf("entity[%d]: text_url requires url", index)
+			}
+		case TextEntityTypeMentionName:
+			if entity.MentionUserID == "" {
+				return fmt.Errorf("entity[%d]: mention_name requires mention_user_id", index)
+			}
+		case TextEntityTypeCustomEmoji:
+			if entity.CustomEmojiID == "" {
+				return fmt.Errorf("entity[%d]: custom_emoji requires custom_emoji_id", index)
+			}
+		default:
+		}
+	}
+
+	return nil
 }
 
 // MediaType identifies attachment media categories.
@@ -192,6 +309,8 @@ type Mutation struct {
 	Type MutationType
 	// TargetMessageID identifies the message affected by the mutation.
 	TargetMessageID string
+	// ChangedAt is when the mutation happened on the source platform when known.
+	ChangedAt *time.Time
 	// Before captures message state before mutation.
 	Before *MessageSnapshot
 	// After captures message state after mutation.
@@ -204,6 +323,8 @@ type Mutation struct {
 type MessageSnapshot struct {
 	// Text is the immutable text snapshot.
 	Text string
+	// Entities stores immutable rich-text entities aligned with Text.
+	Entities []TextEntity
 	// Media is the immutable media snapshot.
 	Media []MediaAttachment
 }
@@ -316,9 +437,18 @@ func validatePayloadByKind(e *Event) error {
 		if e.Message == nil {
 			return fmt.Errorf("%w: message.created requires message payload", ErrInvalidEvent)
 		}
+		if e.Message.ID == "" {
+			return fmt.Errorf("%w: message.created requires message id", ErrInvalidEvent)
+		}
+		if err := ValidateTextEntities(e.Message.Text, e.Message.Entities); err != nil {
+			return fmt.Errorf("%w: message.created invalid entities: %w", ErrInvalidEvent, err)
+		}
 	case EventKindMessageEdited, EventKindMessageRetracted:
 		if e.Mutation == nil {
 			return fmt.Errorf("%w: mutation event requires mutation payload", ErrInvalidEvent)
+		}
+		if err := validateMutationSnapshotEntities(e.Mutation); err != nil {
+			return fmt.Errorf("%w: mutation invalid entities: %v", ErrInvalidEvent, err)
 		}
 	case EventKindReactionAdded, EventKindReactionRemoved:
 		if e.Reaction == nil {
@@ -330,6 +460,24 @@ func validatePayloadByKind(e *Event) error {
 		}
 	default:
 		return fmt.Errorf("%w: unsupported kind %q", ErrInvalidEvent, e.Kind)
+	}
+
+	return nil
+}
+
+func validateMutationSnapshotEntities(mutation *Mutation) error {
+	if mutation == nil {
+		return nil
+	}
+	if mutation.Before != nil {
+		if err := ValidateTextEntities(mutation.Before.Text, mutation.Before.Entities); err != nil {
+			return fmt.Errorf("before snapshot: %w", err)
+		}
+	}
+	if mutation.After != nil {
+		if err := ValidateTextEntities(mutation.After.Text, mutation.After.Entities); err != nil {
+			return fmt.Errorf("after snapshot: %w", err)
+		}
 	}
 
 	return nil

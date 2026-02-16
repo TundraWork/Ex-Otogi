@@ -96,6 +96,8 @@ type MessagePayload struct {
 	Entities []otogi.TextEntity
 	// Media carries normalized media attachments.
 	Media []MediaPayload
+	// Reactions carries projected reaction counts when included by Telegram updates.
+	Reactions []otogi.MessageReaction
 }
 
 // MediaPayload represents Telegram media metadata.
@@ -136,6 +138,8 @@ type MediaPreviewPayload struct {
 type EditPayload struct {
 	// MessageID identifies the edited Telegram message.
 	MessageID string
+	// ChangedAt captures when the edit happened on Telegram when known.
+	ChangedAt *time.Time
 	// Before captures the message snapshot before the edit.
 	Before *SnapshotPayload
 	// After captures the message snapshot after the edit.

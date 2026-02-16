@@ -76,6 +76,8 @@ type SendMessageRequest struct {
 	Target OutboundTarget
 	// Text is the message body.
 	Text string
+	// Entities decorates Text with semantic formatting ranges.
+	Entities []TextEntity
 	// ReplyToMessageID optionally links this message as a reply.
 	ReplyToMessageID string
 	// DisableLinkPreview disables link previews when supported by the platform.
@@ -92,6 +94,9 @@ func (r SendMessageRequest) Validate() error {
 	if r.Text == "" {
 		return fmt.Errorf("%w: missing message text", ErrInvalidOutboundRequest)
 	}
+	if err := ValidateTextEntities(r.Text, r.Entities); err != nil {
+		return fmt.Errorf("%w: validate send message entities: %w", ErrInvalidOutboundRequest, err)
+	}
 
 	return nil
 }
@@ -104,6 +109,8 @@ type EditMessageRequest struct {
 	MessageID string
 	// Text is the replacement message body.
 	Text string
+	// Entities decorates Text with semantic formatting ranges.
+	Entities []TextEntity
 	// DisableLinkPreview disables link previews when supported by the platform.
 	DisableLinkPreview bool
 }
@@ -118,6 +125,9 @@ func (r EditMessageRequest) Validate() error {
 	}
 	if r.Text == "" {
 		return fmt.Errorf("%w: missing message text", ErrInvalidOutboundRequest)
+	}
+	if err := ValidateTextEntities(r.Text, r.Entities); err != nil {
+		return fmt.Errorf("%w: validate edit message entities: %w", ErrInvalidOutboundRequest, err)
 	}
 
 	return nil
