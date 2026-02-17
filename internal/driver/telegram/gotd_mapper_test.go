@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 			wantType:     UpdateTypeMessage,
 			assert: func(t *testing.T, got Update) {
 				t.Helper()
-				if got.Message == nil {
+				if got.Article == nil {
 					t.Fatal("expected message payload")
 				}
 				if got.Chat.ID != "100" {
@@ -74,17 +75,17 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if got.Actor.ID != "42" {
 					t.Fatalf("actor id = %s, want 42", got.Actor.ID)
 				}
-				if got.Message.ID != "777" {
-					t.Fatalf("message id = %s, want 777", got.Message.ID)
+				if got.Article.ID != "777" {
+					t.Fatalf("message id = %s, want 777", got.Article.ID)
 				}
-				if got.Message.Text != "hello" {
-					t.Fatalf("message text = %s, want hello", got.Message.Text)
+				if got.Article.Text != "hello" {
+					t.Fatalf("message text = %s, want hello", got.Article.Text)
 				}
-				if len(got.Message.Reactions) != 1 {
-					t.Fatalf("reactions length = %d, want 1", len(got.Message.Reactions))
+				if len(got.Article.Reactions) != 1 {
+					t.Fatalf("reactions length = %d, want 1", len(got.Article.Reactions))
 				}
-				if got.Message.Reactions[0].Emoji != "❤️" || got.Message.Reactions[0].Count != 2 {
-					t.Fatalf("reactions[0] = %+v, want {Emoji:❤️ Count:2}", got.Message.Reactions[0])
+				if got.Article.Reactions[0].Emoji != "❤️" || got.Article.Reactions[0].Count != 2 {
+					t.Fatalf("reactions[0] = %+v, want {Emoji:❤️ Count:2}", got.Article.Reactions[0])
 				}
 			},
 		},
@@ -118,14 +119,14 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 			wantType:     UpdateTypeEdit,
 			assert: func(t *testing.T, got Update) {
 				t.Helper()
-				if got.Message == nil {
+				if got.Article == nil {
 					t.Fatal("expected message payload")
 				}
-				if got.Message.ID != "888" {
-					t.Fatalf("message id = %s, want 888", got.Message.ID)
+				if got.Article.ID != "888" {
+					t.Fatalf("message id = %s, want 888", got.Article.ID)
 				}
-				if got.Message.Text != "updated" {
-					t.Fatalf("message text = %s, want updated", got.Message.Text)
+				if got.Article.Text != "updated" {
+					t.Fatalf("message text = %s, want updated", got.Article.Text)
 				}
 				if got.Edit == nil {
 					t.Fatal("expected edit payload")
@@ -139,8 +140,8 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if !got.Edit.ChangedAt.Equal(time.Unix(1_700_000_111, 0).UTC()) {
 					t.Fatalf("changed_at = %v, want %v", got.Edit.ChangedAt, time.Unix(1_700_000_111, 0).UTC())
 				}
-				if got.Edit.MessageID != "888" {
-					t.Fatalf("edit message id = %s, want 888", got.Edit.MessageID)
+				if got.Edit.ArticleID != "888" {
+					t.Fatalf("edit message id = %s, want 888", got.Edit.ArticleID)
 				}
 				if got.Edit.After == nil {
 					t.Fatal("expected edit after snapshot")
@@ -148,8 +149,8 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if got.Edit.After.Text != "updated" {
 					t.Fatalf("edit after text = %s, want updated", got.Edit.After.Text)
 				}
-				if len(got.ID) < len("tg:message.edited:") || got.ID[:len("tg:message.edited:")] != "tg:message.edited:" {
-					t.Fatalf("id = %s, want prefix tg:message.edited:", got.ID)
+				if len(got.ID) < len("tg:article.edited:") || got.ID[:len("tg:article.edited:")] != "tg:article.edited:" {
+					t.Fatalf("id = %s, want prefix tg:article.edited:", got.ID)
 				}
 			},
 		},
@@ -199,11 +200,22 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if got.Reaction == nil {
 					t.Fatal("expected reaction payload")
 				}
-				if got.Reaction.MessageID != "889" {
-					t.Fatalf("reaction message id = %s, want 889", got.Reaction.MessageID)
+				if got.Reaction.ArticleID != "889" {
+					t.Fatalf("reaction message id = %s, want 889", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
+				}
+				assertEventIDSegments(
+					t,
+					got.ID,
+					"article.reaction.added",
+					"500",
+					"889",
+					time.Unix(1_700_000_222, 0).UTC(),
+				)
+				if strings.Contains(got.ID, "❤️") {
+					t.Fatalf("reaction id = %s, should not contain emoji", got.ID)
 				}
 			},
 		},
@@ -246,8 +258,8 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if got.Reaction == nil {
 					t.Fatal("expected reaction payload")
 				}
-				if got.Reaction.MessageID != "890" {
-					t.Fatalf("reaction message id = %s, want 890", got.Reaction.MessageID)
+				if got.Reaction.ArticleID != "890" {
+					t.Fatalf("reaction message id = %s, want 890", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -300,8 +312,8 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if got.Reaction == nil {
 					t.Fatal("expected reaction payload")
 				}
-				if got.Reaction.MessageID != "891" {
-					t.Fatalf("reaction message id = %s, want 891", got.Reaction.MessageID)
+				if got.Reaction.ArticleID != "891" {
+					t.Fatalf("reaction message id = %s, want 891", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -350,8 +362,8 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if got.Reaction == nil {
 					t.Fatal("expected reaction payload")
 				}
-				if got.Reaction.MessageID != "893" {
-					t.Fatalf("reaction message id = %s, want 893", got.Reaction.MessageID)
+				if got.Reaction.ArticleID != "893" {
+					t.Fatalf("reaction message id = %s, want 893", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -514,11 +526,22 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				if got.Reaction.Emoji != "👍" {
 					t.Fatalf("emoji = %s, want 👍", got.Reaction.Emoji)
 				}
-				if got.Reaction.MessageID != "700" {
-					t.Fatalf("message id = %s, want 700", got.Reaction.MessageID)
+				if got.Reaction.ArticleID != "700" {
+					t.Fatalf("message id = %s, want 700", got.Reaction.ArticleID)
 				}
 				if got.Chat.ID != "500" {
 					t.Fatalf("chat id = %s, want 500", got.Chat.ID)
+				}
+				assertEventIDSegments(
+					t,
+					got.ID,
+					"article.reaction.added",
+					"500",
+					"700",
+					occurredAt,
+				)
+				if strings.Contains(got.ID, "👍") {
+					t.Fatalf("reaction id = %s, should not contain emoji", got.ID)
 				}
 			},
 		},
@@ -646,8 +669,8 @@ func TestDefaultGotdUpdateMapperMapInfersReactionDeltaFromCountsOnEdit(t *testin
 	if got.Reaction == nil {
 		t.Fatal("expected reaction payload")
 	}
-	if got.Reaction.MessageID != "777" {
-		t.Fatalf("reaction message id = %s, want 777", got.Reaction.MessageID)
+	if got.Reaction.ArticleID != "777" {
+		t.Fatalf("reaction message id = %s, want 777", got.Reaction.ArticleID)
 	}
 	if got.Reaction.Emoji != "❤️" {
 		t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -735,8 +758,93 @@ func TestDefaultGotdUpdateMapperMapEditCarriesBeforeSnapshotFromCache(t *testing
 	if got.Edit.After.Text != "after" {
 		t.Fatalf("after text = %q, want after", got.Edit.After.Text)
 	}
-	if !strings.HasPrefix(got.ID, "tg:message.edited:") {
-		t.Fatalf("id = %s, want prefix tg:message.edited:", got.ID)
+	if !strings.HasPrefix(got.ID, "tg:article.edited:") {
+		t.Fatalf("id = %s, want prefix tg:article.edited:", got.ID)
+	}
+}
+
+func TestDefaultGotdUpdateMapperMapEntityOnlyEditKeepsEditSemantics(t *testing.T) {
+	t.Parallel()
+
+	mapper := NewDefaultGotdUpdateMapper()
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewMessage{
+			Message: &tg.Message{
+				ID:       902,
+				PeerID:   &tg.PeerChat{ChatID: 100},
+				Date:     1_700_000_000,
+				Message:  "hello",
+				FromID:   &tg.PeerUser{UserID: 42},
+				Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 5}},
+			},
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+		},
+		updateClass: "updateNewMessage",
+	})
+	if err != nil {
+		t.Fatalf("map baseline message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted baseline message")
+	}
+
+	edited := &tg.Message{
+		ID:       902,
+		PeerID:   &tg.PeerChat{ChatID: 100},
+		Date:     1_700_000_010,
+		Message:  "hello",
+		FromID:   &tg.PeerUser{UserID: 42},
+		Entities: []tg.MessageEntityClass{&tg.MessageEntityItalic{Offset: 0, Length: 5}},
+	}
+	edited.SetEditDate(1_700_000_020)
+
+	got, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateEditMessage{
+			Message: edited,
+		},
+		occurredAt: occurredAt.Add(20 * time.Second),
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+		},
+		updateClass: "updateEditMessage",
+	})
+	if err != nil {
+		t.Fatalf("map entity-only edit failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted entity-only edit")
+	}
+	if got.Type != UpdateTypeEdit {
+		t.Fatalf("type = %s, want %s", got.Type, UpdateTypeEdit)
+	}
+	if got.Reaction != nil {
+		t.Fatalf("reaction = %+v, want nil", got.Reaction)
+	}
+	if got.Edit == nil {
+		t.Fatal("expected edit payload")
+	}
+	if got.Edit.Before == nil || len(got.Edit.Before.Entities) != 1 {
+		t.Fatalf("before entities = %+v, want 1 entity", got.Edit.Before)
+	}
+	if got.Edit.Before.Entities[0].Type != otogi.TextEntityTypeBold {
+		t.Fatalf("before entity type = %s, want %s", got.Edit.Before.Entities[0].Type, otogi.TextEntityTypeBold)
+	}
+	if got.Edit.After == nil || len(got.Edit.After.Entities) != 1 {
+		t.Fatalf("after entities = %+v, want 1 entity", got.Edit.After)
+	}
+	if got.Edit.After.Entities[0].Type != otogi.TextEntityTypeItalic {
+		t.Fatalf("after entity type = %s, want %s", got.Edit.After.Entities[0].Type, otogi.TextEntityTypeItalic)
 	}
 }
 
@@ -905,8 +1013,8 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionFromAPIOnAmbiguousEdit(t *tes
 	if got.Reaction == nil {
 		t.Fatal("expected reaction payload")
 	}
-	if got.Reaction.MessageID != "777" {
-		t.Fatalf("reaction message id = %s, want 777", got.Reaction.MessageID)
+	if got.Reaction.ArticleID != "777" {
+		t.Fatalf("reaction message id = %s, want 777", got.Reaction.ArticleID)
 	}
 	if got.Reaction.Emoji != "❤️" {
 		t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -1197,6 +1305,246 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionOnNonLikelyUnchangedEdit(t *t
 	}
 }
 
+func TestDefaultGotdUpdateMapperMapResolvesReactionSequenceOnAmbiguousEdits(t *testing.T) {
+	t.Parallel()
+
+	reactionResolver := &mutableMessageReactionResolver{}
+	mapper := NewDefaultGotdUpdateMapper(
+		WithMessageReactionResolver(reactionResolver),
+		WithReactionResolveTimeout(1*time.Second),
+	)
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+	chatInputPeer := &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99}
+
+	baseline := &tg.Message{
+		ID:      782,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "test",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	baseline.SetReactions(tg.MessageReactions{Results: []tg.ReactionCount{}})
+
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewChannelMessage{
+			Message: baseline,
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {
+				title:     "channel",
+				kind:      otogi.ConversationTypeChannel,
+				inputPeer: chatInputPeer,
+			},
+		},
+		updateClass: "updateNewChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map baseline message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted baseline message")
+	}
+
+	mapAmbiguous := func(editDate int, counts map[string]int) (Update, bool, error) {
+		reactionResolver.SetCounts(counts)
+
+		message := &tg.Message{
+			ID:      782,
+			PeerID:  &tg.PeerChannel{ChannelID: 500},
+			Date:    1_700_000_000,
+			Message: "test",
+			FromID:  &tg.PeerUser{UserID: 42},
+		}
+		message.EditHide = true
+		message.SetEditDate(editDate)
+		message.SetReactions(tg.MessageReactions{
+			Results: []tg.ReactionCount{},
+		})
+
+		return mapper.Map(context.Background(), gotdUpdateEnvelope{
+			update: &tg.UpdateEditChannelMessage{
+				Message: message,
+			},
+			occurredAt: occurredAt.Add(time.Duration(editDate-1_700_000_000) * time.Second),
+			usersByID: map[int64]*tg.User{
+				42: newTGUser(42, "alice", "Alice", "User", false),
+			},
+			chatsByID: map[int64]gotdChatInfo{
+				500: {
+					title:     "channel",
+					kind:      otogi.ConversationTypeChannel,
+					inputPeer: chatInputPeer,
+				},
+			},
+			updateClass: "updateEditChannelMessage",
+		})
+	}
+
+	first, accepted, err := mapAmbiguous(1_700_000_050, map[string]int{"❤️": 1})
+	if err != nil {
+		t.Fatalf("map first ambiguous edit failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected first ambiguous edit to map as reaction")
+	}
+	if first.Type != UpdateTypeReactionAdd {
+		t.Fatalf("first type = %s, want %s", first.Type, UpdateTypeReactionAdd)
+	}
+	if first.Reaction == nil || first.Reaction.Emoji != "❤️" {
+		t.Fatalf("first reaction = %+v, want add ❤️", first.Reaction)
+	}
+
+	second, accepted, err := mapAmbiguous(1_700_000_070, map[string]int{})
+	if err != nil {
+		t.Fatalf("map second ambiguous edit failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected second ambiguous edit to map as reaction remove")
+	}
+	if second.Type != UpdateTypeReactionRemove {
+		t.Fatalf("second type = %s, want %s", second.Type, UpdateTypeReactionRemove)
+	}
+	if second.Reaction == nil || second.Reaction.Emoji != "❤️" {
+		t.Fatalf("second reaction = %+v, want remove ❤️", second.Reaction)
+	}
+
+	third, accepted, err := mapAmbiguous(1_700_000_090, map[string]int{"❤️": 1})
+	if err != nil {
+		t.Fatalf("map third ambiguous edit failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected third ambiguous edit to map as reaction add")
+	}
+	if third.Type != UpdateTypeReactionAdd {
+		t.Fatalf("third type = %s, want %s", third.Type, UpdateTypeReactionAdd)
+	}
+	if third.Reaction == nil || third.Reaction.Emoji != "❤️" {
+		t.Fatalf("third reaction = %+v, want add ❤️", third.Reaction)
+	}
+}
+
+func TestDefaultGotdUpdateMapperPollReactionUpdatesBackfillsMissingReactionEdits(t *testing.T) {
+	t.Parallel()
+
+	reactionResolver := &mutableMessageReactionResolver{}
+	mapper := NewDefaultGotdUpdateMapper(
+		WithMessageReactionResolver(reactionResolver),
+		WithReactionResolveTimeout(1*time.Second),
+	)
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+	chatInputPeer := &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99}
+
+	baseline := &tg.Message{
+		ID:      783,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "test",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	baseline.SetReactions(tg.MessageReactions{Results: []tg.ReactionCount{}})
+
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewChannelMessage{
+			Message: baseline,
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {
+				title:     "channel",
+				kind:      otogi.ConversationTypeChannel,
+				inputPeer: chatInputPeer,
+			},
+		},
+		updateClass: "updateNewChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map baseline message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted baseline message")
+	}
+
+	reactionResolver.SetCounts(map[string]int{"❤️": 1})
+	ambiguous := &tg.Message{
+		ID:      783,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "test",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	ambiguous.EditHide = true
+	ambiguous.SetEditDate(1_700_000_050)
+	ambiguous.SetReactions(tg.MessageReactions{
+		Results: []tg.ReactionCount{},
+	})
+	first, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateEditChannelMessage{
+			Message: ambiguous,
+		},
+		occurredAt: occurredAt.Add(50 * time.Second),
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {
+				title:     "channel",
+				kind:      otogi.ConversationTypeChannel,
+				inputPeer: chatInputPeer,
+			},
+		},
+		updateClass: "updateEditChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map ambiguous edit failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted reaction update")
+	}
+	if first.Type != UpdateTypeReactionAdd {
+		t.Fatalf("first type = %s, want %s", first.Type, UpdateTypeReactionAdd)
+	}
+
+	reactionResolver.SetCounts(map[string]int{})
+	polled, err := mapper.PollReactionUpdates(context.Background())
+	if err != nil {
+		t.Fatalf("poll reaction updates failed: %v", err)
+	}
+	if len(polled) != 1 {
+		t.Fatalf("polled updates length = %d, want 1", len(polled))
+	}
+	if polled[0].Type != UpdateTypeReactionRemove {
+		t.Fatalf("polled type = %s, want %s", polled[0].Type, UpdateTypeReactionRemove)
+	}
+	if polled[0].Reaction == nil || polled[0].Reaction.Emoji != "❤️" {
+		t.Fatalf("polled reaction = %+v, want remove ❤️", polled[0].Reaction)
+	}
+	if polled[0].Metadata["gotd_update"] != "reaction_poll" {
+		t.Fatalf("polled metadata gotd_update = %q, want reaction_poll", polled[0].Metadata["gotd_update"])
+	}
+
+	reactionResolver.SetCounts(map[string]int{"❤️": 1})
+	polled, err = mapper.PollReactionUpdates(context.Background())
+	if err != nil {
+		t.Fatalf("poll reaction updates second pass failed: %v", err)
+	}
+	if len(polled) != 1 {
+		t.Fatalf("second polled updates length = %d, want 1", len(polled))
+	}
+	if polled[0].Type != UpdateTypeReactionAdd {
+		t.Fatalf("second polled type = %s, want %s", polled[0].Type, UpdateTypeReactionAdd)
+	}
+	if polled[0].Reaction == nil || polled[0].Reaction.Emoji != "❤️" {
+		t.Fatalf("second polled reaction = %+v, want add ❤️", polled[0].Reaction)
+	}
+}
+
 func TestDefaultGotdUpdateMapperMapPreservesBaselineAcrossAmbiguousLikelyEdit(t *testing.T) {
 	t.Parallel()
 
@@ -1319,22 +1667,505 @@ func TestDefaultGotdUpdateMapperMapPreservesBaselineAcrossAmbiguousLikelyEdit(t 
 	}
 }
 
+func TestDefaultGotdUpdateMapperMapBatchFromMessageReactionsRemovesReaction(t *testing.T) {
+	t.Parallel()
+
+	mapper := NewDefaultGotdUpdateMapper()
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+	baseline := &tg.Message{
+		ID:      777,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "baseline",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	baseline.SetReactions(tg.MessageReactions{
+		Results: []tg.ReactionCount{
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "❤️"},
+				Count:    1,
+			},
+		},
+	})
+
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewChannelMessage{
+			Message: baseline,
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateNewChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map baseline message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted baseline message")
+	}
+
+	updates, err := mapper.MapBatch(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateMessageReactions{
+			Peer:  &tg.PeerChannel{ChannelID: 500},
+			MsgID: 777,
+			Reactions: tg.MessageReactions{
+				Results: []tg.ReactionCount{},
+			},
+		},
+		occurredAt: occurredAt.Add(10 * time.Second),
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateMessageReactions",
+	})
+	if err != nil {
+		t.Fatalf("map message reactions failed: %v", err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("updates length = %d, want 1", len(updates))
+	}
+	if updates[0].Type != UpdateTypeReactionRemove {
+		t.Fatalf("type = %s, want %s", updates[0].Type, UpdateTypeReactionRemove)
+	}
+	if updates[0].Reaction == nil {
+		t.Fatal("expected reaction payload")
+	}
+	if updates[0].Reaction.ArticleID != "777" {
+		t.Fatalf("reaction article id = %s, want 777", updates[0].Reaction.ArticleID)
+	}
+	if updates[0].Reaction.Emoji != "❤️" {
+		t.Fatalf("reaction emoji = %s, want ❤️", updates[0].Reaction.Emoji)
+	}
+}
+
+func TestDefaultGotdUpdateMapperMapBatchFromMessageReactionsSplitsAllDeltas(t *testing.T) {
+	t.Parallel()
+
+	mapper := NewDefaultGotdUpdateMapper()
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+	baseline := &tg.Message{
+		ID:      778,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "baseline",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	baseline.SetReactions(tg.MessageReactions{
+		Results: []tg.ReactionCount{
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "❤️"},
+				Count:    2,
+			},
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "👍"},
+				Count:    1,
+			},
+		},
+	})
+
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewChannelMessage{
+			Message: baseline,
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateNewChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map baseline message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted baseline message")
+	}
+
+	updates, err := mapper.MapBatch(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateMessageReactions{
+			Peer:  &tg.PeerChannel{ChannelID: 500},
+			MsgID: 778,
+			Reactions: tg.MessageReactions{
+				Results: []tg.ReactionCount{
+					{
+						Reaction: &tg.ReactionEmoji{Emoticon: "❤️"},
+						Count:    1,
+					},
+					{
+						Reaction: &tg.ReactionEmoji{Emoticon: "😀"},
+						Count:    2,
+					},
+				},
+			},
+		},
+		occurredAt: occurredAt.Add(20 * time.Second),
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateMessageReactions",
+	})
+	if err != nil {
+		t.Fatalf("map message reactions failed: %v", err)
+	}
+	if len(updates) != 4 {
+		t.Fatalf("updates length = %d, want 4", len(updates))
+	}
+
+	signatureCount := make(map[string]int, len(updates))
+	ids := make(map[string]struct{}, len(updates))
+	suffixedIDFound := false
+	for _, update := range updates {
+		if update.Reaction == nil {
+			t.Fatalf("update reaction payload = nil, type=%s", update.Type)
+		}
+		signature := string(update.Type) + "|" + update.Reaction.Emoji
+		signatureCount[signature]++
+
+		if _, exists := ids[update.ID]; exists {
+			t.Fatalf("duplicate id detected: %s", update.ID)
+		}
+		ids[update.ID] = struct{}{}
+		if strings.Contains(update.ID, ":778~1:") {
+			suffixedIDFound = true
+		}
+	}
+
+	if signatureCount[string(UpdateTypeReactionRemove)+"|❤️"] != 1 {
+		t.Fatalf("remove ❤️ count = %d, want 1", signatureCount[string(UpdateTypeReactionRemove)+"|❤️"])
+	}
+	if signatureCount[string(UpdateTypeReactionRemove)+"|👍"] != 1 {
+		t.Fatalf("remove 👍 count = %d, want 1", signatureCount[string(UpdateTypeReactionRemove)+"|👍"])
+	}
+	if signatureCount[string(UpdateTypeReactionAdd)+"|😀"] != 2 {
+		t.Fatalf("add 😀 count = %d, want 2", signatureCount[string(UpdateTypeReactionAdd)+"|😀"])
+	}
+	if !suffixedIDFound {
+		t.Fatal("expected at least one deduplicated subject id suffix")
+	}
+}
+
+func TestDefaultGotdUpdateMapperMapPrefersCountDiffOverHeuristicOnEditedMessage(t *testing.T) {
+	t.Parallel()
+
+	mapper := NewDefaultGotdUpdateMapper()
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+	baseline := &tg.Message{
+		ID:      779,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "baseline",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	baseline.SetReactions(tg.MessageReactions{
+		Results: []tg.ReactionCount{
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "❤️"},
+				Count:    1,
+			},
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "👍"},
+				Count:    1,
+			},
+		},
+	})
+
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewChannelMessage{
+			Message: baseline,
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateNewChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map baseline message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted baseline message")
+	}
+
+	edit := &tg.Message{
+		ID:      779,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "baseline",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	edit.EditHide = true
+	edit.SetEditDate(1_700_000_050)
+	editReactions := tg.MessageReactions{
+		Results: []tg.ReactionCount{
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "👍"},
+				Count:    1,
+			},
+		},
+	}
+	editReactions.SetRecentReactions([]tg.MessagePeerReaction{
+		{
+			My:       true,
+			PeerID:   &tg.PeerUser{UserID: 42},
+			Reaction: &tg.ReactionEmoji{Emoticon: "❤️"},
+			Date:     1_700_000_050,
+		},
+	})
+	edit.SetReactions(editReactions)
+
+	got, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateEditChannelMessage{
+			Message: edit,
+		},
+		occurredAt: occurredAt.Add(50 * time.Second),
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateEditChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map edited message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted reaction update")
+	}
+	if got.Type != UpdateTypeReactionRemove {
+		t.Fatalf("type = %s, want %s", got.Type, UpdateTypeReactionRemove)
+	}
+	if got.Reaction == nil || got.Reaction.Emoji != "❤️" {
+		t.Fatalf("reaction = %+v, want remove ❤️", got.Reaction)
+	}
+}
+
+func TestDefaultGotdUpdateMapperMapBatchFanOutsServiceChatAddUser(t *testing.T) {
+	t.Parallel()
+
+	mapper := NewDefaultGotdUpdateMapper()
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+
+	updates, err := mapper.MapBatch(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewMessage{
+			Message: &tg.MessageService{
+				PeerID: &tg.PeerChat{ChatID: 100},
+				FromID: &tg.PeerUser{UserID: 42},
+				Date:   1_700_000_001,
+				Action: &tg.MessageActionChatAddUser{
+					Users: []int64{101, 102, 103},
+				},
+			},
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42:  newTGUser(42, "alice", "Alice", "User", false),
+			101: newTGUser(101, "u101", "User", "One", false),
+			102: newTGUser(102, "u102", "User", "Two", false),
+			103: newTGUser(103, "u103", "User", "Three", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+		},
+		updateClass: "updateNewMessage",
+	})
+	if err != nil {
+		t.Fatalf("map service message failed: %v", err)
+	}
+	if len(updates) != 3 {
+		t.Fatalf("updates length = %d, want 3", len(updates))
+	}
+
+	gotMembers := map[string]struct{}{}
+	for _, update := range updates {
+		if update.Type != UpdateTypeMemberJoin {
+			t.Fatalf("update type = %s, want %s", update.Type, UpdateTypeMemberJoin)
+		}
+		if update.Member == nil {
+			t.Fatal("expected member payload")
+		}
+		gotMembers[update.Member.Member.ID] = struct{}{}
+	}
+	for _, expected := range []string{"101", "102", "103"} {
+		if _, ok := gotMembers[expected]; !ok {
+			t.Fatalf("missing member id %s in fan-out updates", expected)
+		}
+	}
+}
+
+func TestDefaultGotdUpdateMapperMapBatchUsesHeuristicWhenNoBaseline(t *testing.T) {
+	t.Parallel()
+
+	mapper := NewDefaultGotdUpdateMapper()
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+
+	reactions := tg.MessageReactions{
+		Results: []tg.ReactionCount{},
+	}
+	reactions.SetRecentReactions([]tg.MessagePeerReaction{
+		{
+			My:       true,
+			PeerID:   &tg.PeerUser{UserID: 42},
+			Reaction: &tg.ReactionEmoji{Emoticon: "❤️"},
+			Date:     1_700_000_100,
+		},
+	})
+
+	updates, err := mapper.MapBatch(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateMessageReactions{
+			Peer:      &tg.PeerChannel{ChannelID: 500},
+			MsgID:     900,
+			Reactions: reactions,
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateMessageReactions",
+	})
+	if err != nil {
+		t.Fatalf("map message reactions failed: %v", err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("updates length = %d, want 1", len(updates))
+	}
+	if updates[0].Type != UpdateTypeReactionAdd {
+		t.Fatalf("type = %s, want %s", updates[0].Type, UpdateTypeReactionAdd)
+	}
+	if updates[0].Reaction == nil || updates[0].Reaction.Emoji != "❤️" {
+		t.Fatalf("reaction = %+v, want add ❤️", updates[0].Reaction)
+	}
+}
+
+func TestDefaultGotdUpdateMapperMapReturnsFirstFromBatch(t *testing.T) {
+	t.Parallel()
+
+	mapperBatch := NewDefaultGotdUpdateMapper()
+	mapperSingle := NewDefaultGotdUpdateMapper()
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+
+	baseline := &tg.Message{
+		ID:      901,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "baseline",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	baseline.SetReactions(tg.MessageReactions{
+		Results: []tg.ReactionCount{
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "😀"},
+				Count:    2,
+			},
+			{
+				Reaction: &tg.ReactionEmoji{Emoticon: "👍"},
+				Count:    1,
+			},
+		},
+	})
+	baselineEnvelope := gotdUpdateEnvelope{
+		update: &tg.UpdateNewChannelMessage{
+			Message: baseline,
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateNewChannelMessage",
+	}
+
+	if _, accepted, err := mapperBatch.Map(context.Background(), baselineEnvelope); err != nil {
+		t.Fatalf("map batch baseline failed: %v", err)
+	} else if !accepted {
+		t.Fatal("expected accepted batch baseline message")
+	}
+	if _, accepted, err := mapperSingle.Map(context.Background(), baselineEnvelope); err != nil {
+		t.Fatalf("map single baseline failed: %v", err)
+	} else if !accepted {
+		t.Fatal("expected accepted single baseline message")
+	}
+
+	reactionsEnvelope := gotdUpdateEnvelope{
+		update: &tg.UpdateMessageReactions{
+			Peer:  &tg.PeerChannel{ChannelID: 500},
+			MsgID: 901,
+			Reactions: tg.MessageReactions{
+				Results: []tg.ReactionCount{
+					{
+						Reaction: &tg.ReactionEmoji{Emoticon: "😀"},
+						Count:    1,
+					},
+				},
+			},
+		},
+		occurredAt: occurredAt.Add(10 * time.Second),
+		chatsByID: map[int64]gotdChatInfo{
+			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+		},
+		updateClass: "updateMessageReactions",
+	}
+
+	batchUpdates, err := mapperBatch.MapBatch(context.Background(), reactionsEnvelope)
+	if err != nil {
+		t.Fatalf("map batch failed: %v", err)
+	}
+	if len(batchUpdates) < 2 {
+		t.Fatalf("batch updates length = %d, want >=2", len(batchUpdates))
+	}
+
+	singleUpdate, accepted, err := mapperSingle.Map(context.Background(), reactionsEnvelope)
+	if err != nil {
+		t.Fatalf("map single failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted single update")
+	}
+
+	if singleUpdate.Type != batchUpdates[0].Type {
+		t.Fatalf("single type = %s, want %s", singleUpdate.Type, batchUpdates[0].Type)
+	}
+	if singleUpdate.Reaction == nil || batchUpdates[0].Reaction == nil {
+		t.Fatalf("reaction payload mismatch: single=%+v batch0=%+v", singleUpdate.Reaction, batchUpdates[0].Reaction)
+	}
+	if singleUpdate.Reaction.ArticleID != batchUpdates[0].Reaction.ArticleID {
+		t.Fatalf("single article id = %s, want %s", singleUpdate.Reaction.ArticleID, batchUpdates[0].Reaction.ArticleID)
+	}
+	if singleUpdate.Reaction.Emoji != batchUpdates[0].Reaction.Emoji {
+		t.Fatalf("single emoji = %s, want %s", singleUpdate.Reaction.Emoji, batchUpdates[0].Reaction.Emoji)
+	}
+}
+
 func TestComposeUpdateIDUsesSemanticEventTokens(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		updateType UpdateType
-		wantPrefix string
+		wantToken  string
 	}{
-		{updateType: UpdateTypeMessage, wantPrefix: "tg:message.created:"},
-		{updateType: UpdateTypeEdit, wantPrefix: "tg:message.edited:"},
-		{updateType: UpdateTypeDelete, wantPrefix: "tg:message.retracted:"},
-		{updateType: UpdateTypeReactionAdd, wantPrefix: "tg:reaction.added:"},
-		{updateType: UpdateTypeReactionRemove, wantPrefix: "tg:reaction.removed:"},
-		{updateType: UpdateTypeMemberJoin, wantPrefix: "tg:member.joined:"},
-		{updateType: UpdateTypeMemberLeave, wantPrefix: "tg:member.left:"},
-		{updateType: UpdateTypeRole, wantPrefix: "tg:role.updated:"},
-		{updateType: UpdateTypeMigration, wantPrefix: "tg:chat.migrated:"},
+		{updateType: UpdateTypeMessage, wantToken: "article.created"},
+		{updateType: UpdateTypeEdit, wantToken: "article.edited"},
+		{updateType: UpdateTypeDelete, wantToken: "article.retracted"},
+		{updateType: UpdateTypeReactionAdd, wantToken: "article.reaction.added"},
+		{updateType: UpdateTypeReactionRemove, wantToken: "article.reaction.removed"},
+		{updateType: UpdateTypeMemberJoin, wantToken: "member.joined"},
+		{updateType: UpdateTypeMemberLeave, wantToken: "member.left"},
+		{updateType: UpdateTypeRole, wantToken: "role.updated"},
+		{updateType: UpdateTypeMigration, wantToken: "chat.migrated"},
 	}
 
 	for _, testCase := range tests {
@@ -1342,11 +2173,45 @@ func TestComposeUpdateIDUsesSemanticEventTokens(t *testing.T) {
 		t.Run(string(testCase.updateType), func(t *testing.T) {
 			t.Parallel()
 
-			got := composeUpdateID(testCase.updateType, "100", "777", time.Unix(1_700_000_000, 0).UTC())
-			if !strings.HasPrefix(got, testCase.wantPrefix) {
-				t.Fatalf("composeUpdateID(%s) = %s, want prefix %s", testCase.updateType, got, testCase.wantPrefix)
-			}
+			occurredAt := time.Unix(1_700_000_000, 0).UTC()
+			got := composeUpdateID(testCase.updateType, "100", "777", occurredAt)
+			assertEventIDSegments(t, got, testCase.wantToken, "100", "777", occurredAt)
 		})
+	}
+}
+
+func assertEventIDSegments(
+	t *testing.T,
+	eventID string,
+	wantToken string,
+	wantChatID string,
+	wantSubjectID string,
+	wantOccurredAt time.Time,
+) {
+	t.Helper()
+
+	parts := strings.Split(eventID, ":")
+	if len(parts) != 5 {
+		t.Fatalf("event id = %s, want 5 segments", eventID)
+	}
+	if parts[0] != "tg" {
+		t.Fatalf("event id namespace = %s, want tg", parts[0])
+	}
+	if parts[1] != wantToken {
+		t.Fatalf("event id token = %s, want %s", parts[1], wantToken)
+	}
+	if parts[2] != wantChatID {
+		t.Fatalf("event id chat segment = %s, want %s", parts[2], wantChatID)
+	}
+	if parts[3] != wantSubjectID {
+		t.Fatalf("event id subject segment = %s, want %s", parts[3], wantSubjectID)
+	}
+	if parts[4] != strconv.FormatInt(wantOccurredAt.UnixNano(), 10) {
+		t.Fatalf(
+			"event id timestamp segment = %s, want %d",
+			parts[4],
+			wantOccurredAt.UnixNano(),
+		)
 	}
 }
 
@@ -1398,6 +2263,25 @@ func (s *sequenceMessageReactionResolver) ResolveMessageReactionCounts(
 	}
 
 	return cloneReactionCounts(s.responses[idx]), nil
+}
+
+type mutableMessageReactionResolver struct {
+	counts map[string]int
+	calls  int
+}
+
+func (s *mutableMessageReactionResolver) SetCounts(counts map[string]int) {
+	s.counts = cloneReactionCounts(counts)
+}
+
+func (s *mutableMessageReactionResolver) ResolveMessageReactionCounts(
+	_ context.Context,
+	_ tg.InputPeerClass,
+	_ int,
+) (map[string]int, error) {
+	s.calls++
+
+	return cloneReactionCounts(s.counts), nil
 }
 
 func newTGUser(id int64, username, firstName, lastName string, isBot bool) *tg.User {

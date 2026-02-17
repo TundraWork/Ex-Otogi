@@ -32,8 +32,8 @@ func (m *Module) Spec() otogi.ModuleSpec {
 					Name:        "ping-listener",
 					Description: "responds with pong for ping messages",
 					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindMessageCreated},
-						RequireMessage: true,
+						Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
+						RequireArticle: true,
 					},
 					RequiredServices: []string{otogi.ServiceOutboundDispatcher},
 				},
@@ -70,7 +70,7 @@ func (m *Module) OnShutdown(_ context.Context) error {
 }
 
 func (m *Module) handleMessage(ctx context.Context, event *otogi.Event) error {
-	if !isPing(event.Message.Text) {
+	if !isPing(event.Article.Text) {
 		return nil
 	}
 
@@ -81,7 +81,7 @@ func (m *Module) handleMessage(ctx context.Context, event *otogi.Event) error {
 	_, err = m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
 		Target:           target,
 		Text:             "pong",
-		ReplyToMessageID: event.Message.ID,
+		ReplyToMessageID: event.Article.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("pingpong send pong message: %w", err)

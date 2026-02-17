@@ -42,14 +42,14 @@ type Update struct {
 	Chat ChatRef
 	// Actor identifies who initiated the update when known.
 	Actor ActorRef
-	// Message carries payload for message updates.
-	Message *MessagePayload
-	// Edit carries payload for message edit updates.
-	Edit *EditPayload
-	// Delete carries payload for message deletion updates.
-	Delete *DeletePayload
-	// Reaction carries payload for reaction updates.
-	Reaction *ReactionPayload
+	// Article carries payload for article updates.
+	Article *ArticlePayload
+	// Edit carries payload for article edit updates.
+	Edit *ArticleEditPayload
+	// Delete carries payload for article deletion updates.
+	Delete *ArticleDeletePayload
+	// Reaction carries payload for article reaction updates.
+	Reaction *ArticleReactionPayload
 	// Member carries payload for member join/leave updates.
 	Member *MemberPayload
 	// Role carries payload for role mutation updates.
@@ -82,22 +82,22 @@ type ActorRef struct {
 	IsBot bool
 }
 
-// MessagePayload represents a Telegram message projection.
-type MessagePayload struct {
-	// ID is the Telegram message identifier.
+// ArticlePayload represents a Telegram article projection.
+type ArticlePayload struct {
+	// ID is the Telegram article identifier.
 	ID string
 	// ThreadID is the optional topic/thread identifier.
 	ThreadID string
-	// ReplyToID is the replied-to message identifier when present.
-	ReplyToID string
-	// Text is the normalized message text.
+	// ReplyToArticleID is the replied-to article identifier when present.
+	ReplyToArticleID string
+	// Text is the normalized article text.
 	Text string
 	// Entities carries rich-text entity ranges.
 	Entities []otogi.TextEntity
 	// Media carries normalized media attachments.
 	Media []MediaPayload
 	// Reactions carries projected reaction counts when included by Telegram updates.
-	Reactions []otogi.MessageReaction
+	Reactions []otogi.ArticleReaction
 }
 
 // MediaPayload represents Telegram media metadata.
@@ -134,40 +134,42 @@ type MediaPreviewPayload struct {
 	Duration time.Duration
 }
 
-// EditPayload captures before/after message content for edits.
-type EditPayload struct {
-	// MessageID identifies the edited Telegram message.
-	MessageID string
+// ArticleEditPayload captures before/after article content for edits.
+type ArticleEditPayload struct {
+	// ArticleID identifies the edited Telegram article.
+	ArticleID string
 	// ChangedAt captures when the edit happened on Telegram when known.
 	ChangedAt *time.Time
-	// Before captures the message snapshot before the edit.
-	Before *SnapshotPayload
-	// After captures the message snapshot after the edit.
-	After *SnapshotPayload
+	// Before captures the article snapshot before the edit.
+	Before *ArticleSnapshotPayload
+	// After captures the article snapshot after the edit.
+	After *ArticleSnapshotPayload
 	// Reason carries optional platform context for the edit.
 	Reason string
 }
 
-// SnapshotPayload captures immutable message snapshots.
-type SnapshotPayload struct {
-	// Text is the immutable message text snapshot.
+// ArticleSnapshotPayload captures immutable article snapshots.
+type ArticleSnapshotPayload struct {
+	// Text is the immutable article text snapshot.
 	Text string
+	// Entities stores immutable rich-text entities aligned with Text.
+	Entities []otogi.TextEntity
 	// Media is the immutable media snapshot.
 	Media []MediaPayload
 }
 
-// DeletePayload captures message deletion metadata.
-type DeletePayload struct {
-	// MessageID identifies the deleted/retracted message.
-	MessageID string
+// ArticleDeletePayload captures article deletion metadata.
+type ArticleDeletePayload struct {
+	// ArticleID identifies the deleted/retracted article.
+	ArticleID string
 	// Reason carries optional platform context for deletion.
 	Reason string
 }
 
-// ReactionPayload captures emoji reaction metadata.
-type ReactionPayload struct {
-	// MessageID identifies the message receiving the reaction update.
-	MessageID string
+// ArticleReactionPayload captures emoji reaction metadata.
+type ArticleReactionPayload struct {
+	// ArticleID identifies the article receiving the reaction update.
+	ArticleID string
 	// Emoji is the normalized emoji token.
 	Emoji string
 }
@@ -204,4 +206,29 @@ type MigrationPayload struct {
 	ToChatID string
 	// Reason carries optional platform context for migration.
 	Reason string
+}
+
+func eventKindFromUpdateType(updateType UpdateType) (otogi.EventKind, bool) {
+	switch updateType {
+	case UpdateTypeMessage:
+		return otogi.EventKindArticleCreated, true
+	case UpdateTypeEdit:
+		return otogi.EventKindArticleEdited, true
+	case UpdateTypeDelete:
+		return otogi.EventKindArticleRetracted, true
+	case UpdateTypeReactionAdd:
+		return otogi.EventKindArticleReactionAdded, true
+	case UpdateTypeReactionRemove:
+		return otogi.EventKindArticleReactionRemoved, true
+	case UpdateTypeMemberJoin:
+		return otogi.EventKindMemberJoined, true
+	case UpdateTypeMemberLeave:
+		return otogi.EventKindMemberLeft, true
+	case UpdateTypeRole:
+		return otogi.EventKindRoleUpdated, true
+	case UpdateTypeMigration:
+		return otogi.EventKindChatMigrated, true
+	default:
+		return "", false
+	}
 }

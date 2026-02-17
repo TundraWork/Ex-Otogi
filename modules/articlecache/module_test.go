@@ -1,4 +1,4 @@
-package eventcache
+package articlecache
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func TestModuleOnRegister(t *testing.T) {
 				otogi.ServiceOutboundDispatcher: &captureDispatcher{},
 			},
 			wantErr:          true,
-			wantErrSubstring: "event cache resolve logger",
+			wantErrSubstring: "article cache resolve logger",
 		},
 		{
 			name: "missing outbound dispatcher fails",
@@ -42,7 +42,7 @@ func TestModuleOnRegister(t *testing.T) {
 				ServiceLogger: slog.Default(),
 			},
 			wantErr:          true,
-			wantErrSubstring: "event cache resolve outbound dispatcher",
+			wantErrSubstring: "article cache resolve outbound dispatcher",
 		},
 	}
 
@@ -76,12 +76,12 @@ func TestModuleOnRegister(t *testing.T) {
 				return
 			}
 
-			resolved, err := registry.Resolve(otogi.ServiceEventCache)
+			resolved, err := registry.Resolve(otogi.ServiceArticleStore)
 			if err != nil {
-				t.Fatalf("resolve event cache service failed: %v", err)
+				t.Fatalf("resolve article cache service failed: %v", err)
 			}
 			if resolved != module {
-				t.Fatal("resolved event cache service is not module instance")
+				t.Fatal("resolved article cache service is not module instance")
 			}
 		})
 	}
@@ -100,14 +100,14 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 		wantTextNotContains []string
 	}{
 		{
-			name: "reply raw returns message entity json representation",
+			name: "reply raw returns article entity json representation",
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
 			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
-				"\"Message\": {",
+				"\"Article\": {",
 				"\"ID\": \"msg-1\"",
 				"\"Text\": \"hello\"",
 			},
@@ -123,7 +123,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			commandEvent: newCreatedEvent("msg-2", "~raw@mybot", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
-				"\"Message\": {",
+				"\"Article\": {",
 				"\"ID\": \"msg-1\"",
 			},
 		},
@@ -159,7 +159,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			},
 		},
 		{
-			name: "reply raw after reaction still returns message entity",
+			name: "reply raw after reaction still returns article entity",
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 				newReactionEvent("msg-1", "👍", otogi.ReactionActionAdd),
@@ -191,7 +191,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			name:         "raw with cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-404"),
 			wantSent:     true,
-			wantText:     "raw: replied message not found in event cache",
+			wantText:     "raw: replied article not found in article cache",
 		},
 		{
 			name: "legacy slash raw command is ignored",
@@ -202,7 +202,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			wantSent:     false,
 		},
 		{
-			name: "raw can target explicit integer message id",
+			name: "raw can target explicit integer article id",
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("114514", "hello explicit", ""),
 			},
@@ -214,22 +214,22 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			},
 		},
 		{
-			name:         "raw explicit message id cache miss returns miss message",
+			name:         "raw explicit article id cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~raw 114514", ""),
 			wantSent:     true,
-			wantText:     "raw: message not found in event cache",
+			wantText:     "raw: article not found in article cache",
 		},
 		{
-			name:         "raw invalid message id returns parse message",
+			name:         "raw invalid article id returns parse message",
 			commandEvent: newCreatedEvent("msg-2", "~raw invalid", ""),
 			wantSent:     true,
-			wantText:     "raw: invalid message id \"invalid\", expected a positive integer",
+			wantText:     "raw: invalid article id \"invalid\", expected a positive integer",
 		},
 		{
 			name:         "raw with too many arguments returns parse message",
 			commandEvent: newCreatedEvent("msg-2", "~raw 1 2", ""),
 			wantSent:     true,
-			wantText:     "raw: expected at most one integer message id argument",
+			wantText:     "raw: expected at most one integer article id argument",
 		},
 		{
 			name: "raw send failure returns error",
@@ -261,12 +261,12 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			commandEvent: newCreatedEvent("msg-2", "~history", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
-				"\"Kind\": \"message.created\"",
-				"\"Kind\": \"reaction.added\"",
+				"\"Kind\": \"article.created\"",
+				"\"Kind\": \"article.reaction.added\"",
 			},
 		},
 		{
-			name: "history can target explicit integer message id",
+			name: "history can target explicit integer article id",
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("114514", "hello", ""),
 				newEditedEvent("114514", "hello edited"),
@@ -274,8 +274,8 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			commandEvent: newCreatedEvent("msg-2", "~history 114514", ""),
 			wantSent:     true,
 			wantTextContains: []string{
-				"\"Kind\": \"message.created\"",
-				"\"Kind\": \"message.edited\"",
+				"\"Kind\": \"article.created\"",
+				"\"Kind\": \"article.edited\"",
 				"\"Before\": {",
 			},
 			wantTextNotContains: []string{
@@ -291,19 +291,19 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			name:         "history with cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~history", "msg-404"),
 			wantSent:     true,
-			wantText:     "history: replied message not found in event cache",
+			wantText:     "history: replied article not found in article cache",
 		},
 		{
-			name:         "history explicit message id cache miss returns miss message",
+			name:         "history explicit article id cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~history 114514", ""),
 			wantSent:     true,
-			wantText:     "history: message not found in event cache",
+			wantText:     "history: article not found in article cache",
 		},
 		{
-			name:         "history invalid message id returns parse message",
+			name:         "history invalid article id returns parse message",
 			commandEvent: newCreatedEvent("msg-2", "~history invalid", ""),
 			wantSent:     true,
-			wantText:     "history: invalid message id \"invalid\", expected a positive integer",
+			wantText:     "history: invalid article id \"invalid\", expected a positive integer",
 		},
 		{
 			name: "history send failure returns error",
@@ -351,11 +351,11 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 				return
 			}
 
-			if dispatcher.lastRequest.ReplyToMessageID != testCase.commandEvent.Message.ID {
+			if dispatcher.lastRequest.ReplyToMessageID != testCase.commandEvent.Article.ID {
 				t.Fatalf(
 					"reply_to = %q, want %q",
 					dispatcher.lastRequest.ReplyToMessageID,
-					testCase.commandEvent.Message.ID,
+					testCase.commandEvent.Article.ID,
 				)
 			}
 			if len(dispatcher.lastRequest.Entities) != 1 {
@@ -399,7 +399,7 @@ func TestModuleEventLifecycle(t *testing.T) {
 	tests := []struct {
 		name      string
 		events    []*otogi.Event
-		lookup    otogi.MessageLookup
+		lookup    otogi.ArticleLookup
 		wantFound bool
 		wantText  string
 	}{
@@ -408,10 +408,10 @@ func TestModuleEventLifecycle(t *testing.T) {
 			events: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
-			lookup: otogi.MessageLookup{
+			lookup: otogi.ArticleLookup{
 				Platform:       otogi.PlatformTelegram,
 				ConversationID: "chat-1",
-				MessageID:      "msg-1",
+				ArticleID:      "msg-1",
 			},
 			wantFound: true,
 			wantText:  "hello",
@@ -422,10 +422,10 @@ func TestModuleEventLifecycle(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newEditedEvent("msg-1", "hello edited"),
 			},
-			lookup: otogi.MessageLookup{
+			lookup: otogi.ArticleLookup{
 				Platform:       otogi.PlatformTelegram,
 				ConversationID: "chat-1",
-				MessageID:      "msg-1",
+				ArticleID:      "msg-1",
 			},
 			wantFound: true,
 			wantText:  "hello edited",
@@ -436,10 +436,10 @@ func TestModuleEventLifecycle(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newRetractedEvent("msg-1"),
 			},
-			lookup: otogi.MessageLookup{
+			lookup: otogi.ArticleLookup{
 				Platform:       otogi.PlatformTelegram,
 				ConversationID: "chat-1",
-				MessageID:      "msg-1",
+				ArticleID:      "msg-1",
 			},
 			wantFound: false,
 		},
@@ -462,7 +462,7 @@ func TestModuleEventLifecycle(t *testing.T) {
 				}
 			}
 
-			cached, found, err := module.GetMessage(context.Background(), testCase.lookup)
+			cached, found, err := module.GetArticle(context.Background(), testCase.lookup)
 			if err != nil {
 				t.Fatalf("get message failed: %v", err)
 			}
@@ -472,14 +472,96 @@ func TestModuleEventLifecycle(t *testing.T) {
 			if !testCase.wantFound {
 				return
 			}
-			if cached.Message.Text != testCase.wantText {
-				t.Fatalf("cached text = %q, want %q", cached.Message.Text, testCase.wantText)
+			if cached.Article.Text != testCase.wantText {
+				t.Fatalf("cached text = %q, want %q", cached.Article.Text, testCase.wantText)
 			}
 		})
 	}
 }
 
-func TestModuleGetRepliedMessage(t *testing.T) {
+func TestModuleEditProjectionUpdatesEntitiesAndMedia(t *testing.T) {
+	t.Parallel()
+
+	module := New(
+		WithTTL(24*time.Hour),
+		withClock(func() time.Time { return time.Unix(215, 0).UTC() }),
+	)
+
+	created := &otogi.Event{
+		ID:         "evt-created-msg-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(10, 0).UTC(),
+		Platform:   otogi.PlatformTelegram,
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "actor-1", DisplayName: "Alice"},
+		Article: &otogi.Article{
+			ID:   "msg-1",
+			Text: "hello",
+			Entities: []otogi.TextEntity{
+				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 5},
+			},
+			Media: []otogi.MediaAttachment{
+				{ID: "photo-1", Type: otogi.MediaTypePhoto},
+			},
+		},
+	}
+	edited := &otogi.Event{
+		ID:         "evt-edit-msg-1",
+		Kind:       otogi.EventKindArticleEdited,
+		OccurredAt: time.Unix(20, 0).UTC(),
+		Platform:   otogi.PlatformTelegram,
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Mutation: &otogi.ArticleMutation{
+			Type:            otogi.MutationTypeEdit,
+			TargetArticleID: "msg-1",
+			After: &otogi.ArticleSnapshot{
+				Text: "hello edited",
+				Entities: []otogi.TextEntity{
+					{Type: otogi.TextEntityTypeItalic, Offset: 0, Length: 11},
+				},
+				Media: []otogi.MediaAttachment{
+					{ID: "doc-1", Type: otogi.MediaTypeDocument, FileName: "changelog.txt"},
+				},
+			},
+		},
+	}
+
+	if err := module.handleEvent(context.Background(), created); err != nil {
+		t.Fatalf("seed created event failed: %v", err)
+	}
+	if err := module.handleEvent(context.Background(), edited); err != nil {
+		t.Fatalf("seed edited event failed: %v", err)
+	}
+
+	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
+		Platform:       otogi.PlatformTelegram,
+		ConversationID: "chat-1",
+		ArticleID:      "msg-1",
+	})
+	if err != nil {
+		t.Fatalf("get article failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected article cache hit")
+	}
+	if cached.Article.Text != "hello edited" {
+		t.Fatalf("article text = %q, want hello edited", cached.Article.Text)
+	}
+	if len(cached.Article.Entities) != 1 || cached.Article.Entities[0].Type != otogi.TextEntityTypeItalic {
+		t.Fatalf("article entities = %+v, want one italic entity", cached.Article.Entities)
+	}
+	if len(cached.Article.Media) != 1 || cached.Article.Media[0].ID != "doc-1" {
+		t.Fatalf("article media = %+v, want one doc-1 attachment", cached.Article.Media)
+	}
+}
+
+func TestModuleGetRepliedArticle(t *testing.T) {
 	t.Parallel()
 
 	module := New(
@@ -492,19 +574,19 @@ func TestModuleGetRepliedMessage(t *testing.T) {
 	}
 
 	replyEvent := newCreatedEvent("msg-2", "ping", "msg-1")
-	cached, found, err := module.GetRepliedMessage(context.Background(), replyEvent)
+	cached, found, err := module.GetRepliedArticle(context.Background(), replyEvent)
 	if err != nil {
 		t.Fatalf("get replied message failed: %v", err)
 	}
 	if !found {
 		t.Fatal("expected reply cache hit")
 	}
-	if cached.Message.Text != "origin" {
-		t.Fatalf("reply text = %q, want origin", cached.Message.Text)
+	if cached.Article.Text != "origin" {
+		t.Fatalf("reply text = %q, want origin", cached.Article.Text)
 	}
 
 	nonReplyEvent := newCreatedEvent("msg-3", "ping", "")
-	_, found, err = module.GetRepliedMessage(context.Background(), nonReplyEvent)
+	_, found, err = module.GetRepliedArticle(context.Background(), nonReplyEvent)
 	if err != nil {
 		t.Fatalf("get replied message for non-reply failed: %v", err)
 	}
@@ -532,21 +614,21 @@ func TestModuleEventHistoryAndEntityProjectionSeparation(t *testing.T) {
 		}
 	}
 
-	lookup := otogi.MessageLookup{
+	lookup := otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	}
 
-	cached, found, err := module.GetMessage(context.Background(), lookup)
+	cached, found, err := module.GetArticle(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
 	}
 	if !found {
 		t.Fatal("expected message projection cache hit")
 	}
-	if cached.Message.Text != "hello edited" {
-		t.Fatalf("cached text = %q, want hello edited", cached.Message.Text)
+	if cached.Article.Text != "hello edited" {
+		t.Fatalf("cached text = %q, want hello edited", cached.Article.Text)
 	}
 
 	history, found, err := module.GetEvents(context.Background(), lookup)
@@ -561,9 +643,9 @@ func TestModuleEventHistoryAndEntityProjectionSeparation(t *testing.T) {
 	}
 
 	wantKinds := []otogi.EventKind{
-		otogi.EventKindMessageCreated,
-		otogi.EventKindReactionAdded,
-		otogi.EventKindMessageEdited,
+		otogi.EventKindArticleCreated,
+		otogi.EventKindArticleReactionAdded,
+		otogi.EventKindArticleEdited,
 	}
 	for idx, wantKind := range wantKinds {
 		if history[idx].Kind != wantKind {
@@ -580,17 +662,25 @@ func TestModuleHistoryBackfillsMissingEditBeforeSnapshot(t *testing.T) {
 		withClock(func() time.Time { return time.Unix(225, 0).UTC() }),
 	)
 
-	if err := module.handleEvent(context.Background(), newCreatedEvent("msg-1", "hello", "")); err != nil {
+	created := newCreatedEvent("msg-1", "hello", "")
+	created.Article.Entities = []otogi.TextEntity{
+		{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 5},
+	}
+	if err := module.handleEvent(context.Background(), created); err != nil {
 		t.Fatalf("seed created event failed: %v", err)
 	}
-	if err := module.handleEvent(context.Background(), newEditedEvent("msg-1", "hello edited")); err != nil {
+	edited := newEditedEvent("msg-1", "hello edited")
+	edited.Mutation.After.Entities = []otogi.TextEntity{
+		{Type: otogi.TextEntityTypeItalic, Offset: 0, Length: 11},
+	}
+	if err := module.handleEvent(context.Background(), edited); err != nil {
 		t.Fatalf("seed edited event failed: %v", err)
 	}
 
-	history, found, err := module.GetEvents(context.Background(), otogi.MessageLookup{
+	history, found, err := module.GetEvents(context.Background(), otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	})
 	if err != nil {
 		t.Fatalf("get events failed: %v", err)
@@ -610,11 +700,17 @@ func TestModuleHistoryBackfillsMissingEditBeforeSnapshot(t *testing.T) {
 	if history[1].Mutation.Before.Text != "hello" {
 		t.Fatalf("before text = %q, want hello", history[1].Mutation.Before.Text)
 	}
+	if len(history[1].Mutation.Before.Entities) != 1 || history[1].Mutation.Before.Entities[0].Type != otogi.TextEntityTypeBold {
+		t.Fatalf("before entities = %+v, want one bold entity", history[1].Mutation.Before.Entities)
+	}
 	if history[1].Mutation.After == nil {
 		t.Fatal("expected mutation after snapshot")
 	}
 	if history[1].Mutation.After.Text != "hello edited" {
 		t.Fatalf("after text = %q, want hello edited", history[1].Mutation.After.Text)
+	}
+	if len(history[1].Mutation.After.Entities) != 1 || history[1].Mutation.After.Entities[0].Type != otogi.TextEntityTypeItalic {
+		t.Fatalf("after entities = %+v, want one italic entity", history[1].Mutation.After.Entities)
 	}
 }
 
@@ -638,10 +734,10 @@ func TestModuleMessageMutationUsesChangedAtForUpdatedAt(t *testing.T) {
 		t.Fatalf("seed message mutation event failed: %v", err)
 	}
 
-	cached, found, err := module.GetMessage(context.Background(), otogi.MessageLookup{
+	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	})
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
@@ -655,8 +751,8 @@ func TestModuleMessageMutationUsesChangedAtForUpdatedAt(t *testing.T) {
 	if !cached.UpdatedAt.Equal(editedAt) {
 		t.Fatalf("updated_at = %v, want %v", cached.UpdatedAt, editedAt)
 	}
-	if cached.Message.Text != "edited" {
-		t.Fatalf("message text = %q, want edited", cached.Message.Text)
+	if cached.Article.Text != "edited" {
+		t.Fatalf("message text = %q, want edited", cached.Article.Text)
 	}
 }
 
@@ -687,10 +783,10 @@ func TestModuleReactionProjectionDerivedFromEvents(t *testing.T) {
 		t.Fatalf("seed reaction remove event failed: %v", err)
 	}
 
-	cached, found, err := module.GetMessage(context.Background(), otogi.MessageLookup{
+	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	})
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
@@ -698,8 +794,8 @@ func TestModuleReactionProjectionDerivedFromEvents(t *testing.T) {
 	if !found {
 		t.Fatal("expected cache hit")
 	}
-	if len(cached.Message.Reactions) != 0 {
-		t.Fatalf("reactions = %+v, want empty", cached.Message.Reactions)
+	if len(cached.Article.Reactions) != 0 {
+		t.Fatalf("reactions = %+v, want empty", cached.Article.Reactions)
 	}
 	if !cached.UpdatedAt.Equal(createdAt) {
 		t.Fatalf("updated_at = %v, want %v", cached.UpdatedAt, createdAt)
@@ -721,13 +817,13 @@ func TestModuleRetractedEntityStillPreservesEventHistory(t *testing.T) {
 		t.Fatalf("seed retracted event failed: %v", err)
 	}
 
-	lookup := otogi.MessageLookup{
+	lookup := otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	}
 
-	_, found, err := module.GetMessage(context.Background(), lookup)
+	_, found, err := module.GetArticle(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
 	}
@@ -745,8 +841,8 @@ func TestModuleRetractedEntityStillPreservesEventHistory(t *testing.T) {
 	if len(history) != 2 {
 		t.Fatalf("history length = %d, want 2", len(history))
 	}
-	if history[1].Kind != otogi.EventKindMessageRetracted {
-		t.Fatalf("history[1].Kind = %s, want %s", history[1].Kind, otogi.EventKindMessageRetracted)
+	if history[1].Kind != otogi.EventKindArticleRetracted {
+		t.Fatalf("history[1].Kind = %s, want %s", history[1].Kind, otogi.EventKindArticleRetracted)
 	}
 }
 
@@ -803,10 +899,10 @@ func TestModuleCapacityEviction(t *testing.T) {
 		t.Fatalf("handle second event failed: %v", err)
 	}
 
-	_, found, err := module.GetMessage(context.Background(), otogi.MessageLookup{
+	_, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	})
 	if err != nil {
 		t.Fatalf("lookup oldest message failed: %v", err)
@@ -815,10 +911,10 @@ func TestModuleCapacityEviction(t *testing.T) {
 		t.Fatal("expected oldest message to be evicted")
 	}
 
-	cached, found, err := module.GetMessage(context.Background(), otogi.MessageLookup{
+	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-2",
+		ArticleID:      "msg-2",
 	})
 	if err != nil {
 		t.Fatalf("lookup newest message failed: %v", err)
@@ -826,8 +922,8 @@ func TestModuleCapacityEviction(t *testing.T) {
 	if !found {
 		t.Fatal("expected newest message to remain")
 	}
-	if cached.Message.Text != "second" {
-		t.Fatalf("cached text = %q, want second", cached.Message.Text)
+	if cached.Article.Text != "second" {
+		t.Fatalf("cached text = %q, want second", cached.Article.Text)
 	}
 }
 
@@ -845,10 +941,10 @@ func TestModuleTTLExpiry(t *testing.T) {
 	}
 
 	now = now.Add(2 * time.Minute)
-	_, found, err := module.GetMessage(context.Background(), otogi.MessageLookup{
+	_, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	})
 	if err != nil {
 		t.Fatalf("lookup ttl message failed: %v", err)
@@ -870,30 +966,30 @@ func TestModuleGetMessageReturnsDefensiveCopy(t *testing.T) {
 		t.Fatalf("handle created event failed: %v", err)
 	}
 
-	lookup := otogi.MessageLookup{
+	lookup := otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	}
 
-	cached, found, err := module.GetMessage(context.Background(), lookup)
+	cached, found, err := module.GetArticle(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
 	}
 	if !found {
 		t.Fatal("expected message cache hit")
 	}
-	cached.Message.Text = "mutated"
+	cached.Article.Text = "mutated"
 
-	cachedAgain, found, err := module.GetMessage(context.Background(), lookup)
+	cachedAgain, found, err := module.GetArticle(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message second time failed: %v", err)
 	}
 	if !found {
 		t.Fatal("expected message cache hit")
 	}
-	if cachedAgain.Message.Text != "copy" {
-		t.Fatalf("cached text = %q, want copy", cachedAgain.Message.Text)
+	if cachedAgain.Article.Text != "copy" {
+		t.Fatalf("cached text = %q, want copy", cachedAgain.Article.Text)
 	}
 }
 
@@ -909,10 +1005,10 @@ func TestModuleGetEventsReturnsDefensiveCopy(t *testing.T) {
 		t.Fatalf("handle created event failed: %v", err)
 	}
 
-	lookup := otogi.MessageLookup{
+	lookup := otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	}
 
 	history, found, err := module.GetEvents(context.Background(), lookup)
@@ -943,10 +1039,10 @@ func TestModuleGetMessageContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := module.GetMessage(ctx, otogi.MessageLookup{
+	_, _, err := module.GetArticle(ctx, otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	})
 	if err == nil {
 		t.Fatal("expected context cancellation error")
@@ -963,10 +1059,10 @@ func TestModuleGetEventsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := module.GetEvents(ctx, otogi.MessageLookup{
+	_, _, err := module.GetEvents(ctx, otogi.ArticleLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
-		MessageID:      "msg-1",
+		ArticleID:      "msg-1",
 	})
 	if err == nil {
 		t.Fatal("expected context cancellation error")
@@ -983,7 +1079,7 @@ func newCreatedEvent(messageID string, text string, replyToID string) *otogi.Eve
 func newCreatedEventAt(messageID string, text string, replyToID string, occurredAt time.Time) *otogi.Event {
 	return &otogi.Event{
 		ID:         "evt-created-" + messageID,
-		Kind:       otogi.EventKindMessageCreated,
+		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: occurredAt,
 		Platform:   otogi.PlatformTelegram,
 		Conversation: otogi.Conversation{
@@ -991,10 +1087,10 @@ func newCreatedEventAt(messageID string, text string, replyToID string, occurred
 			Type: otogi.ConversationTypeGroup,
 		},
 		Actor: otogi.Actor{ID: "actor-1", DisplayName: "Alice"},
-		Message: &otogi.Message{
-			ID:        messageID,
-			ReplyToID: replyToID,
-			Text:      text,
+		Article: &otogi.Article{
+			ID:               messageID,
+			ReplyToArticleID: replyToID,
+			Text:             text,
 		},
 	}
 }
@@ -1002,17 +1098,17 @@ func newCreatedEventAt(messageID string, text string, replyToID string, occurred
 func newEditedEvent(targetMessageID string, text string) *otogi.Event {
 	return &otogi.Event{
 		ID:         "evt-edit-" + targetMessageID,
-		Kind:       otogi.EventKindMessageEdited,
+		Kind:       otogi.EventKindArticleEdited,
 		OccurredAt: time.Unix(20, 0).UTC(),
 		Platform:   otogi.PlatformTelegram,
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
 		},
-		Mutation: &otogi.Mutation{
+		Mutation: &otogi.ArticleMutation{
 			Type:            otogi.MutationTypeEdit,
-			TargetMessageID: targetMessageID,
-			After: &otogi.MessageSnapshot{
+			TargetArticleID: targetMessageID,
+			After: &otogi.ArticleSnapshot{
 				Text: text,
 			},
 		},
@@ -1036,7 +1132,7 @@ func newMessageMutationEventWithTimestamps(
 ) *otogi.Event {
 	return &otogi.Event{
 		ID:         "evt-message-mutation-" + targetMessageID,
-		Kind:       otogi.EventKindMessageCreated,
+		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: occurredAt,
 		Platform:   otogi.PlatformTelegram,
 		Conversation: otogi.Conversation{
@@ -1044,15 +1140,15 @@ func newMessageMutationEventWithTimestamps(
 			Type: otogi.ConversationTypeGroup,
 		},
 		Actor: otogi.Actor{ID: "actor-1", DisplayName: "Alice"},
-		Message: &otogi.Message{
+		Article: &otogi.Article{
 			ID:   targetMessageID,
 			Text: text,
 		},
-		Mutation: &otogi.Mutation{
+		Mutation: &otogi.ArticleMutation{
 			Type:            otogi.MutationTypeEdit,
-			TargetMessageID: targetMessageID,
+			TargetArticleID: targetMessageID,
 			ChangedAt:       &changedAt,
-			After: &otogi.MessageSnapshot{
+			After: &otogi.ArticleSnapshot{
 				Text: text,
 			},
 			Reason: "telegram_edit_update",
@@ -1063,16 +1159,16 @@ func newMessageMutationEventWithTimestamps(
 func newRetractedEvent(targetMessageID string) *otogi.Event {
 	return &otogi.Event{
 		ID:         "evt-retract-" + targetMessageID,
-		Kind:       otogi.EventKindMessageRetracted,
+		Kind:       otogi.EventKindArticleRetracted,
 		OccurredAt: time.Unix(30, 0).UTC(),
 		Platform:   otogi.PlatformTelegram,
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
 		},
-		Mutation: &otogi.Mutation{
+		Mutation: &otogi.ArticleMutation{
 			Type:            otogi.MutationTypeRetraction,
-			TargetMessageID: targetMessageID,
+			TargetArticleID: targetMessageID,
 		},
 	}
 }
@@ -1091,9 +1187,9 @@ func newReactionEventAt(
 	action otogi.ReactionAction,
 	occurredAt time.Time,
 ) *otogi.Event {
-	kind := otogi.EventKindReactionAdded
+	kind := otogi.EventKindArticleReactionAdded
 	if action == otogi.ReactionActionRemove {
-		kind = otogi.EventKindReactionRemoved
+		kind = otogi.EventKindArticleReactionRemoved
 	}
 
 	return &otogi.Event{
@@ -1107,7 +1203,7 @@ func newReactionEventAt(
 		},
 		Actor: otogi.Actor{ID: "actor-2", DisplayName: "Bob"},
 		Reaction: &otogi.Reaction{
-			MessageID: targetMessageID,
+			ArticleID: targetMessageID,
 			Emoji:     emoji,
 			Action:    action,
 		},

@@ -97,6 +97,56 @@ func TestGotdUserbotSourceConsume(t *testing.T) {
 	}
 }
 
+func TestGotdUserbotSourceConsumeUsesBatchMapper(t *testing.T) {
+	t.Parallel()
+
+	updates := make(chan any, 1)
+	updates <- "raw-batch-1"
+	close(updates)
+
+	mapper := &gotdTestBatchMapper{
+		batches: map[string][]Update{
+			"raw-batch-1": {
+				{Type: UpdateTypeMessage},
+				{Type: UpdateTypeReactionRemove},
+			},
+		},
+	}
+	source, err := NewGotdUserbotSource(
+		gotdTestClient{
+			run: func(ctx context.Context, fn func(context.Context) error) error {
+				return fn(ctx)
+			},
+		},
+		gotdTestStream{updates: updates},
+		mapper,
+	)
+	if err != nil {
+		t.Fatalf("new source failed: %v", err)
+	}
+
+	handled := make([]UpdateType, 0, 2)
+	if err := source.Consume(context.Background(), func(_ context.Context, update Update) error {
+		handled = append(handled, update.Type)
+		return nil
+	}); err != nil {
+		t.Fatalf("consume failed: %v", err)
+	}
+
+	if mapper.batchCalls != 1 {
+		t.Fatalf("map batch calls = %d, want 1", mapper.batchCalls)
+	}
+	if len(handled) != 2 {
+		t.Fatalf("handled updates = %d, want 2", len(handled))
+	}
+	if handled[0] != UpdateTypeMessage {
+		t.Fatalf("handled[0] = %s, want %s", handled[0], UpdateTypeMessage)
+	}
+	if handled[1] != UpdateTypeReactionRemove {
+		t.Fatalf("handled[1] = %s, want %s", handled[1], UpdateTypeReactionRemove)
+	}
+}
+
 type gotdTestClient struct {
 	run func(ctx context.Context, fn func(context.Context) error) error
 }
@@ -124,4 +174,25 @@ func (m gotdTestMapper) Map(_ context.Context, _ any) (Update, bool, error) {
 		return Update{}, false, m.err
 	}
 	return m.result, m.accepted, nil
+}
+
+type gotdTestBatchMapper struct {
+	gotdTestMapper
+	batches    map[string][]Update
+	batchErr   error
+	batchCalls int
+}
+
+func (m *gotdTestBatchMapper) MapBatch(_ context.Context, raw any) ([]Update, error) {
+	if m.batchErr != nil {
+		return nil, m.batchErr
+	}
+
+	text, ok := raw.(string)
+	if !ok {
+		return nil, nil
+	}
+	m.batchCalls++
+
+	return m.batches[text], nil
 }

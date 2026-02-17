@@ -20,7 +20,7 @@ func TestEventBusPublishDeliversMatchingSubscriptions(t *testing.T) {
 
 	received := make(chan *otogi.Event, 1)
 	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-		Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 	}, otogi.SubscriptionSpec{
 		Name: "match",
 	}, func(_ context.Context, event *otogi.Event) error {
@@ -31,7 +31,7 @@ func TestEventBusPublishDeliversMatchingSubscriptions(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindMessageCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
 
@@ -83,7 +83,7 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 			var mu sync.Mutex
 
 			_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-				Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+				Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 			}, otogi.SubscriptionSpec{
 				Name:         "policy",
 				Workers:      1,
@@ -103,7 +103,7 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 				t.Fatalf("subscribe failed: %v", err)
 			}
 
-			if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindMessageCreated)); err != nil {
+			if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
 				t.Fatalf("publish e1 failed: %v", err)
 			}
 			select {
@@ -111,10 +111,10 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("handler did not block as expected")
 			}
-			if err := bus.Publish(context.Background(), newTestEvent("e2", otogi.EventKindMessageCreated)); err != nil {
+			if err := bus.Publish(context.Background(), newTestEvent("e2", otogi.EventKindArticleCreated)); err != nil {
 				t.Fatalf("publish e2 failed: %v", err)
 			}
-			if err := bus.Publish(context.Background(), newTestEvent("e3", otogi.EventKindMessageCreated)); err != nil {
+			if err := bus.Publish(context.Background(), newTestEvent("e3", otogi.EventKindArticleCreated)); err != nil {
 				t.Fatalf("publish e3 failed: %v", err)
 			}
 
@@ -144,7 +144,7 @@ func TestEventBusCloseRejectsNewPublish(t *testing.T) {
 		t.Fatalf("close failed: %v", err)
 	}
 
-	err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindMessageCreated))
+	err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated))
 	if err == nil {
 		t.Fatal("expected publish on closed bus to fail")
 	}
@@ -178,16 +178,16 @@ func newTestEvent(id string, kind otogi.EventKind) *otogi.Event {
 	}
 
 	switch kind {
-	case otogi.EventKindMessageCreated:
-		event.Message = &otogi.Message{ID: "msg-1", Text: "hello"}
-	case otogi.EventKindMessageEdited:
-		event.Mutation = &otogi.Mutation{Type: otogi.MutationTypeEdit, TargetMessageID: "msg-1"}
-	case otogi.EventKindMessageRetracted:
-		event.Mutation = &otogi.Mutation{Type: otogi.MutationTypeRetraction, TargetMessageID: "msg-1"}
-	case otogi.EventKindReactionAdded:
-		event.Reaction = &otogi.Reaction{MessageID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionAdd}
-	case otogi.EventKindReactionRemoved:
-		event.Reaction = &otogi.Reaction{MessageID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionRemove}
+	case otogi.EventKindArticleCreated:
+		event.Article = &otogi.Article{ID: "msg-1", Text: "hello"}
+	case otogi.EventKindArticleEdited:
+		event.Mutation = &otogi.ArticleMutation{Type: otogi.MutationTypeEdit, TargetArticleID: "msg-1"}
+	case otogi.EventKindArticleRetracted:
+		event.Mutation = &otogi.ArticleMutation{Type: otogi.MutationTypeRetraction, TargetArticleID: "msg-1"}
+	case otogi.EventKindArticleReactionAdded:
+		event.Reaction = &otogi.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionAdd}
+	case otogi.EventKindArticleReactionRemoved:
+		event.Reaction = &otogi.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionRemove}
 	case otogi.EventKindMemberJoined:
 		event.StateChange = &otogi.StateChange{Type: otogi.StateChangeTypeMember, Member: &otogi.MemberChange{Action: kind, Member: otogi.Actor{ID: "user-1"}}}
 	case otogi.EventKindMemberLeft:

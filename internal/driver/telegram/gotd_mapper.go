@@ -18,16 +18,20 @@ import (
 const (
 	gotdUnknownConversationID     = "unknown"
 	gotdUnknownActorID            = "unknown"
+	gotdUnknownSubjectID          = "unknown"
 	defaultReactionResolveTimeout = 2 * time.Second
 	reactionResolveMaxAttempts    = 3
 	reactionResolveRetryDelay     = 120 * time.Millisecond
+	reactionWatchTTL              = 10 * time.Minute
+	reactionWatchMaxPerPoll       = 24
 )
 
 // DefaultGotdUpdateMapper maps gotd updates into adapter DTO updates.
 type DefaultGotdUpdateMapper struct {
 	peerCache              *PeerCache
 	reactionCache          *reactionCountCache
-	messageSnapshotCache   *messageSnapshotCache
+	reactionWatchCache     *reactionWatchCache
+	articleSnapshotCache   *articleSnapshotCache
 	reactionResolver       MessageReactionResolver
 	reactionResolveTimeout time.Duration
 	logger                 *slog.Logger
@@ -76,7 +80,8 @@ func WithReactionResolveTimeout(timeout time.Duration) GotdUpdateMapperOption {
 func NewDefaultGotdUpdateMapper(options ...GotdUpdateMapperOption) DefaultGotdUpdateMapper {
 	mapper := DefaultGotdUpdateMapper{
 		reactionCache:          newReactionCountCache(),
-		messageSnapshotCache:   newMessageSnapshotCache(),
+		reactionWatchCache:     newReactionWatchCache(),
+		articleSnapshotCache:   newArticleSnapshotCache(),
 		reactionResolveTimeout: defaultReactionResolveTimeout,
 	}
 	for _, option := range options {
@@ -88,52 +93,192 @@ func NewDefaultGotdUpdateMapper(options ...GotdUpdateMapperOption) DefaultGotdUp
 
 // Map converts a gotd raw update value into an adapter update.
 func (m DefaultGotdUpdateMapper) Map(ctx context.Context, raw any) (Update, bool, error) {
+	updates, err := m.MapBatch(ctx, raw)
+	if err != nil {
+		return Update{}, false, err
+	}
+	if len(updates) == 0 {
+		return Update{}, false, nil
+	}
+
+	return updates[0], true, nil
+}
+
+// MapBatch converts one gotd raw update into zero or more adapter updates.
+func (m DefaultGotdUpdateMapper) MapBatch(ctx context.Context, raw any) ([]Update, error) {
 	select {
 	case <-ctx.Done():
-		return Update{}, false, fmt.Errorf("map gotd update context: %w", ctx.Err())
+		return nil, fmt.Errorf("map gotd update context: %w", ctx.Err())
 	default:
 	}
 
 	envelope, err := normalizeGotdRaw(raw)
 	if err != nil {
-		return Update{}, false, fmt.Errorf("map gotd raw update: %w", err)
+		return nil, fmt.Errorf("map gotd raw update: %w", err)
 	}
 	m.rememberEnvelope(envelope)
 
 	if envelope.reaction != nil {
-		return m.mapReactionDelta(ctx, envelope)
+		return m.mapReactionDeltasToUpdates(ctx, envelope, []gotdReactionDelta{*envelope.reaction})
 	}
 
+	var updates []Update
 	switch update := envelope.update.(type) {
 	case *tg.UpdateNewMessage:
-		return m.mapNewMessage(update, envelope)
+		updates, err = m.mapNewMessageBatch(update, envelope)
 	case *tg.UpdateNewChannelMessage:
-		return m.mapNewMessage(&tg.UpdateNewMessage{
+		updates, err = m.mapNewMessageBatch(&tg.UpdateNewMessage{
 			Message:  update.Message,
 			Pts:      update.Pts,
 			PtsCount: update.PtsCount,
 		}, envelope)
 	case *tg.UpdateEditMessage:
-		return m.mapEditMessage(ctx, update.Message, envelope)
+		updates, err = m.mapEditMessageBatch(ctx, update.Message, envelope)
 	case *tg.UpdateEditChannelMessage:
-		return m.mapEditMessage(ctx, update.Message, envelope)
+		updates, err = m.mapEditMessageBatch(ctx, update.Message, envelope)
 	case *tg.UpdateDeleteMessages:
-		return m.mapDeleteMessages(update, envelope)
+		updates, err = updateBatchFromSingle(m.mapDeleteMessages(update, envelope))
 	case *tg.UpdateDeleteChannelMessages:
-		return m.mapDeleteChannelMessages(update, envelope)
+		updates, err = updateBatchFromSingle(m.mapDeleteChannelMessages(update, envelope))
+	case *tg.UpdateMessageReactions:
+		updates, err = m.mapMessageReactionsUpdateBatch(ctx, update, envelope)
 	case *tg.UpdateChatParticipantAdd:
-		return m.mapChatParticipantAdd(update, envelope)
+		updates, err = updateBatchFromSingle(m.mapChatParticipantAdd(update, envelope))
 	case *tg.UpdateChatParticipantDelete:
-		return m.mapChatParticipantDelete(update, envelope)
+		updates, err = updateBatchFromSingle(m.mapChatParticipantDelete(update, envelope))
 	case *tg.UpdateChatParticipantAdmin:
-		return m.mapChatParticipantAdmin(update, envelope)
+		updates, err = updateBatchFromSingle(m.mapChatParticipantAdmin(update, envelope))
 	case *tg.UpdateChatParticipant:
-		return m.mapChatParticipant(update, envelope)
+		updates, err = updateBatchFromSingle(m.mapChatParticipant(update, envelope))
 	case *tg.UpdateChannelParticipant:
-		return m.mapChannelParticipant(update, envelope)
+		updates, err = updateBatchFromSingle(m.mapChannelParticipant(update, envelope))
 	default:
-		return Update{}, false, nil
+		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	ensureUniqueBatchUpdateIDs(updates)
+
+	return updates, nil
+}
+
+// PollReactionUpdates performs resolver-backed backfill for watched messages.
+func (m DefaultGotdUpdateMapper) PollReactionUpdates(ctx context.Context) ([]Update, error) {
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("poll gotd reaction updates context: %w", ctx.Err())
+	default:
+	}
+	if m.reactionResolver == nil || m.reactionWatchCache == nil {
+		return nil, nil
+	}
+
+	watches := m.takeActiveReactionWatches(time.Now().UTC(), reactionWatchMaxPerPoll)
+	if len(watches) == 0 {
+		return nil, nil
+	}
+
+	updates := make([]Update, 0)
+	for _, watch := range watches {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("poll gotd reaction updates context: %w", ctx.Err())
+		default:
+		}
+
+		peer := watch.inputPeer
+		if peer == nil && m.peerCache != nil {
+			cachedPeer, err := m.peerCache.Resolve(otogi.Conversation{
+				ID:   watch.chat.ID,
+				Type: watch.chat.Type,
+			})
+			if err == nil {
+				peer = cachedPeer
+			}
+		}
+		if peer == nil {
+			m.logDebug(ctx,
+				"telegram mapper reaction poll skipped",
+				"chat_id", watch.chat.ID,
+				"chat_type", watch.chat.Type,
+				"message_id", watch.messageID,
+				"reason", "missing_input_peer",
+			)
+			continue
+		}
+
+		resolveCtx := ctx
+		cancel := func() {}
+		if m.reactionResolveTimeout > 0 {
+			resolveCtx, cancel = context.WithTimeout(ctx, m.reactionResolveTimeout)
+		}
+		counts, err := m.reactionResolver.ResolveMessageReactionCounts(resolveCtx, peer, watch.messageID)
+		cancel()
+		if err != nil {
+			m.logDebug(ctx,
+				"telegram mapper reaction poll resolver failed",
+				"chat_id", watch.chat.ID,
+				"chat_type", watch.chat.Type,
+				"message_id", watch.messageID,
+				"error", err,
+			)
+			continue
+		}
+		if counts == nil {
+			counts = map[string]int{}
+		}
+
+		previous := m.reactionCountCacheSnapshot(watch.chat.ID, watch.messageID)
+		if previous == nil {
+			previous = map[string]int{}
+		}
+		deltas := reactionDeltasFromCountDiff(previous, counts, watch.messageID, nil)
+		m.setReactionCountCache(watch.chat.ID, watch.messageID, counts)
+		if len(deltas) == 0 {
+			continue
+		}
+
+		occurredAt := time.Now().UTC()
+		for _, delta := range deltas {
+			updates = append(updates, Update{
+				ID:         composeUpdateID(delta.action, watch.chat.ID, strconv.Itoa(watch.messageID), occurredAt),
+				Type:       delta.action,
+				OccurredAt: occurredAt,
+				Chat:       watch.chat,
+				Actor:      ActorRef{ID: gotdUnknownActorID},
+				Reaction: &ArticleReactionPayload{
+					ArticleID: strconv.Itoa(watch.messageID),
+					Emoji:     delta.emoji,
+				},
+				Metadata: map[string]string{
+					"gotd_update": "reaction_poll",
+				},
+			})
+		}
+		m.logDebug(ctx,
+			"telegram mapper reaction poll matched delta",
+			"chat_id", watch.chat.ID,
+			"chat_type", watch.chat.Type,
+			"message_id", watch.messageID,
+			"delta_count", len(deltas),
+		)
+	}
+
+	ensureUniqueBatchUpdateIDs(updates)
+
+	return updates, nil
+}
+
+func updateBatchFromSingle(update Update, accepted bool, err error) ([]Update, error) {
+	if err != nil {
+		return nil, err
+	}
+	if !accepted {
+		return nil, nil
+	}
+
+	return []Update{update}, nil
 }
 
 func (m DefaultGotdUpdateMapper) rememberEnvelope(envelope gotdUpdateEnvelope) {
@@ -179,21 +324,21 @@ func normalizeGotdRaw(raw any) (gotdUpdateEnvelope, error) {
 	}
 }
 
-func (m DefaultGotdUpdateMapper) mapNewMessage(
+func (m DefaultGotdUpdateMapper) mapNewMessageBatch(
 	update *tg.UpdateNewMessage,
 	envelope gotdUpdateEnvelope,
-) (Update, bool, error) {
+) ([]Update, error) {
 	if update == nil {
-		return Update{}, false, fmt.Errorf("map new message: nil update")
+		return nil, fmt.Errorf("map new message: nil update")
 	}
 
 	switch message := update.Message.(type) {
 	case *tg.Message:
-		return m.mapMessage(message, envelope)
+		return updateBatchFromSingle(m.mapMessage(message, envelope))
 	case *tg.MessageService:
-		return m.mapServiceMessage(message, envelope)
+		return m.mapServiceMessageBatch(message, envelope)
 	default:
-		return Update{}, false, nil
+		return nil, nil
 	}
 }
 
@@ -211,7 +356,7 @@ func (m DefaultGotdUpdateMapper) mapMessage(
 		actor = resolveActorFromPeer(message.PeerID, envelope)
 	}
 
-	payload := mapMessagePayload(message)
+	payload := mapArticlePayload(message)
 
 	occurredAt := intToTimeUTC(message.Date)
 	if occurredAt.IsZero() {
@@ -219,7 +364,7 @@ func (m DefaultGotdUpdateMapper) mapMessage(
 	}
 	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(message.PeerID, envelope))
 	m.rememberMessageReactionCounts(chat.ID, message)
-	m.rememberMessageSnapshot(chat.ID, message)
+	m.rememberArticleSnapshot(chat.ID, message)
 
 	return Update{
 		ID:         composeUpdateID(UpdateTypeMessage, chat.ID, payload.ID, occurredAt),
@@ -227,20 +372,20 @@ func (m DefaultGotdUpdateMapper) mapMessage(
 		OccurredAt: occurredAt,
 		Chat:       chat,
 		Actor:      actor,
-		Message:    payload,
+		Article:    payload,
 		Metadata:   newGotdMetadata(envelope),
 	}, true, nil
 }
 
-func (m DefaultGotdUpdateMapper) mapServiceMessage(
+func (m DefaultGotdUpdateMapper) mapServiceMessageBatch(
 	message *tg.MessageService,
 	envelope gotdUpdateEnvelope,
-) (Update, bool, error) {
+) ([]Update, error) {
 	if message == nil {
-		return Update{}, false, fmt.Errorf("map service message: nil message")
+		return nil, fmt.Errorf("map service message: nil message")
 	}
 	if message.Action == nil {
-		return Update{}, false, nil
+		return nil, nil
 	}
 
 	chat := resolveChatFromPeer(message.PeerID, envelope)
@@ -254,28 +399,33 @@ func (m DefaultGotdUpdateMapper) mapServiceMessage(
 	switch action := message.Action.(type) {
 	case *tg.MessageActionChatAddUser:
 		if len(action.Users) == 0 {
-			return Update{}, false, nil
+			return nil, nil
 		}
-		member := resolveActorByUserID(action.Users[0], envelope)
 
-		return Update{
-			ID:         composeUpdateID(UpdateTypeMemberJoin, chat.ID, member.ID, occurredAt),
-			Type:       UpdateTypeMemberJoin,
-			OccurredAt: occurredAt,
-			Chat:       chat,
-			Actor:      actor,
-			Member: &MemberPayload{
-				Member:   member,
-				Inviter:  actorPointer(actor),
-				Reason:   "service_action_chat_add_user",
-				JoinedAt: occurredAt,
-			},
-			Metadata: newGotdMetadata(envelope),
-		}, true, nil
+		updates := make([]Update, 0, len(action.Users))
+		for _, userID := range action.Users {
+			member := resolveActorByUserID(userID, envelope)
+			updates = append(updates, Update{
+				ID:         composeUpdateID(UpdateTypeMemberJoin, chat.ID, member.ID, occurredAt),
+				Type:       UpdateTypeMemberJoin,
+				OccurredAt: occurredAt,
+				Chat:       chat,
+				Actor:      actor,
+				Member: &MemberPayload{
+					Member:   member,
+					Inviter:  actorPointer(actor),
+					Reason:   "service_action_chat_add_user",
+					JoinedAt: occurredAt,
+				},
+				Metadata: newGotdMetadata(envelope),
+			})
+		}
+
+		return updates, nil
 	case *tg.MessageActionChatDeleteUser:
 		member := resolveActorByUserID(action.UserID, envelope)
 
-		return Update{
+		return []Update{{
 			ID:         composeUpdateID(UpdateTypeMemberLeave, chat.ID, member.ID, occurredAt),
 			Type:       UpdateTypeMemberLeave,
 			OccurredAt: occurredAt,
@@ -286,12 +436,12 @@ func (m DefaultGotdUpdateMapper) mapServiceMessage(
 				Reason: "service_action_chat_delete_user",
 			},
 			Metadata: newGotdMetadata(envelope),
-		}, true, nil
+		}}, nil
 	case *tg.MessageActionChatJoinedByLink:
 		member := actor
 		inviter := resolveActorByUserID(action.InviterID, envelope)
 
-		return Update{
+		return []Update{{
 			ID:         composeUpdateID(UpdateTypeMemberJoin, chat.ID, member.ID, occurredAt),
 			Type:       UpdateTypeMemberJoin,
 			OccurredAt: occurredAt,
@@ -304,11 +454,11 @@ func (m DefaultGotdUpdateMapper) mapServiceMessage(
 				JoinedAt: occurredAt,
 			},
 			Metadata: newGotdMetadata(envelope),
-		}, true, nil
+		}}, nil
 	case *tg.MessageActionChatJoinedByRequest:
 		member := actor
 
-		return Update{
+		return []Update{{
 			ID:         composeUpdateID(UpdateTypeMemberJoin, chat.ID, member.ID, occurredAt),
 			Type:       UpdateTypeMemberJoin,
 			OccurredAt: occurredAt,
@@ -320,9 +470,9 @@ func (m DefaultGotdUpdateMapper) mapServiceMessage(
 				JoinedAt: occurredAt,
 			},
 			Metadata: newGotdMetadata(envelope),
-		}, true, nil
+		}}, nil
 	case *tg.MessageActionChatMigrateTo:
-		return Update{
+		return []Update{{
 			ID:         composeUpdateID(UpdateTypeMigration, chat.ID, strconv.FormatInt(action.ChannelID, 10), occurredAt),
 			Type:       UpdateTypeMigration,
 			OccurredAt: occurredAt,
@@ -334,9 +484,9 @@ func (m DefaultGotdUpdateMapper) mapServiceMessage(
 				Reason:     "service_action_chat_migrate_to",
 			},
 			Metadata: newGotdMetadata(envelope),
-		}, true, nil
+		}}, nil
 	case *tg.MessageActionChannelMigrateFrom:
-		return Update{
+		return []Update{{
 			ID:         composeUpdateID(UpdateTypeMigration, strconv.FormatInt(action.ChatID, 10), chat.ID, occurredAt),
 			Type:       UpdateTypeMigration,
 			OccurredAt: occurredAt,
@@ -348,26 +498,26 @@ func (m DefaultGotdUpdateMapper) mapServiceMessage(
 				Reason:     "service_action_channel_migrate_from",
 			},
 			Metadata: newGotdMetadata(envelope),
-		}, true, nil
+		}}, nil
 	default:
-		return Update{}, false, nil
+		return nil, nil
 	}
 }
 
-func (m DefaultGotdUpdateMapper) mapEditMessage(
+func (m DefaultGotdUpdateMapper) mapEditMessageBatch(
 	ctx context.Context,
 	message tg.MessageClass,
 	envelope gotdUpdateEnvelope,
-) (Update, bool, error) {
+) ([]Update, error) {
 	typed, ok := message.(*tg.Message)
 	if !ok {
-		return Update{}, false, nil
+		return nil, nil
 	}
 
-	if reactionUpdate, mappedAsReaction, err := m.mapReactionFromEditedMessage(ctx, typed, envelope); err != nil {
-		return Update{}, false, fmt.Errorf("map edit message as reaction: %w", err)
+	if reactionUpdates, mappedAsReaction, err := m.mapReactionUpdatesFromEditedMessage(ctx, typed, envelope); err != nil {
+		return nil, fmt.Errorf("map edit message as reaction: %w", err)
 	} else if mappedAsReaction {
-		return reactionUpdate, true, nil
+		return reactionUpdates, nil
 	}
 	if shouldSuppressAmbiguousReactionEdit(typed) {
 		m.logDebug(ctx,
@@ -377,7 +527,7 @@ func (m DefaultGotdUpdateMapper) mapEditMessage(
 			"edit_hide", typed.EditHide,
 		)
 
-		return Update{}, false, nil
+		return nil, nil
 	}
 
 	chat := resolveChatFromPeer(typed.PeerID, envelope)
@@ -387,37 +537,37 @@ func (m DefaultGotdUpdateMapper) mapEditMessage(
 	}
 	occurredAt := resolveMutationOccurredAt(typed, envelope.occurredAt)
 	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(typed.PeerID, envelope))
-	before := m.loadMessageSnapshot(chat.ID, typed.ID)
-	payload := mapMessagePayload(typed)
-	after := snapshotPayloadFromMessage(typed)
+	before := m.loadArticleSnapshot(chat.ID, typed.ID)
+	payload := mapArticlePayload(typed)
+	after := articleSnapshotPayloadFromMessage(typed)
 	m.rememberMessageReactionCounts(chat.ID, typed)
-	m.rememberMessageSnapshot(chat.ID, typed)
+	m.rememberArticleSnapshot(chat.ID, typed)
 
-	return Update{
+	return []Update{{
 		ID:         composeUpdateID(UpdateTypeEdit, chat.ID, strconv.Itoa(typed.ID), occurredAt),
 		Type:       UpdateTypeEdit,
 		OccurredAt: occurredAt,
 		Chat:       chat,
 		Actor:      actor,
-		Message:    payload,
-		Edit: &EditPayload{
-			MessageID: strconv.Itoa(typed.ID),
+		Article:    payload,
+		Edit: &ArticleEditPayload{
+			ArticleID: strconv.Itoa(typed.ID),
 			ChangedAt: timePointer(occurredAt),
 			Before:    before,
 			After:     after,
 			Reason:    "telegram_edit_update",
 		},
 		Metadata: newGotdMetadata(envelope),
-	}, true, nil
+	}}, nil
 }
 
-func (m DefaultGotdUpdateMapper) mapReactionFromEditedMessage(
+func (m DefaultGotdUpdateMapper) mapReactionUpdatesFromEditedMessage(
 	ctx context.Context,
 	message *tg.Message,
 	envelope gotdUpdateEnvelope,
-) (Update, bool, error) {
+) ([]Update, bool, error) {
 	if message == nil {
-		return Update{}, false, fmt.Errorf("map reaction from edited message: nil message")
+		return nil, false, fmt.Errorf("map reaction from edited message: nil message")
 	}
 
 	chat := resolveChatFromPeer(message.PeerID, envelope)
@@ -426,43 +576,50 @@ func (m DefaultGotdUpdateMapper) mapReactionFromEditedMessage(
 	countCacheKnown := m.reactionCountCacheSnapshot(chat.ID, message.ID) != nil
 
 	var (
-		delta                      gotdReactionDelta
-		ok                         bool
+		deltas                     []gotdReactionDelta
 		deltaFrom                  = "none"
+		resolverCounts             map[string]int
 		resolverAttempted          bool
 		nonLikelySnapshotKnown     bool
 		nonLikelySnapshotUnchanged bool
 	)
-	if isLikelyReactionUpdate {
-		delta, ok = reactionDeltaFromEditedMessage(message)
+
+	// Count-cache diff is prioritized over heuristic classification so remove deltas are not
+	// misclassified as add events when recent reactions are noisy.
+	canUseCountDiff := !isLikelyReactionUpdate || reactionResultsCount > 0 || reactionRecentCount > 0
+	if canUseCountDiff {
+		diffDeltas, ok := m.reactionDeltasFromCountCache(chat.ID, message)
 		if ok {
-			deltaFrom = "edited_message"
-		}
-		if !ok {
-			delta, ok = m.reactionDeltaFromCountCache(chat.ID, message)
-			if ok {
-				deltaFrom = "count_cache"
-			}
-		}
-	} else {
-		delta, ok = m.reactionDeltaFromCountCache(chat.ID, message)
-		if ok {
+			deltas = diffDeltas
 			deltaFrom = "count_cache"
 		}
 	}
-	if !ok {
+	if len(deltas) == 0 && isLikelyReactionUpdate {
+		if heuristicDelta, ok := reactionDeltaFromEditedMessage(message); ok {
+			deltas = []gotdReactionDelta{heuristicDelta}
+			deltaFrom = "edited_message"
+		}
+	}
+	if len(deltas) == 0 {
 		shouldAttemptResolver := isLikelyReactionUpdate
 		if !shouldAttemptResolver {
-			nonLikelySnapshotKnown, nonLikelySnapshotUnchanged = m.isMessageSnapshotUnchanged(chat.ID, message)
+			nonLikelySnapshotKnown, nonLikelySnapshotUnchanged = m.isArticleSnapshotUnchanged(chat.ID, message)
 			shouldAttemptResolver = nonLikelySnapshotKnown && nonLikelySnapshotUnchanged
 		}
 		if shouldAttemptResolver {
 			resolverAttempted = true
-			delta, ok = m.reactionDeltaFromResolver(ctx, chat, message, envelope)
+			delta, counts, ok := m.reactionDeltaFromResolver(ctx, chat, message, envelope)
 			if ok {
+				deltas = []gotdReactionDelta{delta}
 				deltaFrom = "resolver"
+				resolverCounts = counts
 			}
 		}
+	}
+
+	primaryDelta := gotdReactionDelta{}
+	if len(deltas) > 0 {
+		primaryDelta = deltas[0]
 	}
 	m.logDebug(ctx,
 		"telegram mapper edited-message reaction classification",
@@ -470,10 +627,11 @@ func (m DefaultGotdUpdateMapper) mapReactionFromEditedMessage(
 		"chat_id", chat.ID,
 		"message_id", message.ID,
 		"is_likely_reaction_only_edit", isLikelyReactionUpdate,
-		"mapped_as_reaction", ok,
+		"mapped_as_reaction", len(deltas) > 0,
+		"delta_count", len(deltas),
 		"delta_source", deltaFrom,
-		"delta_action", delta.action,
-		"delta_emoji", delta.emoji,
+		"delta_action", primaryDelta.action,
+		"delta_emoji", primaryDelta.emoji,
 		"resolver_attempted", resolverAttempted,
 		"count_cache_known", countCacheKnown,
 		"reaction_payload_present", reactionPayloadPresent,
@@ -482,41 +640,64 @@ func (m DefaultGotdUpdateMapper) mapReactionFromEditedMessage(
 		"non_likely_snapshot_known", nonLikelySnapshotKnown,
 		"non_likely_snapshot_unchanged", nonLikelySnapshotUnchanged,
 	)
-	if !ok {
+	if len(deltas) == 0 {
 		if shouldRememberUnmappedReactionEditCounts(message, isLikelyReactionUpdate) {
 			m.rememberMessageReactionCounts(chat.ID, message)
 		}
-		return Update{}, false, nil
-	}
-	if delta.peer == nil {
-		delta.peer = message.PeerID
+		return nil, false, nil
 	}
 
-	actor := resolveActorFromPeer(delta.actor, envelope)
+	for idx := range deltas {
+		if deltas[idx].peer == nil {
+			deltas[idx].peer = message.PeerID
+		}
+	}
+
+	reactionUpdates, err := m.mapReactionDeltasToUpdates(ctx, envelope, deltas)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(reactionUpdates) == 0 {
+		return nil, false, nil
+	}
+
 	occurredAt := resolveMutationOccurredAt(message, envelope.occurredAt)
-	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(delta.peer, envelope))
-	m.rememberMessageReactionCounts(chat.ID, message)
+	if !occurredAt.IsZero() {
+		for idx := range reactionUpdates {
+			reactionArticleID := strconv.Itoa(message.ID)
+			if reactionUpdates[idx].Reaction != nil && reactionUpdates[idx].Reaction.ArticleID != "" {
+				reactionArticleID = reactionUpdates[idx].Reaction.ArticleID
+			}
+			reactionUpdates[idx].OccurredAt = occurredAt
+			reactionUpdates[idx].ID = composeUpdateID(
+				reactionUpdates[idx].Type,
+				reactionUpdates[idx].Chat.ID,
+				reactionArticleID,
+				occurredAt,
+			)
+		}
+		ensureUniqueBatchUpdateIDs(reactionUpdates)
+	}
+	if deltaFrom == "resolver" {
+		m.rememberReactionWatch(chat, message, envelope)
+		if len(resolverCounts) == 0 {
+			resolverCounts = map[string]int{}
+		}
+		m.setReactionCountCache(chat.ID, message.ID, resolverCounts)
+	} else {
+		m.rememberMessageReactionCounts(chat.ID, message)
+	}
 	m.logDebug(ctx,
 		"telegram mapper classified edited message as reaction",
 		"update_class", envelope.updateClass,
 		"chat_id", chat.ID,
-		"message_id", delta.messageID,
-		"delta_action", delta.action,
-		"delta_emoji", delta.emoji,
+		"message_id", primaryDelta.messageID,
+		"delta_count", len(reactionUpdates),
+		"delta_action", primaryDelta.action,
+		"delta_emoji", primaryDelta.emoji,
 	)
 
-	return Update{
-		ID:         composeUpdateID(delta.action, chat.ID, strconv.Itoa(delta.messageID), delta.emoji, occurredAt),
-		Type:       delta.action,
-		OccurredAt: occurredAt,
-		Chat:       chat,
-		Actor:      actor,
-		Reaction: &ReactionPayload{
-			MessageID: strconv.Itoa(delta.messageID),
-			Emoji:     delta.emoji,
-		},
-		Metadata: newGotdMetadata(envelope),
-	}, true, nil
+	return reactionUpdates, true, nil
 }
 
 func (m DefaultGotdUpdateMapper) mapDeleteMessages(
@@ -542,8 +723,8 @@ func (m DefaultGotdUpdateMapper) mapDeleteMessages(
 			Type: otogi.ConversationTypePrivate,
 		},
 		Actor: ActorRef{ID: gotdUnknownActorID},
-		Delete: &DeletePayload{
-			MessageID: strconv.Itoa(messageID),
+		Delete: &ArticleDeletePayload{
+			ArticleID: strconv.Itoa(messageID),
 			Reason:    "telegram_delete_update",
 		},
 		Metadata: newGotdMetadata(envelope),
@@ -571,8 +752,8 @@ func (m DefaultGotdUpdateMapper) mapDeleteChannelMessages(
 		OccurredAt: occurredAt,
 		Chat:       chat,
 		Actor:      ActorRef{ID: gotdUnknownActorID},
-		Delete: &DeletePayload{
-			MessageID: strconv.Itoa(update.Messages[0]),
+		Delete: &ArticleDeletePayload{
+			ArticleID: strconv.Itoa(update.Messages[0]),
 			Reason:    "telegram_delete_channel_update",
 		},
 		Metadata: newGotdMetadata(envelope),
@@ -609,17 +790,119 @@ func (m DefaultGotdUpdateMapper) mapReactionDelta(
 	)
 
 	return Update{
-		ID:         composeUpdateID(delta.action, chat.ID, strconv.Itoa(delta.messageID), delta.emoji, occurredAt),
+		ID:         composeUpdateID(delta.action, chat.ID, strconv.Itoa(delta.messageID), occurredAt),
 		Type:       delta.action,
 		OccurredAt: occurredAt,
 		Chat:       chat,
 		Actor:      actor,
-		Reaction: &ReactionPayload{
-			MessageID: strconv.Itoa(delta.messageID),
+		Reaction: &ArticleReactionPayload{
+			ArticleID: strconv.Itoa(delta.messageID),
 			Emoji:     delta.emoji,
 		},
 		Metadata: newGotdMetadata(envelope),
 	}, true, nil
+}
+
+func (m DefaultGotdUpdateMapper) mapReactionDeltasToUpdates(
+	ctx context.Context,
+	envelope gotdUpdateEnvelope,
+	deltas []gotdReactionDelta,
+) ([]Update, error) {
+	if len(deltas) == 0 {
+		return nil, nil
+	}
+
+	updates := make([]Update, 0, len(deltas))
+	for _, delta := range deltas {
+		delta := delta
+		singleEnvelope := envelope
+		singleEnvelope.reaction = &delta
+
+		mapped, accepted, err := m.mapReactionDelta(ctx, singleEnvelope)
+		if err != nil {
+			return nil, err
+		}
+		if !accepted {
+			continue
+		}
+		updates = append(updates, mapped)
+	}
+
+	return updates, nil
+}
+
+func (m DefaultGotdUpdateMapper) mapMessageReactionsUpdateBatch(
+	ctx context.Context,
+	update *tg.UpdateMessageReactions,
+	envelope gotdUpdateEnvelope,
+) ([]Update, error) {
+	if update == nil {
+		return nil, fmt.Errorf("map message reactions update: nil update")
+	}
+
+	chat := resolveChatFromPeer(update.Peer, envelope)
+	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(update.Peer, envelope))
+	currentCounts := reactionCountsFromMessageReactions(update.Reactions)
+	previousCounts := m.reactionCountCacheSnapshot(chat.ID, update.MsgID)
+
+	var deltas []gotdReactionDelta
+	if previousCounts != nil {
+		deltas = reactionDeltasFromCountDiff(previousCounts, currentCounts, update.MsgID, update.Peer)
+	} else {
+		deltas = reactionHeuristicDeltasFromMessageReactions(update)
+	}
+
+	updates, err := m.mapReactionDeltasToUpdates(ctx, envelope, deltas)
+	if err != nil {
+		return nil, err
+	}
+	m.setReactionCountCache(chat.ID, update.MsgID, currentCounts)
+
+	return updates, nil
+}
+
+func reactionHeuristicDeltasFromMessageReactions(update *tg.UpdateMessageReactions) []gotdReactionDelta {
+	if update == nil {
+		return nil
+	}
+
+	deltas := make([]gotdReactionDelta, 0, 1)
+	seenEmoji := map[string]struct{}{}
+	if recentReactions, ok := update.Reactions.GetRecentReactions(); ok && len(recentReactions) > 0 {
+		for _, reaction := range recentReactions {
+			emoji := reactionToEmoji(reaction.Reaction)
+			if emoji == "" {
+				continue
+			}
+			if !reaction.My && !reaction.Unread {
+				continue
+			}
+			if _, exists := seenEmoji[emoji]; exists {
+				continue
+			}
+			deltas = append(deltas, gotdReactionDelta{
+				action:    UpdateTypeReactionAdd,
+				messageID: update.MsgID,
+				emoji:     emoji,
+				actor:     reaction.PeerID,
+				peer:      update.Peer,
+			})
+			seenEmoji[emoji] = struct{}{}
+		}
+	}
+
+	if emoji, chosen := reactionFromChosenResults(update.Reactions.Results); chosen {
+		if _, exists := seenEmoji[emoji]; !exists {
+			deltas = append(deltas, gotdReactionDelta{
+				action:    UpdateTypeReactionAdd,
+				messageID: update.MsgID,
+				emoji:     emoji,
+				peer:      update.Peer,
+			})
+		}
+	}
+
+	return deltas
 }
 
 func (m DefaultGotdUpdateMapper) mapChatParticipantAdd(
@@ -909,14 +1192,26 @@ type reactionCountCache struct {
 	byMessage map[string]map[string]int
 }
 
-type messageSnapshotCache struct {
+type reactionWatchCache struct {
 	mu        sync.Mutex
-	byMessage map[string]messageSnapshotRecord
+	byMessage map[string]reactionWatchRecord
 }
 
-type messageSnapshotRecord struct {
+type reactionWatchRecord struct {
+	chat      ChatRef
+	messageID int
+	inputPeer tg.InputPeerClass
+	expiresAt time.Time
+}
+
+type articleSnapshotCache struct {
+	mu        sync.Mutex
+	byArticle map[string]articleSnapshotRecord
+}
+
+type articleSnapshotRecord struct {
 	fingerprint string
-	snapshot    SnapshotPayload
+	snapshot    ArticleSnapshotPayload
 }
 
 func newReactionCountCache() *reactionCountCache {
@@ -925,9 +1220,15 @@ func newReactionCountCache() *reactionCountCache {
 	}
 }
 
-func newMessageSnapshotCache() *messageSnapshotCache {
-	return &messageSnapshotCache{
-		byMessage: make(map[string]messageSnapshotRecord),
+func newReactionWatchCache() *reactionWatchCache {
+	return &reactionWatchCache{
+		byMessage: make(map[string]reactionWatchRecord),
+	}
+}
+
+func newArticleSnapshotCache() *articleSnapshotCache {
+	return &articleSnapshotCache{
+		byArticle: make(map[string]articleSnapshotRecord),
 	}
 }
 
@@ -947,39 +1248,39 @@ func (m DefaultGotdUpdateMapper) rememberMessageReactionCounts(chatID string, me
 	m.reactionCache.mu.Unlock()
 }
 
-func (m DefaultGotdUpdateMapper) rememberMessageSnapshot(chatID string, message *tg.Message) {
-	if m.messageSnapshotCache == nil || chatID == "" || message == nil {
+func (m DefaultGotdUpdateMapper) rememberArticleSnapshot(chatID string, message *tg.Message) {
+	if m.articleSnapshotCache == nil || chatID == "" || message == nil {
 		return
 	}
-	snapshot := snapshotPayloadFromMessage(message)
+	snapshot := articleSnapshotPayloadFromMessage(message)
 	if snapshot == nil {
 		return
 	}
 
 	key := messageReactionCacheKey(chatID, message.ID)
-	m.messageSnapshotCache.mu.Lock()
-	m.messageSnapshotCache.byMessage[key] = messageSnapshotRecord{
-		fingerprint: messageSnapshotFingerprint(*snapshot),
+	m.articleSnapshotCache.mu.Lock()
+	m.articleSnapshotCache.byArticle[key] = articleSnapshotRecord{
+		fingerprint: articleSnapshotFingerprint(*snapshot),
 		snapshot:    cloneSnapshotPayload(*snapshot),
 	}
-	m.messageSnapshotCache.mu.Unlock()
+	m.articleSnapshotCache.mu.Unlock()
 }
 
-func (m DefaultGotdUpdateMapper) isMessageSnapshotUnchanged(chatID string, message *tg.Message) (known bool, unchanged bool) {
-	if m.messageSnapshotCache == nil || chatID == "" || message == nil {
+func (m DefaultGotdUpdateMapper) isArticleSnapshotUnchanged(chatID string, message *tg.Message) (known bool, unchanged bool) {
+	if m.articleSnapshotCache == nil || chatID == "" || message == nil {
 		return false, false
 	}
-	currentSnapshot := snapshotPayloadFromMessage(message)
+	currentSnapshot := articleSnapshotPayloadFromMessage(message)
 	if currentSnapshot == nil {
 		return false, false
 	}
 
 	key := messageReactionCacheKey(chatID, message.ID)
-	current := messageSnapshotFingerprint(*currentSnapshot)
+	current := articleSnapshotFingerprint(*currentSnapshot)
 
-	m.messageSnapshotCache.mu.Lock()
-	previous, exists := m.messageSnapshotCache.byMessage[key]
-	m.messageSnapshotCache.mu.Unlock()
+	m.articleSnapshotCache.mu.Lock()
+	previous, exists := m.articleSnapshotCache.byArticle[key]
+	m.articleSnapshotCache.mu.Unlock()
 	if !exists {
 		return false, false
 	}
@@ -987,15 +1288,15 @@ func (m DefaultGotdUpdateMapper) isMessageSnapshotUnchanged(chatID string, messa
 	return true, previous.fingerprint == current
 }
 
-func (m DefaultGotdUpdateMapper) loadMessageSnapshot(chatID string, messageID int) *SnapshotPayload {
-	if m.messageSnapshotCache == nil || chatID == "" || messageID == 0 {
+func (m DefaultGotdUpdateMapper) loadArticleSnapshot(chatID string, articleID int) *ArticleSnapshotPayload {
+	if m.articleSnapshotCache == nil || chatID == "" || articleID == 0 {
 		return nil
 	}
 
-	key := messageReactionCacheKey(chatID, messageID)
-	m.messageSnapshotCache.mu.Lock()
-	record, exists := m.messageSnapshotCache.byMessage[key]
-	m.messageSnapshotCache.mu.Unlock()
+	key := messageReactionCacheKey(chatID, articleID)
+	m.articleSnapshotCache.mu.Lock()
+	record, exists := m.articleSnapshotCache.byArticle[key]
+	m.articleSnapshotCache.mu.Unlock()
 	if !exists {
 		return nil
 	}
@@ -1009,9 +1310,9 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 	chat ChatRef,
 	message *tg.Message,
 	envelope gotdUpdateEnvelope,
-) (gotdReactionDelta, bool) {
+) (gotdReactionDelta, map[string]int, bool) {
 	if m.reactionResolver == nil || chat.ID == "" || message == nil {
-		return gotdReactionDelta{}, false
+		return gotdReactionDelta{}, nil, false
 	}
 
 	peer := resolveInputPeerFromPeer(message.PeerID, envelope)
@@ -1041,7 +1342,7 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 			"reason", "missing_input_peer",
 		)
 
-		return gotdReactionDelta{}, false
+		return gotdReactionDelta{}, nil, false
 	}
 
 	resolveCtx := ctx
@@ -1069,7 +1370,7 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 				"error", err,
 			)
 
-			return gotdReactionDelta{}, false
+			return gotdReactionDelta{}, nil, false
 		}
 		if counts == nil {
 			counts = map[string]int{}
@@ -1078,7 +1379,6 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 
 		emoji, action, ok := diffReactionCounts(previous, counts)
 		if ok {
-			m.setReactionCountCache(chat.ID, message.ID, counts)
 			m.logDebug(ctx,
 				"telegram mapper reaction resolver matched delta",
 				"chat_id", chat.ID,
@@ -1094,7 +1394,7 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 				messageID: message.ID,
 				emoji:     emoji,
 				peer:      message.PeerID,
-			}, true
+			}, counts, true
 		}
 
 		if attempt >= reactionResolveMaxAttempts {
@@ -1112,7 +1412,7 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 		m.setReactionCountCache(chat.ID, message.ID, lastCounts)
 	}
 
-	return gotdReactionDelta{}, false
+	return gotdReactionDelta{}, nil, false
 }
 
 func (m DefaultGotdUpdateMapper) setReactionCountCache(chatID string, messageID int, counts map[string]int) {
@@ -1126,14 +1426,71 @@ func (m DefaultGotdUpdateMapper) setReactionCountCache(chatID string, messageID 
 	m.reactionCache.mu.Unlock()
 }
 
-func (m DefaultGotdUpdateMapper) reactionDeltaFromCountCache(chatID string, message *tg.Message) (gotdReactionDelta, bool) {
+func (m DefaultGotdUpdateMapper) rememberReactionWatch(
+	chat ChatRef,
+	message *tg.Message,
+	envelope gotdUpdateEnvelope,
+) {
+	if m.reactionWatchCache == nil || message == nil || message.ID == 0 || chat.ID == "" {
+		return
+	}
+
+	peer := resolveInputPeerFromPeer(message.PeerID, envelope)
+	if peer == nil && m.peerCache != nil {
+		cachedPeer, err := m.peerCache.Resolve(otogi.Conversation{
+			ID:   chat.ID,
+			Type: chat.Type,
+		})
+		if err == nil {
+			peer = cachedPeer
+		}
+	}
+
+	key := messageReactionCacheKey(chat.ID, message.ID)
+	m.reactionWatchCache.mu.Lock()
+	m.reactionWatchCache.byMessage[key] = reactionWatchRecord{
+		chat:      chat,
+		messageID: message.ID,
+		inputPeer: cloneInputPeer(peer),
+		expiresAt: time.Now().UTC().Add(reactionWatchTTL),
+	}
+	m.reactionWatchCache.mu.Unlock()
+}
+
+func (m DefaultGotdUpdateMapper) takeActiveReactionWatches(
+	now time.Time,
+	limit int,
+) []reactionWatchRecord {
+	if m.reactionWatchCache == nil || limit <= 0 {
+		return nil
+	}
+
+	watches := make([]reactionWatchRecord, 0, limit)
+	m.reactionWatchCache.mu.Lock()
+	for key, watch := range m.reactionWatchCache.byMessage {
+		if watch.messageID == 0 || watch.chat.ID == "" || watch.expiresAt.IsZero() || !now.Before(watch.expiresAt) {
+			delete(m.reactionWatchCache.byMessage, key)
+			continue
+		}
+		watch.inputPeer = cloneInputPeer(watch.inputPeer)
+		watches = append(watches, watch)
+		if len(watches) >= limit {
+			break
+		}
+	}
+	m.reactionWatchCache.mu.Unlock()
+
+	return watches
+}
+
+func (m DefaultGotdUpdateMapper) reactionDeltasFromCountCache(chatID string, message *tg.Message) ([]gotdReactionDelta, bool) {
 	if m.reactionCache == nil || chatID == "" || message == nil {
-		return gotdReactionDelta{}, false
+		return nil, false
 	}
 
 	counts, present := reactionCountsFromMessage(message)
 	if !present {
-		return gotdReactionDelta{}, false
+		return nil, false
 	}
 
 	key := messageReactionCacheKey(chatID, message.ID)
@@ -1144,21 +1501,15 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromCountCache(chatID string, mess
 
 	if !known {
 		m.setReactionCountCache(chatID, message.ID, counts)
-		return gotdReactionDelta{}, false
+		return nil, false
 	}
 
-	emoji, action, ok := diffReactionCounts(previous, counts)
-	if !ok {
-		return gotdReactionDelta{}, false
+	deltas := reactionDeltasFromCountDiff(previous, counts, message.ID, message.PeerID)
+	if len(deltas) == 0 {
+		return nil, false
 	}
-	m.setReactionCountCache(chatID, message.ID, counts)
 
-	return gotdReactionDelta{
-		action:    action,
-		messageID: message.ID,
-		emoji:     emoji,
-		peer:      message.PeerID,
-	}, true
+	return deltas, true
 }
 
 func (m DefaultGotdUpdateMapper) reactionCountCacheSnapshot(chatID string, messageID int) map[string]int {
@@ -1281,22 +1632,77 @@ func diffReactionCounts(previous, current map[string]int) (string, UpdateType, b
 	return candidateEmoji, candidateAction, true
 }
 
-func mapMessagePayload(message *tg.Message) *MessagePayload {
+func reactionDeltasFromCountDiff(
+	previous map[string]int,
+	current map[string]int,
+	messageID int,
+	peer tg.PeerClass,
+) []gotdReactionDelta {
+	emojiSet := make(map[string]struct{}, len(previous)+len(current))
+	for emoji := range previous {
+		emojiSet[emoji] = struct{}{}
+	}
+	for emoji := range current {
+		emojiSet[emoji] = struct{}{}
+	}
+
+	if len(emojiSet) == 0 {
+		return nil
+	}
+
+	emojis := make([]string, 0, len(emojiSet))
+	for emoji := range emojiSet {
+		emojis = append(emojis, emoji)
+	}
+	sort.Strings(emojis)
+
+	deltas := make([]gotdReactionDelta, 0)
+	for _, emoji := range emojis {
+		before := previous[emoji]
+		after := current[emoji]
+		diff := after - before
+		switch {
+		case diff > 0:
+			for idx := 0; idx < diff; idx++ {
+				deltas = append(deltas, gotdReactionDelta{
+					action:    UpdateTypeReactionAdd,
+					messageID: messageID,
+					emoji:     emoji,
+					peer:      peer,
+				})
+			}
+		case diff < 0:
+			for idx := 0; idx < -diff; idx++ {
+				deltas = append(deltas, gotdReactionDelta{
+					action:    UpdateTypeReactionRemove,
+					messageID: messageID,
+					emoji:     emoji,
+					peer:      peer,
+				})
+			}
+		default:
+		}
+	}
+
+	return deltas
+}
+
+func mapArticlePayload(message *tg.Message) *ArticlePayload {
 	if message == nil {
 		return nil
 	}
 
-	payload := &MessagePayload{
+	payload := &ArticlePayload{
 		ID:        strconv.Itoa(message.ID),
 		Text:      message.Message,
 		Entities:  mapTextEntities(message.Entities),
 		Media:     mapMessageMedia(message.Media),
-		Reactions: mapMessageReactions(message),
+		Reactions: mapArticleReactions(message),
 	}
 	if replyTo, ok := message.GetReplyTo(); ok {
 		if header, ok := replyTo.(*tg.MessageReplyHeader); ok {
 			if replyToMessageID, ok := header.GetReplyToMsgID(); ok {
-				payload.ReplyToID = strconv.Itoa(replyToMessageID)
+				payload.ReplyToArticleID = strconv.Itoa(replyToMessageID)
 			}
 			if threadID, ok := header.GetReplyToTopID(); ok {
 				payload.ThreadID = strconv.Itoa(threadID)
@@ -1307,7 +1713,7 @@ func mapMessagePayload(message *tg.Message) *MessagePayload {
 	return payload
 }
 
-func mapMessageReactions(message *tg.Message) []otogi.MessageReaction {
+func mapArticleReactions(message *tg.Message) []otogi.ArticleReaction {
 	if message == nil {
 		return nil
 	}
@@ -1334,9 +1740,9 @@ func mapMessageReactions(message *tg.Message) []otogi.MessageReaction {
 	}
 	sort.Strings(emojis)
 
-	projected := make([]otogi.MessageReaction, 0, len(emojis))
+	projected := make([]otogi.ArticleReaction, 0, len(emojis))
 	for _, emoji := range emojis {
-		projected = append(projected, otogi.MessageReaction{
+		projected = append(projected, otogi.ArticleReaction{
 			Emoji: emoji,
 			Count: counts[emoji],
 		})
@@ -1345,21 +1751,27 @@ func mapMessageReactions(message *tg.Message) []otogi.MessageReaction {
 	return projected
 }
 
-func snapshotPayloadFromMessage(message *tg.Message) *SnapshotPayload {
+func articleSnapshotPayloadFromMessage(message *tg.Message) *ArticleSnapshotPayload {
 	if message == nil {
 		return nil
 	}
 
-	snapshot := SnapshotPayload{
-		Text:  message.Message,
-		Media: mapMessageMedia(message.Media),
+	snapshot := ArticleSnapshotPayload{
+		Text:     message.Message,
+		Entities: mapTextEntities(message.Entities),
+		Media:    mapMessageMedia(message.Media),
 	}
 
 	return &snapshot
 }
 
-func cloneSnapshotPayload(snapshot SnapshotPayload) SnapshotPayload {
+func cloneSnapshotPayload(snapshot ArticleSnapshotPayload) ArticleSnapshotPayload {
 	cloned := snapshot
+	if len(snapshot.Entities) > 0 {
+		cloned.Entities = append([]otogi.TextEntity(nil), snapshot.Entities...)
+	} else {
+		cloned.Entities = nil
+	}
 	if len(snapshot.Media) > 0 {
 		cloned.Media = cloneMediaPayloads(snapshot.Media)
 	} else {
@@ -1390,25 +1802,52 @@ func cloneMediaPayloads(media []MediaPayload) []MediaPayload {
 	return cloned
 }
 
-func messageSnapshotFingerprint(snapshot SnapshotPayload) string {
+func articleSnapshotFingerprint(snapshot ArticleSnapshotPayload) string {
 	var builder strings.Builder
 	builder.WriteString(snapshot.Text)
-	if len(snapshot.Media) == 0 {
-		return builder.String()
+
+	if len(snapshot.Entities) > 0 {
+		builder.WriteByte('\x1f')
+		for idx, entity := range snapshot.Entities {
+			if idx > 0 {
+				builder.WriteByte('\x1e')
+			}
+			builder.WriteString(string(entity.Type))
+			builder.WriteByte(':')
+			builder.WriteString(strconv.Itoa(entity.Offset))
+			builder.WriteByte(':')
+			builder.WriteString(strconv.Itoa(entity.Length))
+			builder.WriteByte(':')
+			builder.WriteString(entity.URL)
+			builder.WriteByte(':')
+			builder.WriteString(entity.Language)
+			builder.WriteByte(':')
+			builder.WriteString(entity.MentionUserID)
+			builder.WriteByte(':')
+			builder.WriteString(entity.CustomEmojiID)
+			builder.WriteByte(':')
+			if entity.Collapsed {
+				builder.WriteByte('1')
+			} else {
+				builder.WriteByte('0')
+			}
+		}
 	}
 
-	builder.WriteByte('\x1f')
-	for idx, item := range snapshot.Media {
-		if idx > 0 {
-			builder.WriteByte('\x1e')
+	if len(snapshot.Media) > 0 {
+		builder.WriteByte('\x1f')
+		for idx, item := range snapshot.Media {
+			if idx > 0 {
+				builder.WriteByte('\x1e')
+			}
+			builder.WriteString(string(item.Type))
+			builder.WriteByte(':')
+			builder.WriteString(item.ID)
+			builder.WriteByte(':')
+			builder.WriteString(item.FileName)
+			builder.WriteByte(':')
+			builder.WriteString(item.MIMEType)
 		}
-		builder.WriteString(string(item.Type))
-		builder.WriteByte(':')
-		builder.WriteString(item.ID)
-		builder.WriteByte(':')
-		builder.WriteString(item.FileName)
-		builder.WriteByte(':')
-		builder.WriteString(item.MIMEType)
 	}
 
 	return builder.String()
@@ -2053,52 +2492,86 @@ func intToTimeUTC(value int) time.Time {
 	return time.Unix(int64(value), 0).UTC()
 }
 
-func composeUpdateID(updateType UpdateType, chatID string, parts ...any) string {
-	values := []string{"tg", updateTypeIDToken(updateType)}
-	if chatID != "" {
-		values = append(values, chatID)
+func composeUpdateID(
+	updateType UpdateType,
+	chatID string,
+	subjectID string,
+	occurredAt time.Time,
+) string {
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
 	}
-	for _, part := range parts {
-		switch typed := part.(type) {
-		case string:
-			if typed != "" {
-				values = append(values, typed)
-			}
-		case time.Time:
-			if !typed.IsZero() {
-				values = append(values, strconv.FormatInt(typed.UnixNano(), 10))
-			}
-		default:
-			values = append(values, fmt.Sprint(part))
-		}
+	kindToken := updateTypeIDToken(updateType)
+	if kindToken == "" {
+		kindToken = string(updateType)
 	}
 
-	return strings.Join(values, ":")
+	return fmt.Sprintf(
+		"tg:%s:%s:%s:%d",
+		kindToken,
+		normalizeIDSegment(chatID, gotdUnknownConversationID),
+		normalizeIDSegment(subjectID, gotdUnknownSubjectID),
+		occurredAt.UnixNano(),
+	)
+}
+
+func normalizeIDSegment(value string, fallback string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback
+	}
+
+	return trimmed
 }
 
 func updateTypeIDToken(updateType UpdateType) string {
-	switch updateType {
-	case UpdateTypeMessage:
-		return string(otogi.EventKindMessageCreated)
-	case UpdateTypeEdit:
-		return string(otogi.EventKindMessageEdited)
-	case UpdateTypeDelete:
-		return string(otogi.EventKindMessageRetracted)
-	case UpdateTypeReactionAdd:
-		return string(otogi.EventKindReactionAdded)
-	case UpdateTypeReactionRemove:
-		return string(otogi.EventKindReactionRemoved)
-	case UpdateTypeMemberJoin:
-		return string(otogi.EventKindMemberJoined)
-	case UpdateTypeMemberLeave:
-		return string(otogi.EventKindMemberLeft)
-	case UpdateTypeRole:
-		return string(otogi.EventKindRoleUpdated)
-	case UpdateTypeMigration:
-		return string(otogi.EventKindChatMigrated)
-	default:
-		return string(updateType)
+	kind, ok := eventKindFromUpdateType(updateType)
+	if !ok {
+		return ""
 	}
+
+	return string(kind)
+}
+
+func ensureUniqueBatchUpdateIDs(updates []Update) {
+	if len(updates) <= 1 {
+		return
+	}
+
+	used := make(map[string]struct{}, len(updates))
+	for idx := range updates {
+		candidate := updates[idx].ID
+		if candidate == "" {
+			continue
+		}
+		if _, exists := used[candidate]; !exists {
+			used[candidate] = struct{}{}
+			continue
+		}
+
+		for suffix := 1; ; suffix++ {
+			candidateWithSuffix := appendSubjectSuffix(candidate, suffix)
+			if _, exists := used[candidateWithSuffix]; exists {
+				continue
+			}
+			updates[idx].ID = candidateWithSuffix
+			used[candidateWithSuffix] = struct{}{}
+			break
+		}
+	}
+}
+
+func appendSubjectSuffix(eventID string, suffix int) string {
+	if suffix <= 0 {
+		return eventID
+	}
+	parts := strings.SplitN(eventID, ":", 5)
+	if len(parts) != 5 {
+		return eventID + "~" + strconv.Itoa(suffix)
+	}
+	parts[3] = parts[3] + "~" + strconv.Itoa(suffix)
+
+	return strings.Join(parts, ":")
 }
 
 func newGotdMetadata(envelope gotdUpdateEnvelope) map[string]string {

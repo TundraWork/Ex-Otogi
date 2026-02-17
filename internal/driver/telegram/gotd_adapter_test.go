@@ -197,17 +197,15 @@ func TestGotdUpdateChannelHandleFlattensMessageReactionsUpdate(t *testing.T) {
 		if !ok {
 			t.Fatalf("item type = %T, want gotdUpdateEnvelope", item)
 		}
-		if envelope.reaction == nil {
-			t.Fatal("expected flattened reaction delta")
+		if envelope.reaction != nil {
+			t.Fatalf("reaction = %+v, want nil passthrough envelope", envelope.reaction)
 		}
-		if envelope.reaction.action != UpdateTypeReactionAdd {
-			t.Fatalf("reaction action = %s, want %s", envelope.reaction.action, UpdateTypeReactionAdd)
+		typed, ok := envelope.update.(*tg.UpdateMessageReactions)
+		if !ok {
+			t.Fatalf("update type = %T, want *tg.UpdateMessageReactions", envelope.update)
 		}
-		if envelope.reaction.emoji != "❤️" {
-			t.Fatalf("reaction emoji = %s, want ❤️", envelope.reaction.emoji)
-		}
-		if envelope.reaction.messageID != 321 {
-			t.Fatalf("reaction message id = %d, want 321", envelope.reaction.messageID)
+		if typed.MsgID != 321 {
+			t.Fatalf("message id = %d, want 321", typed.MsgID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out receiving flattened update")
@@ -258,17 +256,68 @@ func TestGotdUpdateChannelHandleFlattensMessageReactionsChosenFallback(t *testin
 		if !ok {
 			t.Fatalf("item type = %T, want gotdUpdateEnvelope", item)
 		}
-		if envelope.reaction == nil {
-			t.Fatal("expected flattened reaction delta")
+		if envelope.reaction != nil {
+			t.Fatalf("reaction = %+v, want nil passthrough envelope", envelope.reaction)
 		}
-		if envelope.reaction.action != UpdateTypeReactionAdd {
-			t.Fatalf("reaction action = %s, want %s", envelope.reaction.action, UpdateTypeReactionAdd)
+		typed, ok := envelope.update.(*tg.UpdateMessageReactions)
+		if !ok {
+			t.Fatalf("update type = %T, want *tg.UpdateMessageReactions", envelope.update)
 		}
-		if envelope.reaction.emoji != "❤️" {
-			t.Fatalf("reaction emoji = %s, want ❤️", envelope.reaction.emoji)
+		if typed.MsgID != 322 {
+			t.Fatalf("message id = %d, want 322", typed.MsgID)
 		}
-		if envelope.reaction.messageID != 322 {
-			t.Fatalf("reaction message id = %d, want 322", envelope.reaction.messageID)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out receiving flattened update")
+	}
+}
+
+func TestGotdUpdateChannelHandleFlattensMessageReactionsWithoutSignal(t *testing.T) {
+	t.Parallel()
+
+	stream, err := NewGotdUpdateChannel(8)
+	if err != nil {
+		t.Fatalf("new gotd update channel failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	updates, err := stream.Updates(ctx)
+	if err != nil {
+		t.Fatalf("open updates stream failed: %v", err)
+	}
+
+	batch := &tg.Updates{
+		Date: 1_700_000_102,
+		Updates: []tg.UpdateClass{
+			&tg.UpdateMessageReactions{
+				Peer:  &tg.PeerChannel{ChannelID: 500},
+				MsgID: 323,
+				Reactions: tg.MessageReactions{
+					Results: []tg.ReactionCount{},
+				},
+			},
+		},
+	}
+	if err := stream.Handle(ctx, batch); err != nil {
+		t.Fatalf("handle failed: %v", err)
+	}
+
+	select {
+	case item := <-updates:
+		envelope, ok := item.(gotdUpdateEnvelope)
+		if !ok {
+			t.Fatalf("item type = %T, want gotdUpdateEnvelope", item)
+		}
+		if envelope.reaction != nil {
+			t.Fatalf("reaction = %+v, want nil passthrough envelope", envelope.reaction)
+		}
+		typed, ok := envelope.update.(*tg.UpdateMessageReactions)
+		if !ok {
+			t.Fatalf("update type = %T, want *tg.UpdateMessageReactions", envelope.update)
+		}
+		if typed.MsgID != 323 {
+			t.Fatalf("message id = %d, want 323", typed.MsgID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out receiving flattened update")

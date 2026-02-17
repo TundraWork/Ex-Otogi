@@ -138,7 +138,7 @@ func TestRegisterModuleBindsDeclarativeHandlers(t *testing.T) {
 					Capability: otogi.Capability{
 						Name: "message-created",
 						Interest: otogi.InterestSet{
-							Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+							Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 						},
 					},
 					Subscription: otogi.SubscriptionSpec{
@@ -158,7 +158,7 @@ func TestRegisterModuleBindsDeclarativeHandlers(t *testing.T) {
 		t.Fatalf("register module failed: %v", err)
 	}
 
-	if err := kernelRuntime.EventBus().Publish(context.Background(), newTestEvent("e1", otogi.EventKindMessageCreated)); err != nil {
+	if err := kernelRuntime.EventBus().Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
 
@@ -194,7 +194,7 @@ func TestRegisterModuleImperativeSubscriptionCapabilityGate(t *testing.T) {
 					{
 						Name: "imperative-capability",
 						Interest: otogi.InterestSet{
-							Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+							Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 						},
 					},
 				},
@@ -218,7 +218,7 @@ func TestRegisterModuleImperativeSubscriptionCapabilityGate(t *testing.T) {
 				spec: testCase.spec,
 				onRegister: func(ctx context.Context, runtime otogi.ModuleRuntime) error {
 					_, err := runtime.Subscribe(ctx, otogi.InterestSet{
-						Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+						Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 					}, otogi.SubscriptionSpec{
 						Name: "imperative-handler",
 					}, func(_ context.Context, _ *otogi.Event) error {
@@ -259,7 +259,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 					{
 						Capability: otogi.Capability{
 							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 							},
 						},
 						Handler: func(_ context.Context, _ *otogi.Event) error {
@@ -278,7 +278,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 						Capability: otogi.Capability{
 							Name: "dup",
 							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 							},
 						},
 						Handler: func(_ context.Context, _ *otogi.Event) error {
@@ -289,7 +289,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 						Capability: otogi.Capability{
 							Name: "dup",
 							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindMessageEdited},
+								Kinds: []otogi.EventKind{otogi.EventKindArticleEdited},
 							},
 						},
 						Handler: func(_ context.Context, _ *otogi.Event) error {
@@ -308,7 +308,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 						Capability: otogi.Capability{
 							Name: "nil-handler",
 							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 							},
 						},
 					},
@@ -324,7 +324,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 						Capability: otogi.Capability{
 							Name: "a",
 							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 							},
 						},
 						Subscription: otogi.SubscriptionSpec{Name: "dup-sub"},
@@ -336,7 +336,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 						Capability: otogi.Capability{
 							Name: "b",
 							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindMessageEdited},
+								Kinds: []otogi.EventKind{otogi.EventKindArticleEdited},
 							},
 						},
 						Subscription: otogi.SubscriptionSpec{Name: "dup-sub"},
@@ -356,7 +356,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 						Capability: otogi.Capability{
 							Name: "cap",
 							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindMessageCreated},
+								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
 							},
 						},
 						Handler: func(_ context.Context, _ *otogi.Event) error {

@@ -10,16 +10,16 @@ import (
 type EventKind string
 
 const (
-	// EventKindMessageCreated is emitted when a new message is posted.
-	EventKindMessageCreated EventKind = "message.created"
-	// EventKindMessageEdited is emitted when an existing message is edited.
-	EventKindMessageEdited EventKind = "message.edited"
-	// EventKindMessageRetracted is emitted when a message is deleted/retracted.
-	EventKindMessageRetracted EventKind = "message.retracted"
-	// EventKindReactionAdded is emitted when a reaction is added to a message.
-	EventKindReactionAdded EventKind = "reaction.added"
-	// EventKindReactionRemoved is emitted when a reaction is removed from a message.
-	EventKindReactionRemoved EventKind = "reaction.removed"
+	// EventKindArticleCreated is emitted when a new article is posted.
+	EventKindArticleCreated EventKind = "article.created"
+	// EventKindArticleEdited is emitted when an existing article is edited.
+	EventKindArticleEdited EventKind = "article.edited"
+	// EventKindArticleRetracted is emitted when an article is deleted/retracted.
+	EventKindArticleRetracted EventKind = "article.retracted"
+	// EventKindArticleReactionAdded is emitted when a reaction is added to an article.
+	EventKindArticleReactionAdded EventKind = "article.reaction.added"
+	// EventKindArticleReactionRemoved is emitted when a reaction is removed from an article.
+	EventKindArticleReactionRemoved EventKind = "article.reaction.removed"
 	// EventKindMemberJoined is emitted when a member joins a conversation.
 	EventKindMemberJoined EventKind = "member.joined"
 	// EventKindMemberLeft is emitted when a member leaves a conversation.
@@ -52,8 +52,9 @@ const (
 
 // Event is the neutral protocol envelope that all drivers publish and modules consume.
 //
-// Event fields are intentionally composable: Message, Mutation, Reaction, and StateChange
-// are optional payload branches selected by Kind to avoid platform-specific leakage.
+// Event fields are intentionally composable: Article, Mutation, Reaction, and
+// StateChange are optional payload branches selected by Kind to avoid platform-specific
+// leakage.
 type Event struct {
 	// ID is a stable identifier for this event instance.
 	ID string
@@ -69,11 +70,11 @@ type Event struct {
 	Conversation Conversation
 	// Actor identifies who initiated the event when available.
 	Actor Actor
-	// Message carries message content for message-created events.
-	Message *Message
+	// Article carries content for article-created events.
+	Article *Article
 	// Mutation carries before/after context for edit and retraction events.
-	Mutation *Mutation
-	// Reaction carries emoji reaction metadata for reaction events.
+	Mutation *ArticleMutation
+	// Reaction carries emoji reaction metadata for article reaction events.
 	Reaction *Reaction
 	// StateChange carries membership, role, and migration transitions.
 	StateChange *StateChange
@@ -103,26 +104,26 @@ type Actor struct {
 	IsBot bool
 }
 
-// Message holds neutral message content including rich media.
-type Message struct {
-	// ID is the message identifier on the source platform.
+// Article holds neutral article content including rich media.
+type Article struct {
+	// ID is the article identifier on the source platform.
 	ID string
-	// ThreadID is the optional thread/topic identifier containing the message.
+	// ThreadID is the optional thread/topic identifier containing the article.
 	ThreadID string
-	// ReplyToID is the parent message identifier when this is a reply.
-	ReplyToID string
-	// Text is the normalized message text body.
+	// ReplyToArticleID is the parent article identifier when this is a reply.
+	ReplyToArticleID string
+	// Text is the normalized article text body.
 	Text string
 	// Entities describes formatted ranges inside Text.
 	Entities []TextEntity
-	// Media contains normalized attachments associated with the message.
+	// Media contains normalized attachments associated with the article.
 	Media []MediaAttachment
 	// Reactions contains the projected reaction summary derived from reaction events.
-	Reactions []MessageReaction
+	Reactions []ArticleReaction
 }
 
-// MessageReaction summarizes projected reaction state for one emoji.
-type MessageReaction struct {
+// ArticleReaction summarizes projected reaction state for one emoji.
+type ArticleReaction struct {
 	// Emoji identifies the reaction emoji token.
 	Emoji string
 	// Count is the number of active reactions for Emoji.
@@ -179,7 +180,7 @@ const (
 type TextEntity struct {
 	// Type identifies the entity class (for example link, mention, or bold).
 	Type TextEntityType
-	// Offset is the zero-based character offset in the message text.
+	// Offset is the zero-based character offset in the article text.
 	Offset int
 	// Length is the character span of the entity.
 	Length int
@@ -195,7 +196,7 @@ type TextEntity struct {
 	Collapsed bool
 }
 
-// ValidateTextEntities validates rich-text entities against one message text body.
+// ValidateTextEntities validates rich-text entities against one article text body.
 //
 // Offsets and lengths are interpreted as Unicode code-point indexes.
 func ValidateTextEntities(text string, entities []TextEntity) error {
@@ -293,34 +294,34 @@ type MediaPreview struct {
 	Duration time.Duration
 }
 
-// MutationType identifies message mutation kind.
+// MutationType identifies article mutation kind.
 type MutationType string
 
 const (
-	// MutationTypeEdit indicates message edit.
+	// MutationTypeEdit indicates article edit.
 	MutationTypeEdit MutationType = "edit"
-	// MutationTypeRetraction indicates message deletion/retraction.
+	// MutationTypeRetraction indicates article deletion/retraction.
 	MutationTypeRetraction MutationType = "retraction"
 )
 
-// Mutation holds before/after message mutation context.
-type Mutation struct {
+// ArticleMutation holds before/after article mutation context.
+type ArticleMutation struct {
 	// Type identifies the mutation operation.
 	Type MutationType
-	// TargetMessageID identifies the message affected by the mutation.
-	TargetMessageID string
+	// TargetArticleID identifies the article affected by the mutation.
+	TargetArticleID string
 	// ChangedAt is when the mutation happened on the source platform when known.
 	ChangedAt *time.Time
-	// Before captures message state before mutation.
-	Before *MessageSnapshot
-	// After captures message state after mutation.
-	After *MessageSnapshot
+	// Before captures article state before mutation.
+	Before *ArticleSnapshot
+	// After captures article state after mutation.
+	After *ArticleSnapshot
 	// Reason carries optional platform-provided context for the mutation.
 	Reason string
 }
 
-// MessageSnapshot stores immutable message state snapshots for mutations.
-type MessageSnapshot struct {
+// ArticleSnapshot stores immutable article state snapshots for mutations.
+type ArticleSnapshot struct {
 	// Text is the immutable text snapshot.
 	Text string
 	// Entities stores immutable rich-text entities aligned with Text.
@@ -341,8 +342,8 @@ const (
 
 // Reaction holds neutral reaction/emoji metadata.
 type Reaction struct {
-	// MessageID identifies the message receiving the reaction mutation.
-	MessageID string
+	// ArticleID identifies the article receiving the reaction mutation.
+	ArticleID string
 	// Emoji is the normalized emoji token.
 	Emoji string
 	// Action identifies whether the emoji was added or removed.
@@ -361,7 +362,7 @@ const (
 	StateChangeTypeMigration StateChangeType = "migration"
 )
 
-// StateChange wraps non-message platform state transitions.
+// StateChange wraps non-article platform state transitions.
 type StateChange struct {
 	// Type selects which state-change payload branch is set.
 	Type StateChangeType
@@ -433,26 +434,32 @@ func (e *Event) Validate() error {
 // validatePayloadByKind enforces payload branch requirements for each event kind.
 func validatePayloadByKind(e *Event) error {
 	switch e.Kind {
-	case EventKindMessageCreated:
-		if e.Message == nil {
-			return fmt.Errorf("%w: message.created requires message payload", ErrInvalidEvent)
+	case EventKindArticleCreated:
+		if e.Article == nil {
+			return fmt.Errorf("%w: article.created requires article payload", ErrInvalidEvent)
 		}
-		if e.Message.ID == "" {
-			return fmt.Errorf("%w: message.created requires message id", ErrInvalidEvent)
+		if e.Article.ID == "" {
+			return fmt.Errorf("%w: article.created requires article id", ErrInvalidEvent)
 		}
-		if err := ValidateTextEntities(e.Message.Text, e.Message.Entities); err != nil {
-			return fmt.Errorf("%w: message.created invalid entities: %w", ErrInvalidEvent, err)
+		if err := ValidateTextEntities(e.Article.Text, e.Article.Entities); err != nil {
+			return fmt.Errorf("%w: article.created invalid entities: %w", ErrInvalidEvent, err)
 		}
-	case EventKindMessageEdited, EventKindMessageRetracted:
+	case EventKindArticleEdited, EventKindArticleRetracted:
 		if e.Mutation == nil {
-			return fmt.Errorf("%w: mutation event requires mutation payload", ErrInvalidEvent)
+			return fmt.Errorf("%w: article mutation event requires mutation payload", ErrInvalidEvent)
+		}
+		if e.Mutation.TargetArticleID == "" {
+			return fmt.Errorf("%w: article mutation event requires target article id", ErrInvalidEvent)
 		}
 		if err := validateMutationSnapshotEntities(e.Mutation); err != nil {
-			return fmt.Errorf("%w: mutation invalid entities: %v", ErrInvalidEvent, err)
+			return fmt.Errorf("%w: mutation invalid entities: %w", ErrInvalidEvent, err)
 		}
-	case EventKindReactionAdded, EventKindReactionRemoved:
+	case EventKindArticleReactionAdded, EventKindArticleReactionRemoved:
 		if e.Reaction == nil {
-			return fmt.Errorf("%w: reaction event requires reaction payload", ErrInvalidEvent)
+			return fmt.Errorf("%w: article reaction event requires reaction payload", ErrInvalidEvent)
+		}
+		if e.Reaction.ArticleID == "" {
+			return fmt.Errorf("%w: article reaction event requires reaction article id", ErrInvalidEvent)
 		}
 	case EventKindMemberJoined, EventKindMemberLeft, EventKindRoleUpdated, EventKindChatMigrated:
 		if e.StateChange == nil {
@@ -465,7 +472,7 @@ func validatePayloadByKind(e *Event) error {
 	return nil
 }
 
-func validateMutationSnapshotEntities(mutation *Mutation) error {
+func validateMutationSnapshotEntities(mutation *ArticleMutation) error {
 	if mutation == nil {
 		return nil
 	}

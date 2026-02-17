@@ -335,61 +335,15 @@ func flattenMessageReactionsUpdate(
 		return nil, fmt.Errorf("flatten message reactions update: nil update")
 	}
 
-	recentReactions, ok := update.Reactions.GetRecentReactions()
-	deltas := make([]gotdReactionDelta, 0, 1)
-	seenEmoji := map[string]struct{}{}
-	if ok && len(recentReactions) > 0 {
-		for _, reaction := range recentReactions {
-			emoji := reactionToEmoji(reaction.Reaction)
-			if emoji == "" {
-				continue
-			}
-			if !reaction.My && !reaction.Unread {
-				continue
-			}
-			if _, exists := seenEmoji[emoji]; exists {
-				continue
-			}
-
-			deltas = append(deltas, gotdReactionDelta{
-				action:    UpdateTypeReactionAdd,
-				messageID: update.MsgID,
-				emoji:     emoji,
-				actor:     reaction.PeerID,
-				peer:      update.Peer,
-			})
-			seenEmoji[emoji] = struct{}{}
-		}
-	}
-
-	if emoji, chosen := reactionFromChosenResults(update.Reactions.Results); chosen {
-		if _, exists := seenEmoji[emoji]; !exists {
-			deltas = append(deltas, gotdReactionDelta{
-				action:    UpdateTypeReactionAdd,
-				messageID: update.MsgID,
-				emoji:     emoji,
-				peer:      update.Peer,
-			})
-		}
-	}
-	if len(deltas) == 0 {
-		return nil, nil
-	}
-
-	items := make([]gotdUpdateEnvelope, 0, len(deltas))
-	for _, delta := range deltas {
-		delta := delta
-		items = append(items, gotdUpdateEnvelope{
+	return []gotdUpdateEnvelope{
+		{
 			update:      update,
 			occurredAt:  occurredAt,
 			usersByID:   usersByID,
 			chatsByID:   chatsByID,
 			updateClass: update.TypeName(),
-			reaction:    &delta,
-		})
-	}
-
-	return items, nil
+		},
+	}, nil
 }
 
 func mapReactionsToSet(reactions []tg.ReactionClass) map[string]struct{} {

@@ -3,7 +3,10 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"time"
 )
+
+const defaultReactionPollInterval = 2 * time.Second
 
 // GotdUserbotClient abstracts gotd/td userbot session execution.
 type GotdUserbotClient interface {
@@ -22,6 +25,20 @@ type GotdUpdateMapper interface {
 	// Map converts a raw update into adapter DTO form.
 	// The accepted flag allows skipping unsupported update classes.
 	Map(ctx context.Context, raw any) (Update, bool, error)
+}
+
+// GotdUpdateBatchMapper maps one raw gotd update into zero or more adapter updates.
+type GotdUpdateBatchMapper interface {
+	// MapBatch converts one raw update into a batch of adapter DTO updates.
+	//
+	// Returning an empty slice means the update is intentionally skipped.
+	MapBatch(ctx context.Context, raw any) ([]Update, error)
+}
+
+// GotdReactionUpdatePoller provides optional reaction backfill polling.
+type GotdReactionUpdatePoller interface {
+	// PollReactionUpdates returns synthetic reaction updates discovered by polling.
+	PollReactionUpdates(ctx context.Context) ([]Update, error)
 }
 
 // GotdUserbotSource wires gotd userbot updates into UpdateSource.
@@ -66,24 +83,48 @@ func (s *GotdUserbotSource) Consume(ctx context.Context, handler UpdateHandler) 
 			return fmt.Errorf("get gotd updates stream: %w", err)
 		}
 
+		var (
+			reactionPoller GotdReactionUpdatePoller
+			pollTick       <-chan time.Time
+		)
+		if poller, ok := s.mapper.(GotdReactionUpdatePoller); ok {
+			reactionPoller = poller
+			ticker := time.NewTicker(defaultReactionPollInterval)
+			defer ticker.Stop()
+			pollTick = ticker.C
+		}
+
 		for {
 			select {
 			case <-runCtx.Done():
 				return nil
+			case <-pollTick:
+				if reactionPoller == nil {
+					continue
+				}
+
+				polled, pollErr := reactionPoller.PollReactionUpdates(runCtx)
+				if pollErr != nil {
+					return fmt.Errorf("poll gotd reaction updates: %w", pollErr)
+				}
+				for _, update := range polled {
+					if err := handler(runCtx, update); err != nil {
+						return fmt.Errorf("consume polled gotd update %s: %w", update.Type, err)
+					}
+				}
 			case rawUpdate, ok := <-updates:
 				if !ok {
 					return nil
 				}
 
-				mapped, accepted, mapErr := s.mapUpdateSafely(runCtx, rawUpdate)
+				mapped, mapErr := s.mapUpdateSafely(runCtx, rawUpdate)
 				if mapErr != nil {
 					return fmt.Errorf("map gotd update: %w", mapErr)
 				}
-				if !accepted {
-					continue
-				}
-				if err := handler(runCtx, mapped); err != nil {
-					return fmt.Errorf("consume gotd update %s: %w", mapped.Type, err)
+				for _, update := range mapped {
+					if err := handler(runCtx, update); err != nil {
+						return fmt.Errorf("consume gotd update %s: %w", update.Type, err)
+					}
 				}
 			}
 		}
@@ -96,7 +137,7 @@ func (s *GotdUserbotSource) Consume(ctx context.Context, handler UpdateHandler) 
 }
 
 // mapUpdateSafely isolates mapper panics so a bad mapping path cannot crash the process.
-func (s *GotdUserbotSource) mapUpdateSafely(ctx context.Context, rawUpdate any) (mapped Update, accepted bool, err error) {
+func (s *GotdUserbotSource) mapUpdateSafely(ctx context.Context, rawUpdate any) (mapped []Update, err error) {
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -105,10 +146,22 @@ func (s *GotdUserbotSource) mapUpdateSafely(ctx context.Context, rawUpdate any) 
 		err = fmt.Errorf("map gotd update panic: %v", recovered)
 	}()
 
-	mapped, accepted, err = s.mapper.Map(ctx, rawUpdate)
-	if err != nil {
-		return Update{}, false, fmt.Errorf("map gotd raw update: %w", err)
+	if batchMapper, ok := s.mapper.(GotdUpdateBatchMapper); ok {
+		mapped, err = batchMapper.MapBatch(ctx, rawUpdate)
+		if err != nil {
+			return nil, fmt.Errorf("map gotd raw update: %w", err)
+		}
+
+		return mapped, nil
 	}
 
-	return mapped, accepted, nil
+	single, accepted, err := s.mapper.Map(ctx, rawUpdate)
+	if err != nil {
+		return nil, fmt.Errorf("map gotd raw update: %w", err)
+	}
+	if !accepted {
+		return nil, nil
+	}
+
+	return []Update{single}, nil
 }

@@ -12,32 +12,32 @@ func TestInterestSetMatches(t *testing.T) {
 		want     bool
 	}{
 		{
-			name: "require message matches when message is present",
+			name: "require article matches when article is present",
 			interest: InterestSet{
-				Kinds:          []EventKind{EventKindMessageCreated},
-				RequireMessage: true,
+				Kinds:          []EventKind{EventKindArticleCreated},
+				RequireArticle: true,
 			},
 			event: &Event{
-				Kind:    EventKindMessageCreated,
-				Message: &Message{ID: "m1"},
+				Kind:    EventKindArticleCreated,
+				Article: &Article{ID: "m1"},
 			},
 			want: true,
 		},
 		{
-			name: "require message rejects missing message",
+			name: "require article rejects missing article",
 			interest: InterestSet{
-				Kinds:          []EventKind{EventKindMessageCreated},
-				RequireMessage: true,
+				Kinds:          []EventKind{EventKindArticleCreated},
+				RequireArticle: true,
 			},
 			event: &Event{
-				Kind: EventKindMessageCreated,
+				Kind: EventKindArticleCreated,
 			},
 			want: false,
 		},
 		{
-			name: "require message rejects nil event",
+			name: "require article rejects nil event",
 			interest: InterestSet{
-				RequireMessage: true,
+				RequireArticle: true,
 			},
 			event: nil,
 			want:  false,
@@ -67,25 +67,25 @@ func TestInterestSetAllows(t *testing.T) {
 		wantAllow bool
 	}{
 		{
-			name: "require message allows equal strictness",
+			name: "require article allows equal strictness",
 			allowed: InterestSet{
-				Kinds:          []EventKind{EventKindMessageCreated},
-				RequireMessage: true,
+				Kinds:          []EventKind{EventKindArticleCreated},
+				RequireArticle: true,
 			},
 			filter: InterestSet{
-				Kinds:          []EventKind{EventKindMessageCreated},
-				RequireMessage: true,
+				Kinds:          []EventKind{EventKindArticleCreated},
+				RequireArticle: true,
 			},
 			wantAllow: true,
 		},
 		{
-			name: "require message rejects weaker filter",
+			name: "require article rejects weaker filter",
 			allowed: InterestSet{
-				Kinds:          []EventKind{EventKindMessageCreated},
-				RequireMessage: true,
+				Kinds:          []EventKind{EventKindArticleCreated},
+				RequireArticle: true,
 			},
 			filter: InterestSet{
-				Kinds: []EventKind{EventKindMessageCreated},
+				Kinds: []EventKind{EventKindArticleCreated},
 			},
 			wantAllow: false,
 		},

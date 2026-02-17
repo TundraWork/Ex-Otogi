@@ -101,8 +101,8 @@ func TestModuleSpecUsesStrictMessageCapability(t *testing.T) {
 	}
 
 	handler := spec.Handlers[0]
-	if !handler.Capability.Interest.RequireMessage {
-		t.Fatal("expected RequireMessage to be true")
+	if !handler.Capability.Interest.RequireArticle {
+		t.Fatal("expected RequireArticle to be true")
 	}
 	if handler.Subscription.Buffer != 0 || handler.Subscription.Workers != 0 || handler.Subscription.HandlerTimeout != 0 {
 		t.Fatalf("expected subscription to defer runtime defaults, got %#v", handler.Subscription)
@@ -123,14 +123,14 @@ func TestModuleSpecUsesStrictMessageCapability(t *testing.T) {
 func newMessageEvent(text string) *otogi.Event {
 	return &otogi.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindMessageCreated,
+		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: time.Unix(1, 0),
 		Platform:   otogi.PlatformTelegram,
 		Conversation: otogi.Conversation{
 			ID:   "42",
 			Type: otogi.ConversationTypePrivate,
 		},
-		Message: &otogi.Message{
+		Article: &otogi.Article{
 			ID:   "msg-1",
 			Text: text,
 		},

@@ -25,52 +25,50 @@ func NewDefaultDecoder() DefaultDecoder {
 // Decode converts a Telegram update into a neutral event.
 func (d DefaultDecoder) Decode(_ context.Context, update Update) (*otogi.Event, error) {
 	event := newBaseEvent(update)
+	eventKind, known := eventKindFromUpdateType(update.Type)
+	if !known {
+		return nil, fmt.Errorf("decode update %s: unsupported type", update.Type)
+	}
+	event.Kind = eventKind
 
 	switch update.Type {
 	case UpdateTypeMessage:
-		event.Kind = otogi.EventKindMessageCreated
-		message, err := decodeMessage(update.Message)
+		article, err := decodeArticle(update.Article)
 		if err != nil {
-			return nil, fmt.Errorf("decode message: %w", err)
+			return nil, fmt.Errorf("decode article: %w", err)
 		}
-		event.Message = message
+		event.Article = article
 	case UpdateTypeEdit:
-		event.Kind = otogi.EventKindMessageEdited
 		mutation, err := decodeEdit(update.Edit, update.OccurredAt)
 		if err != nil {
 			return nil, fmt.Errorf("decode edit: %w", err)
 		}
 		event.Mutation = mutation
 	case UpdateTypeDelete:
-		event.Kind = otogi.EventKindMessageRetracted
 		mutation, err := decodeDelete(update.Delete, update.OccurredAt)
 		if err != nil {
 			return nil, fmt.Errorf("decode delete: %w", err)
 		}
 		event.Mutation = mutation
 	case UpdateTypeReactionAdd, UpdateTypeReactionRemove:
-		event.Kind = mapReactionKind(update.Type)
 		reaction, err := decodeReaction(update.Type, update.Reaction)
 		if err != nil {
 			return nil, fmt.Errorf("decode reaction: %w", err)
 		}
 		event.Reaction = reaction
 	case UpdateTypeMemberJoin, UpdateTypeMemberLeave:
-		event.Kind = mapMembershipKind(update.Type)
 		stateChange, err := decodeMember(update.Type, update.Member)
 		if err != nil {
 			return nil, fmt.Errorf("decode member update: %w", err)
 		}
 		event.StateChange = stateChange
 	case UpdateTypeRole:
-		event.Kind = otogi.EventKindRoleUpdated
 		stateChange, err := decodeRole(update.Role)
 		if err != nil {
 			return nil, fmt.Errorf("decode role update: %w", err)
 		}
 		event.StateChange = stateChange
 	case UpdateTypeMigration:
-		event.Kind = otogi.EventKindChatMigrated
 		stateChange, err := decodeMigration(update.Migration)
 		if err != nil {
 			return nil, fmt.Errorf("decode migration: %w", err)
@@ -113,25 +111,25 @@ func newBaseEvent(update Update) *otogi.Event {
 	}
 }
 
-// decodeMessage maps Telegram message payload into neutral message content.
-func decodeMessage(payload *MessagePayload) (*otogi.Message, error) {
+// decodeArticle maps Telegram article payload into neutral article content.
+func decodeArticle(payload *ArticlePayload) (*otogi.Article, error) {
 	if payload == nil {
-		return nil, fmt.Errorf("missing message payload")
+		return nil, fmt.Errorf("missing article payload")
 	}
 
-	return &otogi.Message{
-		ID:        payload.ID,
-		ThreadID:  payload.ThreadID,
-		ReplyToID: payload.ReplyToID,
-		Text:      payload.Text,
-		Entities:  payload.Entities,
-		Media:     mapMedia(payload.Media),
-		Reactions: append([]otogi.MessageReaction(nil), payload.Reactions...),
+	return &otogi.Article{
+		ID:               payload.ID,
+		ThreadID:         payload.ThreadID,
+		ReplyToArticleID: payload.ReplyToArticleID,
+		Text:             payload.Text,
+		Entities:         payload.Entities,
+		Media:            mapMedia(payload.Media),
+		Reactions:        append([]otogi.ArticleReaction(nil), payload.Reactions...),
 	}, nil
 }
 
 // decodeEdit maps Telegram edit payload into mutation semantics.
-func decodeEdit(payload *EditPayload, occurredAt time.Time) (*otogi.Mutation, error) {
+func decodeEdit(payload *ArticleEditPayload, occurredAt time.Time) (*otogi.ArticleMutation, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing edit payload")
 	}
@@ -140,9 +138,9 @@ func decodeEdit(payload *EditPayload, occurredAt time.Time) (*otogi.Mutation, er
 		changedAt = eventTimePointer(occurredAt)
 	}
 
-	return &otogi.Mutation{
+	return &otogi.ArticleMutation{
 		Type:            otogi.MutationTypeEdit,
-		TargetMessageID: payload.MessageID,
+		TargetArticleID: payload.ArticleID,
 		ChangedAt:       changedAt,
 		Before:          mapSnapshot(payload.Before),
 		After:           mapSnapshot(payload.After),
@@ -151,22 +149,22 @@ func decodeEdit(payload *EditPayload, occurredAt time.Time) (*otogi.Mutation, er
 }
 
 // decodeDelete maps Telegram delete payload into retraction mutation semantics.
-func decodeDelete(payload *DeletePayload, occurredAt time.Time) (*otogi.Mutation, error) {
+func decodeDelete(payload *ArticleDeletePayload, occurredAt time.Time) (*otogi.ArticleMutation, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing delete payload")
 	}
 	changedAt := eventTimePointer(occurredAt)
 
-	return &otogi.Mutation{
+	return &otogi.ArticleMutation{
 		Type:            otogi.MutationTypeRetraction,
-		TargetMessageID: payload.MessageID,
+		TargetArticleID: payload.ArticleID,
 		ChangedAt:       changedAt,
 		Reason:          payload.Reason,
 	}, nil
 }
 
 // decodeReaction maps reaction add/remove payload into neutral reaction metadata.
-func decodeReaction(updateType UpdateType, payload *ReactionPayload) (*otogi.Reaction, error) {
+func decodeReaction(updateType UpdateType, payload *ArticleReactionPayload) (*otogi.Reaction, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing reaction payload")
 	}
@@ -177,7 +175,7 @@ func decodeReaction(updateType UpdateType, payload *ReactionPayload) (*otogi.Rea
 	}
 
 	return &otogi.Reaction{
-		MessageID: payload.MessageID,
+		ArticleID: payload.ArticleID,
 		Emoji:     payload.Emoji,
 		Action:    action,
 	}, nil
@@ -254,24 +252,6 @@ func decodeMigration(payload *MigrationPayload) (*otogi.StateChange, error) {
 	}, nil
 }
 
-// mapReactionKind derives neutral kind from Telegram reaction update type.
-func mapReactionKind(updateType UpdateType) otogi.EventKind {
-	if updateType == UpdateTypeReactionRemove {
-		return otogi.EventKindReactionRemoved
-	}
-
-	return otogi.EventKindReactionAdded
-}
-
-// mapMembershipKind derives neutral kind from Telegram membership update type.
-func mapMembershipKind(updateType UpdateType) otogi.EventKind {
-	if updateType == UpdateTypeMemberLeave {
-		return otogi.EventKindMemberLeft
-	}
-
-	return otogi.EventKindMemberJoined
-}
-
 // mapMedia converts media descriptors into neutral attachment metadata.
 func mapMedia(media []MediaPayload) []otogi.MediaAttachment {
 	if len(media) == 0 {
@@ -310,15 +290,16 @@ func mapPreview(preview *MediaPreviewPayload) *otogi.MediaPreview {
 	}
 }
 
-// mapSnapshot converts immutable message snapshots for mutation payloads.
-func mapSnapshot(snapshot *SnapshotPayload) *otogi.MessageSnapshot {
+// mapSnapshot converts immutable article snapshots for mutation payloads.
+func mapSnapshot(snapshot *ArticleSnapshotPayload) *otogi.ArticleSnapshot {
 	if snapshot == nil {
 		return nil
 	}
 
-	return &otogi.MessageSnapshot{
-		Text:  snapshot.Text,
-		Media: mapMedia(snapshot.Media),
+	return &otogi.ArticleSnapshot{
+		Text:     snapshot.Text,
+		Entities: append([]otogi.TextEntity(nil), snapshot.Entities...),
+		Media:    mapMedia(snapshot.Media),
 	}
 }
 

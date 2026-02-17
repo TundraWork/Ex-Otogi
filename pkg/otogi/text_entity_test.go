@@ -128,7 +128,7 @@ func TestValidateTextEntities(t *testing.T) {
 	}
 }
 
-func TestEventValidateMessageEntityContract(t *testing.T) {
+func TestEventValidateArticleEntityContract(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -140,14 +140,14 @@ func TestEventValidateMessageEntityContract(t *testing.T) {
 			name: "valid created event with entities",
 			event: &Event{
 				ID:         "evt-1",
-				Kind:       EventKindMessageCreated,
+				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
 				Platform:   PlatformTelegram,
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
 				},
-				Message: &Message{
+				Article: &Article{
 					ID:   "msg-1",
 					Text: "hello",
 					Entities: []TextEntity{
@@ -157,17 +157,17 @@ func TestEventValidateMessageEntityContract(t *testing.T) {
 			},
 		},
 		{
-			name: "created event missing message id fails",
+			name: "created event missing article id fails",
 			event: &Event{
 				ID:         "evt-2",
-				Kind:       EventKindMessageCreated,
+				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
 				Platform:   PlatformTelegram,
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
 				},
-				Message: &Message{
+				Article: &Article{
 					Text: "hello",
 				},
 			},
@@ -177,18 +177,128 @@ func TestEventValidateMessageEntityContract(t *testing.T) {
 			name: "created event invalid entity range fails",
 			event: &Event{
 				ID:         "evt-3",
-				Kind:       EventKindMessageCreated,
+				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
 				Platform:   PlatformTelegram,
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
 				},
-				Message: &Message{
+				Article: &Article{
 					ID:   "msg-1",
 					Text: "hello",
 					Entities: []TextEntity{
 						{Type: TextEntityTypeBold, Offset: 0, Length: 6},
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := testCase.event.Validate()
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !errors.Is(err, ErrInvalidEvent) {
+					t.Fatalf("error = %v, want ErrInvalidEvent", err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestEventValidateMutationSnapshotEntityContract(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		event   *Event
+		wantErr bool
+	}{
+		{
+			name: "valid edited event with snapshot entities",
+			event: &Event{
+				ID:         "evt-10",
+				Kind:       EventKindArticleEdited,
+				OccurredAt: time.Unix(1, 0).UTC(),
+				Platform:   PlatformTelegram,
+				Conversation: Conversation{
+					ID:   "chat-1",
+					Type: ConversationTypeGroup,
+				},
+				Mutation: &ArticleMutation{
+					Type:            MutationTypeEdit,
+					TargetArticleID: "msg-1",
+					Before: &ArticleSnapshot{
+						Text: "hello",
+						Entities: []TextEntity{
+							{Type: TextEntityTypeBold, Offset: 0, Length: 5},
+						},
+					},
+					After: &ArticleSnapshot{
+						Text: "hello edited",
+						Entities: []TextEntity{
+							{Type: TextEntityTypeItalic, Offset: 0, Length: 11},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "invalid before snapshot entity range fails",
+			event: &Event{
+				ID:         "evt-11",
+				Kind:       EventKindArticleEdited,
+				OccurredAt: time.Unix(1, 0).UTC(),
+				Platform:   PlatformTelegram,
+				Conversation: Conversation{
+					ID:   "chat-1",
+					Type: ConversationTypeGroup,
+				},
+				Mutation: &ArticleMutation{
+					Type:            MutationTypeEdit,
+					TargetArticleID: "msg-1",
+					Before: &ArticleSnapshot{
+						Text: "hello",
+						Entities: []TextEntity{
+							{Type: TextEntityTypeBold, Offset: 0, Length: 6},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid after snapshot text_url entity fails",
+			event: &Event{
+				ID:         "evt-12",
+				Kind:       EventKindArticleEdited,
+				OccurredAt: time.Unix(1, 0).UTC(),
+				Platform:   PlatformTelegram,
+				Conversation: Conversation{
+					ID:   "chat-1",
+					Type: ConversationTypeGroup,
+				},
+				Mutation: &ArticleMutation{
+					Type:            MutationTypeEdit,
+					TargetArticleID: "msg-1",
+					After: &ArticleSnapshot{
+						Text: "updated",
+						Entities: []TextEntity{
+							{Type: TextEntityTypeTextURL, Offset: 0, Length: 7},
+						},
 					},
 				},
 			},

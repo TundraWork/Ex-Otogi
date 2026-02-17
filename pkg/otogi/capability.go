@@ -20,8 +20,8 @@ type InterestSet struct {
 	Kinds []EventKind
 	// MediaTypes restricts matching to events carrying at least one listed media type.
 	MediaTypes []MediaType
-	// RequireMessage requires message payload presence.
-	RequireMessage bool
+	// RequireArticle requires article payload presence.
+	RequireArticle bool
 	// RequireMutation requires mutation payload presence.
 	RequireMutation bool
 	// RequireReaction requires reaction payload presence.
@@ -38,7 +38,7 @@ func (i InterestSet) Matches(event *Event) bool {
 	if len(i.Kinds) > 0 && !containsKind(i.Kinds, event.Kind) {
 		return false
 	}
-	if i.RequireMessage && event.Message == nil {
+	if i.RequireArticle && event.Article == nil {
 		return false
 	}
 	if i.RequireMutation && event.Mutation == nil {
@@ -65,7 +65,7 @@ func (i InterestSet) Allows(filter InterestSet) bool {
 	if len(i.MediaTypes) > 0 && !allMediaTypesIncluded(filter.MediaTypes, i.MediaTypes) {
 		return false
 	}
-	if i.RequireMessage && !filter.RequireMessage {
+	if i.RequireArticle && !filter.RequireArticle {
 		return false
 	}
 	if i.RequireMutation && !filter.RequireMutation {
@@ -92,9 +92,9 @@ func containsKind(kinds []EventKind, target EventKind) bool {
 	return false
 }
 
-// eventContainsMediaType checks effective event media across message and mutation payloads.
+// eventContainsMediaType checks effective event media across article and mutation payloads.
 func eventContainsMediaType(event *Event, types []MediaType) bool {
-	for _, media := range event.MessageMedia() {
+	for _, media := range event.ArticleMedia() {
 		if containsMediaType(types, media.Type) {
 			return true
 		}
@@ -103,14 +103,14 @@ func eventContainsMediaType(event *Event, types []MediaType) bool {
 	return false
 }
 
-// messageMedia returns the canonical media payload for filtering purposes.
+// articleMedia returns the canonical media payload for filtering purposes.
 // For mutation events it prefers the post-mutation snapshot.
-func (e *Event) messageMedia() []MediaAttachment {
+func (e *Event) articleMedia() []MediaAttachment {
 	if e == nil {
 		return nil
 	}
-	if e.Message != nil {
-		return e.Message.Media
+	if e.Article != nil {
+		return e.Article.Media
 	}
 	if e.Mutation != nil && e.Mutation.After != nil {
 		return e.Mutation.After.Media
@@ -119,9 +119,9 @@ func (e *Event) messageMedia() []MediaAttachment {
 	return nil
 }
 
-// MessageMedia returns the media payload that best represents this event.
-func (e *Event) MessageMedia() []MediaAttachment {
-	return e.messageMedia()
+// ArticleMedia returns the media payload that best represents this event.
+func (e *Event) ArticleMedia() []MediaAttachment {
+	return e.articleMedia()
 }
 
 // allKindsIncluded reports whether subset is fully contained in allowed.
