@@ -1,4 +1,4 @@
-package articlecache
+package memory
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func TestModuleOnRegister(t *testing.T) {
 				otogi.ServiceOutboundDispatcher: &captureDispatcher{},
 			},
 			wantErr:          true,
-			wantErrSubstring: "article cache resolve logger",
+			wantErrSubstring: "memory resolve logger",
 		},
 		{
 			name: "missing outbound dispatcher fails",
@@ -42,7 +42,7 @@ func TestModuleOnRegister(t *testing.T) {
 				ServiceLogger: slog.Default(),
 			},
 			wantErr:          true,
-			wantErrSubstring: "article cache resolve outbound dispatcher",
+			wantErrSubstring: "memory resolve outbound dispatcher",
 		},
 	}
 
@@ -76,12 +76,12 @@ func TestModuleOnRegister(t *testing.T) {
 				return
 			}
 
-			resolved, err := registry.Resolve(otogi.ServiceArticleStore)
+			resolved, err := registry.Resolve(otogi.ServiceMemory)
 			if err != nil {
-				t.Fatalf("resolve article cache service failed: %v", err)
+				t.Fatalf("resolve memory service failed: %v", err)
 			}
 			if resolved != module {
-				t.Fatal("resolved article cache service is not module instance")
+				t.Fatal("resolved memory service is not module instance")
 			}
 		})
 	}
@@ -191,7 +191,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			name:         "raw with cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-404"),
 			wantSent:     true,
-			wantText:     "raw: replied article not found in article cache",
+			wantText:     "raw: replied article not found in memory",
 		},
 		{
 			name: "legacy slash raw command is ignored",
@@ -217,7 +217,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			name:         "raw explicit article id cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~raw 114514", ""),
 			wantSent:     true,
-			wantText:     "raw: article not found in article cache",
+			wantText:     "raw: article not found in memory",
 		},
 		{
 			name:         "raw invalid article id returns parse message",
@@ -291,13 +291,13 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			name:         "history with cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~history", "msg-404"),
 			wantSent:     true,
-			wantText:     "history: replied article not found in article cache",
+			wantText:     "history: replied article not found in memory",
 		},
 		{
 			name:         "history explicit article id cache miss returns miss message",
 			commandEvent: newCreatedEvent("msg-2", "~history 114514", ""),
 			wantSent:     true,
-			wantText:     "history: article not found in article cache",
+			wantText:     "history: article not found in memory",
 		},
 		{
 			name:         "history invalid article id returns parse message",
@@ -399,7 +399,7 @@ func TestModuleEventLifecycle(t *testing.T) {
 	tests := []struct {
 		name      string
 		events    []*otogi.Event
-		lookup    otogi.ArticleLookup
+		lookup    otogi.MemoryLookup
 		wantFound bool
 		wantText  string
 	}{
@@ -408,7 +408,7 @@ func TestModuleEventLifecycle(t *testing.T) {
 			events: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
-			lookup: otogi.ArticleLookup{
+			lookup: otogi.MemoryLookup{
 				Platform:       otogi.PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -422,7 +422,7 @@ func TestModuleEventLifecycle(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newEditedEvent("msg-1", "hello edited"),
 			},
-			lookup: otogi.ArticleLookup{
+			lookup: otogi.MemoryLookup{
 				Platform:       otogi.PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -436,7 +436,7 @@ func TestModuleEventLifecycle(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newRetractedEvent("msg-1"),
 			},
-			lookup: otogi.ArticleLookup{
+			lookup: otogi.MemoryLookup{
 				Platform:       otogi.PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -462,7 +462,7 @@ func TestModuleEventLifecycle(t *testing.T) {
 				}
 			}
 
-			cached, found, err := module.GetArticle(context.Background(), testCase.lookup)
+			cached, found, err := module.Get(context.Background(), testCase.lookup)
 			if err != nil {
 				t.Fatalf("get message failed: %v", err)
 			}
@@ -539,7 +539,7 @@ func TestModuleEditProjectionUpdatesEntitiesAndMedia(t *testing.T) {
 		t.Fatalf("seed edited event failed: %v", err)
 	}
 
-	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
+	cached, found, err := module.Get(context.Background(), otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
@@ -548,7 +548,7 @@ func TestModuleEditProjectionUpdatesEntitiesAndMedia(t *testing.T) {
 		t.Fatalf("get article failed: %v", err)
 	}
 	if !found {
-		t.Fatal("expected article cache hit")
+		t.Fatal("expected memory hit")
 	}
 	if cached.Article.Text != "hello edited" {
 		t.Fatalf("article text = %q, want hello edited", cached.Article.Text)
@@ -561,7 +561,7 @@ func TestModuleEditProjectionUpdatesEntitiesAndMedia(t *testing.T) {
 	}
 }
 
-func TestModuleGetRepliedArticle(t *testing.T) {
+func TestModuleGetReplied(t *testing.T) {
 	t.Parallel()
 
 	module := New(
@@ -574,7 +574,7 @@ func TestModuleGetRepliedArticle(t *testing.T) {
 	}
 
 	replyEvent := newCreatedEvent("msg-2", "ping", "msg-1")
-	cached, found, err := module.GetRepliedArticle(context.Background(), replyEvent)
+	cached, found, err := module.GetReplied(context.Background(), replyEvent)
 	if err != nil {
 		t.Fatalf("get replied message failed: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestModuleGetRepliedArticle(t *testing.T) {
 	}
 
 	nonReplyEvent := newCreatedEvent("msg-3", "ping", "")
-	_, found, err = module.GetRepliedArticle(context.Background(), nonReplyEvent)
+	_, found, err = module.GetReplied(context.Background(), nonReplyEvent)
 	if err != nil {
 		t.Fatalf("get replied message for non-reply failed: %v", err)
 	}
@@ -614,13 +614,13 @@ func TestModuleEventHistoryAndEntityProjectionSeparation(t *testing.T) {
 		}
 	}
 
-	lookup := otogi.ArticleLookup{
+	lookup := otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
 	}
 
-	cached, found, err := module.GetArticle(context.Background(), lookup)
+	cached, found, err := module.Get(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestModuleEventHistoryAndEntityProjectionSeparation(t *testing.T) {
 		t.Fatalf("cached text = %q, want hello edited", cached.Article.Text)
 	}
 
-	history, found, err := module.GetEvents(context.Background(), lookup)
+	history, found, err := module.getHistory(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get events failed: %v", err)
 	}
@@ -651,6 +651,44 @@ func TestModuleEventHistoryAndEntityProjectionSeparation(t *testing.T) {
 		if history[idx].Kind != wantKind {
 			t.Fatalf("history[%d].Kind = %s, want %s", idx, history[idx].Kind, wantKind)
 		}
+	}
+}
+
+func TestModuleGetReturnsArticleAndHistory(t *testing.T) {
+	t.Parallel()
+
+	module := New(
+		WithTTL(24*time.Hour),
+		withClock(func() time.Time { return time.Unix(221, 0).UTC() }),
+	)
+
+	events := []*otogi.Event{
+		newCreatedEvent("msg-1", "hello", ""),
+		newReactionEvent("msg-1", "🔥", otogi.ReactionActionAdd),
+		newEditedEvent("msg-1", "hello edited"),
+	}
+	for _, event := range events {
+		if err := module.handleEvent(context.Background(), event); err != nil {
+			t.Fatalf("handle event %s failed: %v", event.ID, err)
+		}
+	}
+
+	memoryEntry, found, err := module.Get(context.Background(), otogi.MemoryLookup{
+		Platform:       otogi.PlatformTelegram,
+		ConversationID: "chat-1",
+		ArticleID:      "msg-1",
+	})
+	if err != nil {
+		t.Fatalf("get memory failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected memory hit")
+	}
+	if memoryEntry.Article.Text != "hello edited" {
+		t.Fatalf("article text = %q, want hello edited", memoryEntry.Article.Text)
+	}
+	if len(memoryEntry.History) != 3 {
+		t.Fatalf("history length = %d, want 3", len(memoryEntry.History))
 	}
 }
 
@@ -677,7 +715,7 @@ func TestModuleHistoryBackfillsMissingEditBeforeSnapshot(t *testing.T) {
 		t.Fatalf("seed edited event failed: %v", err)
 	}
 
-	history, found, err := module.GetEvents(context.Background(), otogi.ArticleLookup{
+	history, found, err := module.getHistory(context.Background(), otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
@@ -734,7 +772,7 @@ func TestModuleMessageMutationUsesChangedAtForUpdatedAt(t *testing.T) {
 		t.Fatalf("seed message mutation event failed: %v", err)
 	}
 
-	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
+	cached, found, err := module.Get(context.Background(), otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
@@ -783,7 +821,7 @@ func TestModuleReactionProjectionDerivedFromEvents(t *testing.T) {
 		t.Fatalf("seed reaction remove event failed: %v", err)
 	}
 
-	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
+	cached, found, err := module.Get(context.Background(), otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
@@ -817,13 +855,13 @@ func TestModuleRetractedEntityStillPreservesEventHistory(t *testing.T) {
 		t.Fatalf("seed retracted event failed: %v", err)
 	}
 
-	lookup := otogi.ArticleLookup{
+	lookup := otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
 	}
 
-	_, found, err := module.GetArticle(context.Background(), lookup)
+	_, found, err := module.Get(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
 	}
@@ -831,7 +869,7 @@ func TestModuleRetractedEntityStillPreservesEventHistory(t *testing.T) {
 		t.Fatal("expected retracted message projection to be removed")
 	}
 
-	history, found, err := module.GetEvents(context.Background(), lookup)
+	history, found, err := module.getHistory(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get events failed: %v", err)
 	}
@@ -846,7 +884,7 @@ func TestModuleRetractedEntityStillPreservesEventHistory(t *testing.T) {
 	}
 }
 
-func TestModuleGetRepliedEvents(t *testing.T) {
+func TestModuleGetRepliedHistory(t *testing.T) {
 	t.Parallel()
 
 	module := New(
@@ -862,7 +900,7 @@ func TestModuleGetRepliedEvents(t *testing.T) {
 	}
 
 	replyEvent := newCreatedEvent("msg-2", "ping", "msg-1")
-	history, found, err := module.GetRepliedEvents(context.Background(), replyEvent)
+	history, found, err := module.getRepliedHistory(context.Background(), replyEvent)
 	if err != nil {
 		t.Fatalf("get replied events failed: %v", err)
 	}
@@ -874,7 +912,7 @@ func TestModuleGetRepliedEvents(t *testing.T) {
 	}
 
 	nonReplyEvent := newCreatedEvent("msg-3", "ping", "")
-	_, found, err = module.GetRepliedEvents(context.Background(), nonReplyEvent)
+	_, found, err = module.getRepliedHistory(context.Background(), nonReplyEvent)
 	if err != nil {
 		t.Fatalf("get replied events for non-reply failed: %v", err)
 	}
@@ -899,7 +937,7 @@ func TestModuleCapacityEviction(t *testing.T) {
 		t.Fatalf("handle second event failed: %v", err)
 	}
 
-	_, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
+	_, found, err := module.Get(context.Background(), otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
@@ -911,7 +949,7 @@ func TestModuleCapacityEviction(t *testing.T) {
 		t.Fatal("expected oldest message to be evicted")
 	}
 
-	cached, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
+	cached, found, err := module.Get(context.Background(), otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-2",
@@ -941,7 +979,7 @@ func TestModuleTTLExpiry(t *testing.T) {
 	}
 
 	now = now.Add(2 * time.Minute)
-	_, found, err := module.GetArticle(context.Background(), otogi.ArticleLookup{
+	_, found, err := module.Get(context.Background(), otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
@@ -966,13 +1004,13 @@ func TestModuleGetMessageReturnsDefensiveCopy(t *testing.T) {
 		t.Fatalf("handle created event failed: %v", err)
 	}
 
-	lookup := otogi.ArticleLookup{
+	lookup := otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
 	}
 
-	cached, found, err := module.GetArticle(context.Background(), lookup)
+	cached, found, err := module.Get(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message failed: %v", err)
 	}
@@ -981,7 +1019,7 @@ func TestModuleGetMessageReturnsDefensiveCopy(t *testing.T) {
 	}
 	cached.Article.Text = "mutated"
 
-	cachedAgain, found, err := module.GetArticle(context.Background(), lookup)
+	cachedAgain, found, err := module.Get(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get message second time failed: %v", err)
 	}
@@ -990,6 +1028,18 @@ func TestModuleGetMessageReturnsDefensiveCopy(t *testing.T) {
 	}
 	if cachedAgain.Article.Text != "copy" {
 		t.Fatalf("cached text = %q, want copy", cachedAgain.Article.Text)
+	}
+	cached.History = append(cached.History, otogi.Event{ID: "evt-mutated"})
+
+	cachedAgain, found, err = module.Get(context.Background(), lookup)
+	if err != nil {
+		t.Fatalf("get message third time failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected message cache hit")
+	}
+	if len(cachedAgain.History) != 1 {
+		t.Fatalf("history length = %d, want 1", len(cachedAgain.History))
 	}
 }
 
@@ -1005,13 +1055,13 @@ func TestModuleGetEventsReturnsDefensiveCopy(t *testing.T) {
 		t.Fatalf("handle created event failed: %v", err)
 	}
 
-	lookup := otogi.ArticleLookup{
+	lookup := otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
 	}
 
-	history, found, err := module.GetEvents(context.Background(), lookup)
+	history, found, err := module.getHistory(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get events failed: %v", err)
 	}
@@ -1020,7 +1070,7 @@ func TestModuleGetEventsReturnsDefensiveCopy(t *testing.T) {
 	}
 	history[0].ID = "mutated"
 
-	historyAgain, found, err := module.GetEvents(context.Background(), lookup)
+	historyAgain, found, err := module.getHistory(context.Background(), lookup)
 	if err != nil {
 		t.Fatalf("get events second time failed: %v", err)
 	}
@@ -1039,7 +1089,7 @@ func TestModuleGetMessageContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := module.GetArticle(ctx, otogi.ArticleLookup{
+	_, _, err := module.Get(ctx, otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",
@@ -1059,7 +1109,7 @@ func TestModuleGetEventsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := module.GetEvents(ctx, otogi.ArticleLookup{
+	_, _, err := module.getHistory(ctx, otogi.MemoryLookup{
 		Platform:       otogi.PlatformTelegram,
 		ConversationID: "chat-1",
 		ArticleID:      "msg-1",

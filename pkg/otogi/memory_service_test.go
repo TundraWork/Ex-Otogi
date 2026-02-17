@@ -5,15 +5,15 @@ import (
 	"time"
 )
 
-func TestArticleLookupValidate(t *testing.T) {
+func TestMemoryLookupValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		lookup  ArticleLookup
+		lookup  MemoryLookup
 		wantErr bool
 	}{
 		{
 			name: "valid lookup",
-			lookup: ArticleLookup{
+			lookup: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -21,7 +21,7 @@ func TestArticleLookupValidate(t *testing.T) {
 		},
 		{
 			name: "missing platform",
-			lookup: ArticleLookup{
+			lookup: MemoryLookup{
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
 			},
@@ -29,7 +29,7 @@ func TestArticleLookupValidate(t *testing.T) {
 		},
 		{
 			name: "missing conversation id",
-			lookup: ArticleLookup{
+			lookup: MemoryLookup{
 				Platform:  PlatformTelegram,
 				ArticleID: "msg-1",
 			},
@@ -37,7 +37,7 @@ func TestArticleLookupValidate(t *testing.T) {
 		},
 		{
 			name: "missing article id",
-			lookup: ArticleLookup{
+			lookup: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 			},
@@ -61,13 +61,13 @@ func TestArticleLookupValidate(t *testing.T) {
 	}
 }
 
-func TestArticleLookupFromEvent(t *testing.T) {
+func TestMemoryLookupFromEvent(t *testing.T) {
 	tests := []struct {
 		name       string
 		event      *Event
-		want       ArticleLookup
+		want       MemoryLookup
 		wantErr    bool
-		assertFunc func(*testing.T, ArticleLookup)
+		assertFunc func(*testing.T, MemoryLookup)
 	}{
 		{
 			name: "valid article event",
@@ -81,7 +81,7 @@ func TestArticleLookupFromEvent(t *testing.T) {
 				},
 				Article: &Article{ID: "msg-1"},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -124,7 +124,7 @@ func TestArticleLookupFromEvent(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ArticleLookupFromEvent(testCase.event)
+			got, err := MemoryLookupFromEvent(testCase.event)
 			if testCase.wantErr && err == nil {
 				t.Fatal("expected error")
 			}
@@ -145,11 +145,11 @@ func TestArticleLookupFromEvent(t *testing.T) {
 	}
 }
 
-func TestReplyArticleLookupFromEvent(t *testing.T) {
+func TestReplyMemoryLookupFromEvent(t *testing.T) {
 	tests := []struct {
 		name    string
 		event   *Event
-		want    ArticleLookup
+		want    MemoryLookup
 		wantErr bool
 	}{
 		{
@@ -164,7 +164,7 @@ func TestReplyArticleLookupFromEvent(t *testing.T) {
 				},
 				Article: &Article{ID: "msg-2", ReplyToArticleID: "msg-1"},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -207,7 +207,7 @@ func TestReplyArticleLookupFromEvent(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ReplyArticleLookupFromEvent(testCase.event)
+			got, err := ReplyMemoryLookupFromEvent(testCase.event)
 			if testCase.wantErr && err == nil {
 				t.Fatal("expected error")
 			}
@@ -224,11 +224,11 @@ func TestReplyArticleLookupFromEvent(t *testing.T) {
 	}
 }
 
-func TestMutationArticleLookupFromEvent(t *testing.T) {
+func TestMutationMemoryLookupFromEvent(t *testing.T) {
 	tests := []struct {
 		name    string
 		event   *Event
-		want    ArticleLookup
+		want    MemoryLookup
 		wantErr bool
 	}{
 		{
@@ -244,7 +244,7 @@ func TestMutationArticleLookupFromEvent(t *testing.T) {
 					TargetArticleID: "msg-1",
 				},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -287,7 +287,7 @@ func TestMutationArticleLookupFromEvent(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := MutationArticleLookupFromEvent(testCase.event)
+			got, err := MutationMemoryLookupFromEvent(testCase.event)
 			if testCase.wantErr && err == nil {
 				t.Fatal("expected error")
 			}
@@ -304,11 +304,11 @@ func TestMutationArticleLookupFromEvent(t *testing.T) {
 	}
 }
 
-func TestReactionArticleLookupFromEvent(t *testing.T) {
+func TestReactionMemoryLookupFromEvent(t *testing.T) {
 	tests := []struct {
 		name    string
 		event   *Event
-		want    ArticleLookup
+		want    MemoryLookup
 		wantErr bool
 	}{
 		{
@@ -324,7 +324,7 @@ func TestReactionArticleLookupFromEvent(t *testing.T) {
 					ArticleID: "msg-1",
 				},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-1",
@@ -367,7 +367,7 @@ func TestReactionArticleLookupFromEvent(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := ReactionArticleLookupFromEvent(testCase.event)
+			got, err := ReactionMemoryLookupFromEvent(testCase.event)
 			if testCase.wantErr && err == nil {
 				t.Fatal("expected error")
 			}
@@ -384,11 +384,11 @@ func TestReactionArticleLookupFromEvent(t *testing.T) {
 	}
 }
 
-func TestTargetArticleLookupFromEvent(t *testing.T) {
+func TestTargetMemoryLookupFromEvent(t *testing.T) {
 	tests := []struct {
 		name    string
 		event   *Event
-		want    ArticleLookup
+		want    MemoryLookup
 		wantErr bool
 	}{
 		{
@@ -404,7 +404,7 @@ func TestTargetArticleLookupFromEvent(t *testing.T) {
 					ID: "msg-created",
 				},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-created",
@@ -423,7 +423,7 @@ func TestTargetArticleLookupFromEvent(t *testing.T) {
 					TargetArticleID: "msg-edited",
 				},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-edited",
@@ -442,7 +442,7 @@ func TestTargetArticleLookupFromEvent(t *testing.T) {
 					TargetArticleID: "msg-retracted",
 				},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-retracted",
@@ -461,7 +461,7 @@ func TestTargetArticleLookupFromEvent(t *testing.T) {
 					ArticleID: "msg-react-add",
 				},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-react-add",
@@ -480,7 +480,7 @@ func TestTargetArticleLookupFromEvent(t *testing.T) {
 					ArticleID: "msg-react-remove",
 				},
 			},
-			want: ArticleLookup{
+			want: MemoryLookup{
 				Platform:       PlatformTelegram,
 				ConversationID: "chat-1",
 				ArticleID:      "msg-react-remove",
@@ -510,7 +510,7 @@ func TestTargetArticleLookupFromEvent(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := TargetArticleLookupFromEvent(testCase.event)
+			got, err := TargetMemoryLookupFromEvent(testCase.event)
 			if testCase.wantErr && err == nil {
 				t.Fatal("expected error")
 			}

@@ -16,7 +16,7 @@ import (
 
 	"ex-otogi/internal/driver/telegram"
 	"ex-otogi/internal/kernel"
-	"ex-otogi/modules/articlecache"
+	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/pkg/otogi"
 
@@ -348,7 +348,7 @@ func registerRuntimeServices(
 	logger *slog.Logger,
 	outbound otogi.OutboundDispatcher,
 ) error {
-	if err := kernelRuntime.RegisterService(articlecache.ServiceLogger, logger); err != nil {
+	if err := kernelRuntime.RegisterService(memory.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
 	}
 	if outbound != nil {
@@ -361,9 +361,9 @@ func registerRuntimeServices(
 }
 
 func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) error {
-	articleCacheModule := articlecache.New()
-	if err := kernelRuntime.RegisterModule(ctx, articleCacheModule); err != nil {
-		return fmt.Errorf("register article cache module: %w", err)
+	memoryModule := memory.New()
+	if err := kernelRuntime.RegisterModule(ctx, memoryModule); err != nil {
+		return fmt.Errorf("register memory module: %w", err)
 	}
 	pingPongModule := pingpong.New()
 	if err := kernelRuntime.RegisterModule(ctx, pingPongModule); err != nil {

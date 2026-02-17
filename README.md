@@ -10,7 +10,7 @@ The project name **Ex-Otogi** is inspired by "Ex-おとぎ話 (Ex-Otogibanashi)"
 - `pkg/otogi`: stable contracts, events, and framework interfaces.
 - `internal/kernel`: runtime orchestration, lifecycle, and event dispatch.
 - `internal/driver`: platform adapters (Telegram).
-- `modules/articlecache`: article projection + event history cache module implementation.
+- `modules/memory`: memory module for article projection and event history.
 
 Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 
