@@ -52,6 +52,8 @@ type ModuleRegistrar interface {
 type ModuleSpec struct {
 	// Handlers declares declarative capability and subscription wiring.
 	Handlers []ModuleHandler
+	// Commands declares command registrations handled by this module.
+	Commands []CommandSpec
 	// AdditionalCapabilities declares extra interests used by imperative registration.
 	AdditionalCapabilities []Capability
 }
@@ -105,6 +107,9 @@ func cloneInterestSet(interest InterestSet) InterestSet {
 	}
 	if len(interest.MediaTypes) > 0 {
 		cloned.MediaTypes = append([]MediaType(nil), interest.MediaTypes...)
+	}
+	if len(interest.CommandNames) > 0 {
+		cloned.CommandNames = append([]string(nil), interest.CommandNames...)
 	}
 
 	return cloned

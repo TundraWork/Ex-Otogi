@@ -119,7 +119,7 @@ func (m *Module) Spec() otogi.ModuleSpec {
 			{
 				Capability: otogi.Capability{
 					Name:        "memory-writer",
-					Description: "persists per-article event history, projects article state, and handles ~raw/~history introspection commands",
+					Description: "persists per-article event history and projects article state",
 					Interest: otogi.InterestSet{
 						Kinds: []otogi.EventKind{
 							otogi.EventKindArticleCreated,
@@ -133,6 +133,35 @@ func (m *Module) Spec() otogi.ModuleSpec {
 				},
 				Subscription: otogi.NewDefaultSubscriptionSpec("memory-writer"),
 				Handler:      m.handleEvent,
+			},
+			{
+				Capability: otogi.Capability{
+					Name:        "memory-introspection-command-handler",
+					Description: "handles ~raw and ~history introspection commands",
+					Interest: otogi.InterestSet{
+						Kinds:          []otogi.EventKind{otogi.EventKindSystemCommandReceived},
+						RequireCommand: true,
+						CommandNames: []string{
+							rawCommandName,
+							historyCommandName,
+						},
+					},
+					RequiredServices: []string{otogi.ServiceOutboundDispatcher},
+				},
+				Subscription: otogi.NewDefaultSubscriptionSpec("memory-command-handler"),
+				Handler:      m.handleCommandEvent,
+			},
+		},
+		Commands: []otogi.CommandSpec{
+			{
+				Prefix:      otogi.CommandPrefixSystem,
+				Name:        rawCommandName,
+				Description: "reply with raw article projection JSON",
+			},
+			{
+				Prefix:      otogi.CommandPrefixSystem,
+				Name:        historyCommandName,
+				Description: "reply with article event history JSON",
 			},
 		},
 	}

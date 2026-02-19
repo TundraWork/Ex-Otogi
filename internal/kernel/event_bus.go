@@ -249,6 +249,9 @@ func cloneInterestSet(interest otogi.InterestSet) otogi.InterestSet {
 	if len(interest.MediaTypes) > 0 {
 		cloned.MediaTypes = append([]otogi.MediaType(nil), interest.MediaTypes...)
 	}
+	if len(interest.CommandNames) > 0 {
+		cloned.CommandNames = append([]string(nil), interest.CommandNames...)
+	}
 
 	return cloned
 }

@@ -3,12 +3,13 @@ package pingpong
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"ex-otogi/pkg/otogi"
 )
 
-// Module replies with "pong" when it receives a "ping" message event.
+const pingCommandName = "ping"
+
+// Module replies with "pong!" when it receives a "/ping" command event.
 type Module struct {
 	dispatcher otogi.OutboundDispatcher
 }
@@ -23,22 +24,31 @@ func (m *Module) Name() string {
 	return "pingpong"
 }
 
-// Spec declares interest in newly-created messages.
+// Spec declares interest in received ping command events.
 func (m *Module) Spec() otogi.ModuleSpec {
 	return otogi.ModuleSpec{
 		Handlers: []otogi.ModuleHandler{
 			{
 				Capability: otogi.Capability{
-					Name:        "ping-listener",
-					Description: "responds with pong for ping messages",
+					Name:        "ping-command-handler",
+					Description: "responds with pong! for /ping commands",
 					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
+						Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+						RequireCommand: true,
+						CommandNames:   []string{pingCommandName},
 						RequireArticle: true,
 					},
 					RequiredServices: []string{otogi.ServiceOutboundDispatcher},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("pingpong-messages"),
-				Handler:      m.handleMessage,
+				Subscription: otogi.NewDefaultSubscriptionSpec("pingpong-commands"),
+				Handler:      m.handleCommand,
+			},
+		},
+		Commands: []otogi.CommandSpec{
+			{
+				Prefix:      otogi.CommandPrefixOrdinary,
+				Name:        pingCommandName,
+				Description: "reply with pong!",
 			},
 		},
 	}
@@ -69,8 +79,14 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleMessage(ctx context.Context, event *otogi.Event) error {
-	if !isPing(event.Article.Text) {
+func (m *Module) handleCommand(ctx context.Context, event *otogi.Event) error {
+	if event == nil || event.Command == nil || event.Article == nil {
+		return nil
+	}
+	if event.Kind != otogi.EventKindCommandReceived {
+		return nil
+	}
+	if event.Command.Name != pingCommandName {
 		return nil
 	}
 
@@ -80,7 +96,7 @@ func (m *Module) handleMessage(ctx context.Context, event *otogi.Event) error {
 	}
 	_, err = m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
 		Target:           target,
-		Text:             "pong",
+		Text:             "pong!",
 		ReplyToMessageID: event.Article.ID,
 	})
 	if err != nil {
@@ -88,8 +104,4 @@ func (m *Module) handleMessage(ctx context.Context, event *otogi.Event) error {
 	}
 
 	return nil
-}
-
-func isPing(text string) bool {
-	return strings.EqualFold(strings.TrimSpace(text), "ping")
 }

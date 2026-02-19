@@ -20,6 +20,10 @@ const (
 	EventKindArticleReactionAdded EventKind = "article.reaction.added"
 	// EventKindArticleReactionRemoved is emitted when a reaction is removed from an article.
 	EventKindArticleReactionRemoved EventKind = "article.reaction.removed"
+	// EventKindCommandReceived is emitted when one inbound article is parsed as one ordinary command.
+	EventKindCommandReceived EventKind = "command.received"
+	// EventKindSystemCommandReceived is emitted when one inbound article is parsed as one system command.
+	EventKindSystemCommandReceived EventKind = "system_command.received"
 	// EventKindMemberJoined is emitted when a member joins a conversation.
 	EventKindMemberJoined EventKind = "member.joined"
 	// EventKindMemberLeft is emitted when a member leaves a conversation.
@@ -76,6 +80,8 @@ type Event struct {
 	Mutation *ArticleMutation
 	// Reaction carries emoji reaction metadata for article reaction events.
 	Reaction *Reaction
+	// Command carries parsed command metadata for command-received events.
+	Command *CommandInvocation
 	// StateChange carries membership, role, and migration transitions.
 	StateChange *StateChange
 	// Metadata stores optional driver-provided key/value context.
@@ -460,6 +466,22 @@ func validatePayloadByKind(e *Event) error {
 		}
 		if e.Reaction.ArticleID == "" {
 			return fmt.Errorf("%w: article reaction event requires reaction article id", ErrInvalidEvent)
+		}
+	case EventKindCommandReceived, EventKindSystemCommandReceived:
+		if e.Command == nil {
+			return fmt.Errorf("%w: command event requires command payload", ErrInvalidEvent)
+		}
+		if err := e.Command.Validate(); err != nil {
+			return fmt.Errorf("%w: command event invalid command payload: %w", ErrInvalidEvent, err)
+		}
+		if e.Article == nil {
+			return fmt.Errorf("%w: command event requires article payload", ErrInvalidEvent)
+		}
+		if e.Article.ID == "" {
+			return fmt.Errorf("%w: command event requires article id", ErrInvalidEvent)
+		}
+		if err := ValidateTextEntities(e.Article.Text, e.Article.Entities); err != nil {
+			return fmt.Errorf("%w: command event invalid article entities: %w", ErrInvalidEvent, err)
 		}
 	case EventKindMemberJoined, EventKindMemberLeft, EventKindRoleUpdated, EventKindChatMigrated:
 		if e.StateChange == nil {

@@ -104,7 +104,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~raw", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"Article\": {",
@@ -120,7 +120,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw@mybot", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~raw@mybot", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"Article\": {",
@@ -133,7 +133,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newEditedEvent("msg-1", "hello edited"),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~raw", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"ID\": \"msg-1\"",
@@ -149,7 +149,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newMessageMutationEvent("msg-1", "hello edited"),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~raw", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"Text\": \"hello edited\"",
@@ -164,7 +164,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newReactionEvent("msg-1", "👍", otogi.ReactionActionAdd),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~raw", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"ID\": \"msg-1\"",
@@ -179,26 +179,26 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 		},
 		{
 			name:         "raw without reply is ignored",
-			commandEvent: newCreatedEvent("msg-2", "~raw", ""),
+			commandEvent: newCommandEvent("msg-2", "~raw", ""),
 			wantSent:     false,
 		},
 		{
 			name:         "non raw command is ignored",
-			commandEvent: newCreatedEvent("msg-2", "/ping", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "/ping", "msg-1"),
 			wantSent:     false,
 		},
 		{
 			name:         "raw with cache miss returns miss message",
-			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-404"),
+			commandEvent: newCommandEvent("msg-2", "~raw", "msg-404"),
 			wantSent:     true,
 			wantText:     "raw: replied article not found in memory",
 		},
 		{
-			name: "legacy slash raw command is ignored",
+			name: "slash raw command is ignored",
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
-			commandEvent: newCreatedEvent("msg-2", "/raw", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "/raw", "msg-1"),
 			wantSent:     false,
 		},
 		{
@@ -206,7 +206,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("114514", "hello explicit", ""),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw 114514", ""),
+			commandEvent: newCommandEvent("msg-2", "~raw 114514", ""),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"ID\": \"114514\"",
@@ -215,19 +215,19 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 		},
 		{
 			name:         "raw explicit article id cache miss returns miss message",
-			commandEvent: newCreatedEvent("msg-2", "~raw 114514", ""),
+			commandEvent: newCommandEvent("msg-2", "~raw 114514", ""),
 			wantSent:     true,
 			wantText:     "raw: article not found in memory",
 		},
 		{
 			name:         "raw invalid article id returns parse message",
-			commandEvent: newCreatedEvent("msg-2", "~raw invalid", ""),
+			commandEvent: newCommandEvent("msg-2", "~raw invalid", ""),
 			wantSent:     true,
 			wantText:     "raw: invalid article id \"invalid\", expected a positive integer",
 		},
 		{
 			name:         "raw with too many arguments returns parse message",
-			commandEvent: newCreatedEvent("msg-2", "~raw 1 2", ""),
+			commandEvent: newCommandEvent("msg-2", "~raw 1 2", ""),
 			wantSent:     true,
 			wantText:     "raw: expected at most one integer article id argument",
 		},
@@ -236,7 +236,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~raw", "msg-1"),
 			sendErr:      errors.New("send failed"),
 			wantErr:      true,
 			wantSent:     true,
@@ -246,7 +246,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", strings.Repeat("x", 5000), ""),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~raw", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~raw", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
 				"...(truncated)",
@@ -258,7 +258,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 				newCreatedEvent("msg-1", "hello", ""),
 				newReactionEvent("msg-1", "👍", otogi.ReactionActionAdd),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~history", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~history", "msg-1"),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"Kind\": \"article.created\"",
@@ -271,7 +271,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 				newCreatedEvent("114514", "hello", ""),
 				newEditedEvent("114514", "hello edited"),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~history 114514", ""),
+			commandEvent: newCommandEvent("msg-2", "~history 114514", ""),
 			wantSent:     true,
 			wantTextContains: []string{
 				"\"Kind\": \"article.created\"",
@@ -284,24 +284,29 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 		},
 		{
 			name:         "history without reply is ignored",
-			commandEvent: newCreatedEvent("msg-2", "~history", ""),
+			commandEvent: newCommandEvent("msg-2", "~history", ""),
+			wantSent:     false,
+		},
+		{
+			name:         "slash history command is ignored",
+			commandEvent: newCommandEvent("msg-2", "/history", "msg-1"),
 			wantSent:     false,
 		},
 		{
 			name:         "history with cache miss returns miss message",
-			commandEvent: newCreatedEvent("msg-2", "~history", "msg-404"),
+			commandEvent: newCommandEvent("msg-2", "~history", "msg-404"),
 			wantSent:     true,
 			wantText:     "history: replied article not found in memory",
 		},
 		{
 			name:         "history explicit article id cache miss returns miss message",
-			commandEvent: newCreatedEvent("msg-2", "~history 114514", ""),
+			commandEvent: newCommandEvent("msg-2", "~history 114514", ""),
 			wantSent:     true,
 			wantText:     "history: article not found in memory",
 		},
 		{
 			name:         "history invalid article id returns parse message",
-			commandEvent: newCreatedEvent("msg-2", "~history invalid", ""),
+			commandEvent: newCommandEvent("msg-2", "~history invalid", ""),
 			wantSent:     true,
 			wantText:     "history: invalid article id \"invalid\", expected a positive integer",
 		},
@@ -310,7 +315,7 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 			seedEvents: []*otogi.Event{
 				newCreatedEvent("msg-1", "hello", ""),
 			},
-			commandEvent: newCreatedEvent("msg-2", "~history", "msg-1"),
+			commandEvent: newCommandEvent("msg-2", "~history", "msg-1"),
 			sendErr:      errors.New("send failed"),
 			wantErr:      true,
 			wantSent:     true,
@@ -1124,6 +1129,47 @@ func TestModuleGetEventsContextCancellation(t *testing.T) {
 
 func newCreatedEvent(messageID string, text string, replyToID string) *otogi.Event {
 	return newCreatedEventAt(messageID, text, replyToID, time.Unix(10, 0).UTC())
+}
+
+func newCommandEvent(messageID string, text string, replyToID string) *otogi.Event {
+	candidate, matched, err := otogi.ParseCommandCandidate(text)
+	if err != nil {
+		panic(err)
+	}
+	if !matched {
+		panic("newCommandEvent expects command text")
+	}
+
+	value := strings.Join(candidate.Tokens, " ")
+	commandKind := otogi.EventKindCommandReceived
+	if candidate.Prefix == otogi.CommandPrefixSystem {
+		commandKind = otogi.EventKindSystemCommandReceived
+	}
+
+	return &otogi.Event{
+		ID:         "evt-command-" + messageID,
+		Kind:       commandKind,
+		OccurredAt: time.Unix(10, 0).UTC(),
+		Platform:   otogi.PlatformTelegram,
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "actor-1", DisplayName: "Alice"},
+		Article: &otogi.Article{
+			ID:               messageID,
+			ReplyToArticleID: replyToID,
+			Text:             text,
+		},
+		Command: &otogi.CommandInvocation{
+			Name:            candidate.Name,
+			Mention:         candidate.Mention,
+			Value:           value,
+			SourceEventID:   "evt-created-" + messageID,
+			SourceEventKind: otogi.EventKindArticleCreated,
+			RawInput:        text,
+		},
+	}
 }
 
 func newCreatedEventAt(messageID string, text string, replyToID string, occurredAt time.Time) *otogi.Event {

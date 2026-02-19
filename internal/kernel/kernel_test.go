@@ -370,6 +370,33 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 			},
 			wantErrSub: "duplicate capability name",
 		},
+		{
+			name: "invalid command spec",
+			spec: otogi.ModuleSpec{
+				Commands: []otogi.CommandSpec{
+					{
+						Prefix: otogi.CommandPrefixOrdinary,
+					},
+				},
+			},
+			wantErrSub: "module command 0",
+		},
+		{
+			name: "duplicate command declaration",
+			spec: otogi.ModuleSpec{
+				Commands: []otogi.CommandSpec{
+					{
+						Prefix: otogi.CommandPrefixOrdinary,
+						Name:   "raw",
+					},
+					{
+						Prefix: otogi.CommandPrefixOrdinary,
+						Name:   "raw",
+					},
+				},
+			},
+			wantErrSub: "duplicate command /raw",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -391,6 +418,52 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, testCase.wantErrSub)
 			}
 		})
+	}
+}
+
+func TestKernelProvidesCommandCatalogService(t *testing.T) {
+	t.Parallel()
+
+	kernelRuntime := New()
+	catalog, err := otogi.ResolveAs[otogi.CommandCatalog](
+		kernelRuntime.Services(),
+		otogi.ServiceCommandCatalog,
+	)
+	if err != nil {
+		t.Fatalf("resolve command catalog failed: %v", err)
+	}
+
+	module := &stubModule{
+		name: "catalog-provider",
+		spec: otogi.ModuleSpec{
+			Commands: []otogi.CommandSpec{
+				{Prefix: otogi.CommandPrefixSystem, Name: "raw"},
+				{Prefix: otogi.CommandPrefixOrdinary, Name: "ping"},
+			},
+		},
+	}
+	if err := kernelRuntime.RegisterModule(context.Background(), module); err != nil {
+		t.Fatalf("register module failed: %v", err)
+	}
+
+	commands, err := catalog.ListCommands(context.Background())
+	if err != nil {
+		t.Fatalf("list commands failed: %v", err)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands len = %d, want 2", len(commands))
+	}
+	if commands[0].ModuleName != "catalog-provider" {
+		t.Fatalf("commands[0].module_name = %q, want catalog-provider", commands[0].ModuleName)
+	}
+	if commands[0].Command.Prefix != otogi.CommandPrefixOrdinary || commands[0].Command.Name != "ping" {
+		t.Fatalf("commands[0] = %+v, want /ping", commands[0])
+	}
+	if commands[1].ModuleName != "catalog-provider" {
+		t.Fatalf("commands[1].module_name = %q, want catalog-provider", commands[1].ModuleName)
+	}
+	if commands[1].Command.Prefix != otogi.CommandPrefixSystem || commands[1].Command.Name != "raw" {
+		t.Fatalf("commands[1] = %+v, want ~raw", commands[1])
 	}
 }
 

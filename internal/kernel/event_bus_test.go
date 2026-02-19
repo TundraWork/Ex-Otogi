@@ -188,6 +188,22 @@ func newTestEvent(id string, kind otogi.EventKind) *otogi.Event {
 		event.Reaction = &otogi.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionAdd}
 	case otogi.EventKindArticleReactionRemoved:
 		event.Reaction = &otogi.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionRemove}
+	case otogi.EventKindCommandReceived:
+		event.Article = &otogi.Article{ID: "msg-1", Text: "/raw"}
+		event.Command = &otogi.CommandInvocation{
+			Name:            "raw",
+			SourceEventID:   "source-e1",
+			SourceEventKind: otogi.EventKindArticleCreated,
+			RawInput:        "/raw",
+		}
+	case otogi.EventKindSystemCommandReceived:
+		event.Article = &otogi.Article{ID: "msg-1", Text: "~raw"}
+		event.Command = &otogi.CommandInvocation{
+			Name:            "raw",
+			SourceEventID:   "source-e1",
+			SourceEventKind: otogi.EventKindArticleCreated,
+			RawInput:        "~raw",
+		}
 	case otogi.EventKindMemberJoined:
 		event.StateChange = &otogi.StateChange{Type: otogi.StateChangeTypeMember, Member: &otogi.MemberChange{Action: kind, Member: otogi.Actor{ID: "user-1"}}}
 	case otogi.EventKindMemberLeft:

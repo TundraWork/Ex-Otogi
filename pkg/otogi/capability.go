@@ -18,6 +18,8 @@ type Capability struct {
 type InterestSet struct {
 	// Kinds restricts matching to specific event kinds when non-empty.
 	Kinds []EventKind
+	// CommandNames restricts matching to specific command names when non-empty.
+	CommandNames []string
 	// MediaTypes restricts matching to events carrying at least one listed media type.
 	MediaTypes []MediaType
 	// RequireArticle requires article payload presence.
@@ -26,6 +28,8 @@ type InterestSet struct {
 	RequireMutation bool
 	// RequireReaction requires reaction payload presence.
 	RequireReaction bool
+	// RequireCommand requires command payload presence.
+	RequireCommand bool
 	// RequireStateChange requires state-change payload presence.
 	RequireStateChange bool
 }
@@ -47,8 +51,19 @@ func (i InterestSet) Matches(event *Event) bool {
 	if i.RequireReaction && event.Reaction == nil {
 		return false
 	}
+	if i.RequireCommand && event.Command == nil {
+		return false
+	}
 	if i.RequireStateChange && event.StateChange == nil {
 		return false
+	}
+	if len(i.CommandNames) > 0 {
+		if event.Command == nil {
+			return false
+		}
+		if !containsCommandName(i.CommandNames, event.Command.Name) {
+			return false
+		}
 	}
 	if len(i.MediaTypes) > 0 && !eventContainsMediaType(event, i.MediaTypes) {
 		return false
@@ -65,6 +80,9 @@ func (i InterestSet) Allows(filter InterestSet) bool {
 	if len(i.MediaTypes) > 0 && !allMediaTypesIncluded(filter.MediaTypes, i.MediaTypes) {
 		return false
 	}
+	if len(i.CommandNames) > 0 && !allCommandNamesIncluded(filter.CommandNames, i.CommandNames) {
+		return false
+	}
 	if i.RequireArticle && !filter.RequireArticle {
 		return false
 	}
@@ -72,6 +90,9 @@ func (i InterestSet) Allows(filter InterestSet) bool {
 		return false
 	}
 	if i.RequireReaction && !filter.RequireReaction {
+		return false
+	}
+	if i.RequireCommand && !filter.RequireCommand {
 		return false
 	}
 	if i.RequireStateChange && !filter.RequireStateChange {
@@ -150,6 +171,33 @@ func allMediaTypesIncluded(subset, allowed []MediaType) bool {
 func containsMediaType(types []MediaType, target MediaType) bool {
 	for _, candidate := range types {
 		if candidate == target {
+			return true
+		}
+	}
+
+	return false
+}
+
+// allCommandNamesIncluded reports whether subset is fully contained in allowed.
+func allCommandNamesIncluded(subset, allowed []string) bool {
+	for _, item := range subset {
+		if !containsCommandName(allowed, item) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// containsCommandName reports whether target is present in command names.
+func containsCommandName(commandNames []string, target string) bool {
+	normalizedTarget := normalizeCommandName(target)
+	if normalizedTarget == "" {
+		return false
+	}
+
+	for _, candidate := range commandNames {
+		if normalizeCommandName(candidate) == normalizedTarget {
 			return true
 		}
 	}

@@ -20,6 +20,7 @@ type Kernel struct {
 	mu          sync.RWMutex
 	modules     map[string]*moduleRecord
 	moduleOrder []string
+	commands    map[string]commandRegistration
 	drivers     map[string]otogi.Driver
 	driverOrder []string
 
@@ -42,15 +43,24 @@ func New(options ...Option) *Kernel {
 		cfg.onAsyncError,
 	)
 
-	return &Kernel{
+	kernelRuntime := &Kernel{
 		cfg:         cfg,
 		bus:         bus,
 		services:    services,
 		modules:     make(map[string]*moduleRecord),
+		commands:    make(map[string]commandRegistration),
 		drivers:     make(map[string]otogi.Driver),
 		moduleOrder: make([]string, 0),
 		driverOrder: make([]string, 0),
 	}
+	if err := kernelRuntime.services.Register(
+		otogi.ServiceCommandCatalog,
+		&kernelCommandCatalog{kernel: kernelRuntime},
+	); err != nil {
+		cfg.onAsyncError(context.Background(), "register command catalog service", err)
+	}
+
+	return kernelRuntime
 }
 
 // EventBus exposes the kernel event bus to integration code.
@@ -110,6 +120,11 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 		serviceLookup: k.services,
 		bus:           k.bus,
 		record:        record,
+	}
+
+	if err := k.registerModuleCommands(ctx, name, moduleSpec.Commands); err != nil {
+		k.rollbackModuleRegistration(ctx, name, record)
+		return fmt.Errorf("register module %s: %w", name, err)
 	}
 
 	hookCtx, cancel := context.WithTimeout(ctx, k.cfg.moduleHookTimeout)
@@ -263,6 +278,8 @@ func (k *Kernel) startDrivers(ctx context.Context) (<-chan error, func()) {
 	}
 	k.mu.RUnlock()
 
+	driverSink := k.newDriverEventSink()
+
 	for _, name := range order {
 		driver := drivers[name]
 		if driver == nil {
@@ -273,7 +290,7 @@ func (k *Kernel) startDrivers(ctx context.Context) (<-chan error, func()) {
 		go func(driverName string, adapter otogi.Driver) {
 			defer workerWG.Done()
 			err := runSafely("driver "+driverName+" Start", func() error {
-				return adapter.Start(ctx, k.bus)
+				return adapter.Start(ctx, driverSink)
 			})
 			if err == nil || isContextCancellation(err) {
 				return
@@ -402,6 +419,7 @@ func (k *Kernel) rollbackModuleRegistration(ctx context.Context, name string, re
 	if err := record.closeSubscriptions(rollbackCtx); err != nil {
 		k.cfg.onAsyncError(rollbackCtx, "rollback_module_registration", err)
 	}
+	k.unregisterModuleCommands(name)
 
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -453,6 +471,7 @@ func (k *Kernel) registerDeclaredHandlers(
 func validateModuleSpec(spec otogi.ModuleSpec) error {
 	seenCapabilities := make(map[string]struct{}, len(spec.Handlers)+len(spec.AdditionalCapabilities))
 	seenSubscriptions := make(map[string]struct{}, len(spec.Handlers))
+	seenCommands := make(map[string]struct{}, len(spec.Commands))
 
 	for idx, handler := range spec.Handlers {
 		if handler.Capability.Name == "" {
@@ -482,6 +501,21 @@ func validateModuleSpec(spec otogi.ModuleSpec) error {
 			return fmt.Errorf("additional capability %d: duplicate capability name %s", idx, capability.Name)
 		}
 		seenCapabilities[capability.Name] = struct{}{}
+	}
+
+	for idx, command := range spec.Commands {
+		if err := command.Validate(); err != nil {
+			return fmt.Errorf("module command %d: %w", idx, err)
+		}
+		key := commandRegistryKey(command.Prefix, command.Name)
+		if _, exists := seenCommands[key]; exists {
+			return fmt.Errorf(
+				"module command %d: duplicate command %s",
+				idx,
+				formatCommandKey(command.Prefix, command.Name),
+			)
+		}
+		seenCommands[key] = struct{}{}
 	}
 
 	return nil

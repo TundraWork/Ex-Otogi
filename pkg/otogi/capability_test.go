@@ -42,6 +42,31 @@ func TestInterestSetMatches(t *testing.T) {
 			event: nil,
 			want:  false,
 		},
+		{
+			name: "require command and command name matches",
+			interest: InterestSet{
+				Kinds:          []EventKind{EventKindCommandReceived},
+				RequireCommand: true,
+				CommandNames:   []string{"raw"},
+			},
+			event: &Event{
+				Kind:    EventKindCommandReceived,
+				Command: &CommandInvocation{Name: "raw"},
+			},
+			want: true,
+		},
+		{
+			name: "command name mismatch rejects",
+			interest: InterestSet{
+				Kinds:        []EventKind{EventKindCommandReceived},
+				CommandNames: []string{"raw"},
+			},
+			event: &Event{
+				Kind:    EventKindCommandReceived,
+				Command: &CommandInvocation{Name: "history"},
+			},
+			want: false,
+		},
 	}
 
 	for _, testCase := range tests {
@@ -86,6 +111,29 @@ func TestInterestSetAllows(t *testing.T) {
 			},
 			filter: InterestSet{
 				Kinds: []EventKind{EventKindArticleCreated},
+			},
+			wantAllow: false,
+		},
+		{
+			name: "command names allow subset",
+			allowed: InterestSet{
+				Kinds:        []EventKind{EventKindCommandReceived},
+				CommandNames: []string{"raw", "history"},
+			},
+			filter: InterestSet{
+				Kinds:        []EventKind{EventKindCommandReceived},
+				CommandNames: []string{"raw"},
+			},
+			wantAllow: true,
+		},
+		{
+			name: "require command rejects weaker filter",
+			allowed: InterestSet{
+				Kinds:          []EventKind{EventKindCommandReceived},
+				RequireCommand: true,
+			},
+			filter: InterestSet{
+				Kinds: []EventKind{EventKindCommandReceived},
 			},
 			wantAllow: false,
 		},

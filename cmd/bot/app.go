@@ -16,6 +16,7 @@ import (
 
 	"ex-otogi/internal/driver/telegram"
 	"ex-otogi/internal/kernel"
+	"ex-otogi/modules/help"
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/pkg/otogi"
@@ -368,6 +369,10 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) e
 	pingPongModule := pingpong.New()
 	if err := kernelRuntime.RegisterModule(ctx, pingPongModule); err != nil {
 		return fmt.Errorf("register pingpong module: %w", err)
+	}
+	helpModule := help.New()
+	if err := kernelRuntime.RegisterModule(ctx, helpModule); err != nil {
+		return fmt.Errorf("register help module: %w", err)
 	}
 
 	return nil

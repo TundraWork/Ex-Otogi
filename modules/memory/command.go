@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	rawCommandName         = "~raw"
-	historyCommandName     = "~history"
+	rawCommandName         = "raw"
+	historyCommandName     = "history"
 	maxCommandReplyLength  = 3950
 	maxCommandArgumentSize = 1
 )
@@ -44,43 +44,38 @@ func commandReplyEntities(body string) []otogi.TextEntity {
 	}
 }
 
-func parseIntrospectionCommand(text string) (introspectionCommand, bool, error) {
+func parseIntrospectionCommand(commandInvocation *otogi.CommandInvocation) (introspectionCommand, error) {
 	command := introspectionCommand{}
-
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) == 0 {
-		return command, false, nil
+	if commandInvocation == nil {
+		return command, fmt.Errorf("missing command invocation")
 	}
 
-	name, matched := matchCommandName(fields[0])
+	name, matched := matchCommandName(commandInvocation.Name)
 	if !matched {
-		return command, false, nil
+		return command, fmt.Errorf("unsupported introspection command %q", commandInvocation.Name)
 	}
 	command.kind = name
 
-	if len(fields[1:]) > maxCommandArgumentSize {
-		return command, true, fmt.Errorf("%s: expected at most one integer article id argument", command.kind)
+	fields := strings.Fields(strings.TrimSpace(commandInvocation.Value))
+	if len(fields) > maxCommandArgumentSize {
+		return command, fmt.Errorf("%s: expected at most one integer article id argument", command.kind)
 	}
 
-	if len(fields) == 2 {
-		articleID, err := parseArticleIDArgument(fields[1])
+	if len(fields) == 1 {
+		articleID, err := parseArticleIDArgument(fields[0])
 		if err != nil {
-			return command, true, fmt.Errorf("%s: %w", command.kind, err)
+			return command, fmt.Errorf("%s: %w", command.kind, err)
 		}
 		command.articleID = articleID
 	}
 
-	return command, true, nil
+	return command, nil
 }
 
-func matchCommandName(token string) (introspectionCommandKind, bool) {
-	command := strings.ToLower(strings.TrimSpace(token))
+func matchCommandName(name string) (introspectionCommandKind, bool) {
+	command := strings.ToLower(strings.TrimSpace(name))
 	if command == "" {
 		return "", false
-	}
-
-	if mentionSeparator := strings.Index(command, "@"); mentionSeparator >= 0 {
-		command = command[:mentionSeparator]
 	}
 
 	switch command {

@@ -20,9 +20,6 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 		if err := m.rememberCreated(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
-		if err := m.handleIntrospectionCommand(ctx, event); err != nil {
-			return fmt.Errorf("memory handle introspection command: %w", err)
-		}
 	case otogi.EventKindArticleEdited:
 		if err := m.appendEvent(event); err != nil {
 			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
@@ -44,19 +41,29 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 		if err := m.rememberReaction(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
+	case otogi.EventKindSystemCommandReceived:
+		if err := m.handleCommandEvent(ctx, event); err != nil {
+			return fmt.Errorf("memory handle %s: %w", event.Kind, err)
+		}
 	default:
 	}
 
 	return nil
 }
 
-func (m *Module) handleIntrospectionCommand(ctx context.Context, event *otogi.Event) error {
-	if event == nil || event.Article == nil {
+func (m *Module) handleCommandEvent(ctx context.Context, event *otogi.Event) error {
+	if event == nil {
+		return fmt.Errorf("nil event")
+	}
+	if event.Kind != otogi.EventKindSystemCommandReceived {
 		return nil
 	}
+	if event.Command == nil {
+		return fmt.Errorf("missing command payload")
+	}
 
-	command, matched, parseErr := parseIntrospectionCommand(event.Article.Text)
-	if !matched {
+	command, parseErr := parseIntrospectionCommand(event.Command)
+	if parseErr != nil && command.kind == "" {
 		return nil
 	}
 	if m.dispatcher == nil {
@@ -67,7 +74,6 @@ func (m *Module) handleIntrospectionCommand(ctx context.Context, event *otogi.Ev
 	if err != nil {
 		return fmt.Errorf("%s command derive outbound target: %w", command.kind, err)
 	}
-
 	if parseErr != nil {
 		return m.replyCommandResult(ctx, target, event.Article.ID, parseErr.Error())
 	}
