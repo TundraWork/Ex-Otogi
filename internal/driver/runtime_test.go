@@ -143,12 +143,12 @@ func TestRegistryBuildEnabled(t *testing.T) {
 	}
 }
 
-func TestCompositeSinkDispatcherRoutesByID(t *testing.T) {
+func TestSinkDispatcherRoutesByID(t *testing.T) {
 	t.Parallel()
 
 	primary := &stubSinkDispatcher{}
 	secondary := &stubSinkDispatcher{}
-	dispatcher, err := NewCompositeSinkDispatcher([]Runtime{
+	dispatcher, err := NewSinkDispatcher([]Runtime{
 		{
 			Source: otogi.EventSource{
 				Platform: testDriverPlatform,
@@ -165,7 +165,7 @@ func TestCompositeSinkDispatcherRoutesByID(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("new composite sink dispatcher failed: %v", err)
+		t.Fatalf("new sink dispatcher failed: %v", err)
 	}
 
 	_, err = dispatcher.SendMessage(context.Background(), otogi.SendMessageRequest{
@@ -188,10 +188,10 @@ func TestCompositeSinkDispatcherRoutesByID(t *testing.T) {
 	}
 }
 
-func TestCompositeSinkDispatcherAmbiguousPlatform(t *testing.T) {
+func TestSinkDispatcherAmbiguousPlatform(t *testing.T) {
 	t.Parallel()
 
-	dispatcher, err := NewCompositeSinkDispatcher([]Runtime{
+	dispatcher, err := NewSinkDispatcher([]Runtime{
 		{
 			Source:         otogi.EventSource{Platform: testDriverPlatform, ID: "main"},
 			SinkDispatcher: &stubSinkDispatcher{},
@@ -202,7 +202,7 @@ func TestCompositeSinkDispatcherAmbiguousPlatform(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("new composite sink dispatcher failed: %v", err)
+		t.Fatalf("new sink dispatcher failed: %v", err)
 	}
 
 	_, err = dispatcher.SendMessage(context.Background(), otogi.SendMessageRequest{
@@ -219,17 +219,17 @@ func TestCompositeSinkDispatcherAmbiguousPlatform(t *testing.T) {
 	}
 }
 
-func TestCompositeSinkDispatcherListSinksByPlatform(t *testing.T) {
+func TestSinkDispatcherListSinksByPlatform(t *testing.T) {
 	t.Parallel()
 
-	dispatcher, err := NewCompositeSinkDispatcher([]Runtime{
+	dispatcher, err := NewSinkDispatcher([]Runtime{
 		{
 			Source:         otogi.EventSource{Platform: testDriverPlatform, ID: "main"},
 			SinkDispatcher: &stubSinkDispatcher{},
 		},
 	})
 	if err != nil {
-		t.Fatalf("new composite sink dispatcher failed: %v", err)
+		t.Fatalf("new sink dispatcher failed: %v", err)
 	}
 
 	sinks, err := dispatcher.ListSinksByPlatform(context.Background(), testDriverPlatform)
@@ -291,6 +291,17 @@ func (*stubSinkDispatcher) SetReaction(context.Context, otogi.SetReactionRequest
 	return nil
 }
 
+func (*stubSinkDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+	return nil, nil
+}
+
+func (*stubSinkDispatcher) ListSinksByPlatform(
+	context.Context,
+	otogi.Platform,
+) ([]otogi.EventSink, error) {
+	return nil, nil
+}
+
 func stubRuntimeBuilder(_ context.Context, definition Definition, _ *slog.Logger) (Runtime, error) {
 	return Runtime{
 		Source: otogi.EventSource{
@@ -304,12 +315,12 @@ func ensureNoContextCancellationError(err error) bool {
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
-func TestCompositeSinkDispatcherListSinksHonorsContext(t *testing.T) {
+func TestSinkDispatcherListSinksHonorsContext(t *testing.T) {
 	t.Parallel()
 
-	dispatcher, err := NewCompositeSinkDispatcher(nil)
+	dispatcher, err := NewSinkDispatcher(nil)
 	if err != nil {
-		t.Fatalf("new composite sink dispatcher failed: %v", err)
+		t.Fatalf("new sink dispatcher failed: %v", err)
 	}
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))

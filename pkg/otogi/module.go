@@ -15,7 +15,7 @@ type EventDispatcher interface {
 
 // ModuleRuntime provides kernel facilities to modules during registration.
 type ModuleRuntime interface {
-	// Services exposes the service registry for dependency lookup.
+	// Services exposes the service registry for dependency registration and resolution.
 	Services() ServiceRegistry
 	// Subscribe registers an asynchronous event handler owned by the module.
 	Subscribe(ctx context.Context, interest InterestSet, spec SubscriptionSpec, handler EventHandler) (Subscription, error)

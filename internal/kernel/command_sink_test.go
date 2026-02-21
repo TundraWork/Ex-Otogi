@@ -350,3 +350,14 @@ func (*commandReplyCaptureDispatcher) DeleteMessage(context.Context, otogi.Delet
 func (*commandReplyCaptureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
 	return nil
 }
+
+func (*commandReplyCaptureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+	return nil, nil
+}
+
+func (*commandReplyCaptureDispatcher) ListSinksByPlatform(
+	context.Context,
+	otogi.Platform,
+) ([]otogi.EventSink, error) {
+	return nil, nil
+}

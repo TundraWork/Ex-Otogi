@@ -8,13 +8,11 @@ import (
 // ServiceSinkDispatcher is the canonical service registry key for outbound messaging.
 const ServiceSinkDispatcher = "otogi.sink_dispatcher"
 
-// ServiceEventSinkCatalog is the canonical service registry key for sink lookup.
-const ServiceEventSinkCatalog = "otogi.event_sink_catalog"
-
 // SinkDispatcher sends neutral outbound operations to one sink adapter.
 //
 // Implementations should enforce platform-specific constraints while preserving
-// these protocol-level request semantics.
+// these protocol-level request semantics. Implementations also expose sink
+// discovery so modules can dynamically select a destination sink.
 type SinkDispatcher interface {
 	// SendMessage publishes a new outbound message to a destination conversation.
 	SendMessage(ctx context.Context, request SendMessageRequest) (*OutboundMessage, error)
@@ -24,10 +22,6 @@ type SinkDispatcher interface {
 	DeleteMessage(ctx context.Context, request DeleteMessageRequest) error
 	// SetReaction adds or removes a reaction on an existing message.
 	SetReaction(ctx context.Context, request SetReactionRequest) error
-}
-
-// EventSinkCatalog lists active sink identities for dynamic module selection.
-type EventSinkCatalog interface {
 	// ListSinks returns all active sink identities.
 	ListSinks(ctx context.Context) ([]EventSink, error)
 	// ListSinksByPlatform returns active sink identities for one platform.

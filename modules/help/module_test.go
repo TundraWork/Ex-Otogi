@@ -328,6 +328,17 @@ func (*captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest)
 	return nil
 }
 
+func (*captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+	return nil, nil
+}
+
+func (*captureDispatcher) ListSinksByPlatform(
+	context.Context,
+	otogi.Platform,
+) ([]otogi.EventSink, error) {
+	return nil, nil
+}
+
 type captureCommandCatalog struct {
 	commands []otogi.RegisteredCommand
 	err      error

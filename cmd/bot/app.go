@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	driverpkg "ex-otogi/internal/driver"
+	"ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/memory"
@@ -40,7 +40,7 @@ type appConfig struct {
 	subscriptionBuffer  int
 	subscriptionWorkers int
 
-	drivers        []driverpkg.Definition
+	drivers        []driver.Definition
 	routingDefault *kernel.ModuleRoute
 	moduleRoutes   map[string]kernel.ModuleRoute
 }
@@ -87,7 +87,7 @@ type fileSinkRef struct {
 }
 
 func run() error {
-	registry, err := driverpkg.NewBuiltinRegistry()
+	registry, err := driver.NewBuiltinRegistry()
 	if err != nil {
 		return fmt.Errorf("new builtin driver registry: %w", err)
 	}
@@ -100,7 +100,7 @@ func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 	kernelRuntime := buildKernelRuntime(logger, cfg)
 
-	drivers, sinkDispatcher, sinkCatalog, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
+	drivers, sinkDispatcher, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func run() error {
 	if err := registerRuntimeDrivers(kernelRuntime, drivers); err != nil {
 		return err
 	}
-	if err := registerRuntimeServices(kernelRuntime, logger, sinkDispatcher, sinkCatalog); err != nil {
+	if err := registerRuntimeServices(kernelRuntime, logger, sinkDispatcher); err != nil {
 		return err
 	}
 	if err := registerRuntimeModules(context.Background(), kernelRuntime); err != nil {
@@ -125,7 +125,7 @@ func run() error {
 	return nil
 }
 
-func loadConfig(registry *driverpkg.Registry) (appConfig, error) {
+func loadConfig(registry *driver.Registry) (appConfig, error) {
 	cfg := defaultAppConfig()
 	configFile, err := resolveConfigFilePath()
 	if err != nil {
@@ -178,7 +178,7 @@ func defaultAppConfig() appConfig {
 		subscriptionBuffer:  defaultSubscriptionBuffer,
 		subscriptionWorkers: defaultSubscriptionWorker,
 
-		drivers:      make([]driverpkg.Definition, 0),
+		drivers:      make([]driver.Definition, 0),
 		moduleRoutes: make(map[string]kernel.ModuleRoute),
 	}
 }
@@ -242,13 +242,13 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		cfg.subscriptionWorkers = *parsed.Kernel.SubscriptionWorkers
 	}
 
-	cfg.drivers = make([]driverpkg.Definition, 0, len(parsed.Drivers))
+	cfg.drivers = make([]driver.Definition, 0, len(parsed.Drivers))
 	for index, entry := range parsed.Drivers {
 		enabled := true
 		if entry.Enabled != nil {
 			enabled = *entry.Enabled
 		}
-		cfg.drivers = append(cfg.drivers, driverpkg.Definition{
+		cfg.drivers = append(cfg.drivers, driver.Definition{
 			Name:    strings.TrimSpace(entry.Name),
 			Type:    strings.TrimSpace(entry.Type),
 			Enabled: enabled,
@@ -311,7 +311,7 @@ func parseModuleRoute(raw fileModuleRoute, scope string) (kernel.ModuleRoute, er
 	return kernel.ModuleRoute{Sources: sources, Sink: &sink}, nil
 }
 
-func validateAppConfig(cfg *appConfig, registry *driverpkg.Registry) error {
+func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 	if cfg == nil {
 		return fmt.Errorf("nil config")
 	}
@@ -319,8 +319,8 @@ func validateAppConfig(cfg *appConfig, registry *driverpkg.Registry) error {
 		return fmt.Errorf("nil driver registry")
 	}
 
-	enabledDrivers := make([]driverpkg.Definition, 0, len(cfg.drivers))
-	enabledByName := make(map[string]driverpkg.Definition, len(cfg.drivers))
+	enabledDrivers := make([]driver.Definition, 0, len(cfg.drivers))
+	enabledByName := make(map[string]driver.Definition, len(cfg.drivers))
 	for _, definition := range cfg.drivers {
 		if definition.Name == "" {
 			return fmt.Errorf("drivers[].name is required")
@@ -390,7 +390,7 @@ func validateAppConfig(cfg *appConfig, registry *driverpkg.Registry) error {
 
 func validateRouteRefs(
 	route kernel.ModuleRoute,
-	enabledByName map[string]driverpkg.Definition,
+	enabledByName map[string]driver.Definition,
 	scope string,
 ) error {
 	for index, source := range route.Sources {
@@ -439,15 +439,15 @@ func buildDriverRuntime(
 	ctx context.Context,
 	logger *slog.Logger,
 	cfg appConfig,
-	registry *driverpkg.Registry,
-) ([]otogi.Driver, otogi.SinkDispatcher, otogi.EventSinkCatalog, error) {
+	registry *driver.Registry,
+) ([]otogi.Driver, otogi.SinkDispatcher, error) {
 	if registry == nil {
-		return nil, nil, nil, fmt.Errorf("build drivers: nil driver registry")
+		return nil, nil, fmt.Errorf("build drivers: nil driver registry")
 	}
 
 	runtimes, err := registry.BuildEnabled(ctx, cfg.drivers, logger)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build drivers: %w", err)
+		return nil, nil, fmt.Errorf("build drivers: %w", err)
 	}
 
 	drivers := make([]otogi.Driver, 0, len(runtimes))
@@ -455,19 +455,18 @@ func buildDriverRuntime(
 		drivers = append(drivers, runtime.Driver)
 	}
 
-	composite, err := driverpkg.NewCompositeSinkDispatcher(runtimes)
+	dispatcher, err := driver.NewSinkDispatcher(runtimes)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("build sink dispatcher: %w", err)
+		return nil, nil, fmt.Errorf("build sink dispatcher: %w", err)
 	}
 
-	return drivers, composite, composite, nil
+	return drivers, dispatcher, nil
 }
 
 func registerRuntimeServices(
 	kernelRuntime *kernel.Kernel,
 	logger *slog.Logger,
 	sinkDispatcher otogi.SinkDispatcher,
-	sinkCatalog otogi.EventSinkCatalog,
 ) error {
 	if err := kernelRuntime.RegisterService(memory.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
@@ -477,11 +476,6 @@ func registerRuntimeServices(
 	}
 	if err := kernelRuntime.RegisterService(otogi.ServiceSinkDispatcher, sinkDispatcher); err != nil {
 		return fmt.Errorf("register sink dispatcher service: %w", err)
-	}
-	if sinkCatalog != nil {
-		if err := kernelRuntime.RegisterService(otogi.ServiceEventSinkCatalog, sinkCatalog); err != nil {
-			return fmt.Errorf("register sink catalog service: %w", err)
-		}
 	}
 
 	return nil

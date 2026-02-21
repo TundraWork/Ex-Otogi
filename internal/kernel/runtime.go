@@ -177,6 +177,27 @@ func (d moduleSinkDispatcher) SetReaction(ctx context.Context, request otogi.Set
 	return nil
 }
 
+func (d moduleSinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
+	sinks, err := d.base.ListSinks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list sinks with module sink routing: %w", err)
+	}
+
+	return sinks, nil
+}
+
+func (d moduleSinkDispatcher) ListSinksByPlatform(
+	ctx context.Context,
+	platform otogi.Platform,
+) ([]otogi.EventSink, error) {
+	sinks, err := d.base.ListSinksByPlatform(ctx, platform)
+	if err != nil {
+		return nil, fmt.Errorf("list sinks by platform with module sink routing: %w", err)
+	}
+
+	return sinks, nil
+}
+
 func withDefaultSink(target otogi.OutboundTarget, defaultSink *otogi.EventSink) otogi.OutboundTarget {
 	if target.Sink != nil || defaultSink == nil {
 		return target

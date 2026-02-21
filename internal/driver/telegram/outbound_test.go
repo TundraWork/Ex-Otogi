@@ -440,6 +440,73 @@ func TestOutboundDispatcherDeleteMessage(t *testing.T) {
 	}
 }
 
+func TestOutboundDispatcherListSinks(t *testing.T) {
+	t.Parallel()
+
+	dispatcher, err := newOutboundDispatcherWithRPC(&stubOutboundRPC{}, NewPeerCache())
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+
+	sinks, err := dispatcher.ListSinks(context.Background())
+	if err != nil {
+		t.Fatalf("list sinks failed: %v", err)
+	}
+	if len(sinks) != 1 {
+		t.Fatalf("sinks len = %d, want 1", len(sinks))
+	}
+	if sinks[0].Platform != DriverPlatform {
+		t.Fatalf("sink platform = %s, want %s", sinks[0].Platform, DriverPlatform)
+	}
+
+	dispatcherWithRef, err := newOutboundDispatcherWithRPC(
+		&stubOutboundRPC{},
+		NewPeerCache(),
+		WithSinkRef(otogi.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
+	)
+	if err != nil {
+		t.Fatalf("new dispatcher with ref failed: %v", err)
+	}
+
+	sinks, err = dispatcherWithRef.ListSinksByPlatform(context.Background(), DriverPlatform)
+	if err != nil {
+		t.Fatalf("list sinks by platform failed: %v", err)
+	}
+	if len(sinks) != 1 {
+		t.Fatalf("platform sinks len = %d, want 1", len(sinks))
+	}
+	if sinks[0].ID != "tg-main" {
+		t.Fatalf("sink id = %s, want tg-main", sinks[0].ID)
+	}
+
+	sinks, err = dispatcherWithRef.ListSinksByPlatform(context.Background(), otogi.Platform("discord"))
+	if err != nil {
+		t.Fatalf("list sinks by mismatched platform failed: %v", err)
+	}
+	if len(sinks) != 0 {
+		t.Fatalf("mismatched platform sinks len = %d, want 0", len(sinks))
+	}
+}
+
+func TestOutboundDispatcherListSinksHonorsContext(t *testing.T) {
+	t.Parallel()
+
+	dispatcher, err := newOutboundDispatcherWithRPC(&stubOutboundRPC{}, NewPeerCache())
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := dispatcher.ListSinks(ctx); err == nil {
+		t.Fatal("expected context cancellation error from list sinks")
+	}
+	if _, err := dispatcher.ListSinksByPlatform(ctx, DriverPlatform); err == nil {
+		t.Fatal("expected context cancellation error from list sinks by platform")
+	}
+}
+
 func TestMapOutboundTextEntities(t *testing.T) {
 	t.Parallel()
 

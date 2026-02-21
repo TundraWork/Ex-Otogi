@@ -39,6 +39,16 @@ func WithOutboundLogger(logger *slog.Logger) OutboundOption {
 	}
 }
 
+// WithSinkRef configures the sink identity returned by sink-list operations.
+func WithSinkRef(ref otogi.EventSink) OutboundOption {
+	return func(cfg *outboundConfig) {
+		cfg.sink = ref
+		if cfg.sink.Platform == "" {
+			cfg.sink.Platform = DriverPlatform
+		}
+	}
+}
+
 // SinkDispatcher adapts neutral outbound operations to Telegram RPC calls.
 type SinkDispatcher struct {
 	cfg      outboundConfig
@@ -49,6 +59,7 @@ type SinkDispatcher struct {
 type outboundConfig struct {
 	rpcTimeout time.Duration
 	logger     *slog.Logger
+	sink       otogi.EventSink
 }
 
 // NewOutboundDispatcher creates a Telegram outbound dispatcher using gotd client APIs.
@@ -78,6 +89,9 @@ func newOutboundDispatcherWithRPC(
 
 	cfg := outboundConfig{
 		rpcTimeout: defaultOutboundTimeout,
+		sink: otogi.EventSink{
+			Platform: DriverPlatform,
+		},
 	}
 	for _, option := range options {
 		option(&cfg)
@@ -239,6 +253,30 @@ func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReact
 	)
 
 	return nil
+}
+
+// ListSinks returns the configured Telegram sink identity.
+func (d *SinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("list sinks: %w", err)
+	}
+
+	return []otogi.EventSink{d.cfg.sink}, nil
+}
+
+// ListSinksByPlatform returns the configured sink when platform matches Telegram.
+func (d *SinkDispatcher) ListSinksByPlatform(
+	ctx context.Context,
+	platform otogi.Platform,
+) ([]otogi.EventSink, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("list sinks by platform: %w", err)
+	}
+	if platform != d.cfg.sink.Platform {
+		return []otogi.EventSink{}, nil
+	}
+
+	return []otogi.EventSink{d.cfg.sink}, nil
 }
 
 func (d *SinkDispatcher) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

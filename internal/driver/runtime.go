@@ -170,15 +170,14 @@ type sinkRoute struct {
 	dispatcher otogi.SinkDispatcher
 }
 
-// CompositeSinkDispatcher routes sink operations to per-driver dispatchers.
-type CompositeSinkDispatcher struct {
+type sinkDispatcher struct {
 	byID         map[string]sinkRoute
 	byPlatform   map[otogi.Platform][]string
 	sortedSinkID []string
 }
 
-// NewCompositeSinkDispatcher creates a composite dispatcher from runtime sinks.
-func NewCompositeSinkDispatcher(runtimes []Runtime) (*CompositeSinkDispatcher, error) {
+// NewSinkDispatcher creates a sink dispatcher from runtime sinks.
+func NewSinkDispatcher(runtimes []Runtime) (otogi.SinkDispatcher, error) {
 	byID := make(map[string]sinkRoute)
 	byPlatform := make(map[otogi.Platform][]string)
 	sortedIDs := make([]string, 0, len(runtimes))
@@ -187,10 +186,10 @@ func NewCompositeSinkDispatcher(runtimes []Runtime) (*CompositeSinkDispatcher, e
 			continue
 		}
 		if runtime.Source.ID == "" {
-			return nil, fmt.Errorf("new composite sink dispatcher: missing sink id")
+			return nil, fmt.Errorf("new sink dispatcher: missing sink id")
 		}
 		if _, exists := byID[runtime.Source.ID]; exists {
-			return nil, fmt.Errorf("new composite sink dispatcher: duplicate sink id %s", runtime.Source.ID)
+			return nil, fmt.Errorf("new sink dispatcher: duplicate sink id %s", runtime.Source.ID)
 		}
 
 		ref := otogi.EventSink{
@@ -206,7 +205,7 @@ func NewCompositeSinkDispatcher(runtimes []Runtime) (*CompositeSinkDispatcher, e
 	}
 	sort.Strings(sortedIDs)
 
-	return &CompositeSinkDispatcher{
+	return &sinkDispatcher{
 		byID:         byID,
 		byPlatform:   byPlatform,
 		sortedSinkID: sortedIDs,
@@ -214,7 +213,7 @@ func NewCompositeSinkDispatcher(runtimes []Runtime) (*CompositeSinkDispatcher, e
 }
 
 // SendMessage routes send-message requests to one concrete sink.
-func (d *CompositeSinkDispatcher) SendMessage(
+func (d *sinkDispatcher) SendMessage(
 	ctx context.Context,
 	request otogi.SendMessageRequest,
 ) (*otogi.OutboundMessage, error) {
@@ -232,7 +231,7 @@ func (d *CompositeSinkDispatcher) SendMessage(
 }
 
 // EditMessage routes edit-message requests to one concrete sink.
-func (d *CompositeSinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
+func (d *sinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
 		return fmt.Errorf("resolve sink for edit message: %w", err)
@@ -246,7 +245,7 @@ func (d *CompositeSinkDispatcher) EditMessage(ctx context.Context, request otogi
 }
 
 // DeleteMessage routes delete-message requests to one concrete sink.
-func (d *CompositeSinkDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
+func (d *sinkDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
 		return fmt.Errorf("resolve sink for delete message: %w", err)
@@ -260,7 +259,7 @@ func (d *CompositeSinkDispatcher) DeleteMessage(ctx context.Context, request oto
 }
 
 // SetReaction routes set-reaction requests to one concrete sink.
-func (d *CompositeSinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
+func (d *sinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
 		return fmt.Errorf("resolve sink for set reaction: %w", err)
@@ -274,7 +273,7 @@ func (d *CompositeSinkDispatcher) SetReaction(ctx context.Context, request otogi
 }
 
 // ListSinks returns all known concrete sinks.
-func (d *CompositeSinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
+func (d *sinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list sinks: %w", err)
 	}
@@ -291,7 +290,7 @@ func (d *CompositeSinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventS
 }
 
 // ListSinksByPlatform returns all known concrete sinks for one platform.
-func (d *CompositeSinkDispatcher) ListSinksByPlatform(
+func (d *sinkDispatcher) ListSinksByPlatform(
 	ctx context.Context,
 	platform otogi.Platform,
 ) ([]otogi.EventSink, error) {
@@ -312,7 +311,7 @@ func (d *CompositeSinkDispatcher) ListSinksByPlatform(
 	return sinks, nil
 }
 
-func (d *CompositeSinkDispatcher) resolve(target otogi.OutboundTarget) (otogi.SinkDispatcher, error) {
+func (d *sinkDispatcher) resolve(target otogi.OutboundTarget) (otogi.SinkDispatcher, error) {
 	if d == nil {
 		return nil, fmt.Errorf("nil dispatcher")
 	}
@@ -332,7 +331,7 @@ func (d *CompositeSinkDispatcher) resolve(target otogi.OutboundTarget) (otogi.Si
 	return nil, fmt.Errorf("%w: missing target sink", otogi.ErrOutboundUnsupported)
 }
 
-func (d *CompositeSinkDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.SinkDispatcher, error) {
+func (d *sinkDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.SinkDispatcher, error) {
 	if ref.ID != "" {
 		route, exists := d.byID[ref.ID]
 		if !exists {

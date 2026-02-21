@@ -119,6 +119,10 @@ func BuildRuntimeFromConfig(
 		peers,
 		WithOutboundTimeout(cfg.publishTimeout),
 		WithOutboundLogger(logger),
+		WithSinkRef(otogi.EventSink{
+			Platform: DriverPlatform,
+			ID:       name,
+		}),
 	)
 	if err != nil {
 		return otogi.EventSource{}, nil, nil, fmt.Errorf("new telegram sink dispatcher: %w", err)

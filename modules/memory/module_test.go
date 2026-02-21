@@ -1412,3 +1412,14 @@ func (d *captureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRe
 func (d *captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
 	return nil
 }
+
+func (d *captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+	return nil, nil
+}
+
+func (d *captureDispatcher) ListSinksByPlatform(
+	context.Context,
+	otogi.Platform,
+) ([]otogi.EventSink, error) {
+	return nil, nil
+}

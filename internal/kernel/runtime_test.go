@@ -67,10 +67,22 @@ func TestModuleServiceRegistryWrapsSinkDispatcher(t *testing.T) {
 	if dispatcher.lastTarget.Sink.ID != "tg-main" {
 		t.Fatalf("sink id = %s, want tg-main", dispatcher.lastTarget.Sink.ID)
 	}
+
+	sinks, err := wrapped.ListSinksByPlatform(context.Background(), otogi.PlatformTelegram)
+	if err != nil {
+		t.Fatalf("list sinks by platform failed: %v", err)
+	}
+	if len(sinks) != 1 {
+		t.Fatalf("sinks len = %d, want 1", len(sinks))
+	}
+	if sinks[0].ID != "tg-main" {
+		t.Fatalf("sink id = %s, want tg-main", sinks[0].ID)
+	}
 }
 
 type captureSinkDispatcher struct {
 	lastTarget otogi.OutboundTarget
+	sinks      []otogi.EventSink
 }
 
 func (d *captureSinkDispatcher) SendMessage(
@@ -94,4 +106,31 @@ func (*captureSinkDispatcher) DeleteMessage(context.Context, otogi.DeleteMessage
 
 func (*captureSinkDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
 	return nil
+}
+
+func (d *captureSinkDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+	if len(d.sinks) == 0 {
+		return []otogi.EventSink{{Platform: otogi.PlatformTelegram, ID: "tg-main"}}, nil
+	}
+
+	return append([]otogi.EventSink(nil), d.sinks...), nil
+}
+
+func (d *captureSinkDispatcher) ListSinksByPlatform(
+	ctx context.Context,
+	platform otogi.Platform,
+) ([]otogi.EventSink, error) {
+	sinks, err := d.ListSinks(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]otogi.EventSink, 0, len(sinks))
+	for _, sink := range sinks {
+		if sink.Platform == platform {
+			filtered = append(filtered, sink)
+		}
+	}
+
+	return filtered, nil
 }
