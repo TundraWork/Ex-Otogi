@@ -125,7 +125,7 @@ func BuildRuntimeFromConfig(
 	}
 
 	return otogi.EventSource{
-		Platform: otogi.PlatformTelegram,
+		Platform: DriverPlatform,
 		ID:       name,
 	}, driver, sink, nil
 }

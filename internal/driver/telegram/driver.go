@@ -65,7 +65,7 @@ func NewDriver(source UpdateSource, decoder Decoder, options ...DriverOption) (*
 	}
 
 	cfg := driverConfig{
-		name:           "telegram",
+		name:           DriverType,
 		publishTimeout: defaultPublishTimeout,
 		onAsyncError:   func(context.Context, error) {},
 	}
@@ -115,7 +115,7 @@ func (d *Driver) handleUpdate(ctx context.Context, update Update, sink otogi.Eve
 	}
 	if event != nil {
 		if event.Source.Platform == "" {
-			event.Source.Platform = otogi.PlatformTelegram
+			event.Source.Platform = DriverPlatform
 		}
 		if event.Source.ID == "" {
 			event.Source.ID = d.cfg.name

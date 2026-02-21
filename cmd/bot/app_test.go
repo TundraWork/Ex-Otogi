@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	driverpkg "ex-otogi/internal/driver"
 )
 
 func writeConfigFile(t *testing.T, path string, contents string) {
@@ -18,6 +20,17 @@ func writeConfigFile(t *testing.T, path string, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
 	}
+}
+
+func mustBuiltinDriverRegistry(t *testing.T) *driverpkg.Registry {
+	t.Helper()
+
+	registry, err := driverpkg.NewBuiltinRegistry()
+	if err != nil {
+		t.Fatalf("new builtin registry failed: %v", err)
+	}
+
+	return registry
 }
 
 func TestParseLogLevel(t *testing.T) {
@@ -86,7 +99,7 @@ func TestLoadConfig(t *testing.T) {
 		}`)
 		t.Setenv(envConfigFile, configPath)
 
-		cfg, err := loadConfig()
+		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
 		if err != nil {
 			t.Fatalf("load config failed: %v", err)
 		}
@@ -133,7 +146,7 @@ func TestLoadConfig(t *testing.T) {
 		}`)
 		t.Setenv(envConfigFile, configPath)
 
-		cfg, err := loadConfig()
+		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
 		if err != nil {
 			t.Fatalf("load config failed: %v", err)
 		}
@@ -168,7 +181,7 @@ func TestLoadConfig(t *testing.T) {
 		})
 		t.Setenv(envConfigFile, "")
 
-		cfg, err := loadConfig()
+		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
 		if err != nil {
 			t.Fatalf("load config failed: %v", err)
 		}
@@ -199,9 +212,14 @@ func TestLoadConfig(t *testing.T) {
 				wantErrSub: "at least one enabled driver",
 			},
 			{
-				name:       "legacy telegram section rejected",
+				name:       "legacy telegram section fails with missing drivers",
 				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash"}}`,
-				wantErrSub: "legacy telegram config",
+				wantErrSub: "at least one enabled driver",
+			},
+			{
+				name:       "unsupported driver type",
+				fileJSON:   `{"drivers":[{"name":"legacy","type":"discord","config":{"token":"x"}}]}`,
+				wantErrSub: "unsupported type discord",
 			},
 		}
 
@@ -212,7 +230,7 @@ func TestLoadConfig(t *testing.T) {
 				writeConfigFile(t, configPath, testCase.fileJSON)
 				t.Setenv(envConfigFile, configPath)
 
-				_, err := loadConfig()
+				_, err := loadConfig(mustBuiltinDriverRegistry(t))
 				if err == nil {
 					t.Fatal("expected error")
 				}
@@ -233,7 +251,7 @@ func TestLoadConfig(t *testing.T) {
 		}`)
 		t.Setenv(envConfigFile, configPath)
 
-		_, err := loadConfig()
+		_, err := loadConfig(mustBuiltinDriverRegistry(t))
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -244,7 +262,7 @@ func TestLoadConfig(t *testing.T) {
 
 	t.Run("missing explicit config file fails", func(t *testing.T) {
 		t.Setenv(envConfigFile, filepath.Join(t.TempDir(), "missing.json"))
-		if _, err := loadConfig(); err == nil {
+		if _, err := loadConfig(mustBuiltinDriverRegistry(t)); err == nil {
 			t.Fatal("expected error for missing config file")
 		}
 	})

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	driverpkg "ex-otogi/internal/driver"
-	"ex-otogi/internal/driver/telegram"
 	"ex-otogi/internal/kernel"
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/memory"
@@ -51,7 +50,6 @@ type fileConfig struct {
 	Kernel   fileKernelConfig  `json:"kernel"`
 	Drivers  []fileDriverEntry `json:"drivers"`
 	Routing  fileRoutingConfig `json:"routing"`
-	Telegram json.RawMessage   `json:"telegram"`
 }
 
 type fileKernelConfig struct {
@@ -89,7 +87,12 @@ type fileSinkRef struct {
 }
 
 func run() error {
-	cfg, err := loadConfig()
+	registry, err := driverpkg.NewBuiltinRegistry()
+	if err != nil {
+		return fmt.Errorf("new builtin driver registry: %w", err)
+	}
+
+	cfg, err := loadConfig(registry)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -97,18 +100,18 @@ func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 	kernelRuntime := buildKernelRuntime(logger, cfg)
 
-	drivers, sinkDispatcher, sinkCatalog, err := buildDriverRuntime(context.Background(), logger, cfg)
+	drivers, sinkDispatcher, sinkCatalog, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
 	if err != nil {
 		return err
 	}
 
+	if err := registerRuntimeDrivers(kernelRuntime, drivers); err != nil {
+		return err
+	}
 	if err := registerRuntimeServices(kernelRuntime, logger, sinkDispatcher, sinkCatalog); err != nil {
 		return err
 	}
 	if err := registerRuntimeModules(context.Background(), kernelRuntime); err != nil {
-		return err
-	}
-	if err := registerRuntimeDrivers(kernelRuntime, drivers); err != nil {
 		return err
 	}
 
@@ -122,7 +125,7 @@ func run() error {
 	return nil
 }
 
-func loadConfig() (appConfig, error) {
+func loadConfig(registry *driverpkg.Registry) (appConfig, error) {
 	cfg := defaultAppConfig()
 	configFile, err := resolveConfigFilePath()
 	if err != nil {
@@ -132,7 +135,7 @@ func loadConfig() (appConfig, error) {
 	if err := applyConfigFile(&cfg, configFile); err != nil {
 		return appConfig{}, err
 	}
-	if err := validateAppConfig(&cfg); err != nil {
+	if err := validateAppConfig(&cfg, registry); err != nil {
 		return appConfig{}, fmt.Errorf("validate config file %s: %w", configFile, err)
 	}
 
@@ -196,9 +199,6 @@ func applyConfigFile(cfg *appConfig, path string) error {
 	var parsed fileConfig
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return fmt.Errorf("parse config file %s: %w", path, err)
-	}
-	if len(parsed.Telegram) != 0 {
-		return fmt.Errorf("legacy telegram config is not supported; use drivers[]")
 	}
 
 	if rawLevel := strings.TrimSpace(parsed.LogLevel); rawLevel != "" {
@@ -311,9 +311,12 @@ func parseModuleRoute(raw fileModuleRoute, scope string) (kernel.ModuleRoute, er
 	return kernel.ModuleRoute{Sources: sources, Sink: &sink}, nil
 }
 
-func validateAppConfig(cfg *appConfig) error {
+func validateAppConfig(cfg *appConfig, registry *driverpkg.Registry) error {
 	if cfg == nil {
 		return fmt.Errorf("nil config")
+	}
+	if registry == nil {
+		return fmt.Errorf("nil driver registry")
 	}
 
 	enabledDrivers := make([]driverpkg.Definition, 0, len(cfg.drivers))
@@ -330,6 +333,9 @@ func validateAppConfig(cfg *appConfig) error {
 		}
 		if !definition.Enabled {
 			continue
+		}
+		if _, err := registry.PlatformForType(definition.Type); err != nil {
+			return fmt.Errorf("drivers[%s].type: %w", definition.Name, err)
 		}
 		enabledDrivers = append(enabledDrivers, definition)
 		enabledByName[definition.Name] = definition
@@ -361,7 +367,7 @@ func validateAppConfig(cfg *appConfig) error {
 
 	if len(enabledDrivers) == 1 && cfg.routingDefault == nil {
 		sole := enabledDrivers[0]
-		platform, err := platformForDriverType(sole.Type)
+		platform, err := registry.PlatformForType(sole.Type)
 		if err != nil {
 			return fmt.Errorf("derive default route from driver %s: %w", sole.Name, err)
 		}
@@ -403,15 +409,6 @@ func validateRouteRefs(
 	return nil
 }
 
-func platformForDriverType(driverType string) (otogi.Platform, error) {
-	switch strings.ToLower(strings.TrimSpace(driverType)) {
-	case "telegram":
-		return otogi.PlatformTelegram, nil
-	default:
-		return "", fmt.Errorf("unsupported driver type %s", driverType)
-	}
-}
-
 func parseLogLevel(raw string) (slog.Level, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "debug":
@@ -442,29 +439,10 @@ func buildDriverRuntime(
 	ctx context.Context,
 	logger *slog.Logger,
 	cfg appConfig,
+	registry *driverpkg.Registry,
 ) ([]otogi.Driver, otogi.SinkDispatcher, otogi.EventSinkCatalog, error) {
-	registry := driverpkg.NewRegistry()
-	if err := registry.Register("telegram", func(
-		_ context.Context,
-		definition driverpkg.Definition,
-		builderLogger *slog.Logger,
-	) (driverpkg.Runtime, error) {
-		source, runtimeDriver, sinkDispatcher, err := telegram.BuildRuntimeFromConfig(
-			definition.Name,
-			builderLogger,
-			definition.Config,
-		)
-		if err != nil {
-			return driverpkg.Runtime{}, fmt.Errorf("build telegram runtime from config: %w", err)
-		}
-
-		return driverpkg.Runtime{
-			Source:         source,
-			Driver:         runtimeDriver,
-			SinkDispatcher: sinkDispatcher,
-		}, nil
-	}); err != nil {
-		return nil, nil, nil, fmt.Errorf("register telegram builder: %w", err)
+	if registry == nil {
+		return nil, nil, nil, fmt.Errorf("build drivers: nil driver registry")
 	}
 
 	runtimes, err := registry.BuildEnabled(ctx, cfg.drivers, logger)

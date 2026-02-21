@@ -34,36 +34,83 @@ type Runtime struct {
 // BuilderFunc builds one runtime from one configured driver definition.
 type BuilderFunc func(ctx context.Context, definition Definition, logger *slog.Logger) (Runtime, error)
 
-// Registry maps driver types to runtime builders.
+// Descriptor binds one driver type token to platform metadata and a runtime builder.
+type Descriptor struct {
+	// Type is the driver type token from configuration (for example "telegram").
+	Type string
+	// Platform is the neutral otogi platform for this driver type.
+	Platform otogi.Platform
+	// Builder constructs one runtime instance for this driver type.
+	Builder BuilderFunc
+}
+
+type registryEntry struct {
+	platform otogi.Platform
+	builder  BuilderFunc
+}
+
+// Registry maps driver types to runtime builders and type-level platform metadata.
 type Registry struct {
-	builders map[string]BuilderFunc
+	entries map[string]registryEntry
+	types   []string
 }
 
-// NewRegistry creates an empty driver builder registry.
-func NewRegistry() *Registry {
+// NewRegistry creates one immutable driver registry from descriptors.
+func NewRegistry(descriptors []Descriptor) (*Registry, error) {
+	entries := make(map[string]registryEntry, len(descriptors))
+	types := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		if descriptor.Type == "" {
+			return nil, fmt.Errorf("new registry: empty descriptor type")
+		}
+		if descriptor.Platform == "" {
+			return nil, fmt.Errorf("new registry type %s: empty platform", descriptor.Type)
+		}
+		if descriptor.Builder == nil {
+			return nil, fmt.Errorf("new registry type %s: nil builder", descriptor.Type)
+		}
+		if _, exists := entries[descriptor.Type]; exists {
+			return nil, fmt.Errorf("new registry type %s: duplicate", descriptor.Type)
+		}
+
+		entries[descriptor.Type] = registryEntry{
+			platform: descriptor.Platform,
+			builder:  descriptor.Builder,
+		}
+		types = append(types, descriptor.Type)
+	}
+	sort.Strings(types)
+
 	return &Registry{
-		builders: make(map[string]BuilderFunc),
-	}
+		entries: entries,
+		types:   types,
+	}, nil
 }
 
-// Register binds one builder to one driver type.
-func (r *Registry) Register(driverType string, builder BuilderFunc) error {
+// Types returns all registered driver types in deterministic sorted order.
+func (r *Registry) Types() []string {
 	if r == nil {
-		return fmt.Errorf("register driver builder: nil registry")
-	}
-	if driverType == "" {
-		return fmt.Errorf("register driver builder: empty driver type")
-	}
-	if builder == nil {
-		return fmt.Errorf("register driver builder %s: nil builder", driverType)
-	}
-	if _, exists := r.builders[driverType]; exists {
-		return fmt.Errorf("register driver builder %s: duplicate", driverType)
+		return nil
 	}
 
-	r.builders[driverType] = builder
+	types := make([]string, len(r.types))
+	copy(types, r.types)
 
-	return nil
+	return types
+}
+
+// PlatformForType resolves one registered driver type to its neutral otogi platform.
+func (r *Registry) PlatformForType(driverType string) (otogi.Platform, error) {
+	if r == nil {
+		return "", fmt.Errorf("resolve platform: nil registry")
+	}
+
+	entry, exists := r.entries[driverType]
+	if !exists {
+		return "", fmt.Errorf("unsupported type %s", driverType)
+	}
+
+	return entry.platform, nil
 }
 
 // BuildEnabled builds all enabled driver definitions.
@@ -93,12 +140,12 @@ func (r *Registry) BuildEnabled(
 			return nil, fmt.Errorf("build driver %s: empty type", definition.Name)
 		}
 
-		builder, exists := r.builders[definition.Type]
+		entry, exists := r.entries[definition.Type]
 		if !exists {
 			return nil, fmt.Errorf("build driver %s type %s: unsupported type", definition.Name, definition.Type)
 		}
 
-		runtime, err := builder(ctx, definition, logger)
+		runtime, err := entry.builder(ctx, definition, logger)
 		if err != nil {
 			return nil, fmt.Errorf("build driver %s type %s: %w", definition.Name, definition.Type, err)
 		}
