@@ -73,7 +73,6 @@ func TestLoadConfig(t *testing.T) {
 				"update_buffer":222,
 				"auth_timeout":"4m",
 				"code":"998877",
-				"bot_token":"123:abc",
 				"phone":"+15550001111",
 				"password":"secret",
 				"session_file":"state/telegram/session.json"
@@ -118,9 +117,6 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if cfg.telegramCode != "998877" {
 			t.Fatalf("telegram code = %q, want 998877", cfg.telegramCode)
-		}
-		if cfg.telegramBotToken != "123:abc" {
-			t.Fatalf("telegram bot token = %q, want 123:abc", cfg.telegramBotToken)
 		}
 		if cfg.telegramPhone != "+15550001111" {
 			t.Fatalf("telegram phone = %q, want +15550001111", cfg.telegramPhone)

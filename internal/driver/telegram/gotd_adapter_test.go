@@ -45,17 +45,8 @@ func TestGotdUpdateChannelHandleFlattensBatch(t *testing.T) {
 				ChannelID: 500,
 				Messages:  []int{101, 102},
 			},
-			&tg.UpdateBotMessageReaction{
-				Peer:  &tg.PeerChannel{ChannelID: 500},
-				MsgID: 200,
-				Actor: &tg.PeerUser{UserID: 42},
-				OldReactions: []tg.ReactionClass{
-					&tg.ReactionEmoji{Emoticon: "😀"},
-				},
-				NewReactions: []tg.ReactionClass{
-					&tg.ReactionEmoji{Emoticon: "😀"},
-					&tg.ReactionEmoji{Emoticon: "👍"},
-				},
+			&tg.UpdateDeleteMessages{
+				Messages: []int{200},
 			},
 		},
 	}
@@ -82,35 +73,30 @@ func TestGotdUpdateChannelHandleFlattensBatch(t *testing.T) {
 		t.Fatalf("collected = %d, want 3", len(collected))
 	}
 
+	deleteChannelCount := 0
 	deleteCount := 0
-	reactionCount := 0
 	for _, envelope := range collected {
-		if envelope.reaction != nil {
-			reactionCount++
-			if envelope.reaction.action != UpdateTypeReactionAdd {
-				t.Fatalf("reaction action = %s, want %s", envelope.reaction.action, UpdateTypeReactionAdd)
+		switch typed := envelope.update.(type) {
+		case *tg.UpdateDeleteChannelMessages:
+			if len(typed.Messages) != 1 {
+				t.Fatalf("delete channel messages len = %d, want 1", len(typed.Messages))
 			}
-			if envelope.reaction.emoji != "👍" {
-				t.Fatalf("reaction emoji = %s, want 👍", envelope.reaction.emoji)
+			deleteChannelCount++
+		case *tg.UpdateDeleteMessages:
+			if len(typed.Messages) != 1 {
+				t.Fatalf("delete messages len = %d, want 1", len(typed.Messages))
 			}
-			continue
+			deleteCount++
+		default:
+			t.Fatalf("update type = %T, want delete update", envelope.update)
 		}
-
-		typed, ok := envelope.update.(*tg.UpdateDeleteChannelMessages)
-		if !ok {
-			t.Fatalf("update type = %T, want *tg.UpdateDeleteChannelMessages", envelope.update)
-		}
-		if len(typed.Messages) != 1 {
-			t.Fatalf("delete messages len = %d, want 1", len(typed.Messages))
-		}
-		deleteCount++
 	}
 
-	if deleteCount != 2 {
-		t.Fatalf("delete count = %d, want 2", deleteCount)
+	if deleteChannelCount != 2 {
+		t.Fatalf("delete channel count = %d, want 2", deleteChannelCount)
 	}
-	if reactionCount != 1 {
-		t.Fatalf("reaction count = %d, want 1", reactionCount)
+	if deleteCount != 1 {
+		t.Fatalf("delete count = %d, want 1", deleteCount)
 	}
 }
 

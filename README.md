@@ -23,9 +23,9 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 2. Edit `config/bot.json` and set Telegram API credentials:
    - `telegram.app_id`
    - `telegram.app_hash`
-3. Configure one auth path in the same file:
-   - bot: set `telegram.bot_token`
-   - user: set `telegram.phone` and optionally `telegram.code` (or enter code interactively)
+3. Configure user account auth in the same file:
+   - set `telegram.phone`
+   - optionally set `telegram.code` (or enter code interactively)
 4. Run:
    ```sh
    go run ./cmd/bot

@@ -499,7 +499,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 		{
 			name: "reaction add delta",
 			raw: gotdUpdateEnvelope{
-				update:     &tg.UpdateBotMessageReaction{},
+				update:     &tg.UpdateMessageReactions{},
 				occurredAt: occurredAt,
 				usersByID: map[int64]*tg.User{
 					42: messageActor,
@@ -507,7 +507,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				chatsByID: map[int64]gotdChatInfo{
 					500: {title: "channel", kind: otogi.ConversationTypeChannel},
 				},
-				updateClass: "updateBotMessageReaction",
+				updateClass: "updateMessageReactions",
 				reaction: &gotdReactionDelta{
 					action:    UpdateTypeReactionAdd,
 					messageID: 700,

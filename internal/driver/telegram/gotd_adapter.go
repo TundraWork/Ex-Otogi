@@ -189,8 +189,6 @@ func flattenSingleGotdUpdate(
 			})
 		}
 		return items, nil
-	case *tg.UpdateBotMessageReaction:
-		return flattenBotReactionUpdate(typed, occurredAt, usersByID, chatsByID)
 	case *tg.UpdateMessageReactions:
 		return flattenMessageReactionsUpdate(typed, occurredAt, usersByID, chatsByID)
 	default:
@@ -270,61 +268,6 @@ func flattenShortChatMessage(update *tg.UpdateShortChatMessage) ([]gotdUpdateEnv
 	}, nil
 }
 
-func flattenBotReactionUpdate(
-	update *tg.UpdateBotMessageReaction,
-	occurredAt time.Time,
-	usersByID map[int64]*tg.User,
-	chatsByID map[int64]gotdChatInfo,
-) ([]gotdUpdateEnvelope, error) {
-	if update == nil {
-		return nil, fmt.Errorf("flatten bot reaction update: nil update")
-	}
-
-	oldSet := mapReactionsToSet(update.OldReactions)
-	newSet := mapReactionsToSet(update.NewReactions)
-
-	deltas := make([]gotdReactionDelta, 0)
-	for emoji := range newSet {
-		if _, exists := oldSet[emoji]; exists {
-			continue
-		}
-		deltas = append(deltas, gotdReactionDelta{
-			action:    UpdateTypeReactionAdd,
-			messageID: update.MsgID,
-			emoji:     emoji,
-			actor:     update.Actor,
-			peer:      update.Peer,
-		})
-	}
-	for emoji := range oldSet {
-		if _, exists := newSet[emoji]; exists {
-			continue
-		}
-		deltas = append(deltas, gotdReactionDelta{
-			action:    UpdateTypeReactionRemove,
-			messageID: update.MsgID,
-			emoji:     emoji,
-			actor:     update.Actor,
-			peer:      update.Peer,
-		})
-	}
-
-	items := make([]gotdUpdateEnvelope, 0, len(deltas))
-	for _, delta := range deltas {
-		delta := delta
-		items = append(items, gotdUpdateEnvelope{
-			update:      update,
-			occurredAt:  occurredAt,
-			usersByID:   usersByID,
-			chatsByID:   chatsByID,
-			updateClass: update.TypeName(),
-			reaction:    &delta,
-		})
-	}
-
-	return items, nil
-}
-
 func flattenMessageReactionsUpdate(
 	update *tg.UpdateMessageReactions,
 	occurredAt time.Time,
@@ -344,17 +287,4 @@ func flattenMessageReactionsUpdate(
 			updateClass: update.TypeName(),
 		},
 	}, nil
-}
-
-func mapReactionsToSet(reactions []tg.ReactionClass) map[string]struct{} {
-	out := make(map[string]struct{}, len(reactions))
-	for _, reaction := range reactions {
-		emoji := reactionToEmoji(reaction)
-		if emoji == "" {
-			continue
-		}
-		out[emoji] = struct{}{}
-	}
-
-	return out
 }

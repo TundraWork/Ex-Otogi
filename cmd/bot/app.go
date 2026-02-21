@@ -54,7 +54,6 @@ type appConfig struct {
 	telegramUpdateBuffer   int
 	telegramAuthTimeout    time.Duration
 	telegramCode           string
-	telegramBotToken       string
 	telegramPhone          string
 	telegramPassword       string
 	telegramSessionFile    string
@@ -80,7 +79,6 @@ type fileTelegramConfig struct {
 	UpdateBuffer   *int   `json:"update_buffer"`
 	AuthTimeout    string `json:"auth_timeout"`
 	Code           string `json:"code"`
-	BotToken       string `json:"bot_token"`
 	Phone          string `json:"phone"`
 	Password       string `json:"password"`
 	SessionFile    string `json:"session_file"`
@@ -183,7 +181,6 @@ func defaultAppConfig() appConfig {
 		telegramUpdateBuffer:   defaultSubscriptionBuffer,
 		telegramAuthTimeout:    defaultTelegramAuthTimeout,
 		telegramCode:           "",
-		telegramBotToken:       "",
 		telegramSessionFile:    defaultTelegramSessionFile,
 	}
 }
@@ -291,9 +288,6 @@ func applyConfigFile(cfg *appConfig, path string) error {
 
 	if code := strings.TrimSpace(parsed.Telegram.Code); code != "" {
 		cfg.telegramCode = code
-	}
-	if botToken := strings.TrimSpace(parsed.Telegram.BotToken); botToken != "" {
-		cfg.telegramBotToken = botToken
 	}
 	if phone := strings.TrimSpace(parsed.Telegram.Phone); phone != "" {
 		cfg.telegramPhone = phone
@@ -531,18 +525,10 @@ func authenticateGotdClient(
 		return nil
 	}
 
-	if botToken := strings.TrimSpace(cfg.telegramBotToken); botToken != "" {
-		if _, err := client.Auth().Bot(authCtx, botToken); err != nil {
-			return fmt.Errorf("authenticate bot: %w", err)
-		}
-		logger.Info("telegram authorized with bot token")
-		return nil
-	}
-
 	phone := strings.TrimSpace(cfg.telegramPhone)
 	if phone == "" {
 		return fmt.Errorf(
-			"telegram phone number is required for user login; configure telegram.phone in %s or %s",
+			"telegram phone number is required for userbot login; configure telegram.phone in %s or %s",
 			defaultConfigFilePath,
 			alternateConfigFilePath,
 		)

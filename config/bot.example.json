@@ -13,7 +13,6 @@
     "update_buffer": 256,
     "auth_timeout": "3m",
     "code": "",
-    "bot_token": "",
     "phone": "+15550001111",
     "password": "",
     "session_file": ".cache/telegram/session.json"
