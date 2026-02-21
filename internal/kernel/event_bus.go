@@ -246,6 +246,9 @@ func cloneInterestSet(interest otogi.InterestSet) otogi.InterestSet {
 	if len(interest.Kinds) > 0 {
 		cloned.Kinds = append([]otogi.EventKind(nil), interest.Kinds...)
 	}
+	if len(interest.Sources) > 0 {
+		cloned.Sources = append([]otogi.EventSource(nil), interest.Sources...)
+	}
 	if len(interest.MediaTypes) > 0 {
 		cloned.MediaTypes = append([]otogi.MediaType(nil), interest.MediaTypes...)
 	}

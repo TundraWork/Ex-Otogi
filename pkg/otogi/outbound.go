@@ -5,14 +5,17 @@ import (
 	"fmt"
 )
 
-// ServiceOutboundDispatcher is the canonical service registry key for outbound messaging.
-const ServiceOutboundDispatcher = "otogi.outbound_dispatcher"
+// ServiceSinkDispatcher is the canonical service registry key for outbound messaging.
+const ServiceSinkDispatcher = "otogi.sink_dispatcher"
 
-// OutboundDispatcher sends neutral outbound operations to a platform adapter.
+// ServiceEventSinkCatalog is the canonical service registry key for sink lookup.
+const ServiceEventSinkCatalog = "otogi.event_sink_catalog"
+
+// SinkDispatcher sends neutral outbound operations to one sink adapter.
 //
 // Implementations should enforce platform-specific constraints while preserving
 // these protocol-level request semantics.
-type OutboundDispatcher interface {
+type SinkDispatcher interface {
 	// SendMessage publishes a new outbound message to a destination conversation.
 	SendMessage(ctx context.Context, request SendMessageRequest) (*OutboundMessage, error)
 	// EditMessage mutates an existing outbound message by ID.
@@ -23,24 +26,34 @@ type OutboundDispatcher interface {
 	SetReaction(ctx context.Context, request SetReactionRequest) error
 }
 
+// EventSinkCatalog lists active sink identities for dynamic module selection.
+type EventSinkCatalog interface {
+	// ListSinks returns all active sink identities.
+	ListSinks(ctx context.Context) ([]EventSink, error)
+	// ListSinksByPlatform returns active sink identities for one platform.
+	ListSinksByPlatform(ctx context.Context, platform Platform) ([]EventSink, error)
+}
+
 // OutboundTarget identifies where an outbound operation should be delivered.
 type OutboundTarget struct {
-	// Platform identifies the downstream chat platform.
-	Platform Platform
 	// Conversation identifies the destination conversation.
 	Conversation Conversation
+	// Sink optionally overrides runtime-configured sink routing for this operation.
+	Sink *EventSink
 }
 
 // Validate checks target identity fields used for outbound routing.
 func (t OutboundTarget) Validate() error {
-	if t.Platform == "" {
-		return fmt.Errorf("%w: missing platform", ErrInvalidOutboundRequest)
-	}
 	if t.Conversation.ID == "" {
 		return fmt.Errorf("%w: missing conversation id", ErrInvalidOutboundRequest)
 	}
 	if t.Conversation.Type == "" {
 		return fmt.Errorf("%w: missing conversation type", ErrInvalidOutboundRequest)
+	}
+	if t.Sink != nil {
+		if t.Sink.Platform == "" && t.Sink.ID == "" {
+			return fmt.Errorf("%w: missing sink identity", ErrInvalidOutboundRequest)
+		}
 	}
 
 	return nil
@@ -51,9 +64,18 @@ func OutboundTargetFromEvent(event *Event) (OutboundTarget, error) {
 	if event == nil {
 		return OutboundTarget{}, fmt.Errorf("%w: nil event", ErrInvalidOutboundRequest)
 	}
+	sourcePlatform := event.Source.Platform
+	if sourcePlatform == "" {
+		sourcePlatform = event.Platform
+	}
 	target := OutboundTarget{
-		Platform:     event.Platform,
 		Conversation: event.Conversation,
+	}
+	if sourcePlatform != "" || event.Source.ID != "" {
+		target.Sink = &EventSink{
+			Platform: sourcePlatform,
+			ID:       event.Source.ID,
+		}
 	}
 	if err := target.Validate(); err != nil {
 		return OutboundTarget{}, fmt.Errorf("derive target from event %s: %w", event.Kind, err)

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,36 +8,30 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	driverpkg "ex-otogi/internal/driver"
 	"ex-otogi/internal/driver/telegram"
 	"ex-otogi/internal/kernel"
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/pkg/otogi"
-
-	"github.com/gotd/td/session"
-	gotdtelegram "github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/auth"
-	"github.com/gotd/td/tg"
 )
 
 const (
-	envConfigFile               = "OTOGI_CONFIG_FILE"
-	defaultConfigFilePath       = "config/bot.json"
-	alternateConfigFilePath     = "bin/config/bot.json"
-	defaultTelegramSessionFile  = ".cache/telegram/session.json"
-	defaultModuleHookTimeout    = 3 * time.Second
-	defaultShutdownTimeout      = 10 * time.Second
-	defaultSubscriptionBuffer   = 256
-	defaultSubscriptionWorkers  = 2
-	defaultTelegramPublishDelay = 2 * time.Second
-	defaultTelegramAuthTimeout  = 3 * time.Minute
+	envConfigFile             = "OTOGI_CONFIG_FILE"
+	defaultConfigFilePath     = "config/bot.json"
+	alternateConfigFilePath   = "bin/config/bot.json"
+	defaultModuleHookTimeout  = 3 * time.Second
+	defaultShutdownTimeout    = 10 * time.Second
+	defaultSubscriptionBuffer = 256
+	defaultSubscriptionWorker = 2
 )
+
+var runtimeModuleNames = []string{"memory", "pingpong", "help"}
 
 type appConfig struct {
 	logLevel slog.Level
@@ -48,21 +41,17 @@ type appConfig struct {
 	subscriptionBuffer  int
 	subscriptionWorkers int
 
-	telegramAppID          int
-	telegramAppHash        string
-	telegramPublishTimeout time.Duration
-	telegramUpdateBuffer   int
-	telegramAuthTimeout    time.Duration
-	telegramCode           string
-	telegramPhone          string
-	telegramPassword       string
-	telegramSessionFile    string
+	drivers        []driverpkg.Definition
+	routingDefault *kernel.ModuleRoute
+	moduleRoutes   map[string]kernel.ModuleRoute
 }
 
 type fileConfig struct {
-	LogLevel string             `json:"log_level"`
-	Kernel   fileKernelConfig   `json:"kernel"`
-	Telegram fileTelegramConfig `json:"telegram"`
+	LogLevel string            `json:"log_level"`
+	Kernel   fileKernelConfig  `json:"kernel"`
+	Drivers  []fileDriverEntry `json:"drivers"`
+	Routing  fileRoutingConfig `json:"routing"`
+	Telegram json.RawMessage   `json:"telegram"`
 }
 
 type fileKernelConfig struct {
@@ -72,21 +61,31 @@ type fileKernelConfig struct {
 	SubscriptionWorkers *int   `json:"subscription_workers"`
 }
 
-type fileTelegramConfig struct {
-	AppID          *int   `json:"app_id"`
-	AppHash        string `json:"app_hash"`
-	PublishTimeout string `json:"publish_timeout"`
-	UpdateBuffer   *int   `json:"update_buffer"`
-	AuthTimeout    string `json:"auth_timeout"`
-	Code           string `json:"code"`
-	Phone          string `json:"phone"`
-	Password       string `json:"password"`
-	SessionFile    string `json:"session_file"`
+type fileDriverEntry struct {
+	Name    string          `json:"name"`
+	Type    string          `json:"type"`
+	Enabled *bool           `json:"enabled"`
+	Config  json.RawMessage `json:"config"`
 }
 
-type telegramRuntime struct {
-	driver   *telegram.Driver
-	outbound otogi.OutboundDispatcher
+type fileRoutingConfig struct {
+	Default *fileModuleRoute           `json:"default"`
+	Modules map[string]fileModuleRoute `json:"modules"`
+}
+
+type fileModuleRoute struct {
+	Sources []fileSourceRef `json:"sources"`
+	Sink    *fileSinkRef    `json:"sink"`
+}
+
+type fileSourceRef struct {
+	Platform string `json:"platform"`
+	ID       string `json:"id"`
+}
+
+type fileSinkRef struct {
+	Platform string `json:"platform"`
+	ID       string `json:"id"`
 }
 
 func run() error {
@@ -96,19 +95,20 @@ func run() error {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
-
 	kernelRuntime := buildKernelRuntime(logger, cfg)
-	telegramRuntime, err := buildTelegramRuntime(logger, cfg)
+
+	drivers, sinkDispatcher, sinkCatalog, err := buildDriverRuntime(context.Background(), logger, cfg)
 	if err != nil {
 		return err
 	}
-	if err := registerRuntimeServices(kernelRuntime, logger, telegramRuntime.outbound); err != nil {
+
+	if err := registerRuntimeServices(kernelRuntime, logger, sinkDispatcher, sinkCatalog); err != nil {
 		return err
 	}
 	if err := registerRuntimeModules(context.Background(), kernelRuntime); err != nil {
 		return err
 	}
-	if err := registerRuntimeDrivers(kernelRuntime, telegramRuntime.driver); err != nil {
+	if err := registerRuntimeDrivers(kernelRuntime, drivers); err != nil {
 		return err
 	}
 
@@ -132,7 +132,7 @@ func loadConfig() (appConfig, error) {
 	if err := applyConfigFile(&cfg, configFile); err != nil {
 		return appConfig{}, err
 	}
-	if err := validateAppConfig(cfg); err != nil {
+	if err := validateAppConfig(&cfg); err != nil {
 		return appConfig{}, fmt.Errorf("validate config file %s: %w", configFile, err)
 	}
 
@@ -173,15 +173,10 @@ func defaultAppConfig() appConfig {
 		moduleHookTimeout:   defaultModuleHookTimeout,
 		shutdownTimeout:     defaultShutdownTimeout,
 		subscriptionBuffer:  defaultSubscriptionBuffer,
-		subscriptionWorkers: defaultSubscriptionWorkers,
+		subscriptionWorkers: defaultSubscriptionWorker,
 
-		telegramAppID:          0,
-		telegramAppHash:        "",
-		telegramPublishTimeout: defaultTelegramPublishDelay,
-		telegramUpdateBuffer:   defaultSubscriptionBuffer,
-		telegramAuthTimeout:    defaultTelegramAuthTimeout,
-		telegramCode:           "",
-		telegramSessionFile:    defaultTelegramSessionFile,
+		drivers:      make([]driverpkg.Definition, 0),
+		moduleRoutes: make(map[string]kernel.ModuleRoute),
 	}
 }
 
@@ -202,6 +197,9 @@ func applyConfigFile(cfg *appConfig, path string) error {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return fmt.Errorf("parse config file %s: %w", path, err)
 	}
+	if len(parsed.Telegram) != 0 {
+		return fmt.Errorf("legacy telegram config is not supported; use drivers[]")
+	}
 
 	if rawLevel := strings.TrimSpace(parsed.LogLevel); rawLevel != "" {
 		level, err := parseLogLevel(rawLevel)
@@ -221,7 +219,6 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		}
 		cfg.moduleHookTimeout = timeout
 	}
-
 	if rawTimeout := strings.TrimSpace(parsed.Kernel.ShutdownTimeout); rawTimeout != "" {
 		timeout, err := time.ParseDuration(rawTimeout)
 		if err != nil {
@@ -232,14 +229,12 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		}
 		cfg.shutdownTimeout = timeout
 	}
-
 	if parsed.Kernel.SubscriptionBuffer != nil {
 		if *parsed.Kernel.SubscriptionBuffer <= 0 {
 			return fmt.Errorf("parse kernel.subscription_buffer: must be > 0")
 		}
 		cfg.subscriptionBuffer = *parsed.Kernel.SubscriptionBuffer
 	}
-
 	if parsed.Kernel.SubscriptionWorkers != nil {
 		if *parsed.Kernel.SubscriptionWorkers <= 0 {
 			return fmt.Errorf("parse kernel.subscription_workers: must be > 0")
@@ -247,70 +242,174 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		cfg.subscriptionWorkers = *parsed.Kernel.SubscriptionWorkers
 	}
 
-	if parsed.Telegram.AppID != nil {
-		if *parsed.Telegram.AppID <= 0 {
-			return fmt.Errorf("parse telegram.app_id: must be > 0")
+	cfg.drivers = make([]driverpkg.Definition, 0, len(parsed.Drivers))
+	for index, entry := range parsed.Drivers {
+		enabled := true
+		if entry.Enabled != nil {
+			enabled = *entry.Enabled
 		}
-		cfg.telegramAppID = *parsed.Telegram.AppID
-	}
-	if appHash := strings.TrimSpace(parsed.Telegram.AppHash); appHash != "" {
-		cfg.telegramAppHash = appHash
+		cfg.drivers = append(cfg.drivers, driverpkg.Definition{
+			Name:    strings.TrimSpace(entry.Name),
+			Type:    strings.TrimSpace(entry.Type),
+			Enabled: enabled,
+			Config:  append([]byte(nil), entry.Config...),
+		})
+		if len(entry.Config) == 0 {
+			return fmt.Errorf("parse drivers[%d].config: required", index)
+		}
 	}
 
-	if rawTimeout := strings.TrimSpace(parsed.Telegram.PublishTimeout); rawTimeout != "" {
-		timeout, err := time.ParseDuration(rawTimeout)
+	cfg.routingDefault = nil
+	if parsed.Routing.Default != nil {
+		route, err := parseModuleRoute(*parsed.Routing.Default, "routing.default")
 		if err != nil {
-			return fmt.Errorf("parse telegram.publish_timeout: %w", err)
+			return err
 		}
-		if timeout <= 0 {
-			return fmt.Errorf("parse telegram.publish_timeout: must be > 0")
-		}
-		cfg.telegramPublishTimeout = timeout
+		cfg.routingDefault = &route
 	}
 
-	if parsed.Telegram.UpdateBuffer != nil {
-		if *parsed.Telegram.UpdateBuffer <= 0 {
-			return fmt.Errorf("parse telegram.update_buffer: must be > 0")
-		}
-		cfg.telegramUpdateBuffer = *parsed.Telegram.UpdateBuffer
-	}
-
-	if rawTimeout := strings.TrimSpace(parsed.Telegram.AuthTimeout); rawTimeout != "" {
-		timeout, err := time.ParseDuration(rawTimeout)
+	cfg.moduleRoutes = make(map[string]kernel.ModuleRoute, len(parsed.Routing.Modules))
+	for moduleName, rawRoute := range parsed.Routing.Modules {
+		route, err := parseModuleRoute(rawRoute, fmt.Sprintf("routing.modules.%s", moduleName))
 		if err != nil {
-			return fmt.Errorf("parse telegram.auth_timeout: %w", err)
+			return err
 		}
-		if timeout <= 0 {
-			return fmt.Errorf("parse telegram.auth_timeout: must be > 0")
-		}
-		cfg.telegramAuthTimeout = timeout
-	}
-
-	if code := strings.TrimSpace(parsed.Telegram.Code); code != "" {
-		cfg.telegramCode = code
-	}
-	if phone := strings.TrimSpace(parsed.Telegram.Phone); phone != "" {
-		cfg.telegramPhone = phone
-	}
-	if password := strings.TrimSpace(parsed.Telegram.Password); password != "" {
-		cfg.telegramPassword = password
-	}
-	if sessionFile := strings.TrimSpace(parsed.Telegram.SessionFile); sessionFile != "" {
-		cfg.telegramSessionFile = sessionFile
+		cfg.moduleRoutes[moduleName] = route
 	}
 
 	return nil
 }
 
-func validateAppConfig(cfg appConfig) error {
-	if cfg.telegramAppID <= 0 {
-		return fmt.Errorf("telegram.app_id must be > 0")
+func parseModuleRoute(raw fileModuleRoute, scope string) (kernel.ModuleRoute, error) {
+	if len(raw.Sources) == 0 {
+		return kernel.ModuleRoute{}, fmt.Errorf("%s.sources is required", scope)
 	}
-	if strings.TrimSpace(cfg.telegramAppHash) == "" {
-		return fmt.Errorf("telegram.app_hash is required")
+	if raw.Sink == nil {
+		return kernel.ModuleRoute{}, fmt.Errorf("%s.sink is required", scope)
+	}
+
+	sources := make([]otogi.EventSource, 0, len(raw.Sources))
+	for index, sourceRef := range raw.Sources {
+		source := otogi.EventSource{
+			Platform: otogi.Platform(strings.TrimSpace(sourceRef.Platform)),
+			ID:       strings.TrimSpace(sourceRef.ID),
+		}
+		if source.Platform == "" && source.ID == "" {
+			return kernel.ModuleRoute{}, fmt.Errorf("%s.sources[%d]: empty source reference", scope, index)
+		}
+		sources = append(sources, source)
+	}
+
+	sink := otogi.EventSink{
+		Platform: otogi.Platform(strings.TrimSpace(raw.Sink.Platform)),
+		ID:       strings.TrimSpace(raw.Sink.ID),
+	}
+	if sink.Platform == "" && sink.ID == "" {
+		return kernel.ModuleRoute{}, fmt.Errorf("%s.sink: empty sink reference", scope)
+	}
+
+	return kernel.ModuleRoute{Sources: sources, Sink: &sink}, nil
+}
+
+func validateAppConfig(cfg *appConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("nil config")
+	}
+
+	enabledDrivers := make([]driverpkg.Definition, 0, len(cfg.drivers))
+	enabledByName := make(map[string]driverpkg.Definition, len(cfg.drivers))
+	for _, definition := range cfg.drivers {
+		if definition.Name == "" {
+			return fmt.Errorf("drivers[].name is required")
+		}
+		if definition.Type == "" {
+			return fmt.Errorf("drivers[%s].type is required", definition.Name)
+		}
+		if _, exists := enabledByName[definition.Name]; exists {
+			return fmt.Errorf("drivers[%s]: duplicate name", definition.Name)
+		}
+		if !definition.Enabled {
+			continue
+		}
+		enabledDrivers = append(enabledDrivers, definition)
+		enabledByName[definition.Name] = definition
+	}
+	if len(enabledDrivers) == 0 {
+		return fmt.Errorf("at least one enabled driver is required")
+	}
+
+	knownModules := make(map[string]struct{}, len(runtimeModuleNames))
+	for _, moduleName := range runtimeModuleNames {
+		knownModules[moduleName] = struct{}{}
+	}
+	for moduleName := range cfg.moduleRoutes {
+		if _, known := knownModules[moduleName]; !known {
+			return fmt.Errorf("routing.modules.%s: unknown module", moduleName)
+		}
+	}
+
+	for moduleName, route := range cfg.moduleRoutes {
+		if err := validateRouteRefs(route, enabledByName, fmt.Sprintf("routing.modules.%s", moduleName)); err != nil {
+			return err
+		}
+	}
+	if cfg.routingDefault != nil {
+		if err := validateRouteRefs(*cfg.routingDefault, enabledByName, "routing.default"); err != nil {
+			return err
+		}
+	}
+
+	if len(enabledDrivers) == 1 && cfg.routingDefault == nil {
+		sole := enabledDrivers[0]
+		platform, err := platformForDriverType(sole.Type)
+		if err != nil {
+			return fmt.Errorf("derive default route from driver %s: %w", sole.Name, err)
+		}
+		cfg.routingDefault = &kernel.ModuleRoute{
+			Sources: []otogi.EventSource{{Platform: platform, ID: sole.Name}},
+			Sink:    &otogi.EventSink{Platform: platform, ID: sole.Name},
+		}
+	}
+
+	if len(enabledDrivers) >= 2 && cfg.routingDefault == nil {
+		for _, moduleName := range runtimeModuleNames {
+			if _, exists := cfg.moduleRoutes[moduleName]; !exists {
+				return fmt.Errorf("routing.default is required in multi-driver mode unless all modules override")
+			}
+		}
 	}
 
 	return nil
+}
+
+func validateRouteRefs(
+	route kernel.ModuleRoute,
+	enabledByName map[string]driverpkg.Definition,
+	scope string,
+) error {
+	for index, source := range route.Sources {
+		if source.ID != "" {
+			if _, exists := enabledByName[source.ID]; !exists {
+				return fmt.Errorf("%s.sources[%d]: unknown driver id %s", scope, index, source.ID)
+			}
+		}
+	}
+	if route.Sink != nil && route.Sink.ID != "" {
+		if _, exists := enabledByName[route.Sink.ID]; !exists {
+			return fmt.Errorf("%s.sink: unknown driver id %s", scope, route.Sink.ID)
+		}
+	}
+
+	return nil
+}
+
+func platformForDriverType(driverType string) (otogi.Platform, error) {
+	switch strings.ToLower(strings.TrimSpace(driverType)) {
+	case "telegram":
+		return otogi.PlatformTelegram, nil
+	default:
+		return "", fmt.Errorf("unsupported driver type %s", driverType)
+	}
 }
 
 func parseLogLevel(raw string) (slog.Level, error) {
@@ -335,20 +434,75 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) *kernel.Kernel {
 		kernel.WithShutdownTimeout(cfg.shutdownTimeout),
 		kernel.WithDefaultSubscriptionBuffer(cfg.subscriptionBuffer),
 		kernel.WithDefaultSubscriptionWorkers(cfg.subscriptionWorkers),
+		kernel.WithModuleRouting(cfg.routingDefault, cfg.moduleRoutes),
 	)
+}
+
+func buildDriverRuntime(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg appConfig,
+) ([]otogi.Driver, otogi.SinkDispatcher, otogi.EventSinkCatalog, error) {
+	registry := driverpkg.NewRegistry()
+	if err := registry.Register("telegram", func(
+		_ context.Context,
+		definition driverpkg.Definition,
+		builderLogger *slog.Logger,
+	) (driverpkg.Runtime, error) {
+		source, runtimeDriver, sinkDispatcher, err := telegram.BuildRuntimeFromConfig(
+			definition.Name,
+			builderLogger,
+			definition.Config,
+		)
+		if err != nil {
+			return driverpkg.Runtime{}, fmt.Errorf("build telegram runtime from config: %w", err)
+		}
+
+		return driverpkg.Runtime{
+			Source:         source,
+			Driver:         runtimeDriver,
+			SinkDispatcher: sinkDispatcher,
+		}, nil
+	}); err != nil {
+		return nil, nil, nil, fmt.Errorf("register telegram builder: %w", err)
+	}
+
+	runtimes, err := registry.BuildEnabled(ctx, cfg.drivers, logger)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build drivers: %w", err)
+	}
+
+	drivers := make([]otogi.Driver, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		drivers = append(drivers, runtime.Driver)
+	}
+
+	composite, err := driverpkg.NewCompositeSinkDispatcher(runtimes)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("build sink dispatcher: %w", err)
+	}
+
+	return drivers, composite, composite, nil
 }
 
 func registerRuntimeServices(
 	kernelRuntime *kernel.Kernel,
 	logger *slog.Logger,
-	outbound otogi.OutboundDispatcher,
+	sinkDispatcher otogi.SinkDispatcher,
+	sinkCatalog otogi.EventSinkCatalog,
 ) error {
 	if err := kernelRuntime.RegisterService(memory.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
 	}
-	if outbound != nil {
-		if err := kernelRuntime.RegisterService(otogi.ServiceOutboundDispatcher, outbound); err != nil {
-			return fmt.Errorf("register outbound dispatcher service: %w", err)
+	if sinkDispatcher == nil {
+		return fmt.Errorf("register sink dispatcher service: nil dispatcher")
+	}
+	if err := kernelRuntime.RegisterService(otogi.ServiceSinkDispatcher, sinkDispatcher); err != nil {
+		return fmt.Errorf("register sink dispatcher service: %w", err)
+	}
+	if sinkCatalog != nil {
+		if err := kernelRuntime.RegisterService(otogi.ServiceEventSinkCatalog, sinkCatalog); err != nil {
+			return fmt.Errorf("register sink catalog service: %w", err)
 		}
 	}
 
@@ -372,214 +526,12 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) e
 	return nil
 }
 
-func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, telegramDriver *telegram.Driver) error {
-	if err := kernelRuntime.RegisterDriver(telegramDriver); err != nil {
-		return fmt.Errorf("register telegram driver: %w", err)
+func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, drivers []otogi.Driver) error {
+	for _, runtimeDriver := range drivers {
+		if err := kernelRuntime.RegisterDriver(runtimeDriver); err != nil {
+			return fmt.Errorf("register driver %s: %w", runtimeDriver.Name(), err)
+		}
 	}
 
 	return nil
-}
-
-func buildTelegramRuntime(logger *slog.Logger, cfg appConfig) (telegramRuntime, error) {
-	updateChannel, err := telegram.NewGotdUpdateChannel(cfg.telegramUpdateBuffer)
-	if err != nil {
-		return telegramRuntime{}, fmt.Errorf("new gotd update channel: %w", err)
-	}
-
-	sessionStorage, err := newGotdSessionStorage(cfg.telegramSessionFile)
-	if err != nil {
-		return telegramRuntime{}, fmt.Errorf("new gotd session storage: %w", err)
-	}
-
-	client := gotdtelegram.NewClient(cfg.telegramAppID, cfg.telegramAppHash, gotdtelegram.Options{
-		UpdateHandler:  updateChannel,
-		SessionStorage: sessionStorage,
-	})
-
-	peers := telegram.NewPeerCache()
-	reactionResolver, err := telegram.NewGotdMessageReactionResolver(client.API())
-	if err != nil {
-		return telegramRuntime{}, fmt.Errorf("new gotd message reaction resolver: %w", err)
-	}
-	source, err := telegram.NewGotdUserbotSource(
-		gotdAuthenticatedClient{
-			client: client,
-			authenticate: func(ctx context.Context) error {
-				return authenticateGotdClient(ctx, logger, client, cfg)
-			},
-		},
-		updateChannel,
-		telegram.NewDefaultGotdUpdateMapper(
-			telegram.WithPeerCache(peers),
-			telegram.WithMessageReactionResolver(reactionResolver),
-			telegram.WithMapperLogger(logger),
-		),
-	)
-	if err != nil {
-		return telegramRuntime{}, fmt.Errorf("new gotd userbot source: %w", err)
-	}
-
-	driver, err := telegram.NewDriver(
-		source,
-		telegram.NewDefaultDecoder(),
-		telegram.WithPublishTimeout(cfg.telegramPublishTimeout),
-		telegram.WithErrorHandler(func(_ context.Context, err error) {
-			logger.Error("telegram driver async error", "error", err)
-		}),
-	)
-	if err != nil {
-		return telegramRuntime{}, fmt.Errorf("new telegram driver: %w", err)
-	}
-
-	outbound, err := telegram.NewOutboundDispatcher(
-		client,
-		peers,
-		telegram.WithOutboundTimeout(cfg.telegramPublishTimeout),
-		telegram.WithOutboundLogger(logger),
-	)
-	if err != nil {
-		return telegramRuntime{}, fmt.Errorf("new telegram outbound dispatcher: %w", err)
-	}
-
-	return telegramRuntime{
-		driver:   driver,
-		outbound: outbound,
-	}, nil
-}
-
-func newGotdSessionStorage(path string) (*session.FileStorage, error) {
-	trimmedPath := strings.TrimSpace(path)
-	if trimmedPath == "" {
-		return nil, fmt.Errorf("empty session file path")
-	}
-
-	absPath, err := filepath.Abs(trimmedPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve absolute session file path: %w", err)
-	}
-	sessionDir := filepath.Dir(absPath)
-	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create session directory %s: %w", sessionDir, err)
-	}
-
-	return &session.FileStorage{Path: absPath}, nil
-}
-
-type gotdAuthenticatedClient struct {
-	client       *gotdtelegram.Client
-	authenticate func(ctx context.Context) error
-}
-
-// Run executes client runtime and performs authentication before invoking fn.
-func (c gotdAuthenticatedClient) Run(ctx context.Context, fn func(runCtx context.Context) error) error {
-	if c.client == nil {
-		return fmt.Errorf("run gotd authenticated client: nil client")
-	}
-	if c.authenticate == nil {
-		return fmt.Errorf("run gotd authenticated client: nil authenticate callback")
-	}
-	if fn == nil {
-		return fmt.Errorf("run gotd authenticated client: nil run callback")
-	}
-
-	if err := c.client.Run(ctx, func(runCtx context.Context) error {
-		if err := c.authenticate(runCtx); err != nil {
-			return fmt.Errorf("authenticate gotd client: %w", err)
-		}
-		if err := fn(runCtx); err != nil {
-			return fmt.Errorf("run gotd client callback: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("run gotd authenticated client: %w", err)
-	}
-
-	return nil
-}
-
-func authenticateGotdClient(
-	ctx context.Context,
-	logger *slog.Logger,
-	client *gotdtelegram.Client,
-	cfg appConfig,
-) error {
-	if client == nil {
-		return fmt.Errorf("authenticate gotd client: nil client")
-	}
-
-	authCtx := ctx
-	cancel := func() {}
-	if cfg.telegramAuthTimeout > 0 {
-		timeoutCtx, timeoutCancel := context.WithTimeout(ctx, cfg.telegramAuthTimeout)
-		authCtx = timeoutCtx
-		cancel = timeoutCancel
-	}
-	defer cancel()
-
-	status, err := client.Auth().Status(authCtx)
-	if err != nil {
-		return fmt.Errorf("check auth status: %w", err)
-	}
-	if status.Authorized {
-		logger.Info("telegram session restored from local storage", "session_file", cfg.telegramSessionFile)
-		return nil
-	}
-
-	phone := strings.TrimSpace(cfg.telegramPhone)
-	if phone == "" {
-		return fmt.Errorf(
-			"telegram phone number is required for userbot login; configure telegram.phone in %s or %s",
-			defaultConfigFilePath,
-			alternateConfigFilePath,
-		)
-	}
-
-	codeAuthenticator := auth.CodeAuthenticatorFunc(func(_ context.Context, _ *tg.AuthSentCode) (string, error) {
-		code, err := telegramAuthCode(cfg.telegramCode)
-		if err != nil {
-			return "", fmt.Errorf("resolve login code: %w", err)
-		}
-		return code, nil
-	})
-
-	var authenticator auth.UserAuthenticator = auth.CodeOnly(phone, codeAuthenticator)
-	if password := strings.TrimSpace(cfg.telegramPassword); password != "" {
-		authenticator = auth.Constant(phone, password, codeAuthenticator)
-	}
-
-	flow := auth.NewFlow(authenticator, auth.SendCodeOptions{})
-
-	if err := client.Auth().IfNecessary(authCtx, flow); err != nil {
-		return fmt.Errorf("authenticate user: %w", err)
-	}
-	logger.Info("telegram authorized with user flow", "session_file", cfg.telegramSessionFile)
-
-	return nil
-}
-
-func telegramAuthCode(configuredCode string) (string, error) {
-	if code := strings.TrimSpace(configuredCode); code != "" {
-		return code, nil
-	}
-
-	stdinInfo, err := os.Stdin.Stat()
-	if err != nil {
-		return "", fmt.Errorf("read stdin status: %w", err)
-	}
-	if stdinInfo.Mode()&os.ModeCharDevice == 0 {
-		return "", fmt.Errorf("telegram.code is empty and stdin is not interactive")
-	}
-
-	fmt.Fprint(os.Stdout, "Enter Telegram login code: ")
-	code, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("read login code: %w", err)
-	}
-
-	code = strings.TrimSpace(code)
-	if code == "" {
-		return "", fmt.Errorf("empty login code")
-	}
-
-	return code, nil
 }

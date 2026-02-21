@@ -96,7 +96,7 @@ func (k *Kernel) lookupCommand(prefix otogi.CommandPrefix, name string) (otogi.C
 }
 
 // newDriverEventSink creates the source-event sink wrapped with command derivation.
-func (k *Kernel) newDriverEventSink() otogi.EventSink {
+func (k *Kernel) newDriverEventSink() otogi.EventDispatcher {
 	return &commandDerivingSink{
 		base: k.bus,
 		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
@@ -109,7 +109,7 @@ func (k *Kernel) newDriverEventSink() otogi.EventSink {
 
 // commandDerivingSink publishes source events and derives command events.
 type commandDerivingSink struct {
-	base          otogi.EventSink
+	base          otogi.EventDispatcher
 	lookupCommand func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool)
 	serviceLookup otogi.ServiceRegistry
 	reportAsync   func(context.Context, string, error)
@@ -179,9 +179,9 @@ func (s *commandDerivingSink) replyCommandError(
 		return
 	}
 
-	dispatcher, err := otogi.ResolveAs[otogi.OutboundDispatcher](
+	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
 		s.serviceLookup,
-		otogi.ServiceOutboundDispatcher,
+		otogi.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		if errors.Is(err, otogi.ErrServiceNotFound) {
@@ -251,11 +251,16 @@ func derivedCommandEvent(
 	invocation otogi.CommandInvocation,
 ) *otogi.Event {
 	kind, suffix := derivedCommandEventKind(prefix)
+	source := sourceEvent.Source
+	if source.Platform == "" {
+		source.Platform = sourceEvent.Platform
+	}
 	commandEvent := &otogi.Event{
 		ID:         sourceEvent.ID + suffix,
 		Kind:       kind,
 		OccurredAt: sourceEvent.OccurredAt,
-		Platform:   sourceEvent.Platform,
+		Platform:   source.Platform,
+		Source:     source,
 		TenantID:   sourceEvent.TenantID,
 		Conversation: otogi.Conversation{
 			ID:    sourceEvent.Conversation.ID,

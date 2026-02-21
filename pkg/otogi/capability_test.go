@@ -43,6 +43,32 @@ func TestInterestSetMatches(t *testing.T) {
 			want:  false,
 		},
 		{
+			name: "source filter matches platform wildcard",
+			interest: InterestSet{
+				Sources: []EventSource{
+					{Platform: PlatformTelegram},
+				},
+			},
+			event: &Event{
+				Kind:   EventKindArticleCreated,
+				Source: EventSource{Platform: PlatformTelegram, ID: "tg-main"},
+			},
+			want: true,
+		},
+		{
+			name: "source filter rejects mismatch",
+			interest: InterestSet{
+				Sources: []EventSource{
+					{Platform: PlatformTelegram, ID: "tg-main"},
+				},
+			},
+			event: &Event{
+				Kind:   EventKindArticleCreated,
+				Source: EventSource{Platform: PlatformTelegram, ID: "tg-alt"},
+			},
+			want: false,
+		},
+		{
 			name: "require command and command name matches",
 			interest: InterestSet{
 				Kinds:          []EventKind{EventKindCommandReceived},
@@ -136,6 +162,20 @@ func TestInterestSetAllows(t *testing.T) {
 				Kinds: []EventKind{EventKindCommandReceived},
 			},
 			wantAllow: false,
+		},
+		{
+			name: "source filter allows subset",
+			allowed: InterestSet{
+				Sources: []EventSource{
+					{Platform: PlatformTelegram},
+				},
+			},
+			filter: InterestSet{
+				Sources: []EventSource{
+					{Platform: PlatformTelegram, ID: "tg-main"},
+				},
+			},
+			wantAllow: true,
 		},
 	}
 

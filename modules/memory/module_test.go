@@ -23,15 +23,15 @@ func TestModuleOnRegister(t *testing.T) {
 		{
 			name: "registers cache service with optional logger",
 			services: map[string]any{
-				ServiceLogger:                   slog.Default(),
-				otogi.ServiceOutboundDispatcher: &captureDispatcher{},
+				ServiceLogger:               slog.Default(),
+				otogi.ServiceSinkDispatcher: &captureDispatcher{},
 			},
 		},
 		{
 			name: "invalid logger type fails",
 			services: map[string]any{
-				ServiceLogger:                   struct{}{},
-				otogi.ServiceOutboundDispatcher: &captureDispatcher{},
+				ServiceLogger:               struct{}{},
+				otogi.ServiceSinkDispatcher: &captureDispatcher{},
 			},
 			wantErr:          true,
 			wantErrSubstring: "memory resolve logger",
@@ -363,6 +363,12 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 					testCase.commandEvent.Article.ID,
 				)
 			}
+			if dispatcher.lastRequest.Target.Sink == nil {
+				t.Fatal("target sink = nil, want source sink")
+			}
+			if dispatcher.lastRequest.Target.Sink.ID != "tg-main" {
+				t.Fatalf("target sink id = %q, want tg-main", dispatcher.lastRequest.Target.Sink.ID)
+			}
 			if len(dispatcher.lastRequest.Entities) != 1 {
 				t.Fatalf("entities len = %d, want 1", len(dispatcher.lastRequest.Entities))
 			}
@@ -496,7 +502,10 @@ func TestModuleEditProjectionUpdatesEntitiesAndMedia(t *testing.T) {
 		ID:         "evt-created-msg-1",
 		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -517,7 +526,10 @@ func TestModuleEditProjectionUpdatesEntitiesAndMedia(t *testing.T) {
 		ID:         "evt-edit-msg-1",
 		Kind:       otogi.EventKindArticleEdited,
 		OccurredAt: time.Unix(20, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -1150,7 +1162,10 @@ func newCommandEvent(messageID string, text string, replyToID string) *otogi.Eve
 		ID:         "evt-command-" + messageID,
 		Kind:       commandKind,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -1177,7 +1192,10 @@ func newCreatedEventAt(messageID string, text string, replyToID string, occurred
 		ID:         "evt-created-" + messageID,
 		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: occurredAt,
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -1196,7 +1214,10 @@ func newEditedEvent(targetMessageID string, text string) *otogi.Event {
 		ID:         "evt-edit-" + targetMessageID,
 		Kind:       otogi.EventKindArticleEdited,
 		OccurredAt: time.Unix(20, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -1230,7 +1251,10 @@ func newMessageMutationEventWithTimestamps(
 		ID:         "evt-message-mutation-" + targetMessageID,
 		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: occurredAt,
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -1257,7 +1281,10 @@ func newRetractedEvent(targetMessageID string) *otogi.Event {
 		ID:         "evt-retract-" + targetMessageID,
 		Kind:       otogi.EventKindArticleRetracted,
 		OccurredAt: time.Unix(30, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -1292,7 +1319,10 @@ func newReactionEventAt(
 		ID:         "evt-reaction-" + targetMessageID,
 		Kind:       kind,
 		OccurredAt: occurredAt,
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,

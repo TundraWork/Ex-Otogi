@@ -13,7 +13,7 @@ const helpCommandName = "help"
 
 // Module replies with command reference text when it receives a /help command.
 type Module struct {
-	dispatcher     otogi.OutboundDispatcher
+	dispatcher     otogi.SinkDispatcher
 	commandCatalog otogi.CommandCatalog
 }
 
@@ -42,7 +42,7 @@ func (m *Module) Spec() otogi.ModuleSpec {
 						RequireArticle: true,
 					},
 					RequiredServices: []string{
-						otogi.ServiceOutboundDispatcher,
+						otogi.ServiceSinkDispatcher,
 						otogi.ServiceCommandCatalog,
 					},
 				},
@@ -62,9 +62,9 @@ func (m *Module) Spec() otogi.ModuleSpec {
 
 // OnRegister resolves dependencies required by this module.
 func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
-	dispatcher, err := otogi.ResolveAs[otogi.OutboundDispatcher](
+	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceOutboundDispatcher,
+		otogi.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("help resolve outbound dispatcher: %w", err)

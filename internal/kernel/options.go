@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"ex-otogi/pkg/otogi"
 )
 
 const (
@@ -23,6 +25,20 @@ type config struct {
 	handlerTimeout     time.Duration
 	logger             *slog.Logger
 	onAsyncError       func(context.Context, string, error)
+	routing            routingConfig
+}
+
+// ModuleRoute configures inbound source filters and default outbound sink for one module.
+type ModuleRoute struct {
+	// Sources restricts inbound delivery to matching event sources.
+	Sources []otogi.EventSource
+	// Sink configures the default outbound sink used when request target omits sink.
+	Sink *otogi.EventSink
+}
+
+type routingConfig struct {
+	defaultRoute *ModuleRoute
+	moduleRoutes map[string]ModuleRoute
 }
 
 // Option mutates kernel construction configuration.
@@ -41,6 +57,9 @@ func defaultConfig() config {
 		logger:             logger,
 		onAsyncError: func(ctx context.Context, scope string, err error) {
 			logger.ErrorContext(ctx, "otogi async error", "scope", scope, "error", err)
+		},
+		routing: routingConfig{
+			moduleRoutes: make(map[string]ModuleRoute),
 		},
 	}
 }
@@ -111,4 +130,31 @@ func WithAsyncErrorHandler(handler func(context.Context, string, error)) Option 
 			cfg.onAsyncError = handler
 		}
 	}
+}
+
+// WithModuleRouting configures module inbound source filters and default sink routing.
+func WithModuleRouting(defaultRoute *ModuleRoute, routes map[string]ModuleRoute) Option {
+	return func(cfg *config) {
+		cfg.routing.defaultRoute = cloneRoute(defaultRoute)
+		cfg.routing.moduleRoutes = make(map[string]ModuleRoute, len(routes))
+		for moduleName, route := range routes {
+			cfg.routing.moduleRoutes[moduleName] = *cloneRoute(&route)
+		}
+	}
+}
+
+func cloneRoute(route *ModuleRoute) *ModuleRoute {
+	if route == nil {
+		return nil
+	}
+	cloned := ModuleRoute{}
+	if len(route.Sources) > 0 {
+		cloned.Sources = append([]otogi.EventSource(nil), route.Sources...)
+	}
+	if route.Sink != nil {
+		sink := *route.Sink
+		cloned.Sink = &sink
+	}
+
+	return &cloned
 }

@@ -25,7 +25,6 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 			name: "successful send",
 			request: otogi.SendMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -39,7 +38,6 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 			name: "successful send with entities",
 			request: otogi.SendMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -61,7 +59,6 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 			name: "invalid request",
 			request: otogi.SendMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -74,7 +71,9 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 			name: "unsupported platform",
 			request: otogi.SendMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: "discord",
+					Sink: &otogi.EventSink{
+						Platform: "discord",
+					},
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -88,7 +87,6 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 			name: "rpc failure",
 			request: otogi.SendMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -166,7 +164,6 @@ func TestOutboundDispatcherEditMessage(t *testing.T) {
 			name: "successful edit with entities",
 			request: otogi.EditMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -187,7 +184,6 @@ func TestOutboundDispatcherEditMessage(t *testing.T) {
 			name: "invalid edit entity payload",
 			request: otogi.EditMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -264,7 +260,6 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 			name: "add emoji reaction",
 			request: otogi.SetReactionRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -282,7 +277,6 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 			name: "add custom reaction",
 			request: otogi.SetReactionRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -300,7 +294,6 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 			name: "remove reaction",
 			request: otogi.SetReactionRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -315,7 +308,6 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 			name: "invalid message id",
 			request: otogi.SetReactionRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeGroup,
@@ -396,7 +388,6 @@ func TestOutboundDispatcherDeleteMessage(t *testing.T) {
 			name: "revoke channel delete succeeds",
 			request: otogi.DeleteMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeChannel,
@@ -410,7 +401,6 @@ func TestOutboundDispatcherDeleteMessage(t *testing.T) {
 			name: "non-revoke channel delete fails",
 			request: otogi.DeleteMessageRequest{
 				Target: otogi.OutboundTarget{
-					Platform: otogi.PlatformTelegram,
 					Conversation: otogi.Conversation{
 						ID:   "42",
 						Type: otogi.ConversationTypeChannel,

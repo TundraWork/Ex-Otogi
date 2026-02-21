@@ -55,7 +55,7 @@ type Subscription interface {
 
 // EventBus is the asynchronous pub/sub contract used by the kernel.
 type EventBus interface {
-	EventSink
+	EventDispatcher
 	// Subscribe registers a handler with bounded buffering semantics.
 	Subscribe(ctx context.Context, interest InterestSet, spec SubscriptionSpec, handler EventHandler) (Subscription, error)
 	// Close shuts down the bus and all active subscriptions.

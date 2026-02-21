@@ -6,15 +6,36 @@
     "subscription_buffer": 256,
     "subscription_workers": 2
   },
-  "telegram": {
-    "app_id": 0,
-    "app_hash": "",
-    "publish_timeout": "2s",
-    "update_buffer": 256,
-    "auth_timeout": "3m",
-    "code": "",
-    "phone": "+15550001111",
-    "password": "",
-    "session_file": ".cache/telegram/session.json"
+  "drivers": [
+    {
+      "name": "telegram-main",
+      "type": "telegram",
+      "enabled": true,
+      "config": {
+        "app_id": 0,
+        "app_hash": "",
+        "publish_timeout": "2s",
+        "update_buffer": 256,
+        "auth_timeout": "3m",
+        "code": "",
+        "phone": "+15550001111",
+        "password": "",
+        "session_file": ".cache/telegram/session.json"
+      }
+    }
+  ],
+  "routing": {
+    "default": {
+      "sources": [
+        {
+          "platform": "telegram",
+          "id": "telegram-main"
+        }
+      ],
+      "sink": {
+        "platform": "telegram",
+        "id": "telegram-main"
+      }
+    }
   }
 }

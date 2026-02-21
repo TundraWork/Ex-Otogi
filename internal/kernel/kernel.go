@@ -120,6 +120,7 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 		serviceLookup: k.services,
 		bus:           k.bus,
 		record:        record,
+		defaultSink:   k.moduleRouteFor(name).Sink,
 	}
 
 	if err := k.registerModuleCommands(ctx, name, moduleSpec.Commands); err != nil {
@@ -453,18 +454,34 @@ func (k *Kernel) registerDeclaredHandlers(
 	runtime *moduleRuntime,
 	handlers []otogi.ModuleHandler,
 ) error {
+	route := k.moduleRouteFor(moduleName)
 	for idx, declared := range handlers {
 		capabilityName := declared.Capability.Name
 		spec := declared.Subscription
+		interest := declared.Capability.Interest
+		if len(route.Sources) > 0 {
+			interest.Sources = append([]otogi.EventSource(nil), route.Sources...)
+		}
 		if spec.Name == "" {
 			spec.Name = fmt.Sprintf("%s-handler-%d", moduleName, idx+1)
 		}
-		if _, err := runtime.Subscribe(ctx, declared.Capability.Interest, spec, declared.Handler); err != nil {
+		if _, err := runtime.Subscribe(ctx, interest, spec, declared.Handler); err != nil {
 			return fmt.Errorf("register handler %s for capability %s: %w", spec.Name, capabilityName, err)
 		}
 	}
 
 	return nil
+}
+
+func (k *Kernel) moduleRouteFor(moduleName string) ModuleRoute {
+	if route, exists := k.cfg.routing.moduleRoutes[moduleName]; exists {
+		return route
+	}
+	if k.cfg.routing.defaultRoute != nil {
+		return *k.cfg.routing.defaultRoute
+	}
+
+	return ModuleRoute{}
 }
 
 // validateModuleSpec ensures declarative module definitions are coherent.

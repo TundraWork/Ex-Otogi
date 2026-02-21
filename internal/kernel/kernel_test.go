@@ -518,7 +518,7 @@ func (d *stubDriver) Name() string {
 	return d.name
 }
 
-func (d *stubDriver) Start(ctx context.Context, _ otogi.EventSink) error {
+func (d *stubDriver) Start(ctx context.Context, _ otogi.EventDispatcher) error {
 	d.started.Add(1)
 	<-ctx.Done()
 	return nil

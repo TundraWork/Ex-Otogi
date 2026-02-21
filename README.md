@@ -20,13 +20,18 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
    ```sh
    cp config/bot.example.json config/bot.json
    ```
-2. Edit `config/bot.json` and set Telegram API credentials:
-   - `telegram.app_id`
-   - `telegram.app_hash`
-3. Configure user account auth in the same file:
-   - set `telegram.phone`
-   - optionally set `telegram.code` (or enter code interactively)
-4. Run:
+2. Edit `config/bot.json` and configure at least one driver in `drivers[]`:
+   - `drivers[0].name` (driver instance id)
+   - `drivers[0].type` (currently `telegram`)
+   - `drivers[0].config.app_id`
+   - `drivers[0].config.app_hash`
+3. Configure user account auth in the same driver config:
+   - `drivers[0].config.phone`
+   - optionally `drivers[0].config.code` (or enter code interactively)
+4. Configure routing defaults in `routing.default`:
+   - `routing.default.sources`
+   - `routing.default.sink`
+5. Run:
    ```sh
    go run ./cmd/bot
    ```

@@ -15,9 +15,13 @@ func (m *Module) rememberCreated(event *otogi.Event) error {
 	now := m.now()
 	occurredAt := normalizeEventTime(event.OccurredAt, now)
 	updatedAt := mutationChangedAtOrFallback(event.Mutation, occurredAt)
+	platform := event.Source.Platform
+	if platform == "" {
+		platform = event.Platform
+	}
 	cached := memorySnapshot{
 		TenantID:     event.TenantID,
-		Platform:     event.Platform,
+		Platform:     platform,
 		Conversation: event.Conversation,
 		Actor:        event.Actor,
 		Article:      cloneArticle(*event.Article),
@@ -97,6 +101,9 @@ func (m *Module) rememberEdit(event *otogi.Event) error {
 	}
 	if cached.Platform == "" {
 		cached.Platform = event.Platform
+		if event.Source.Platform != "" {
+			cached.Platform = event.Source.Platform
+		}
 	}
 	if cached.Article.ID == "" {
 		cached.Article.ID = lookup.ArticleID

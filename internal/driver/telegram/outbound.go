@@ -39,8 +39,8 @@ func WithOutboundLogger(logger *slog.Logger) OutboundOption {
 	}
 }
 
-// OutboundDispatcher adapts neutral outbound operations to Telegram RPC calls.
-type OutboundDispatcher struct {
+// SinkDispatcher adapts neutral outbound operations to Telegram RPC calls.
+type SinkDispatcher struct {
 	cfg      outboundConfig
 	peers    *PeerCache
 	telegram outboundRPC
@@ -56,7 +56,7 @@ func NewOutboundDispatcher(
 	client *gotdtelegram.Client,
 	peers *PeerCache,
 	options ...OutboundOption,
-) (*OutboundDispatcher, error) {
+) (*SinkDispatcher, error) {
 	if client == nil {
 		return nil, fmt.Errorf("new telegram outbound dispatcher: nil client")
 	}
@@ -68,7 +68,7 @@ func newOutboundDispatcherWithRPC(
 	rpc outboundRPC,
 	peers *PeerCache,
 	options ...OutboundOption,
-) (*OutboundDispatcher, error) {
+) (*SinkDispatcher, error) {
 	if rpc == nil {
 		return nil, fmt.Errorf("new telegram outbound dispatcher: nil rpc adapter")
 	}
@@ -83,7 +83,7 @@ func newOutboundDispatcherWithRPC(
 		option(&cfg)
 	}
 
-	return &OutboundDispatcher{
+	return &SinkDispatcher{
 		cfg:      cfg,
 		peers:    peers,
 		telegram: rpc,
@@ -91,7 +91,7 @@ func newOutboundDispatcherWithRPC(
 }
 
 // SendMessage publishes a text message to a Telegram conversation.
-func (d *OutboundDispatcher) SendMessage(
+func (d *SinkDispatcher) SendMessage(
 	ctx context.Context,
 	request otogi.SendMessageRequest,
 ) (*otogi.OutboundMessage, error) {
@@ -128,7 +128,7 @@ func (d *OutboundDispatcher) SendMessage(
 }
 
 // EditMessage updates text for an existing Telegram message.
-func (d *OutboundDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
+func (d *SinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("edit message validate: %w", err)
 	}
@@ -162,7 +162,7 @@ func (d *OutboundDispatcher) EditMessage(ctx context.Context, request otogi.Edit
 }
 
 // DeleteMessage removes an existing Telegram message.
-func (d *OutboundDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
+func (d *SinkDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("delete message validate: %w", err)
 	}
@@ -197,7 +197,7 @@ func (d *OutboundDispatcher) DeleteMessage(ctx context.Context, request otogi.De
 }
 
 // SetReaction applies add/remove reaction behavior on an existing Telegram message.
-func (d *OutboundDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
+func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("set reaction validate: %w", err)
 	}
@@ -241,7 +241,7 @@ func (d *OutboundDispatcher) SetReaction(ctx context.Context, request otogi.SetR
 	return nil
 }
 
-func (d *OutboundDispatcher) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+func (d *SinkDispatcher) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if d.cfg.rpcTimeout <= 0 {
 		return ctx, func() {}
 	}
@@ -249,9 +249,9 @@ func (d *OutboundDispatcher) withTimeout(ctx context.Context) (context.Context, 
 	return context.WithTimeout(ctx, d.cfg.rpcTimeout)
 }
 
-func (d *OutboundDispatcher) resolvePeer(target otogi.OutboundTarget) (tg.InputPeerClass, error) {
-	if target.Platform != otogi.PlatformTelegram {
-		return nil, fmt.Errorf("%w: platform %s", otogi.ErrOutboundUnsupported, target.Platform)
+func (d *SinkDispatcher) resolvePeer(target otogi.OutboundTarget) (tg.InputPeerClass, error) {
+	if target.Sink != nil && target.Sink.Platform != "" && target.Sink.Platform != otogi.PlatformTelegram {
+		return nil, fmt.Errorf("%w: platform %s", otogi.ErrOutboundUnsupported, target.Sink.Platform)
 	}
 
 	peer, err := d.peers.Resolve(target.Conversation)
@@ -262,7 +262,7 @@ func (d *OutboundDispatcher) resolvePeer(target otogi.OutboundTarget) (tg.InputP
 	return peer, nil
 }
 
-func (d *OutboundDispatcher) logOutbound(ctx context.Context, operation string, attrs ...any) {
+func (d *SinkDispatcher) logOutbound(ctx context.Context, operation string, attrs ...any) {
 	if d.cfg.logger == nil {
 		return
 	}

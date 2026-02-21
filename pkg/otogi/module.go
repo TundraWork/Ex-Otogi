@@ -7,8 +7,8 @@ import (
 // EventHandler processes a single neutral event.
 type EventHandler func(ctx context.Context, event *Event) error
 
-// EventSink accepts neutral events for dispatching into the kernel.
-type EventSink interface {
+// EventDispatcher accepts neutral events for dispatching into the kernel.
+type EventDispatcher interface {
 	// Publish submits an event to downstream subscribers.
 	Publish(ctx context.Context, event *Event) error
 }
@@ -105,6 +105,9 @@ func cloneInterestSet(interest InterestSet) InterestSet {
 	if len(interest.Kinds) > 0 {
 		cloned.Kinds = append([]EventKind(nil), interest.Kinds...)
 	}
+	if len(interest.Sources) > 0 {
+		cloned.Sources = append([]EventSource(nil), interest.Sources...)
+	}
 	if len(interest.MediaTypes) > 0 {
 		cloned.MediaTypes = append([]MediaType(nil), interest.MediaTypes...)
 	}
@@ -123,7 +126,7 @@ type Driver interface {
 	Name() string
 	// Start starts consuming external updates and publishing neutral events.
 	// It should return only after context cancellation or fatal error.
-	Start(ctx context.Context, sink EventSink) error
+	Start(ctx context.Context, dispatcher EventDispatcher) error
 	// Shutdown stops external resources that are not tied to Start context alone.
 	Shutdown(ctx context.Context) error
 }

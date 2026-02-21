@@ -42,6 +42,24 @@ const (
 	PlatformTelegram Platform = "telegram"
 )
 
+// EventSource identifies which driver instance produced one inbound event.
+type EventSource struct {
+	// Platform identifies the upstream chat platform.
+	Platform Platform
+	// ID identifies one concrete configured driver instance.
+	ID string
+}
+
+// EventSink identifies which driver instance should receive one outbound operation.
+//
+// Empty ID acts as a platform-level wildcard for runtime resolution.
+type EventSink struct {
+	// Platform identifies the target chat platform.
+	Platform Platform
+	// ID identifies one concrete configured driver instance.
+	ID string
+}
+
 // ConversationType identifies conversation scope.
 type ConversationType string
 
@@ -66,8 +84,12 @@ type Event struct {
 	Kind EventKind
 	// OccurredAt is the source-platform timestamp for the event.
 	OccurredAt time.Time
-	// Platform identifies the upstream platform that produced the event.
+	// Platform is the legacy source platform field.
+	//
+	// Deprecated: use Source.Platform.
 	Platform Platform
+	// Source identifies the upstream driver instance that produced this event.
+	Source EventSource
 	// TenantID scopes the event to a tenant/workspace when multi-tenant routing is used.
 	TenantID string
 	// Conversation identifies where the event happened.
@@ -429,6 +451,9 @@ func (e *Event) Validate() error {
 	}
 	if e.OccurredAt.IsZero() {
 		return fmt.Errorf("%w: missing occurred_at", ErrInvalidEvent)
+	}
+	if e.Source.Platform == "" && e.Platform == "" {
+		return fmt.Errorf("%w: missing source platform", ErrInvalidEvent)
 	}
 	if e.Conversation.ID == "" {
 		return fmt.Errorf("%w: missing conversation id", ErrInvalidEvent)

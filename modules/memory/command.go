@@ -103,9 +103,13 @@ func commandLookup(event *otogi.Event, explicitArticleID string) (otogi.MemoryLo
 	}
 
 	if explicitArticleID != "" {
+		platform := event.Source.Platform
+		if platform == "" {
+			platform = event.Platform
+		}
 		lookup := otogi.MemoryLookup{
 			TenantID:       event.TenantID,
-			Platform:       event.Platform,
+			Platform:       platform,
 			ConversationID: event.Conversation.ID,
 			ArticleID:      explicitArticleID,
 		}

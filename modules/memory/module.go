@@ -53,7 +53,7 @@ func WithTTL(ttl time.Duration) Option {
 // Module stores article projections and per-article event history.
 type Module struct {
 	logger     *slog.Logger
-	dispatcher otogi.OutboundDispatcher
+	dispatcher otogi.SinkDispatcher
 	maxEntries int
 	ttl        time.Duration
 	clock      func() time.Time
@@ -129,7 +129,7 @@ func (m *Module) Spec() otogi.ModuleSpec {
 							otogi.EventKindArticleReactionRemoved,
 						},
 					},
-					RequiredServices: []string{otogi.ServiceOutboundDispatcher},
+					RequiredServices: []string{otogi.ServiceSinkDispatcher},
 				},
 				Subscription: otogi.NewDefaultSubscriptionSpec("memory-writer"),
 				Handler:      m.handleEvent,
@@ -146,7 +146,7 @@ func (m *Module) Spec() otogi.ModuleSpec {
 							historyCommandName,
 						},
 					},
-					RequiredServices: []string{otogi.ServiceOutboundDispatcher},
+					RequiredServices: []string{otogi.ServiceSinkDispatcher},
 				},
 				Subscription: otogi.NewDefaultSubscriptionSpec("memory-command-handler"),
 				Handler:      m.handleCommandEvent,
@@ -178,9 +178,9 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 		return fmt.Errorf("memory resolve logger: %w", err)
 	}
 
-	dispatcher, err := otogi.ResolveAs[otogi.OutboundDispatcher](
+	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceOutboundDispatcher,
+		otogi.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("memory resolve outbound dispatcher: %w", err)

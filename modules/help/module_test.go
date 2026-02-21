@@ -141,6 +141,12 @@ func TestModuleHandleCommand(t *testing.T) {
 					testCase.event.Article.ID,
 				)
 			}
+			if dispatcher.lastRequest.Target.Sink == nil {
+				t.Fatal("target sink = nil, want source sink")
+			}
+			if dispatcher.lastRequest.Target.Sink.ID != "tg-main" {
+				t.Fatalf("target sink id = %q, want tg-main", dispatcher.lastRequest.Target.Sink.ID)
+			}
 			for _, wantSubstring := range testCase.wantTextContains {
 				if !strings.Contains(dispatcher.lastRequest.Text, wantSubstring) {
 					t.Fatalf("text = %q, missing substring %q", dispatcher.lastRequest.Text, wantSubstring)
@@ -159,8 +165,8 @@ func TestModuleOnRegister(t *testing.T) {
 		{
 			name: "resolve dependencies succeeds",
 			services: map[string]any{
-				otogi.ServiceOutboundDispatcher: &captureDispatcher{},
-				otogi.ServiceCommandCatalog:     &captureCommandCatalog{},
+				otogi.ServiceSinkDispatcher: &captureDispatcher{},
+				otogi.ServiceCommandCatalog: &captureCommandCatalog{},
 			},
 		},
 		{
@@ -173,7 +179,7 @@ func TestModuleOnRegister(t *testing.T) {
 		{
 			name: "missing command catalog fails",
 			services: map[string]any{
-				otogi.ServiceOutboundDispatcher: &captureDispatcher{},
+				otogi.ServiceSinkDispatcher: &captureDispatcher{},
 			},
 			wantErrSubstring: "help resolve command catalog",
 		},
@@ -247,7 +253,10 @@ func newCommandEvent(text string) *otogi.Event {
 		ID:         "event-1",
 		Kind:       commandKind,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "42",
 			Type: otogi.ConversationTypePrivate,
@@ -272,7 +281,10 @@ func newMissingCommandPayloadEvent() *otogi.Event {
 		ID:         "event-1",
 		Kind:       otogi.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "42",
 			Type: otogi.ConversationTypePrivate,

@@ -193,7 +193,7 @@ func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *te
 
 	dispatcher := &commandReplyCaptureDispatcher{}
 	services := NewServiceRegistry()
-	if err := services.Register(otogi.ServiceOutboundDispatcher, dispatcher); err != nil {
+	if err := services.Register(otogi.ServiceSinkDispatcher, dispatcher); err != nil {
 		t.Fatalf("register dispatcher failed: %v", err)
 	}
 

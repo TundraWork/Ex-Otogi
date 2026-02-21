@@ -10,7 +10,6 @@ func TestOutboundRequestValidation(t *testing.T) {
 	t.Parallel()
 
 	validTarget := OutboundTarget{
-		Platform: PlatformTelegram,
 		Conversation: Conversation{
 			ID:   "chat-1",
 			Type: ConversationTypeGroup,
@@ -150,7 +149,7 @@ func TestOutboundRequestValidation(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "invalid target platform",
+			name: "target without sink override is valid",
 			check: func() error {
 				return SendMessageRequest{
 					Target: OutboundTarget{
@@ -159,7 +158,6 @@ func TestOutboundRequestValidation(t *testing.T) {
 					Text: "hello",
 				}.Validate()
 			},
-			wantErr: true,
 		},
 	}
 
@@ -240,8 +238,11 @@ func TestOutboundTargetFromEvent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if target.Platform != PlatformTelegram {
-				t.Fatalf("target platform = %s, want %s", target.Platform, PlatformTelegram)
+			if target.Sink == nil {
+				t.Fatal("target sink = nil, want populated sink")
+			}
+			if target.Sink.Platform != PlatformTelegram {
+				t.Fatalf("target sink platform = %s, want %s", target.Sink.Platform, PlatformTelegram)
 			}
 			if target.Conversation.ID != "chat-1" {
 				t.Fatalf("target conversation id = %s, want chat-1", target.Conversation.ID)

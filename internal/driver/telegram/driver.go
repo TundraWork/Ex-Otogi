@@ -86,7 +86,7 @@ func (d *Driver) Name() string {
 }
 
 // Start consumes Telegram updates and publishes neutral events.
-func (d *Driver) Start(ctx context.Context, sink otogi.EventSink) error {
+func (d *Driver) Start(ctx context.Context, sink otogi.EventDispatcher) error {
 	if sink == nil {
 		return fmt.Errorf("start telegram driver: nil sink")
 	}
@@ -107,11 +107,22 @@ func (d *Driver) Start(ctx context.Context, sink otogi.EventSink) error {
 }
 
 // handleUpdate decodes one platform update and publishes it with bounded latency.
-func (d *Driver) handleUpdate(ctx context.Context, update Update, sink otogi.EventSink) error {
+func (d *Driver) handleUpdate(ctx context.Context, update Update, sink otogi.EventDispatcher) error {
 	event, err := d.decodeSafely(ctx, update)
 	if err != nil {
 		d.cfg.onAsyncError(ctx, err)
 		return fmt.Errorf("handle update %s: %w", update.Type, err)
+	}
+	if event != nil {
+		if event.Source.Platform == "" {
+			event.Source.Platform = otogi.PlatformTelegram
+		}
+		if event.Source.ID == "" {
+			event.Source.ID = d.cfg.name
+		}
+		if event.Platform == "" {
+			event.Platform = event.Source.Platform
+		}
 	}
 
 	publishCtx := ctx

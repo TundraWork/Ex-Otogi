@@ -56,7 +56,7 @@ func TestParseLogLevel(t *testing.T) {
 }
 
 func TestLoadConfig(t *testing.T) {
-	t.Run("loads all supported fields from config file", func(t *testing.T) {
+	t.Run("loads drivers and routing config", func(t *testing.T) {
 		configPath := filepath.Join(t.TempDir(), "bot.json")
 		writeConfigFile(t, configPath, `{
 			"log_level":"warn",
@@ -66,16 +66,22 @@ func TestLoadConfig(t *testing.T) {
 				"subscription_buffer":64,
 				"subscription_workers":5
 			},
-			"telegram":{
-				"app_id":123456,
-				"app_hash":"sample_hash",
-				"publish_timeout":"11s",
-				"update_buffer":222,
-				"auth_timeout":"4m",
-				"code":"998877",
-				"phone":"+15550001111",
-				"password":"secret",
-				"session_file":"state/telegram/session.json"
+			"drivers":[
+				{
+					"name":"tg-main",
+					"type":"telegram",
+					"enabled":true,
+					"config":{
+						"app_id":123456,
+						"app_hash":"sample_hash"
+					}
+				}
+			],
+			"routing":{
+				"default":{
+					"sources":[{"platform":"telegram","id":"tg-main"}],
+					"sink":{"platform":"telegram","id":"tg-main"}
+				}
 			}
 		}`)
 		t.Setenv(envConfigFile, configPath)
@@ -100,32 +106,42 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.subscriptionWorkers != 5 {
 			t.Fatalf("subscription workers = %d, want 5", cfg.subscriptionWorkers)
 		}
-		if cfg.telegramAppID != 123456 {
-			t.Fatalf("telegram app id = %d, want 123456", cfg.telegramAppID)
+		if len(cfg.drivers) != 1 {
+			t.Fatalf("drivers len = %d, want 1", len(cfg.drivers))
 		}
-		if cfg.telegramAppHash != "sample_hash" {
-			t.Fatalf("telegram app hash = %q, want sample_hash", cfg.telegramAppHash)
+		if cfg.drivers[0].Name != "tg-main" {
+			t.Fatalf("driver name = %q, want tg-main", cfg.drivers[0].Name)
 		}
-		if cfg.telegramPublishTimeout != 11*time.Second {
-			t.Fatalf("telegram publish timeout = %s, want 11s", cfg.telegramPublishTimeout)
+		if cfg.routingDefault == nil || cfg.routingDefault.Sink == nil {
+			t.Fatal("expected routing default sink")
 		}
-		if cfg.telegramUpdateBuffer != 222 {
-			t.Fatalf("telegram update buffer = %d, want 222", cfg.telegramUpdateBuffer)
+		if cfg.routingDefault.Sink.ID != "tg-main" {
+			t.Fatalf("default sink id = %q, want tg-main", cfg.routingDefault.Sink.ID)
 		}
-		if cfg.telegramAuthTimeout != 4*time.Minute {
-			t.Fatalf("telegram auth timeout = %s, want 4m", cfg.telegramAuthTimeout)
+	})
+
+	t.Run("single-driver mode infers default route", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "bot.json")
+		writeConfigFile(t, configPath, `{
+			"drivers":[
+				{
+					"name":"tg-main",
+					"type":"telegram",
+					"config":{"app_id":123456,"app_hash":"sample_hash"}
+				}
+			]
+		}`)
+		t.Setenv(envConfigFile, configPath)
+
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatalf("load config failed: %v", err)
 		}
-		if cfg.telegramCode != "998877" {
-			t.Fatalf("telegram code = %q, want 998877", cfg.telegramCode)
+		if cfg.routingDefault == nil || cfg.routingDefault.Sink == nil {
+			t.Fatal("expected inferred default sink route")
 		}
-		if cfg.telegramPhone != "+15550001111" {
-			t.Fatalf("telegram phone = %q, want +15550001111", cfg.telegramPhone)
-		}
-		if cfg.telegramPassword != "secret" {
-			t.Fatalf("telegram password = %q, want secret", cfg.telegramPassword)
-		}
-		if cfg.telegramSessionFile != "state/telegram/session.json" {
-			t.Fatalf("telegram session file = %q, want state/telegram/session.json", cfg.telegramSessionFile)
+		if cfg.routingDefault.Sink.ID != "tg-main" {
+			t.Fatalf("default sink id = %q, want tg-main", cfg.routingDefault.Sink.ID)
 		}
 	})
 
@@ -133,10 +149,9 @@ func TestLoadConfig(t *testing.T) {
 		workDir := t.TempDir()
 		configPath := filepath.Join(workDir, "bin", "config", "bot.json")
 		writeConfigFile(t, configPath, `{
-			"telegram":{
-				"app_id":777,
-				"app_hash":"fallback_hash"
-			}
+			"drivers":[
+				{"name":"tg-main","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}
+			]
 		}`)
 
 		currentDir, err := os.Getwd()
@@ -157,12 +172,8 @@ func TestLoadConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load config failed: %v", err)
 		}
-
-		if cfg.telegramAppID != 777 {
-			t.Fatalf("telegram app id = %d, want 777", cfg.telegramAppID)
-		}
-		if cfg.telegramAppHash != "fallback_hash" {
-			t.Fatalf("telegram app hash = %q, want fallback_hash", cfg.telegramAppHash)
+		if len(cfg.drivers) != 1 || cfg.drivers[0].Name != "tg-main" {
+			t.Fatalf("unexpected drivers: %+v", cfg.drivers)
 		}
 	})
 
@@ -174,33 +185,23 @@ func TestLoadConfig(t *testing.T) {
 		}{
 			{
 				name:       "invalid log level",
-				fileJSON:   `{"log_level":"trace","telegram":{"app_id":1,"app_hash":"hash"}}`,
+				fileJSON:   `{"log_level":"trace","drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
 				wantErrSub: "parse log_level",
 			},
 			{
 				name:       "invalid kernel timeout",
-				fileJSON:   `{"kernel":{"module_hook_timeout":"bad"},"telegram":{"app_id":1,"app_hash":"hash"}}`,
+				fileJSON:   `{"kernel":{"module_hook_timeout":"bad"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
 				wantErrSub: "parse kernel.module_hook_timeout",
 			},
 			{
-				name:       "non-positive kernel buffer",
-				fileJSON:   `{"kernel":{"subscription_buffer":0},"telegram":{"app_id":1,"app_hash":"hash"}}`,
-				wantErrSub: "parse kernel.subscription_buffer",
+				name:       "missing drivers",
+				fileJSON:   `{}`,
+				wantErrSub: "at least one enabled driver",
 			},
 			{
-				name:       "invalid telegram timeout",
-				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash","auth_timeout":"bad"}}`,
-				wantErrSub: "parse telegram.auth_timeout",
-			},
-			{
-				name:       "non-positive telegram update buffer",
-				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash","update_buffer":0}}`,
-				wantErrSub: "parse telegram.update_buffer",
-			},
-			{
-				name:       "non-positive telegram app id",
-				fileJSON:   `{"telegram":{"app_id":0,"app_hash":"hash"}}`,
-				wantErrSub: "parse telegram.app_id",
+				name:       "legacy telegram section rejected",
+				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash"}}`,
+				wantErrSub: "legacy telegram config",
 			},
 		}
 
@@ -222,39 +223,22 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("missing required app credentials fail", func(t *testing.T) {
-		tests := []struct {
-			name       string
-			fileJSON   string
-			wantErrSub string
-		}{
-			{
-				name:       "app id missing",
-				fileJSON:   `{"telegram":{"app_hash":"hash"}}`,
-				wantErrSub: "telegram.app_id must be > 0",
-			},
-			{
-				name:       "app hash missing",
-				fileJSON:   `{"telegram":{"app_id":1}}`,
-				wantErrSub: "telegram.app_hash is required",
-			},
+	t.Run("multi-driver requires default route unless all modules override", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "bot.json")
+		writeConfigFile(t, configPath, `{
+			"drivers":[
+				{"name":"tg-main","type":"telegram","config":{"app_id":1,"app_hash":"hash"}},
+				{"name":"tg-alt","type":"telegram","config":{"app_id":2,"app_hash":"hash2"}}
+			]
+		}`)
+		t.Setenv(envConfigFile, configPath)
+
+		_, err := loadConfig()
+		if err == nil {
+			t.Fatal("expected error")
 		}
-
-		for _, testCase := range tests {
-			testCase := testCase
-			t.Run(testCase.name, func(t *testing.T) {
-				configPath := filepath.Join(t.TempDir(), "bot.json")
-				writeConfigFile(t, configPath, testCase.fileJSON)
-				t.Setenv(envConfigFile, configPath)
-
-				_, err := loadConfig()
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				if !strings.Contains(err.Error(), testCase.wantErrSub) {
-					t.Fatalf("error = %v, want substring %q", err, testCase.wantErrSub)
-				}
-			})
+		if !strings.Contains(err.Error(), "routing.default is required") {
+			t.Fatalf("error = %v, want routing.default error", err)
 		}
 	})
 
@@ -262,35 +246,6 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv(envConfigFile, filepath.Join(t.TempDir(), "missing.json"))
 		if _, err := loadConfig(); err == nil {
 			t.Fatal("expected error for missing config file")
-		}
-	})
-}
-
-func TestNewGotdSessionStorage(t *testing.T) {
-	t.Run("creates parent directories and absolute path", func(t *testing.T) {
-		sessionPath := filepath.Join(t.TempDir(), "nested", "telegram", "session.json")
-
-		storage, err := newGotdSessionStorage(sessionPath)
-		if err != nil {
-			t.Fatalf("new gotd session storage failed: %v", err)
-		}
-
-		if !filepath.IsAbs(storage.Path) {
-			t.Fatalf("session path = %q, want absolute path", storage.Path)
-		}
-		parent := filepath.Dir(storage.Path)
-		info, err := os.Stat(parent)
-		if err != nil {
-			t.Fatalf("stat session parent dir: %v", err)
-		}
-		if !info.IsDir() {
-			t.Fatalf("session parent %q is not a directory", parent)
-		}
-	})
-
-	t.Run("empty path fails", func(t *testing.T) {
-		if _, err := newGotdSessionStorage("   "); err == nil {
-			t.Fatal("expected error for empty session path")
 		}
 	})
 }

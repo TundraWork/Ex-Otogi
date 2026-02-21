@@ -18,6 +18,10 @@ type Capability struct {
 type InterestSet struct {
 	// Kinds restricts matching to specific event kinds when non-empty.
 	Kinds []EventKind
+	// Sources restricts matching to one or more source identities.
+	//
+	// Empty ID in one source entry acts as a platform wildcard.
+	Sources []EventSource
 	// CommandNames restricts matching to specific command names when non-empty.
 	CommandNames []string
 	// MediaTypes restricts matching to events carrying at least one listed media type.
@@ -40,6 +44,9 @@ func (i InterestSet) Matches(event *Event) bool {
 		return false
 	}
 	if len(i.Kinds) > 0 && !containsKind(i.Kinds, event.Kind) {
+		return false
+	}
+	if len(i.Sources) > 0 && !containsSource(i.Sources, event.Source) {
 		return false
 	}
 	if i.RequireArticle && event.Article == nil {
@@ -77,6 +84,9 @@ func (i InterestSet) Allows(filter InterestSet) bool {
 	if len(i.Kinds) > 0 && !allKindsIncluded(filter.Kinds, i.Kinds) {
 		return false
 	}
+	if len(i.Sources) > 0 && !allSourcesIncluded(filter.Sources, i.Sources) {
+		return false
+	}
 	if len(i.MediaTypes) > 0 && !allMediaTypesIncluded(filter.MediaTypes, i.MediaTypes) {
 		return false
 	}
@@ -108,6 +118,22 @@ func containsKind(kinds []EventKind, target EventKind) bool {
 		if candidate == target {
 			return true
 		}
+	}
+
+	return false
+}
+
+// containsSource reports whether target is matched by one configured source filter.
+func containsSource(sources []EventSource, target EventSource) bool {
+	for _, source := range sources {
+		if source.Platform != "" && source.Platform != target.Platform {
+			continue
+		}
+		if source.ID != "" && source.ID != target.ID {
+			continue
+		}
+
+		return true
 	}
 
 	return false
@@ -149,6 +175,17 @@ func (e *Event) ArticleMedia() []MediaAttachment {
 func allKindsIncluded(subset, allowed []EventKind) bool {
 	for _, item := range subset {
 		if !containsKind(allowed, item) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// allSourcesIncluded reports whether each source filter in subset is allowed.
+func allSourcesIncluded(subset, allowed []EventSource) bool {
+	for _, source := range subset {
+		if !containsSource(allowed, source) {
 			return false
 		}
 	}

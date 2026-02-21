@@ -11,7 +11,7 @@ const pingCommandName = "ping"
 
 // Module replies with "pong!" when it receives a "/ping" command event.
 type Module struct {
-	dispatcher otogi.OutboundDispatcher
+	dispatcher otogi.SinkDispatcher
 }
 
 // New creates a ping-pong module with default configuration.
@@ -38,7 +38,7 @@ func (m *Module) Spec() otogi.ModuleSpec {
 						CommandNames:   []string{pingCommandName},
 						RequireArticle: true,
 					},
-					RequiredServices: []string{otogi.ServiceOutboundDispatcher},
+					RequiredServices: []string{otogi.ServiceSinkDispatcher},
 				},
 				Subscription: otogi.NewDefaultSubscriptionSpec("pingpong-commands"),
 				Handler:      m.handleCommand,
@@ -56,9 +56,9 @@ func (m *Module) Spec() otogi.ModuleSpec {
 
 // OnRegister resolves outbound dependencies required by this module.
 func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
-	dispatcher, err := otogi.ResolveAs[otogi.OutboundDispatcher](
+	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceOutboundDispatcher,
+		otogi.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("pingpong resolve outbound dispatcher: %w", err)

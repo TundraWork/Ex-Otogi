@@ -49,11 +49,15 @@ type moduleRuntime struct {
 	serviceLookup otogi.ServiceRegistry
 	bus           otogi.EventBus
 	record        *moduleRecord
+	defaultSink   *otogi.EventSink
 }
 
 // Services returns the kernel service registry visible to the module.
 func (r *moduleRuntime) Services() otogi.ServiceRegistry {
-	return r.serviceLookup
+	return moduleServiceRegistry{
+		base:        r.serviceLookup,
+		defaultSink: cloneSinkRef(r.defaultSink),
+	}
 }
 
 // Subscribe registers a module-owned subscription after capability checks.
@@ -94,4 +98,100 @@ func assertSubscriptionAllowed(capabilities []otogi.Capability, subscriptionName
 	}
 
 	return fmt.Errorf("subscription does not match declared module capabilities")
+}
+
+type moduleServiceRegistry struct {
+	base        otogi.ServiceRegistry
+	defaultSink *otogi.EventSink
+}
+
+func (r moduleServiceRegistry) Register(name string, service any) error {
+	if err := r.base.Register(name, service); err != nil {
+		return fmt.Errorf("register service %s: %w", name, err)
+	}
+
+	return nil
+}
+
+func (r moduleServiceRegistry) Resolve(name string) (any, error) {
+	service, err := r.base.Resolve(name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve service %s: %w", name, err)
+	}
+	if name != otogi.ServiceSinkDispatcher {
+		return service, nil
+	}
+	dispatcher, ok := service.(otogi.SinkDispatcher)
+	if !ok {
+		return nil, fmt.Errorf("resolve service %s: type assertion failed", name)
+	}
+
+	return moduleSinkDispatcher{
+		base:        dispatcher,
+		defaultSink: cloneSinkRef(r.defaultSink),
+	}, nil
+}
+
+type moduleSinkDispatcher struct {
+	base        otogi.SinkDispatcher
+	defaultSink *otogi.EventSink
+}
+
+func (d moduleSinkDispatcher) SendMessage(
+	ctx context.Context,
+	request otogi.SendMessageRequest,
+) (*otogi.OutboundMessage, error) {
+	request.Target = withDefaultSink(request.Target, d.defaultSink)
+	message, err := d.base.SendMessage(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("send message with module sink routing: %w", err)
+	}
+
+	return message, nil
+}
+
+func (d moduleSinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
+	request.Target = withDefaultSink(request.Target, d.defaultSink)
+	if err := d.base.EditMessage(ctx, request); err != nil {
+		return fmt.Errorf("edit message with module sink routing: %w", err)
+	}
+
+	return nil
+}
+
+func (d moduleSinkDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
+	request.Target = withDefaultSink(request.Target, d.defaultSink)
+	if err := d.base.DeleteMessage(ctx, request); err != nil {
+		return fmt.Errorf("delete message with module sink routing: %w", err)
+	}
+
+	return nil
+}
+
+func (d moduleSinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
+	request.Target = withDefaultSink(request.Target, d.defaultSink)
+	if err := d.base.SetReaction(ctx, request); err != nil {
+		return fmt.Errorf("set reaction with module sink routing: %w", err)
+	}
+
+	return nil
+}
+
+func withDefaultSink(target otogi.OutboundTarget, defaultSink *otogi.EventSink) otogi.OutboundTarget {
+	if target.Sink != nil || defaultSink == nil {
+		return target
+	}
+
+	target.Sink = cloneSinkRef(defaultSink)
+
+	return target
+}
+
+func cloneSinkRef(sink *otogi.EventSink) *otogi.EventSink {
+	if sink == nil {
+		return nil
+	}
+	cloned := *sink
+
+	return &cloned
 }

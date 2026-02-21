@@ -91,6 +91,12 @@ func TestModuleHandleCommand(t *testing.T) {
 					testCase.event.Article.ID,
 				)
 			}
+			if dispatcher.lastRequest.Target.Sink == nil {
+				t.Fatal("target sink = nil, want source sink")
+			}
+			if dispatcher.lastRequest.Target.Sink.ID != "tg-main" {
+				t.Fatalf("target sink id = %q, want tg-main", dispatcher.lastRequest.Target.Sink.ID)
+			}
 		})
 	}
 }
@@ -103,7 +109,7 @@ func TestModuleOnRegister(t *testing.T) {
 	runtime := moduleRuntimeStub{
 		registry: serviceRegistryStub{
 			values: map[string]any{
-				otogi.ServiceOutboundDispatcher: dispatcher,
+				otogi.ServiceSinkDispatcher: dispatcher,
 			},
 		},
 	}
@@ -155,8 +161,8 @@ func TestModuleSpecUsesCommandCapability(t *testing.T) {
 	for _, serviceName := range handler.Capability.RequiredServices {
 		required[serviceName] = true
 	}
-	if !required[otogi.ServiceOutboundDispatcher] {
-		t.Fatalf("required services missing %s", otogi.ServiceOutboundDispatcher)
+	if !required[otogi.ServiceSinkDispatcher] {
+		t.Fatalf("required services missing %s", otogi.ServiceSinkDispatcher)
 	}
 	if len(required) != 1 {
 		t.Fatalf("required service count = %d, want 1", len(required))
@@ -180,7 +186,10 @@ func newCommandEvent(text string) *otogi.Event {
 		ID:         "event-1",
 		Kind:       commandKind,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "42",
 			Type: otogi.ConversationTypePrivate,
@@ -205,7 +214,10 @@ func newMissingCommandPayloadEvent() *otogi.Event {
 		ID:         "event-1",
 		Kind:       otogi.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
 		Conversation: otogi.Conversation{
 			ID:   "42",
 			Type: otogi.ConversationTypePrivate,
