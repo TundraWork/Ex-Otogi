@@ -18,9 +18,9 @@ import (
 	"ex-otogi/modules/llmchat"
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
+	"ex-otogi/pkg/llm"
+	openaillm "ex-otogi/pkg/llm/providers/openai"
 	"ex-otogi/pkg/otogi"
-	servicesllm "ex-otogi/services/llm"
-	openaillm "ex-otogi/services/llm/providers/openai"
 )
 
 const (
@@ -517,7 +517,7 @@ func registerRuntimeServices(
 			return fmt.Errorf("build llm providers: %w", err)
 		}
 
-		registry, err := servicesllm.NewRegistry(providers)
+		registry, err := llm.NewRegistry(providers)
 		if err != nil {
 			return fmt.Errorf("new llm provider registry: %w", err)
 		}
