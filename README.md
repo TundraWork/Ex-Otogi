@@ -45,6 +45,7 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 
 ## Development
 
+- `make fmt`: format code.
 - `make lint`: static checks + architecture checks.
 - `make test`: run `go test -race ./...`.
 - `make generate`: regenerate mocks/generated code.
