@@ -95,9 +95,9 @@ func (k *Kernel) lookupCommand(prefix otogi.CommandPrefix, name string) (otogi.C
 	return cloneCommandSpec(registration.spec), true
 }
 
-// newDriverEventSink creates the source-event sink wrapped with command derivation.
-func (k *Kernel) newDriverEventSink() otogi.EventDispatcher {
-	return &commandDerivingSink{
+// newDriverEventDispatcher creates the source-event dispatcher wrapped with command derivation.
+func (k *Kernel) newDriverEventDispatcher() otogi.EventDispatcher {
+	return &commandDerivingDispatcher{
 		base: k.bus,
 		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
 			return k.lookupCommand(prefix, name)
@@ -107,8 +107,8 @@ func (k *Kernel) newDriverEventSink() otogi.EventDispatcher {
 	}
 }
 
-// commandDerivingSink publishes source events and derives command events.
-type commandDerivingSink struct {
+// commandDerivingDispatcher publishes source events and conditionally derives command events.
+type commandDerivingDispatcher struct {
 	base          otogi.EventDispatcher
 	lookupCommand func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool)
 	serviceLookup otogi.ServiceRegistry
@@ -116,7 +116,7 @@ type commandDerivingSink struct {
 }
 
 // Publish forwards one source event and conditionally derives one command event.
-func (s *commandDerivingSink) Publish(ctx context.Context, event *otogi.Event) error {
+func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *otogi.Event) error {
 	if event == nil {
 		return fmt.Errorf("publish command deriving sink: nil event")
 	}
@@ -164,7 +164,7 @@ func (s *commandDerivingSink) Publish(ctx context.Context, event *otogi.Event) e
 	return nil
 }
 
-func (s *commandDerivingSink) replyCommandError(
+func (s *commandDerivingDispatcher) replyCommandError(
 	ctx context.Context,
 	sourceEvent *otogi.Event,
 	spec otogi.CommandSpec,
@@ -208,7 +208,7 @@ func (s *commandDerivingSink) replyCommandError(
 	}
 }
 
-func (s *commandDerivingSink) reportAsyncError(ctx context.Context, scope string, err error) {
+func (s *commandDerivingDispatcher) reportAsyncError(ctx context.Context, scope string, err error) {
 	if s.reportAsync != nil {
 		s.reportAsync(ctx, scope, err)
 	}

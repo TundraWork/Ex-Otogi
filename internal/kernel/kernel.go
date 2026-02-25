@@ -279,7 +279,7 @@ func (k *Kernel) startDrivers(ctx context.Context) (<-chan error, func()) {
 	}
 	k.mu.RUnlock()
 
-	driverSink := k.newDriverEventSink()
+	eventDispatcher := k.newDriverEventDispatcher()
 
 	for _, name := range order {
 		driver := drivers[name]
@@ -291,7 +291,7 @@ func (k *Kernel) startDrivers(ctx context.Context) (<-chan error, func()) {
 		go func(driverName string, adapter otogi.Driver) {
 			defer workerWG.Done()
 			err := runSafely("driver "+driverName+" Start", func() error {
-				return adapter.Start(ctx, driverSink)
+				return adapter.Start(ctx, eventDispatcher)
 			})
 			if err == nil || isContextCancellation(err) {
 				return

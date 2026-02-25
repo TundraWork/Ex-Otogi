@@ -33,7 +33,7 @@ func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) 
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	sink := &commandDerivingSink{
+	sink := &commandDerivingDispatcher{
 		base: bus,
 		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
 			if prefix == otogi.CommandPrefixOrdinary && name == "raw" {
@@ -94,7 +94,7 @@ func TestCommandDerivingSinkPublishesDerivedEditedCommandEvent(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	sink := &commandDerivingSink{
+	sink := &commandDerivingDispatcher{
 		base: bus,
 		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
 			if prefix == otogi.CommandPrefixSystem && name == "history" {
@@ -150,7 +150,7 @@ func TestCommandDerivingSinkUnregisteredCommandPublishesOnlySourceEvent(t *testi
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	sink := &commandDerivingSink{
+	sink := &commandDerivingDispatcher{
 		base: bus,
 		lookupCommand: func(otogi.CommandPrefix, string) (otogi.CommandSpec, bool) {
 			return otogi.CommandSpec{}, false
@@ -197,7 +197,7 @@ func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *te
 		t.Fatalf("register dispatcher failed: %v", err)
 	}
 
-	sink := &commandDerivingSink{
+	sink := &commandDerivingDispatcher{
 		base: bus,
 		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
 			if prefix == otogi.CommandPrefixOrdinary && name == "raw" {
