@@ -24,6 +24,11 @@ type MemoryService interface {
 	// When the event has no reply target or the memory has no entry, found is
 	// false and err is nil.
 	GetReplied(ctx context.Context, event *Event) (memory Memory, found bool, err error)
+	// GetReplyChain resolves one reply chain for the event article.
+	//
+	// The returned chain is ordered oldest -> newest and always includes the
+	// current inbound event article as the last entry when event is valid.
+	GetReplyChain(ctx context.Context, event *Event) ([]ReplyChainEntry, error)
 }
 
 // MemoryLookup identifies one memory entry in a conversation scope.
@@ -194,4 +199,16 @@ type Memory struct {
 	CreatedAt time.Time
 	// UpdatedAt records when this memory entry was last updated.
 	UpdatedAt time.Time
+}
+
+// ReplyChainEntry is one immutable entry in a resolved reply chain.
+type ReplyChainEntry struct {
+	// Conversation identifies where this article was sent.
+	Conversation Conversation
+	// Actor identifies who authored this article when known.
+	Actor Actor
+	// Article stores the projected article payload for this chain entry.
+	Article Article
+	// IsCurrent reports whether this entry is the current inbound event article.
+	IsCurrent bool
 }

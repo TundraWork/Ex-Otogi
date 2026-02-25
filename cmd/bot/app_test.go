@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +12,9 @@ import (
 	"time"
 
 	driverpkg "ex-otogi/internal/driver"
+	"ex-otogi/internal/kernel"
+	"ex-otogi/modules/llmchat"
+	"ex-otogi/pkg/otogi"
 )
 
 func writeConfigFile(t *testing.T, path string, contents string) {
@@ -20,6 +26,32 @@ func writeConfigFile(t *testing.T, path string, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
 	}
+}
+
+func writeLLMConfigFile(t *testing.T, path string) {
+	t.Helper()
+
+	writeConfigFile(t, path, `{
+		"request_timeout":"30s",
+		"providers":{
+			"openai-main":{
+				"type":"openai",
+				"api_key":"sk-test",
+				"base_url":"https://api.openai.com/v1",
+				"timeout":"15s",
+				"max_retries":2
+			}
+		},
+		"agents":[
+			{
+				"name":"Otogi",
+				"description":"Assistant",
+				"provider":"openai-main",
+				"model":"gpt-5-mini",
+				"system_prompt_template":"You are {{.AgentName}}"
+			}
+		]
+	}`)
 }
 
 func mustBuiltinDriverRegistry(t *testing.T) *driverpkg.Registry {
@@ -266,4 +298,279 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatal("expected error for missing config file")
 		}
 	})
+
+	t.Run("llm config file from bot config enables llm module", func(t *testing.T) {
+		rootDir := t.TempDir()
+		llmConfigPath := filepath.Join(rootDir, "llm.json")
+		writeLLMConfigFile(t, llmConfigPath)
+
+		configPath := filepath.Join(rootDir, "bot.json")
+		writeConfigFile(t, configPath, `{
+			"drivers":[
+				{
+					"name":"tg-main",
+					"type":"telegram",
+					"config":{"app_id":123456,"app_hash":"sample_hash"}
+				}
+			],
+			"llm":{
+				"config_file":"`+llmConfigPath+`"
+			}
+		}`)
+		t.Setenv(envConfigFile, configPath)
+
+		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
+		if err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+		if cfg.llmConfig == nil {
+			t.Fatal("expected llm config to be loaded")
+		}
+		if cfg.llmConfigFile != llmConfigPath {
+			t.Fatalf("llm config file = %q, want %q", cfg.llmConfigFile, llmConfigPath)
+		}
+
+		moduleNames := configuredRuntimeModuleNames(&cfg)
+		found := false
+		for _, moduleName := range moduleNames {
+			if moduleName == "llmchat" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("configured modules = %v, want llmchat included", moduleNames)
+		}
+	})
+
+	t.Run("llm config env override takes precedence", func(t *testing.T) {
+		rootDir := t.TempDir()
+		llmConfigFromFile := filepath.Join(rootDir, "llm-file.json")
+		llmConfigFromEnv := filepath.Join(rootDir, "llm-env.json")
+		writeLLMConfigFile(t, llmConfigFromFile)
+		writeLLMConfigFile(t, llmConfigFromEnv)
+
+		configPath := filepath.Join(rootDir, "bot.json")
+		writeConfigFile(t, configPath, `{
+			"drivers":[
+				{
+					"name":"tg-main",
+					"type":"telegram",
+					"config":{"app_id":123456,"app_hash":"sample_hash"}
+				}
+			],
+			"llm":{
+				"config_file":"`+llmConfigFromFile+`"
+			}
+		}`)
+		t.Setenv(envConfigFile, configPath)
+		t.Setenv(envLLMConfigFile, llmConfigFromEnv)
+
+		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
+		if err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+		if cfg.llmConfigFile != llmConfigFromEnv {
+			t.Fatalf("llm config file = %q, want env override %q", cfg.llmConfigFile, llmConfigFromEnv)
+		}
+	})
+
+	t.Run("configured llm path missing fails fast", func(t *testing.T) {
+		rootDir := t.TempDir()
+		configPath := filepath.Join(rootDir, "bot.json")
+		missingLLMConfigPath := filepath.Join(rootDir, "missing-llm.json")
+		writeConfigFile(t, configPath, `{
+			"drivers":[
+				{
+					"name":"tg-main",
+					"type":"telegram",
+					"config":{"app_id":123456,"app_hash":"sample_hash"}
+				}
+			],
+			"llm":{
+				"config_file":"`+missingLLMConfigPath+`"
+			}
+		}`)
+		t.Setenv(envConfigFile, configPath)
+
+		_, err := loadConfig(mustBuiltinDriverRegistry(t))
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "load llm config file") {
+			t.Fatalf("error = %v, want llm config load failure", err)
+		}
+	})
+
+	t.Run("invalid llm provider profile fails fast", func(t *testing.T) {
+		rootDir := t.TempDir()
+		llmConfigPath := filepath.Join(rootDir, "llm-invalid.json")
+		writeConfigFile(t, llmConfigPath, `{
+			"providers":{
+				"openai-main":{"type":"openai","api_key":""}
+			},
+			"agents":[
+				{
+					"name":"Otogi",
+					"description":"Assistant",
+					"provider":"openai-main",
+					"model":"gpt-5-mini",
+					"system_prompt_template":"You are {{.AgentName}}"
+				}
+			]
+		}`)
+
+		configPath := filepath.Join(rootDir, "bot.json")
+		writeConfigFile(t, configPath, `{
+			"drivers":[
+				{
+					"name":"tg-main",
+					"type":"telegram",
+					"config":{"app_id":123456,"app_hash":"sample_hash"}
+				}
+			],
+			"llm":{
+				"config_file":"`+llmConfigPath+`"
+			}
+		}`)
+		t.Setenv(envConfigFile, configPath)
+
+		_, err := loadConfig(mustBuiltinDriverRegistry(t))
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "load llm config file") {
+			t.Fatalf("error = %v, want llm config load failure", err)
+		}
+	})
+}
+
+func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("llm disabled does not register provider registry", func(t *testing.T) {
+		kernelRuntime := kernel.New()
+		err := registerRuntimeServices(kernelRuntime, logger, &sinkDispatcherTestStub{}, appConfig{})
+		if err != nil {
+			t.Fatalf("registerRuntimeServices failed: %v", err)
+		}
+
+		_, resolveErr := kernelRuntime.Services().Resolve(otogi.ServiceLLMProviderRegistry)
+		if !errors.Is(resolveErr, otogi.ErrServiceNotFound) {
+			t.Fatalf("resolve provider registry error = %v, want ErrServiceNotFound", resolveErr)
+		}
+	})
+
+	t.Run("llm enabled registers provider registry with multiple profiles", func(t *testing.T) {
+		kernelRuntime := kernel.New()
+		cfg := appConfig{
+			llmConfig: &llmchat.Config{
+				RequestTimeout: time.Second,
+				Providers: map[string]llmchat.ProviderProfile{
+					"openai-main": {
+						Type:   "openai",
+						APIKey: "sk-main",
+					},
+					"openai-backup": {
+						Type:   "openai",
+						APIKey: "sk-backup",
+					},
+				},
+				Agents: []llmchat.Agent{
+					{
+						Name:                 "Otogi",
+						Description:          "Primary",
+						Provider:             "openai-main",
+						Model:                "gpt-5-mini",
+						SystemPromptTemplate: "You are {{.AgentName}}",
+					},
+					{
+						Name:                 "OtogiBackup",
+						Description:          "Backup",
+						Provider:             "openai-backup",
+						Model:                "gpt-5-mini",
+						SystemPromptTemplate: "You are {{.AgentName}}",
+					},
+				},
+			},
+		}
+
+		err := registerRuntimeServices(kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
+		if err != nil {
+			t.Fatalf("registerRuntimeServices failed: %v", err)
+		}
+
+		resolved, err := kernelRuntime.Services().Resolve(otogi.ServiceLLMProviderRegistry)
+		if err != nil {
+			t.Fatalf("resolve provider registry failed: %v", err)
+		}
+		registry, ok := resolved.(otogi.LLMProviderRegistry)
+		if !ok {
+			t.Fatalf("resolved registry type = %T, want otogi.LLMProviderRegistry", resolved)
+		}
+		if _, err := registry.Resolve("openai-main"); err != nil {
+			t.Fatalf("resolve openai-main failed: %v", err)
+		}
+		if _, err := registry.Resolve("openai-backup"); err != nil {
+			t.Fatalf("resolve openai-backup failed: %v", err)
+		}
+	})
+
+	t.Run("invalid provider config fails fast during service registration", func(t *testing.T) {
+		kernelRuntime := kernel.New()
+		cfg := appConfig{
+			llmConfig: &llmchat.Config{
+				RequestTimeout: time.Second,
+				Providers: map[string]llmchat.ProviderProfile{
+					"openai-main": {
+						Type:   "openai",
+						APIKey: "",
+					},
+				},
+				Agents: []llmchat.Agent{
+					{
+						Name:                 "Otogi",
+						Description:          "Primary",
+						Provider:             "openai-main",
+						Model:                "gpt-5-mini",
+						SystemPromptTemplate: "You are {{.AgentName}}",
+					},
+				},
+			},
+		}
+
+		err := registerRuntimeServices(kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "build llm providers") {
+			t.Fatalf("error = %v, want build llm providers failure", err)
+		}
+	})
+}
+
+type sinkDispatcherTestStub struct{}
+
+func (*sinkDispatcherTestStub) SendMessage(context.Context, otogi.SendMessageRequest) (*otogi.OutboundMessage, error) {
+	return &otogi.OutboundMessage{ID: "msg-1"}, nil
+}
+
+func (*sinkDispatcherTestStub) EditMessage(context.Context, otogi.EditMessageRequest) error {
+	return nil
+}
+
+func (*sinkDispatcherTestStub) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+	return nil
+}
+
+func (*sinkDispatcherTestStub) SetReaction(context.Context, otogi.SetReactionRequest) error {
+	return nil
+}
+
+func (*sinkDispatcherTestStub) ListSinks(context.Context) ([]otogi.EventSink, error) {
+	return nil, nil
+}
+
+func (*sinkDispatcherTestStub) ListSinksByPlatform(context.Context, otogi.Platform) ([]otogi.EventSink, error) {
+	return nil, nil
 }

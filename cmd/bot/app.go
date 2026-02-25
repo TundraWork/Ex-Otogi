@@ -15,13 +15,17 @@ import (
 	"ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
 	"ex-otogi/modules/help"
+	"ex-otogi/modules/llmchat"
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/pkg/otogi"
+	servicesllm "ex-otogi/services/llm"
+	openaillm "ex-otogi/services/llm/providers/openai"
 )
 
 const (
 	envConfigFile             = "OTOGI_CONFIG_FILE"
+	envLLMConfigFile          = "OTOGI_LLM_CONFIG_FILE"
 	defaultConfigFilePath     = "config/bot.json"
 	alternateConfigFilePath   = "bin/config/bot.json"
 	defaultModuleHookTimeout  = 3 * time.Second
@@ -30,7 +34,7 @@ const (
 	defaultSubscriptionWorker = 2
 )
 
-var runtimeModuleNames = []string{"memory", "pingpong", "help"}
+var baseRuntimeModuleNames = []string{"memory", "pingpong", "help"}
 
 type appConfig struct {
 	logLevel slog.Level
@@ -43,6 +47,9 @@ type appConfig struct {
 	drivers        []driver.Definition
 	routingDefault *kernel.ModuleRoute
 	moduleRoutes   map[string]kernel.ModuleRoute
+
+	llmConfigFile string
+	llmConfig     *llmchat.Config
 }
 
 type fileConfig struct {
@@ -50,6 +57,7 @@ type fileConfig struct {
 	Kernel   fileKernelConfig  `json:"kernel"`
 	Drivers  []fileDriverEntry `json:"drivers"`
 	Routing  fileRoutingConfig `json:"routing"`
+	LLM      fileLLMConfig     `json:"llm"`
 }
 
 type fileKernelConfig struct {
@@ -86,6 +94,10 @@ type fileSinkRef struct {
 	ID       string `json:"id"`
 }
 
+type fileLLMConfig struct {
+	ConfigFile string `json:"config_file"`
+}
+
 func run() error {
 	registry, err := driver.NewBuiltinRegistry()
 	if err != nil {
@@ -108,10 +120,10 @@ func run() error {
 	if err := registerRuntimeDrivers(kernelRuntime, drivers); err != nil {
 		return err
 	}
-	if err := registerRuntimeServices(kernelRuntime, logger, sinkDispatcher); err != nil {
+	if err := registerRuntimeServices(kernelRuntime, logger, sinkDispatcher, cfg); err != nil {
 		return err
 	}
-	if err := registerRuntimeModules(context.Background(), kernelRuntime); err != nil {
+	if err := registerRuntimeModules(context.Background(), kernelRuntime, cfg); err != nil {
 		return err
 	}
 
@@ -134,6 +146,16 @@ func loadConfig(registry *driver.Registry) (appConfig, error) {
 
 	if err := applyConfigFile(&cfg, configFile); err != nil {
 		return appConfig{}, err
+	}
+	if envPath := strings.TrimSpace(os.Getenv(envLLMConfigFile)); envPath != "" {
+		cfg.llmConfigFile = envPath
+	}
+	if cfg.llmConfigFile != "" {
+		llmConfig, err := llmchat.LoadConfigFile(cfg.llmConfigFile)
+		if err != nil {
+			return appConfig{}, fmt.Errorf("load llm config file %s: %w", cfg.llmConfigFile, err)
+		}
+		cfg.llmConfig = &llmConfig
 	}
 	if err := validateAppConfig(&cfg, registry); err != nil {
 		return appConfig{}, fmt.Errorf("validate config file %s: %w", configFile, err)
@@ -276,6 +298,7 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		}
 		cfg.moduleRoutes[moduleName] = route
 	}
+	cfg.llmConfigFile = strings.TrimSpace(parsed.LLM.ConfigFile)
 
 	return nil
 }
@@ -344,8 +367,9 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 		return fmt.Errorf("at least one enabled driver is required")
 	}
 
-	knownModules := make(map[string]struct{}, len(runtimeModuleNames))
-	for _, moduleName := range runtimeModuleNames {
+	moduleNames := configuredRuntimeModuleNames(cfg)
+	knownModules := make(map[string]struct{}, len(moduleNames))
+	for _, moduleName := range moduleNames {
 		knownModules[moduleName] = struct{}{}
 	}
 	for moduleName := range cfg.moduleRoutes {
@@ -378,7 +402,7 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 	}
 
 	if len(enabledDrivers) >= 2 && cfg.routingDefault == nil {
-		for _, moduleName := range runtimeModuleNames {
+		for _, moduleName := range moduleNames {
 			if _, exists := cfg.moduleRoutes[moduleName]; !exists {
 				return fmt.Errorf("routing.default is required in multi-driver mode unless all modules override")
 			}
@@ -386,6 +410,15 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 	}
 
 	return nil
+}
+
+func configuredRuntimeModuleNames(cfg *appConfig) []string {
+	moduleNames := append([]string(nil), baseRuntimeModuleNames...)
+	if cfg != nil && cfg.llmConfig != nil {
+		moduleNames = append(moduleNames, "llmchat")
+	}
+
+	return moduleNames
 }
 
 func validateRouteRefs(
@@ -467,6 +500,7 @@ func registerRuntimeServices(
 	kernelRuntime *kernel.Kernel,
 	logger *slog.Logger,
 	sinkDispatcher otogi.SinkDispatcher,
+	cfg appConfig,
 ) error {
 	if err := kernelRuntime.RegisterService(memory.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
@@ -477,11 +511,63 @@ func registerRuntimeServices(
 	if err := kernelRuntime.RegisterService(otogi.ServiceSinkDispatcher, sinkDispatcher); err != nil {
 		return fmt.Errorf("register sink dispatcher service: %w", err)
 	}
+	if cfg.llmConfig != nil {
+		providers, err := buildLLMProviders(*cfg.llmConfig)
+		if err != nil {
+			return fmt.Errorf("build llm providers: %w", err)
+		}
+
+		registry, err := servicesllm.NewRegistry(providers)
+		if err != nil {
+			return fmt.Errorf("new llm provider registry: %w", err)
+		}
+		if err := kernelRuntime.RegisterService(otogi.ServiceLLMProviderRegistry, registry); err != nil {
+			return fmt.Errorf("register llm provider registry service: %w", err)
+		}
+	}
 
 	return nil
 }
 
-func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) error {
+func buildLLMProviders(cfg llmchat.Config) (map[string]otogi.LLMProvider, error) {
+	providers := make(map[string]otogi.LLMProvider, len(cfg.Providers))
+	for profileKey, profile := range cfg.Providers {
+		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
+		switch providerType {
+		case "openai":
+			openAICfg := openaillm.ProviderConfig{
+				APIKey:       profile.APIKey,
+				BaseURL:      profile.BaseURL,
+				Organization: profile.Organization,
+				Project:      profile.Project,
+				MaxRetries:   cloneOptionalInt(profile.MaxRetries),
+			}
+			if profile.Timeout != nil {
+				openAICfg.Timeout = *profile.Timeout
+			}
+
+			provider, err := openaillm.New(openAICfg)
+			if err != nil {
+				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
+			}
+			providers[profileKey] = provider
+		default:
+			return nil, fmt.Errorf("provider profile %s: unsupported type %q", profileKey, profile.Type)
+		}
+	}
+
+	return providers, nil
+}
+
+func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel, cfg appConfig) error {
 	memoryModule := memory.New()
 	if err := kernelRuntime.RegisterModule(ctx, memoryModule); err != nil {
 		return fmt.Errorf("register memory module: %w", err)
@@ -493,6 +579,15 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) e
 	helpModule := help.New()
 	if err := kernelRuntime.RegisterModule(ctx, helpModule); err != nil {
 		return fmt.Errorf("register help module: %w", err)
+	}
+	if cfg.llmConfig != nil {
+		llmModule, err := llmchat.New(*cfg.llmConfig)
+		if err != nil {
+			return fmt.Errorf("new llmchat module: %w", err)
+		}
+		if err := kernelRuntime.RegisterModule(ctx, llmModule); err != nil {
+			return fmt.Errorf("register llmchat module: %w", err)
+		}
 	}
 
 	return nil

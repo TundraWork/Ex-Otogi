@@ -612,6 +612,123 @@ func TestModuleGetReplied(t *testing.T) {
 	}
 }
 
+func TestModuleGetReplyChain(t *testing.T) {
+	tests := []struct {
+		name               string
+		seedEvents         []*otogi.Event
+		currentEvent       *otogi.Event
+		wantArticleIDs     []string
+		wantIsCurrent      []bool
+		wantErrSubstring   string
+		wantCurrentActorID string
+		wantCurrentArticle string
+	}{
+		{
+			name:               "no reply returns current only",
+			currentEvent:       newCreatedEvent("msg-1", "current", ""),
+			wantArticleIDs:     []string{"msg-1"},
+			wantIsCurrent:      []bool{true},
+			wantCurrentActorID: "actor-1",
+			wantCurrentArticle: "current",
+		},
+		{
+			name: "one-level reply returns parent then current",
+			seedEvents: []*otogi.Event{
+				newCreatedEvent("msg-1", "parent", ""),
+			},
+			currentEvent:       newCreatedEvent("msg-2", "current", "msg-1"),
+			wantArticleIDs:     []string{"msg-1", "msg-2"},
+			wantIsCurrent:      []bool{false, true},
+			wantCurrentActorID: "actor-1",
+			wantCurrentArticle: "current",
+		},
+		{
+			name: "multi-level reply chain returns oldest to newest",
+			seedEvents: []*otogi.Event{
+				newCreatedEvent("msg-1", "root", ""),
+				newCreatedEvent("msg-2", "middle", "msg-1"),
+			},
+			currentEvent:       newCreatedEvent("msg-3", "current", "msg-2"),
+			wantArticleIDs:     []string{"msg-1", "msg-2", "msg-3"},
+			wantIsCurrent:      []bool{false, false, true},
+			wantCurrentActorID: "actor-1",
+			wantCurrentArticle: "current",
+		},
+		{
+			name: "missing ancestor returns available tail and current",
+			seedEvents: []*otogi.Event{
+				newCreatedEvent("msg-2", "middle", "msg-1"),
+			},
+			currentEvent:       newCreatedEvent("msg-3", "current", "msg-2"),
+			wantArticleIDs:     []string{"msg-2", "msg-3"},
+			wantIsCurrent:      []bool{false, true},
+			wantCurrentActorID: "actor-1",
+			wantCurrentArticle: "current",
+		},
+		{
+			name: "cycle detection returns error",
+			seedEvents: []*otogi.Event{
+				newCreatedEvent("msg-1", "first", "msg-2"),
+				newCreatedEvent("msg-2", "second", "msg-1"),
+			},
+			currentEvent:     newCreatedEvent("msg-3", "current", "msg-2"),
+			wantErrSubstring: "cycle detected",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			module := New(
+				WithTTL(24*time.Hour),
+				withClock(func() time.Time { return time.Unix(200, 0).UTC() }),
+			)
+
+			for _, seedEvent := range testCase.seedEvents {
+				if err := module.handleEvent(context.Background(), seedEvent); err != nil {
+					t.Fatalf("seed event %s failed: %v", seedEvent.ID, err)
+				}
+			}
+
+			chain, err := module.GetReplyChain(context.Background(), testCase.currentEvent)
+			if testCase.wantErrSubstring != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), testCase.wantErrSubstring) {
+					t.Fatalf("error = %v, want substring %q", err, testCase.wantErrSubstring)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetReplyChain failed: %v", err)
+			}
+
+			if len(chain) != len(testCase.wantArticleIDs) {
+				t.Fatalf("chain length = %d, want %d", len(chain), len(testCase.wantArticleIDs))
+			}
+			for index, entry := range chain {
+				if entry.Article.ID != testCase.wantArticleIDs[index] {
+					t.Fatalf("chain[%d].Article.ID = %q, want %q", index, entry.Article.ID, testCase.wantArticleIDs[index])
+				}
+				if entry.IsCurrent != testCase.wantIsCurrent[index] {
+					t.Fatalf("chain[%d].IsCurrent = %v, want %v", index, entry.IsCurrent, testCase.wantIsCurrent[index])
+				}
+			}
+
+			last := chain[len(chain)-1]
+			if last.Actor.ID != testCase.wantCurrentActorID {
+				t.Fatalf("current actor id = %q, want %q", last.Actor.ID, testCase.wantCurrentActorID)
+			}
+			if last.Article.Text != testCase.wantCurrentArticle {
+				t.Fatalf("current article text = %q, want %q", last.Article.Text, testCase.wantCurrentArticle)
+			}
+		})
+	}
+}
+
 func TestModuleEventHistoryAndEntityProjectionSeparation(t *testing.T) {
 	t.Parallel()
 

@@ -11,6 +11,7 @@ The project name **Ex-Otogi** is inspired by "Ex-おとぎ話 (Ex-Otogibanashi)"
 - `internal/kernel`: runtime orchestration, lifecycle, and event dispatch.
 - `internal/driver`: platform adapters (Telegram).
 - `modules/memory`: memory module for article projection and event history.
+- `modules/llmchat`: optional keyword-triggered LLM chat module.
 
 Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 
@@ -31,7 +32,13 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 4. Configure routing defaults in `routing.default`:
    - `routing.default.sources`
    - `routing.default.sink`
-5. Run:
+5. Optional: enable LLM module by setting `llm.config_file` in `config/bot.json`:
+   - copy `config/llm.example.json` to `config/llm.json`
+   - define provider profiles under `providers` (currently supports `type: "openai"`)
+   - set `providers.<profile>.api_key` and reference the profile from each `agents[].provider`
+   - set `llm.config_file` to `config/llm.json`
+   - alternatively set `OTOGI_LLM_CONFIG_FILE` to override the path
+6. Run:
    ```sh
    go run ./cmd/bot
    ```

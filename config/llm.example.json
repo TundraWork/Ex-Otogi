@@ -1,0 +1,28 @@
+{
+  "request_timeout": "90s",
+  "providers": {
+    "openai-main": {
+      "type": "openai",
+      "api_key": "sk-REPLACE_ME",
+      "base_url": "https://api.openai.com/v1",
+      "organization": "",
+      "project": "",
+      "timeout": "20s",
+      "max_retries": 2
+    }
+  },
+  "agents": [
+    {
+      "name": "Otogi",
+      "description": "General assistant persona",
+      "provider": "openai-main",
+      "model": "gpt-5-mini",
+      "system_prompt_template": "You are {{.AgentName}}. Current UTC time: {{.DateTimeUTC}}.",
+      "template_variables": {
+        "locale": "en-US"
+      },
+      "max_output_tokens": 512,
+      "temperature": 0.4
+    }
+  ]
+}

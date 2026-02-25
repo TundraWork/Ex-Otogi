@@ -1,6 +1,7 @@
 package otogi
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -526,3 +527,40 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 		})
 	}
 }
+
+func TestReplyChainEntryFields(t *testing.T) {
+	t.Parallel()
+
+	entry := ReplyChainEntry{
+		Conversation: Conversation{ID: "chat-1", Type: ConversationTypeGroup},
+		Actor:        Actor{ID: "u-1", Username: "alice"},
+		Article:      Article{ID: "m-1", Text: "hello"},
+		IsCurrent:    true,
+	}
+
+	if !entry.IsCurrent {
+		t.Fatal("expected IsCurrent to be true")
+	}
+	if entry.Article.ID != "m-1" {
+		t.Fatalf("article id = %q, want m-1", entry.Article.ID)
+	}
+	if entry.Actor.Username != "alice" {
+		t.Fatalf("actor username = %q, want alice", entry.Actor.Username)
+	}
+}
+
+type memoryServiceContractStub struct{}
+
+func (memoryServiceContractStub) Get(context.Context, MemoryLookup) (Memory, bool, error) {
+	return Memory{}, false, nil
+}
+
+func (memoryServiceContractStub) GetReplied(context.Context, *Event) (Memory, bool, error) {
+	return Memory{}, false, nil
+}
+
+func (memoryServiceContractStub) GetReplyChain(context.Context, *Event) ([]ReplyChainEntry, error) {
+	return nil, nil
+}
+
+var _ MemoryService = (*memoryServiceContractStub)(nil)
