@@ -5,10 +5,27 @@
       "type": "openai",
       "api_key": "sk-REPLACE_ME",
       "base_url": "https://api.openai.com/v1",
-      "organization": "",
-      "project": "",
       "timeout": "20s",
-      "max_retries": 2
+      "openai": {
+        "organization": "",
+        "project": "",
+        "max_retries": 2
+      }
+    },
+    "gemini-main": {
+      "type": "gemini",
+      "api_key": "gm-REPLACE_ME",
+      "base_url": "https://generativelanguage.googleapis.com",
+      "timeout": "20s",
+      "gemini": {
+        "api_version": "v1beta",
+        "google_search": true,
+        "url_context": true,
+        "thinking_budget": 128,
+        "include_thoughts": false,
+        "thinking_level": "medium",
+        "response_mime_type": "application/json"
+      }
     }
   },
   "agents": [
@@ -23,6 +40,23 @@
       },
       "max_output_tokens": 512,
       "temperature": 0.4
+    },
+    {
+      "name": "OtogiGemini",
+      "description": "Gemini assistant persona",
+      "provider": "gemini-main",
+      "model": "gemini-2.5-flash",
+      "system_prompt_template": "You are {{.AgentName}}. Current UTC time: {{.DateTimeUTC}}.",
+      "max_output_tokens": 512,
+      "temperature": 0.4,
+      "request_metadata": {
+        "gemini.google_search": "true",
+        "gemini.url_context": "true",
+        "gemini.thinking_budget": "64",
+        "gemini.include_thoughts": "false",
+        "gemini.thinking_level": "high",
+        "gemini.response_mime_type": "text/plain"
+      }
     }
   ]
 }

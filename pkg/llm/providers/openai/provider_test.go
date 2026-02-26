@@ -137,7 +137,9 @@ func TestOpenAIProviderGenerateStreamMapsRequest(t *testing.T) {
 		MaxOutputTokens: 512,
 		Temperature:     0.35,
 		Metadata: map[string]string{
-			"agent": "Otogi",
+			"agent":                        "Otogi",
+			metadataOpenAIReasoningSummary: "concise",
+			metadataOpenAIReasoningEffort:  "low",
 		},
 	}
 	stream, err := provider.GenerateStream(context.Background(), req)
@@ -164,6 +166,18 @@ func TestOpenAIProviderGenerateStreamMapsRequest(t *testing.T) {
 	if got.Metadata["agent"] != "Otogi" {
 		t.Fatalf("metadata agent = %q, want Otogi", got.Metadata["agent"])
 	}
+	if _, exists := got.Metadata[metadataOpenAIReasoningSummary]; exists {
+		t.Fatalf("metadata contains %q control key", metadataOpenAIReasoningSummary)
+	}
+	if _, exists := got.Metadata[metadataOpenAIReasoningEffort]; exists {
+		t.Fatalf("metadata contains %q control key", metadataOpenAIReasoningEffort)
+	}
+	if got.Reasoning.Summary != "concise" {
+		t.Fatalf("reasoning summary = %q, want concise", got.Reasoning.Summary)
+	}
+	if got.Reasoning.Effort != "low" {
+		t.Fatalf("reasoning effort = %q, want low", got.Reasoning.Effort)
+	}
 
 	if len(got.Input.OfInputItemList) != 3 {
 		t.Fatalf("input messages len = %d, want 3", len(got.Input.OfInputItemList))
@@ -185,6 +199,58 @@ func TestOpenAIProviderGenerateStreamMapsRequest(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderGenerateStreamInvalidReasoningMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider := &Provider{
+		responses: &openAIResponsesClientStub{
+			stream: &openAIResponseStreamStub{},
+		},
+	}
+
+	tests := []struct {
+		name             string
+		metadata         map[string]string
+		wantErrSubstring string
+	}{
+		{
+			name: "invalid reasoning summary",
+			metadata: map[string]string{
+				metadataOpenAIReasoningSummary: "verbose",
+			},
+			wantErrSubstring: metadataOpenAIReasoningSummary,
+		},
+		{
+			name: "invalid reasoning effort",
+			metadata: map[string]string{
+				metadataOpenAIReasoningEffort: "fast",
+			},
+			wantErrSubstring: metadataOpenAIReasoningEffort,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+				Model: "gpt-5-mini",
+				Messages: []otogi.LLMMessage{
+					{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+				},
+				Metadata: testCase.metadata,
+			})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), testCase.wantErrSubstring) {
+				t.Fatalf("error = %v, want substring %q", err, testCase.wantErrSubstring)
+			}
+		})
+	}
+}
+
 func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +260,7 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 		streamErr        error
 		preCancelContext bool
 		wantDelta        string
+		wantKind         otogi.LLMGenerateChunkKind
 		wantErrCheck     func(error) bool
 	}{
 		{
@@ -210,6 +277,52 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 				}`),
 			},
 			wantDelta: "hello",
+			wantKind:  otogi.LLMGenerateChunkKindOutputText,
+			wantErrCheck: func(err error) bool {
+				return err == nil
+			},
+		},
+		{
+			name: "reasoning summary delta",
+			events: []responses.ResponseStreamEventUnion{
+				mustUnmarshalEvent(t, `{
+					"type":"response.reasoning_summary_text.delta",
+					"sequence_number":1,
+					"item_id":"item-1",
+					"output_index":0,
+					"summary_index":0,
+					"delta":"planning"
+				}`),
+			},
+			wantDelta: "planning",
+			wantKind:  otogi.LLMGenerateChunkKindThinkingSummary,
+			wantErrCheck: func(err error) bool {
+				return err == nil
+			},
+		},
+		{
+			name: "reasoning text hidden then output delta",
+			events: []responses.ResponseStreamEventUnion{
+				mustUnmarshalEvent(t, `{
+					"type":"response.reasoning_text.delta",
+					"sequence_number":1,
+					"item_id":"item-1",
+					"output_index":0,
+					"content_index":0,
+					"delta":"hidden"
+				}`),
+				mustUnmarshalEvent(t, `{
+					"type":"response.output_text.delta",
+					"sequence_number":2,
+					"item_id":"item-1",
+					"output_index":0,
+					"content_index":1,
+					"delta":"answer",
+					"logprobs":[]
+				}`),
+			},
+			wantDelta: "answer",
+			wantKind:  otogi.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -229,6 +342,7 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 				}`),
 			},
 			wantDelta: "ok",
+			wantKind:  otogi.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -336,6 +450,9 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 			}
 			if err == nil && chunk.Delta != testCase.wantDelta {
 				t.Fatalf("chunk delta = %q, want %q", chunk.Delta, testCase.wantDelta)
+			}
+			if err == nil && testCase.wantKind != "" && chunk.Kind.Normalize() != testCase.wantKind {
+				t.Fatalf("chunk kind = %q, want %q", chunk.Kind.Normalize(), testCase.wantKind)
 			}
 		})
 	}

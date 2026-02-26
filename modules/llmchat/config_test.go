@@ -1,162 +1,109 @@
 package llmchat
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-func writeLLMConfigFile(t *testing.T, body string) string {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "llm.json")
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write llm config file failed: %v", err)
-	}
-
-	return path
-}
-
-func TestLoadConfigFile(t *testing.T) {
+func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name             string
-		fileBody         string
+		mutate           func(*Config)
 		wantErrSubstring string
-		assert           func(*testing.T, Config)
 	}{
 		{
-			name: "valid typed providers config",
-			fileBody: `{
-				"request_timeout":"45s",
-				"providers":{
-					"openai-main":{
-						"type":"openai",
-						"api_key":"sk-test",
-						"base_url":"https://api.openai.com/v1",
-						"organization":"org-test",
-						"project":"project-test",
-						"timeout":"20s",
-						"max_retries":3
-					}
-				},
-				"agents":[
-					{
-						"name":"Otogi",
-						"description":"General chat",
-						"provider":"openai-main",
-						"model":"gpt-5-mini",
-						"system_prompt_template":"You are {{.AgentName}} at {{.DateTimeUTC}}",
-						"template_variables":{"language":"en"},
-						"max_output_tokens":256,
-						"temperature":0.2
-					}
-				]
-			}`,
-			assert: func(t *testing.T, cfg Config) {
-				t.Helper()
-
-				if cfg.RequestTimeout != 45*time.Second {
-					t.Fatalf("request timeout = %s, want 45s", cfg.RequestTimeout)
-				}
-				if len(cfg.Providers) != 1 {
-					t.Fatalf("providers len = %d, want 1", len(cfg.Providers))
-				}
-				provider, exists := cfg.Providers["openai-main"]
-				if !exists {
-					t.Fatal("expected openai-main provider")
-				}
-				if provider.Type != "openai" {
-					t.Fatalf("provider type = %q, want openai", provider.Type)
-				}
-				if provider.APIKey != "sk-test" {
-					t.Fatalf("provider api key = %q, want sk-test", provider.APIKey)
-				}
-				if provider.Timeout == nil || *provider.Timeout != 20*time.Second {
-					t.Fatalf("provider timeout = %v, want 20s", provider.Timeout)
-				}
-				if provider.MaxRetries == nil || *provider.MaxRetries != 3 {
-					t.Fatalf("provider max retries = %v, want 3", provider.MaxRetries)
-				}
-
-				if len(cfg.Agents) != 1 {
-					t.Fatalf("agents len = %d, want 1", len(cfg.Agents))
-				}
-				agent := cfg.Agents[0]
-				if agent.Provider != "openai-main" {
-					t.Fatalf("agent provider = %q, want openai-main", agent.Provider)
-				}
+			name: "valid config",
+		},
+		{
+			name: "request timeout must be positive",
+			mutate: func(cfg *Config) {
+				cfg.RequestTimeout = 0
 			},
+			wantErrSubstring: "request_timeout must be > 0",
 		},
 		{
-			name: "missing providers fails",
-			fileBody: `{
-				"agents":[
-					{"name":"Otogi","description":"d","provider":"openai-main","model":"m","system_prompt_template":"ok"}
-				]
-			}`,
-			wantErrSubstring: "providers is required",
+			name: "at least one agent required",
+			mutate: func(cfg *Config) {
+				cfg.Agents = nil
+			},
+			wantErrSubstring: "at least one agent is required",
 		},
 		{
-			name: "agent references unknown provider",
-			fileBody: `{
-				"providers":{
-					"openai-main":{"type":"openai","api_key":"sk-test"}
-				},
-				"agents":[
-					{"name":"Otogi","description":"d","provider":"missing","model":"m","system_prompt_template":"ok"}
-				]
-			}`,
-			wantErrSubstring: "provider missing is not configured",
+			name: "duplicate agent names are rejected",
+			mutate: func(cfg *Config) {
+				cfg.Agents = append(cfg.Agents, Agent{
+					Name:                 "otogi",
+					Description:          "secondary",
+					Provider:             "p2",
+					Model:                "m2",
+					SystemPromptTemplate: "You are {{.AgentName}}",
+				})
+			},
+			wantErrSubstring: "duplicate agent name",
 		},
 		{
-			name: "unsupported provider type",
-			fileBody: `{
-				"providers":{
-					"anthropic-main":{"type":"anthropic","api_key":"x"}
-				},
-				"agents":[
-					{"name":"Otogi","description":"d","provider":"anthropic-main","model":"m","system_prompt_template":"ok"}
-				]
-			}`,
-			wantErrSubstring: "unsupported type",
+			name: "missing provider fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].Provider = ""
+			},
+			wantErrSubstring: "missing provider",
 		},
 		{
-			name: "missing openai api key",
-			fileBody: `{
-				"providers":{
-					"openai-main":{"type":"openai"}
-				},
-				"agents":[
-					{"name":"Otogi","description":"d","provider":"openai-main","model":"m","system_prompt_template":"ok"}
-				]
-			}`,
-			wantErrSubstring: "missing api_key",
+			name: "invalid system prompt template fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].SystemPromptTemplate = "{{.Missing"
+			},
+			wantErrSubstring: "invalid system_prompt_template",
 		},
 		{
-			name: "invalid provider timeout",
-			fileBody: `{
-				"providers":{
-					"openai-main":{"type":"openai","api_key":"x","timeout":"bad"}
-				},
-				"agents":[
-					{"name":"Otogi","description":"d","provider":"openai-main","model":"m","system_prompt_template":"ok"}
-				]
-			}`,
-			wantErrSubstring: "parse timeout",
+			name: "negative max output tokens fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].MaxOutputTokens = -1
+			},
+			wantErrSubstring: "max_output_tokens must be >= 0",
 		},
 		{
-			name: "invalid provider max retries",
-			fileBody: `{
-				"providers":{
-					"openai-main":{"type":"openai","api_key":"x","max_retries":-1}
-				},
-				"agents":[
-					{"name":"Otogi","description":"d","provider":"openai-main","model":"m","system_prompt_template":"ok"}
-				]
-			}`,
-			wantErrSubstring: "max_retries must be >= 0",
+			name: "negative temperature fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].Temperature = -0.1
+			},
+			wantErrSubstring: "temperature must be >= 0",
+		},
+		{
+			name: "request metadata empty key fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].RequestMetadata = map[string]string{"": "true"}
+			},
+			wantErrSubstring: "request_metadata contains empty key",
+		},
+		{
+			name: "request metadata empty value fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].RequestMetadata = map[string]string{"gemini.google_search": " "}
+			},
+			wantErrSubstring: "empty value",
+		},
+		{
+			name: "request metadata reserved key agent fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].RequestMetadata = map[string]string{"agent": "override"}
+			},
+			wantErrSubstring: "reserved key",
+		},
+		{
+			name: "request metadata reserved key provider fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].RequestMetadata = map[string]string{"provider": "override"}
+			},
+			wantErrSubstring: "reserved key",
+		},
+		{
+			name: "request metadata reserved key conversation id fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].RequestMetadata = map[string]string{"conversation_id": "override"}
+			},
+			wantErrSubstring: "reserved key",
 		},
 	}
 
@@ -165,8 +112,12 @@ func TestLoadConfigFile(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			path := writeLLMConfigFile(t, testCase.fileBody)
-			cfg, err := LoadConfigFile(path)
+			cfg := validModuleConfig()
+			if testCase.mutate != nil {
+				testCase.mutate(&cfg)
+			}
+
+			err := cfg.Validate()
 			if testCase.wantErrSubstring != "" {
 				if err == nil {
 					t.Fatal("expected error")
@@ -177,11 +128,48 @@ func TestLoadConfigFile(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("LoadConfigFile failed: %v", err)
-			}
-			if testCase.assert != nil {
-				testCase.assert(t, cfg)
+				t.Fatalf("Validate failed: %v", err)
 			}
 		})
+	}
+}
+
+func TestCloneConfigDeepCopiesMaps(t *testing.T) {
+	t.Parallel()
+
+	original := validModuleConfig()
+	cloned := cloneConfig(original)
+
+	cloned.Agents[0].TemplateVariables["locale"] = "ja-JP"
+	cloned.Agents[0].RequestMetadata["gemini.google_search"] = "false"
+
+	if original.Agents[0].TemplateVariables["locale"] != "en-US" {
+		t.Fatalf("original template_variables mutated: %+v", original.Agents[0].TemplateVariables)
+	}
+	if original.Agents[0].RequestMetadata["gemini.google_search"] != "true" {
+		t.Fatalf("original request_metadata mutated: %+v", original.Agents[0].RequestMetadata)
+	}
+}
+
+func validModuleConfig() Config {
+	return Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "primary assistant",
+				Provider:             "provider-main",
+				Model:                "model-main",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				TemplateVariables: map[string]string{
+					"locale": "en-US",
+				},
+				MaxOutputTokens: 256,
+				Temperature:     0.2,
+				RequestMetadata: map[string]string{
+					"gemini.google_search": "true",
+				},
+			},
+		},
 	}
 }

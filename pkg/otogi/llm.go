@@ -118,6 +118,36 @@ func (r LLMGenerateRequest) Validate() error {
 
 // LLMGenerateChunk carries incremental text from one stream.
 type LLMGenerateChunk struct {
+	// Kind identifies the semantic category of this chunk.
+	//
+	// Empty values must be treated as output text for backward compatibility with
+	// older providers and tests.
+	Kind LLMGenerateChunkKind
 	// Delta is the newly generated text segment.
 	Delta string
+}
+
+// LLMGenerateChunkKind identifies the semantic category of one stream chunk.
+type LLMGenerateChunkKind string
+
+const (
+	// LLMGenerateChunkKindOutputText identifies normal assistant answer text.
+	LLMGenerateChunkKindOutputText LLMGenerateChunkKind = "output_text"
+	// LLMGenerateChunkKindThinkingSummary identifies short model thinking summary text.
+	LLMGenerateChunkKindThinkingSummary LLMGenerateChunkKind = "thinking_summary"
+)
+
+// Normalize returns one supported chunk kind.
+//
+// Empty and unknown values are normalized to output text for backward
+// compatibility.
+func (k LLMGenerateChunkKind) Normalize() LLMGenerateChunkKind {
+	switch k {
+	case LLMGenerateChunkKindThinkingSummary:
+		return LLMGenerateChunkKindThinkingSummary
+	case LLMGenerateChunkKindOutputText:
+		return LLMGenerateChunkKindOutputText
+	default:
+		return LLMGenerateChunkKindOutputText
+	}
 }

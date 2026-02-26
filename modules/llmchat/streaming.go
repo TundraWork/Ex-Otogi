@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	defaultPlaceholderReply = "..."
-	maxEditInterval         = 10 * time.Second
+	defaultThinkingPlaceholder = "Thinking..."
+	maxThinkingPreviewRunes    = 180
+	maxEditInterval            = 10 * time.Second
 )
 
 func (m *Module) streamProviderReply(
@@ -50,14 +51,15 @@ func (m *Module) streamProviderReply(
 
 	placeholder, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
 		Target:           target,
-		Text:             defaultPlaceholderReply,
+		Text:             defaultThinkingPlaceholder,
 		ReplyToMessageID: replyToMessageID,
 	})
 	if err != nil {
 		return fmt.Errorf("stream provider reply send placeholder: %w", err)
 	}
 
-	builder := strings.Builder{}
+	thinkingBuilder := strings.Builder{}
+	answerBuilder := strings.Builder{}
 	pacer := newEditPacer(m.now())
 	for {
 		chunk, recvErr := stream.Recv(ctx)
@@ -70,7 +72,20 @@ func (m *Module) streamProviderReply(
 		if chunk.Delta == "" {
 			continue
 		}
-		builder.WriteString(chunk.Delta)
+		switch chunk.Kind.Normalize() {
+		case otogi.LLMGenerateChunkKindThinkingSummary:
+			thinkingBuilder.WriteString(chunk.Delta)
+		default:
+			answerBuilder.WriteString(chunk.Delta)
+		}
+
+		nextText := answerBuilder.String()
+		if answerBuilder.Len() == 0 {
+			nextText = renderThinkingMessage(thinkingBuilder.String())
+		}
+		if nextText == "" {
+			nextText = defaultThinkingPlaceholder
+		}
 
 		now := m.now()
 		if !pacer.ShouldAttemptEdit(now) {
@@ -79,7 +94,7 @@ func (m *Module) streamProviderReply(
 		editErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
 			Target:    target,
 			MessageID: placeholder.ID,
-			Text:      builder.String(),
+			Text:      nextText,
 		})
 		if editErr != nil {
 			pacer.RecordEditFailure(now, editErr)
@@ -88,9 +103,13 @@ func (m *Module) streamProviderReply(
 		pacer.RecordEditSuccess(now)
 	}
 
-	finalText := strings.TrimSpace(builder.String())
+	finalText := strings.TrimSpace(answerBuilder.String())
 	if finalText == "" {
-		finalText = defaultPlaceholderReply
+		if thinkingSummary := renderThinkingMessage(thinkingBuilder.String()); thinkingSummary != "" {
+			finalText = thinkingSummary
+		} else {
+			finalText = defaultThinkingPlaceholder
+		}
 	}
 	finalEditErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
 		Target:    target,
@@ -114,6 +133,40 @@ func (m *Module) streamProviderReply(
 	}
 
 	return nil
+}
+
+func renderThinkingMessage(rawSummary string) string {
+	summary := shapeThinkingSummary(rawSummary)
+	if summary == "" {
+		return defaultThinkingPlaceholder
+	}
+
+	return defaultThinkingPlaceholder + "\n\n" + summary
+}
+
+func shapeThinkingSummary(raw string) string {
+	normalized := strings.Join(strings.Fields(raw), " ")
+	if normalized == "" {
+		return ""
+	}
+
+	return trimRunesWithEllipsis(normalized, maxThinkingPreviewRunes)
+}
+
+func trimRunesWithEllipsis(raw string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+
+	runes := []rune(raw)
+	if len(runes) <= maxRunes {
+		return raw
+	}
+	if maxRunes <= 3 {
+		return strings.Repeat(".", maxRunes)
+	}
+
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 type editPacer struct {

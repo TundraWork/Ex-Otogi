@@ -16,10 +16,15 @@ import (
 )
 
 const (
-	openAIEventOutputTextDelta = "response.output_text.delta"
-	openAIEventCompleted       = "response.completed"
-	openAIEventFailed          = "response.failed"
-	openAIEventError           = "error"
+	openAIEventOutputTextDelta           = "response.output_text.delta"
+	openAIEventReasoningSummaryTextDelta = "response.reasoning_summary_text.delta"
+	openAIEventReasoningTextDelta        = "response.reasoning_text.delta"
+	openAIEventCompleted                 = "response.completed"
+	openAIEventFailed                    = "response.failed"
+	openAIEventError                     = "error"
+
+	metadataOpenAIReasoningSummary = "openai.reasoning_summary"
+	metadataOpenAIReasoningEffort  = "openai.reasoning_effort"
 )
 
 // ProviderConfig configures one OpenAI-backed provider instance.
@@ -142,6 +147,20 @@ func mapGenerateRequest(req otogi.LLMGenerateRequest) (responses.ResponseNewPara
 			OfInputItemList: items,
 		},
 	}
+	reasoningOptions, metadata, err := parseOpenAIRequestMetadata(req.Metadata)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
+	if reasoningOptions.enabled() {
+		reasoning := shared.ReasoningParam{}
+		if reasoningOptions.summary != "" {
+			reasoning.Summary = reasoningOptions.summary
+		}
+		if reasoningOptions.effort != "" {
+			reasoning.Effort = reasoningOptions.effort
+		}
+		params.Reasoning = reasoning
+	}
 
 	if req.Temperature > 0 {
 		params.Temperature = openai.Float(req.Temperature)
@@ -149,15 +168,89 @@ func mapGenerateRequest(req otogi.LLMGenerateRequest) (responses.ResponseNewPara
 	if req.MaxOutputTokens > 0 {
 		params.MaxOutputTokens = openai.Int(int64(req.MaxOutputTokens))
 	}
-	if len(req.Metadata) > 0 {
-		metadata := make(shared.Metadata, len(req.Metadata))
-		for key, value := range req.Metadata {
-			metadata[key] = value
+	if len(metadata) > 0 {
+		requestMetadata := make(shared.Metadata, len(metadata))
+		for key, value := range metadata {
+			requestMetadata[key] = value
 		}
-		params.Metadata = metadata
+		params.Metadata = requestMetadata
 	}
 
 	return params, nil
+}
+
+type openAIReasoningOptions struct {
+	summary shared.ReasoningSummary
+	effort  shared.ReasoningEffort
+}
+
+func (o openAIReasoningOptions) enabled() bool {
+	return o.summary != "" || o.effort != ""
+}
+
+func parseOpenAIRequestMetadata(metadata map[string]string) (openAIReasoningOptions, map[string]string, error) {
+	if len(metadata) == 0 {
+		return openAIReasoningOptions{}, nil, nil
+	}
+
+	options := openAIReasoningOptions{}
+	filtered := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case metadataOpenAIReasoningSummary:
+			summary, err := normalizeOpenAIReasoningSummary(value)
+			if err != nil {
+				return openAIReasoningOptions{}, nil, fmt.Errorf("%s: %w", metadataOpenAIReasoningSummary, err)
+			}
+			options.summary = summary
+		case metadataOpenAIReasoningEffort:
+			effort, err := normalizeOpenAIReasoningEffort(value)
+			if err != nil {
+				return openAIReasoningOptions{}, nil, fmt.Errorf("%s: %w", metadataOpenAIReasoningEffort, err)
+			}
+			options.effort = effort
+		default:
+			filtered[key] = value
+		}
+	}
+
+	if len(filtered) == 0 {
+		return options, nil, nil
+	}
+
+	return options, filtered, nil
+}
+
+func normalizeOpenAIReasoningSummary(raw string) (shared.ReasoningSummary, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(shared.ReasoningSummaryAuto):
+		return shared.ReasoningSummaryAuto, nil
+	case string(shared.ReasoningSummaryConcise):
+		return shared.ReasoningSummaryConcise, nil
+	case string(shared.ReasoningSummaryDetailed):
+		return shared.ReasoningSummaryDetailed, nil
+	default:
+		return "", fmt.Errorf("unsupported value %q", raw)
+	}
+}
+
+func normalizeOpenAIReasoningEffort(raw string) (shared.ReasoningEffort, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(shared.ReasoningEffortNone):
+		return shared.ReasoningEffortNone, nil
+	case string(shared.ReasoningEffortMinimal):
+		return shared.ReasoningEffortMinimal, nil
+	case string(shared.ReasoningEffortLow):
+		return shared.ReasoningEffortLow, nil
+	case string(shared.ReasoningEffortMedium):
+		return shared.ReasoningEffortMedium, nil
+	case string(shared.ReasoningEffortHigh):
+		return shared.ReasoningEffortHigh, nil
+	case string(shared.ReasoningEffortXhigh):
+		return shared.ReasoningEffortXhigh, nil
+	default:
+		return "", fmt.Errorf("unsupported value %q", raw)
+	}
 }
 
 func mapMessageRole(role otogi.LLMMessageRole) (responses.EasyInputMessageRole, error) {

@@ -19,7 +19,9 @@ import (
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/pkg/llm"
-	openaillm "ex-otogi/pkg/llm/providers/openai"
+	llmconfig "ex-otogi/pkg/llm/config"
+	"ex-otogi/pkg/llm/providers/gemini"
+	"ex-otogi/pkg/llm/providers/openai"
 	"ex-otogi/pkg/otogi"
 )
 
@@ -49,7 +51,7 @@ type appConfig struct {
 	moduleRoutes   map[string]kernel.ModuleRoute
 
 	llmConfigFile string
-	llmConfig     *llmchat.Config
+	llmConfig     *llmconfig.Config
 }
 
 type fileConfig struct {
@@ -151,7 +153,7 @@ func loadConfig(registry *driver.Registry) (appConfig, error) {
 		cfg.llmConfigFile = envPath
 	}
 	if cfg.llmConfigFile != "" {
-		llmConfig, err := llmchat.LoadConfigFile(cfg.llmConfigFile)
+		llmConfig, err := llmconfig.LoadFile(cfg.llmConfigFile)
 		if err != nil {
 			return appConfig{}, fmt.Errorf("load llm config file %s: %w", cfg.llmConfigFile, err)
 		}
@@ -529,24 +531,49 @@ func registerRuntimeServices(
 	return nil
 }
 
-func buildLLMProviders(cfg llmchat.Config) (map[string]otogi.LLMProvider, error) {
+func buildLLMProviders(cfg llmconfig.Config) (map[string]otogi.LLMProvider, error) {
 	providers := make(map[string]otogi.LLMProvider, len(cfg.Providers))
 	for profileKey, profile := range cfg.Providers {
 		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
 		switch providerType {
 		case "openai":
-			openAICfg := openaillm.ProviderConfig{
-				APIKey:       profile.APIKey,
-				BaseURL:      profile.BaseURL,
-				Organization: profile.Organization,
-				Project:      profile.Project,
-				MaxRetries:   cloneOptionalInt(profile.MaxRetries),
+			openAICfg := openai.ProviderConfig{
+				APIKey:  profile.APIKey,
+				BaseURL: profile.BaseURL,
 			}
 			if profile.Timeout != nil {
 				openAICfg.Timeout = *profile.Timeout
 			}
+			if profile.OpenAI != nil {
+				openAICfg.Organization = profile.OpenAI.Organization
+				openAICfg.Project = profile.OpenAI.Project
+				openAICfg.MaxRetries = cloneOptionalInt(profile.OpenAI.MaxRetries)
+			}
 
-			provider, err := openaillm.New(openAICfg)
+			provider, err := openai.New(openAICfg)
+			if err != nil {
+				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
+			}
+			providers[profileKey] = provider
+		case "gemini":
+			geminiCfg := gemini.ProviderConfig{
+				APIKey:  profile.APIKey,
+				BaseURL: profile.BaseURL,
+			}
+			if profile.Timeout != nil {
+				geminiCfg.Timeout = *profile.Timeout
+			}
+			if profile.Gemini != nil {
+				geminiCfg.APIVersion = profile.Gemini.APIVersion
+				geminiCfg.GoogleSearch = cloneOptionalBool(profile.Gemini.RequestDefaults.GoogleSearch)
+				geminiCfg.URLContext = cloneOptionalBool(profile.Gemini.RequestDefaults.URLContext)
+				geminiCfg.ThinkingBudget = cloneOptionalInt(profile.Gemini.RequestDefaults.ThinkingBudget)
+				geminiCfg.IncludeThoughts = cloneOptionalBool(profile.Gemini.RequestDefaults.IncludeThoughts)
+				geminiCfg.ThinkingLevel = profile.Gemini.RequestDefaults.ThinkingLevel
+				geminiCfg.ResponseMIMEType = profile.Gemini.RequestDefaults.ResponseMIMEType
+			}
+
+			provider, err := gemini.New(geminiCfg)
 			if err != nil {
 				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
 			}
@@ -560,6 +587,14 @@ func buildLLMProviders(cfg llmchat.Config) (map[string]otogi.LLMProvider, error)
 }
 
 func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneOptionalBool(value *bool) *bool {
 	if value == nil {
 		return nil
 	}
@@ -581,7 +616,8 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel, c
 		return fmt.Errorf("register help module: %w", err)
 	}
 	if cfg.llmConfig != nil {
-		llmModule, err := llmchat.New(*cfg.llmConfig)
+		llmModuleConfig := toLLMChatConfig(*cfg.llmConfig)
+		llmModule, err := llmchat.New(llmModuleConfig)
 		if err != nil {
 			return fmt.Errorf("new llmchat module: %w", err)
 		}
@@ -591,6 +627,41 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel, c
 	}
 
 	return nil
+}
+
+func toLLMChatConfig(cfg llmconfig.Config) llmchat.Config {
+	agents := make([]llmchat.Agent, 0, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		agents = append(agents, llmchat.Agent{
+			Name:                 agent.Name,
+			Description:          agent.Description,
+			Provider:             agent.Provider,
+			Model:                agent.Model,
+			SystemPromptTemplate: agent.SystemPromptTemplate,
+			TemplateVariables:    cloneStringMap(agent.TemplateVariables),
+			MaxOutputTokens:      agent.MaxOutputTokens,
+			Temperature:          agent.Temperature,
+			RequestMetadata:      cloneStringMap(agent.RequestMetadata),
+		})
+	}
+
+	return llmchat.Config{
+		RequestTimeout: cfg.RequestTimeout,
+		Agents:         agents,
+	}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+
+	return cloned
 }
 
 func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, drivers []otogi.Driver) error {

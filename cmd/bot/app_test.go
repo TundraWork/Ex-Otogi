@@ -13,7 +13,7 @@ import (
 
 	driverpkg "ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
-	"ex-otogi/modules/llmchat"
+	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/otogi"
 )
 
@@ -39,7 +39,7 @@ func writeLLMConfigFile(t *testing.T, path string) {
 				"api_key":"sk-test",
 				"base_url":"https://api.openai.com/v1",
 				"timeout":"15s",
-				"max_retries":2
+				"openai":{"max_retries":2}
 			}
 		},
 		"agents":[
@@ -464,19 +464,24 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 	t.Run("llm enabled registers provider registry with multiple profiles", func(t *testing.T) {
 		kernelRuntime := kernel.New()
 		cfg := appConfig{
-			llmConfig: &llmchat.Config{
+			llmConfig: &llmconfig.Config{
 				RequestTimeout: time.Second,
-				Providers: map[string]llmchat.ProviderProfile{
+				Providers: map[string]llmconfig.ProviderProfile{
 					"openai-main": {
 						Type:   "openai",
 						APIKey: "sk-main",
 					},
-					"openai-backup": {
-						Type:   "openai",
-						APIKey: "sk-backup",
+					"gemini-main": {
+						Type:   "gemini",
+						APIKey: "gm-main",
+						Gemini: &llmconfig.GeminiOptions{
+							RequestDefaults: llmconfig.GeminiRequestDefaults{
+								GoogleSearch: ptrBool(true),
+							},
+						},
 					},
 				},
-				Agents: []llmchat.Agent{
+				Agents: []llmconfig.Agent{
 					{
 						Name:                 "Otogi",
 						Description:          "Primary",
@@ -485,10 +490,10 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 						SystemPromptTemplate: "You are {{.AgentName}}",
 					},
 					{
-						Name:                 "OtogiBackup",
-						Description:          "Backup",
-						Provider:             "openai-backup",
-						Model:                "gpt-5-mini",
+						Name:                 "OtogiGemini",
+						Description:          "Gemini",
+						Provider:             "gemini-main",
+						Model:                "gemini-2.5-flash",
 						SystemPromptTemplate: "You are {{.AgentName}}",
 					},
 				},
@@ -511,23 +516,23 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 		if _, err := registry.Resolve("openai-main"); err != nil {
 			t.Fatalf("resolve openai-main failed: %v", err)
 		}
-		if _, err := registry.Resolve("openai-backup"); err != nil {
-			t.Fatalf("resolve openai-backup failed: %v", err)
+		if _, err := registry.Resolve("gemini-main"); err != nil {
+			t.Fatalf("resolve gemini-main failed: %v", err)
 		}
 	})
 
 	t.Run("invalid provider config fails fast during service registration", func(t *testing.T) {
 		kernelRuntime := kernel.New()
 		cfg := appConfig{
-			llmConfig: &llmchat.Config{
+			llmConfig: &llmconfig.Config{
 				RequestTimeout: time.Second,
-				Providers: map[string]llmchat.ProviderProfile{
+				Providers: map[string]llmconfig.ProviderProfile{
 					"openai-main": {
 						Type:   "openai",
 						APIKey: "",
 					},
 				},
-				Agents: []llmchat.Agent{
+				Agents: []llmconfig.Agent{
 					{
 						Name:                 "Otogi",
 						Description:          "Primary",
@@ -550,6 +555,10 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 }
 
 type sinkDispatcherTestStub struct{}
+
+func ptrBool(value bool) *bool {
+	return &value
+}
 
 func (*sinkDispatcherTestStub) SendMessage(context.Context, otogi.SendMessageRequest) (*otogi.OutboundMessage, error) {
 	return &otogi.OutboundMessage{ID: "msg-1"}, nil

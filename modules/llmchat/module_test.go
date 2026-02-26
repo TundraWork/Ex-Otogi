@@ -15,12 +15,6 @@ import (
 func TestMatchTriggeredAgent(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
-		Providers: map[string]ProviderProfile{
-			"p": {
-				Type:   providerTypeOpenAI,
-				APIKey: "sk-test",
-			},
-		},
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",
@@ -83,12 +77,6 @@ func TestMatchTriggeredAgent(t *testing.T) {
 func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
-		Providers: map[string]ProviderProfile{
-			"p": {
-				Type:   providerTypeOpenAI,
-				APIKey: "sk-test",
-			},
-		},
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",
@@ -96,6 +84,14 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 				Provider:             "p",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}} at {{.DateTimeUTC}}",
+				RequestMetadata: map[string]string{
+					"gemini.google_search":      "true",
+					"gemini.url_context":        "false",
+					"gemini.thinking_budget":    "32",
+					"gemini.include_thoughts":   "true",
+					"gemini.thinking_level":     "medium",
+					"gemini.response_mime_type": "application/json",
+				},
 			},
 		},
 	})
@@ -151,17 +147,45 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 	if !strings.Contains(req.Messages[2].Content, "Bob: how are you") {
 		t.Fatalf("message[2] = %q, want current speaker with stripped prompt", req.Messages[2].Content)
 	}
+	if req.Metadata[metadataKeyAgent] != "Otogi" {
+		t.Fatalf("metadata[%s] = %q, want Otogi", metadataKeyAgent, req.Metadata[metadataKeyAgent])
+	}
+	if req.Metadata[metadataKeyProvider] != "p" {
+		t.Fatalf("metadata[%s] = %q, want p", metadataKeyProvider, req.Metadata[metadataKeyProvider])
+	}
+	if req.Metadata[metadataKeyConversationID] != "chat-1" {
+		t.Fatalf(
+			"metadata[%s] = %q, want chat-1",
+			metadataKeyConversationID,
+			req.Metadata[metadataKeyConversationID],
+		)
+	}
+	if req.Metadata["gemini.google_search"] != "true" {
+		t.Fatalf("metadata[gemini.google_search] = %q, want true", req.Metadata["gemini.google_search"])
+	}
+	if req.Metadata["gemini.url_context"] != "false" {
+		t.Fatalf("metadata[gemini.url_context] = %q, want false", req.Metadata["gemini.url_context"])
+	}
+	if req.Metadata["gemini.thinking_budget"] != "32" {
+		t.Fatalf("metadata[gemini.thinking_budget] = %q, want 32", req.Metadata["gemini.thinking_budget"])
+	}
+	if req.Metadata["gemini.include_thoughts"] != "true" {
+		t.Fatalf("metadata[gemini.include_thoughts] = %q, want true", req.Metadata["gemini.include_thoughts"])
+	}
+	if req.Metadata["gemini.thinking_level"] != "medium" {
+		t.Fatalf("metadata[gemini.thinking_level] = %q, want medium", req.Metadata["gemini.thinking_level"])
+	}
+	if req.Metadata["gemini.response_mime_type"] != "application/json" {
+		t.Fatalf(
+			"metadata[gemini.response_mime_type] = %q, want application/json",
+			req.Metadata["gemini.response_mime_type"],
+		)
+	}
 }
 
 func TestOnRegisterResolvesProviders(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
-		Providers: map[string]ProviderProfile{
-			"openai": {
-				Type:   providerTypeOpenAI,
-				APIKey: "sk-test",
-			},
-		},
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",
@@ -242,12 +266,6 @@ func TestEditPacerBackoffAndRateLimit(t *testing.T) {
 func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
-		Providers: map[string]ProviderProfile{
-			"openai": {
-				Type:   providerTypeOpenAI,
-				APIKey: "sk-test",
-			},
-		},
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",
@@ -314,12 +332,6 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
-		Providers: map[string]ProviderProfile{
-			"openai": {
-				Type:   providerTypeOpenAI,
-				APIKey: "sk-test",
-			},
-		},
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",
@@ -369,15 +381,149 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 	}
 }
 
+func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+		time.Unix(3, 0).UTC(),
+	})
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: "  Plan\nsteps\t"},
+		{Kind: otogi.LLMGenerateChunkKindOutputText, Delta: "final answer"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"src-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	if len(sink.sendRequests) != 1 {
+		t.Fatalf("send request count = %d, want 1 placeholder only", len(sink.sendRequests))
+	}
+	if sink.sendRequests[0].Text != defaultThinkingPlaceholder {
+		t.Fatalf("placeholder text = %q, want %q", sink.sendRequests[0].Text, defaultThinkingPlaceholder)
+	}
+	if len(sink.editRequests) < 2 {
+		t.Fatalf("edit request count = %d, want at least 2", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "Thinking...\n\nPlan steps" {
+		t.Fatalf("first edit text = %q, want thinking preview", sink.editRequests[0].Text)
+	}
+
+	finalText := sink.editRequests[len(sink.editRequests)-1].Text
+	if finalText != "final answer" {
+		t.Fatalf("final edit text = %q, want final answer", finalText)
+	}
+	if strings.Contains(strings.ToLower(finalText), "thinking") {
+		t.Fatalf("final edit should not contain thinking text, got %q", finalText)
+	}
+}
+
+func TestStreamProviderReplyThinkingOnlyFallbackUsesTrimmedSummary(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+
+	longSummary := strings.Repeat("summary ", 80)
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: longSummary},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"src-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	if len(sink.editRequests) == 0 {
+		t.Fatal("expected edit requests")
+	}
+
+	finalText := sink.editRequests[len(sink.editRequests)-1].Text
+	prefix := defaultThinkingPlaceholder + "\n\n"
+	if !strings.HasPrefix(finalText, prefix) {
+		t.Fatalf("final text prefix = %q, want %q", finalText, prefix)
+	}
+	preview := strings.TrimPrefix(finalText, prefix)
+	if len([]rune(preview)) != maxThinkingPreviewRunes {
+		t.Fatalf("preview rune length = %d, want %d", len([]rune(preview)), maxThinkingPreviewRunes)
+	}
+	if !strings.HasSuffix(preview, "...") {
+		t.Fatalf("preview should be truncated with ellipsis, got %q", preview)
+	}
+}
+
+func TestShapeThinkingSummaryNormalizesWhitespace(t *testing.T) {
+	t.Parallel()
+
+	shaped := shapeThinkingSummary("  a\tb\nc  ")
+	if shaped != "a b c" {
+		t.Fatalf("shapeThinkingSummary = %q, want %q", shaped, "a b c")
+	}
+}
+
 func TestHandleArticleIgnoresBotMessages(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
-		Providers: map[string]ProviderProfile{
-			"openai": {
-				Type:   providerTypeOpenAI,
-				APIKey: "sk-test",
-			},
-		},
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",

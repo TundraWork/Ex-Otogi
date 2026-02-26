@@ -66,10 +66,13 @@ func (m *Module) buildGenerateRequest(
 		MaxOutputTokens: agent.MaxOutputTokens,
 		Temperature:     agent.Temperature,
 		Metadata: map[string]string{
-			"agent":           agent.Name,
-			"provider":        agent.Provider,
-			"conversation_id": event.Conversation.ID,
+			metadataKeyAgent:          agent.Name,
+			metadataKeyProvider:       agent.Provider,
+			metadataKeyConversationID: event.Conversation.ID,
 		},
+	}
+	if err := mergeRequestMetadata(req.Metadata, agent.RequestMetadata); err != nil {
+		return otogi.LLMGenerateRequest{}, fmt.Errorf("build llm request merge request_metadata: %w", err)
 	}
 	if err := req.Validate(); err != nil {
 		return otogi.LLMGenerateRequest{}, fmt.Errorf("build llm request validate: %w", err)
@@ -142,4 +145,19 @@ func renderSystemPrompt(agent Agent, event *otogi.Event, now time.Time) (string,
 	}
 
 	return result, nil
+}
+
+func mergeRequestMetadata(base map[string]string, overrides map[string]string) error {
+	if len(overrides) == 0 {
+		return nil
+	}
+
+	for key, value := range overrides {
+		if err := validateRequestMetadataEntry(key, value); err != nil {
+			return err
+		}
+		base[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+
+	return nil
 }

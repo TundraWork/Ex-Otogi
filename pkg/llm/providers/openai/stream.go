@@ -141,7 +141,21 @@ func mapOpenAIStreamEvent(
 		if !event.JSON.Delta.Valid() {
 			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing delta")
 		}
-		return otogi.LLMGenerateChunk{Delta: event.Delta}, false, nil
+		return otogi.LLMGenerateChunk{
+			Kind:  otogi.LLMGenerateChunkKindOutputText,
+			Delta: event.Delta,
+		}, false, nil
+	case openAIEventReasoningSummaryTextDelta:
+		if !event.JSON.Delta.Valid() {
+			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing delta")
+		}
+		return otogi.LLMGenerateChunk{
+			Kind:  otogi.LLMGenerateChunkKindThinkingSummary,
+			Delta: event.Delta,
+		}, false, nil
+	case openAIEventReasoningTextDelta:
+		// Ignore raw reasoning content. llmchat only surfaces short summaries.
+		return otogi.LLMGenerateChunk{}, false, nil
 	case openAIEventCompleted:
 		if !event.JSON.Response.Valid() {
 			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing response")

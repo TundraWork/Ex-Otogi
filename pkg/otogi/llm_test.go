@@ -2,6 +2,48 @@ package otogi
 
 import "testing"
 
+func TestLLMGenerateChunkKindNormalize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		kind LLMGenerateChunkKind
+		want LLMGenerateChunkKind
+	}{
+		{
+			name: "empty kind defaults to output text",
+			kind: "",
+			want: LLMGenerateChunkKindOutputText,
+		},
+		{
+			name: "output text remains output text",
+			kind: LLMGenerateChunkKindOutputText,
+			want: LLMGenerateChunkKindOutputText,
+		},
+		{
+			name: "thinking summary remains thinking summary",
+			kind: LLMGenerateChunkKindThinkingSummary,
+			want: LLMGenerateChunkKindThinkingSummary,
+		},
+		{
+			name: "unknown kind defaults to output text",
+			kind: "custom",
+			want: LLMGenerateChunkKindOutputText,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.kind.Normalize(); got != testCase.want {
+				t.Fatalf("Normalize() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestLLMMessageRoleValidate(t *testing.T) {
 	tests := []struct {
 		name    string
