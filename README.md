@@ -44,9 +44,10 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 
 ## Development
 
-- `make fmt`
-- `make lint`
-- `make arch-check`
-- `make test`
-- `make generate`
-- `make dev`
+- `make tools` installs pinned local tooling to `.cache/tools/bin`.
+- `make quality` is the canonical local quality gate.
+- `make hooks-install` installs the pre-commit hook (`make quality`).
+- `make generate` runs `go generate`.
+- `make dev` runs local hot reload when `air` is available.
+
+See [Local Quality](docs/quality/LOCAL_QUALITY.md) for gate composition and policy details.

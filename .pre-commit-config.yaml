@@ -4,19 +4,9 @@ default_stages:
 repos:
   - repo: local
     hooks:
-      - id: gofumpt
-        name: gofumpt
-        entry: gofumpt -w
-        language: system
-        types:
-          - go
-      - id: golangci-lint
-        name: golangci-lint
-        entry: env GOLANGCI_LINT_CACHE=.cache/golangci-lint golangci-lint run ./...
+      - id: quality
+        name: make quality
+        entry: env QUALITY_DIFF_MODE=staged make quality
         language: system
         pass_filenames: false
-      - id: go-test-race
-        name: go test -race
-        entry: go test -race ./...
-        language: system
-        pass_filenames: false
+        always_run: true

@@ -1,0 +1,13 @@
+//go:build goleak
+
+package kernel
+
+import (
+	"testing"
+
+	"go.uber.org/goleak"
+)
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}

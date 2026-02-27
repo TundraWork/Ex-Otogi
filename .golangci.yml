@@ -3,10 +3,15 @@ run:
   tests: true
   modules-download-mode: readonly
   allow-parallel-runners: true
+  relative-path-mode: gomod
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - forbidigo
 
 linters:
   disable-all: true
@@ -15,9 +20,11 @@ linters:
     - bidichk
     - bodyclose
     - contextcheck
+    - depguard
     - errcheck
     - errorlint
     - exhaustive
+    - forbidigo
     - gosec
     - govet
     - ineffassign
@@ -31,12 +38,50 @@ linters:
     - wrapcheck
 
 linters-settings:
+  depguard:
+    rules:
+      kernel_must_not_import_driver:
+        list-mode: lax
+        files:
+          - "internal/kernel/**/*.go"
+        deny:
+          - pkg: ex-otogi/internal/driver
+            desc: internal/kernel must not import internal/driver/*
+      modules_must_not_import_internal:
+        list-mode: lax
+        files:
+          - "modules/**/*.go"
+        deny:
+          - pkg: ex-otogi/internal
+            desc: modules/* must not import internal/*
+      pkg_llm_must_not_import_internal:
+        list-mode: lax
+        files:
+          - "pkg/llm/**/*.go"
+        deny:
+          - pkg: ex-otogi/internal
+            desc: pkg/llm must not import internal/*
+      pkg_otogi_must_not_import_internal:
+        list-mode: lax
+        files:
+          - "pkg/otogi/**/*.go"
+        deny:
+          - pkg: ex-otogi/internal
+            desc: pkg/otogi must not import internal/*
+
   errcheck:
     check-type-assertions: true
     check-blank: true
 
   exhaustive:
     default-signifies-exhaustive: true
+
+  forbidigo:
+    forbid:
+      - "^fmt\\.Print(f|ln)?$"
+      - "^panic$"
+      - "^print$"
+      - "^println$"
 
   govet:
     enable:

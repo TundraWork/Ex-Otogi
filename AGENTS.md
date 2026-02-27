@@ -73,7 +73,4 @@ Before proposing or committing code, Trae must verify:
 4. Tests include table-driven coverage and race-safe behavior.
 5. Exported symbols follow required Godoc standards.
 6. After each task, quality checks are run via Makefile commands:
-   - `make fmt`
-   - `make lint`
-   - `make arch-check`
-   - `make test`
+   - `make quality`

@@ -26,10 +26,7 @@
 
 ## Quality Checks
 - After each task, run:
-  - `make fmt`
-  - `make lint`
-  - `make arch-check`
-  - `make test`
+  - `make quality`
 
 ## Testing
 - Contract tests should validate interface expectations and serialization invariants.

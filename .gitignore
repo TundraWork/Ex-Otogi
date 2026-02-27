@@ -1,3 +1,4 @@
-.cache
-bin
+.cache/
+bin/
 config/bot.json
+config/llm.json

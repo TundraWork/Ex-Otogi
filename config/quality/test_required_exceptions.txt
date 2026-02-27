@@ -1,0 +1,4 @@
+# Paths that can bypass the "production change requires test change" rule.
+# Supports shell-style glob matching against repository-relative paths.
+# Keep this list small and document each exception with a reason comment.
+
