@@ -21,9 +21,13 @@ func (m *Module) streamProviderReply(
 	ctx context.Context,
 	target otogi.OutboundTarget,
 	replyToMessageID string,
+	placeholderMessageID string,
 	provider otogi.LLMProvider,
 	req otogi.LLMGenerateRequest,
 ) (err error) {
+	if strings.TrimSpace(placeholderMessageID) == "" {
+		return fmt.Errorf("stream provider reply: empty placeholder message id")
+	}
 	if provider == nil {
 		return fmt.Errorf("stream provider reply: nil provider")
 	}
@@ -49,18 +53,12 @@ func (m *Module) streamProviderReply(
 		err = errors.Join(err, wrapped)
 	}()
 
-	placeholder, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
-		Target:           target,
-		Text:             defaultThinkingPlaceholder,
-		ReplyToMessageID: replyToMessageID,
-	})
-	if err != nil {
-		return fmt.Errorf("stream provider reply send placeholder: %w", err)
-	}
-
 	thinkingBuilder := strings.Builder{}
 	answerBuilder := strings.Builder{}
+	thinkingChunks := 0
+	outputChunks := 0
 	pacer := newEditPacer(m.now())
+	lastDeliveredText := defaultThinkingPlaceholder
 	for {
 		chunk, recvErr := stream.Recv(ctx)
 		if recvErr != nil {
@@ -74,8 +72,10 @@ func (m *Module) streamProviderReply(
 		}
 		switch chunk.Kind.Normalize() {
 		case otogi.LLMGenerateChunkKindThinkingSummary:
+			thinkingChunks++
 			thinkingBuilder.WriteString(chunk.Delta)
 		default:
+			outputChunks++
 			answerBuilder.WriteString(chunk.Delta)
 		}
 
@@ -86,6 +86,9 @@ func (m *Module) streamProviderReply(
 		if nextText == "" {
 			nextText = defaultThinkingPlaceholder
 		}
+		if nextText == lastDeliveredText {
+			continue
+		}
 
 		now := m.now()
 		if !pacer.ShouldAttemptEdit(now) {
@@ -93,7 +96,7 @@ func (m *Module) streamProviderReply(
 		}
 		editErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
 			Target:    target,
-			MessageID: placeholder.ID,
+			MessageID: placeholderMessageID,
 			Text:      nextText,
 		})
 		if editErr != nil {
@@ -101,19 +104,28 @@ func (m *Module) streamProviderReply(
 			continue
 		}
 		pacer.RecordEditSuccess(now)
+		lastDeliveredText = nextText
 	}
 
 	finalText := strings.TrimSpace(answerBuilder.String())
 	if finalText == "" {
-		if thinkingSummary := renderThinkingMessage(thinkingBuilder.String()); thinkingSummary != "" {
-			finalText = thinkingSummary
-		} else {
-			finalText = defaultThinkingPlaceholder
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("stream provider reply canceled: %w", ctxErr)
 		}
+		return fmt.Errorf(
+			"stream provider reply: no output text received (thinking_chunks=%d output_chunks=%d deadline_remaining=%s)",
+			thinkingChunks,
+			outputChunks,
+			describeContextDeadlineRemaining(ctx),
+		)
 	}
+	if finalText == lastDeliveredText {
+		return nil
+	}
+
 	finalEditErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
 		Target:    target,
-		MessageID: placeholder.ID,
+		MessageID: placeholderMessageID,
 		Text:      finalText,
 	})
 	if finalEditErr == nil {
@@ -265,4 +277,22 @@ func isRateLimitError(err error) bool {
 	}
 
 	return false
+}
+
+func describeContextDeadlineRemaining(ctx context.Context) string {
+	if ctx == nil {
+		return "none"
+	}
+
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		return "none"
+	}
+
+	remaining := time.Until(deadline)
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	return remaining.Round(time.Millisecond).String()
 }

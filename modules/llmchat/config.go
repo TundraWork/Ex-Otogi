@@ -39,6 +39,8 @@ type Agent struct {
 	MaxOutputTokens int
 	// Temperature optionally controls output randomness.
 	Temperature float64
+	// RequestTimeout bounds one LLM request lifecycle for this agent.
+	RequestTimeout time.Duration
 	// RequestMetadata carries provider-agnostic request metadata overrides.
 	RequestMetadata map[string]string
 }
@@ -56,6 +58,14 @@ func (cfg Config) Validate() error {
 	for index, agent := range cfg.Agents {
 		if err := validateAgent(agent); err != nil {
 			return fmt.Errorf("validate llmchat config agents[%d]: %w", index, err)
+		}
+		if agent.RequestTimeout > cfg.RequestTimeout {
+			return fmt.Errorf(
+				"validate llmchat config agents[%d]: request_timeout %s exceeds global request_timeout %s",
+				index,
+				agent.RequestTimeout,
+				cfg.RequestTimeout,
+			)
 		}
 
 		normalized := normalizeAgentName(agent.Name)
@@ -89,6 +99,9 @@ func validateAgent(agent Agent) error {
 	}
 	if agent.Temperature < 0 {
 		return fmt.Errorf("temperature must be >= 0")
+	}
+	if agent.RequestTimeout <= 0 {
+		return fmt.Errorf("request_timeout must be > 0")
 	}
 	if _, err := template.New("system-prompt").Option("missingkey=error").Parse(agent.SystemPromptTemplate); err != nil {
 		return fmt.Errorf("invalid system_prompt_template: %w", err)
@@ -147,6 +160,7 @@ func cloneConfig(cfg Config) Config {
 				TemplateVariables:    cloneStringMap(agent.TemplateVariables),
 				MaxOutputTokens:      agent.MaxOutputTokens,
 				Temperature:          agent.Temperature,
+				RequestTimeout:       agent.RequestTimeout,
 				RequestMetadata:      cloneStringMap(agent.RequestMetadata),
 			})
 		}

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,7 +40,6 @@ func writeLLMConfigFile(t *testing.T, path string) {
 				"type":"openai",
 				"api_key":"sk-test",
 				"base_url":"https://api.openai.com/v1",
-				"timeout":"15s",
 				"openai":{"max_retries":2}
 			}
 		},
@@ -48,7 +49,8 @@ func writeLLMConfigFile(t *testing.T, path string) {
 				"description":"Assistant",
 				"provider":"openai-main",
 				"model":"gpt-5-mini",
-				"system_prompt_template":"You are {{.AgentName}}"
+				"system_prompt_template":"You are {{.AgentName}}",
+				"request_timeout":"30s"
 			}
 		]
 	}`)
@@ -106,7 +108,8 @@ func TestLoadConfig(t *testing.T) {
 		writeConfigFile(t, configPath, `{
 			"log_level":"warn",
 			"kernel":{
-				"module_hook_timeout":"7s",
+				"module_lifecycle_timeout":"7s",
+				"module_handler_timeout":"11s",
 				"shutdown_timeout":"15s",
 				"subscription_buffer":64,
 				"subscription_workers":5
@@ -139,8 +142,11 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.logLevel != slog.LevelWarn {
 			t.Fatalf("log level = %v, want %v", cfg.logLevel, slog.LevelWarn)
 		}
-		if cfg.moduleHookTimeout != 7*time.Second {
-			t.Fatalf("module hook timeout = %s, want 7s", cfg.moduleHookTimeout)
+		if cfg.moduleLifecycleTimeout != 7*time.Second {
+			t.Fatalf("module lifecycle timeout = %s, want 7s", cfg.moduleLifecycleTimeout)
+		}
+		if cfg.moduleHandlerTimeout != 11*time.Second {
+			t.Fatalf("module handler timeout = %s, want 11s", cfg.moduleHandlerTimeout)
 		}
 		if cfg.shutdownTimeout != 15*time.Second {
 			t.Fatalf("shutdown timeout = %s, want 15s", cfg.shutdownTimeout)
@@ -234,9 +240,19 @@ func TestLoadConfig(t *testing.T) {
 				wantErrSub: "parse log_level",
 			},
 			{
-				name:       "invalid kernel timeout",
-				fileJSON:   `{"kernel":{"module_hook_timeout":"bad"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
-				wantErrSub: "parse kernel.module_hook_timeout",
+				name:       "invalid lifecycle timeout",
+				fileJSON:   `{"kernel":{"module_lifecycle_timeout":"bad"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				wantErrSub: "parse kernel.module_lifecycle_timeout",
+			},
+			{
+				name:       "invalid handler timeout",
+				fileJSON:   `{"kernel":{"module_handler_timeout":"0s"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				wantErrSub: "parse kernel.module_handler_timeout",
+			},
+			{
+				name:       "legacy hook timeout key rejected",
+				fileJSON:   `{"kernel":{"module_hook_timeout":"7s"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				wantErrSub: "renamed to kernel.module_lifecycle_timeout",
 			},
 			{
 				name:       "missing drivers",
@@ -488,6 +504,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 						Provider:             "openai-main",
 						Model:                "gpt-5-mini",
 						SystemPromptTemplate: "You are {{.AgentName}}",
+						RequestTimeout:       time.Second,
 					},
 					{
 						Name:                 "OtogiGemini",
@@ -495,6 +512,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 						Provider:             "gemini-main",
 						Model:                "gemini-2.5-flash",
 						SystemPromptTemplate: "You are {{.AgentName}}",
+						RequestTimeout:       time.Second,
 					},
 				},
 			},
@@ -539,6 +557,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 						Provider:             "openai-main",
 						Model:                "gpt-5-mini",
 						SystemPromptTemplate: "You are {{.AgentName}}",
+						RequestTimeout:       time.Second,
 					},
 				},
 			},
@@ -552,6 +571,67 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 			t.Fatalf("error = %v, want build llm providers failure", err)
 		}
 	})
+}
+
+func TestConfigureStdlibLogBridge(t *testing.T) {
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, nil))
+
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
+
+	configureStdlibLogBridge(logger)
+	log.Println("Error context canceled")
+
+	output := buffer.String()
+	if output == "" {
+		t.Fatal("expected bridged slog output")
+	}
+	if !strings.Contains(output, `"level":"WARN"`) {
+		t.Fatalf("output = %q, want level WARN", output)
+	}
+	if !strings.Contains(output, `"msg":"Error context canceled"`) {
+		t.Fatalf("output = %q, want bridged message", output)
+	}
+	if !strings.Contains(output, `"source":"stdlib"`) {
+		t.Fatalf("output = %q, want source=stdlib", output)
+	}
+	if !strings.Contains(output, `"component":"google_genai_sdk"`) {
+		t.Fatalf("output = %q, want component=google_genai_sdk", output)
+	}
+	if !strings.Contains(output, `"sdk_log_kind":"context_canceled"`) {
+		t.Fatalf("output = %q, want sdk_log_kind=context_canceled", output)
+	}
+}
+
+func TestConfigureStdlibLogBridgeKeepsOtherLogsAsError(t *testing.T) {
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, nil))
+
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
+
+	configureStdlibLogBridge(logger)
+	log.Println("Some other sdk failure")
+
+	output := buffer.String()
+	if output == "" {
+		t.Fatal("expected bridged slog output")
+	}
+	if !strings.Contains(output, `"level":"ERROR"`) {
+		t.Fatalf("output = %q, want level ERROR", output)
+	}
+	if strings.Contains(output, `"sdk_log_kind":"context_canceled"`) {
+		t.Fatalf("output = %q, should not include context-canceled log kind", output)
+	}
 }
 
 type sinkDispatcherTestStub struct{}

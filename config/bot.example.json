@@ -1,7 +1,8 @@
 {
   "log_level": "info",
   "kernel": {
-    "module_hook_timeout": "3s",
+    "module_lifecycle_timeout": "3s",
+    "module_handler_timeout": "3s",
     "shutdown_timeout": "10s",
     "subscription_buffer": 256,
     "subscription_workers": 2
@@ -14,7 +15,7 @@
       "config": {
         "app_id": 0,
         "app_hash": "",
-        "publish_timeout": "2s",
+        "publish_timeout": "10s",
         "update_buffer": 256,
         "auth_timeout": "3m",
         "code": "",

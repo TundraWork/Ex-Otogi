@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
 	"ex-otogi/pkg/otogi"
 
@@ -37,10 +36,6 @@ type ProviderConfig struct {
 	Organization string
 	// Project optionally sets the OpenAI project header.
 	Project string
-	// Timeout optionally limits each request attempt.
-	//
-	// Zero keeps the SDK default behavior.
-	Timeout time.Duration
 	// MaxRetries optionally overrides the SDK retry count.
 	//
 	// Nil keeps the SDK default behavior.
@@ -85,9 +80,6 @@ func New(cfg ProviderConfig) (*Provider, error) {
 	}
 	if normalized.Project != "" {
 		options = append(options, option.WithProject(normalized.Project))
-	}
-	if normalized.Timeout > 0 {
-		options = append(options, option.WithRequestTimeout(normalized.Timeout))
 	}
 	if normalized.MaxRetries != nil {
 		options = append(options, option.WithMaxRetries(*normalized.MaxRetries))
@@ -283,9 +275,6 @@ func normalizeProviderConfig(cfg ProviderConfig) (ProviderConfig, error) {
 		if parsed.Scheme == "" || parsed.Host == "" {
 			return ProviderConfig{}, fmt.Errorf("parse base_url: must include scheme and host")
 		}
-	}
-	if cfg.Timeout < 0 {
-		return ProviderConfig{}, fmt.Errorf("timeout must be >= 0")
 	}
 	if cfg.MaxRetries != nil && *cfg.MaxRetries < 0 {
 		return ProviderConfig{}, fmt.Errorf("max_retries must be >= 0")

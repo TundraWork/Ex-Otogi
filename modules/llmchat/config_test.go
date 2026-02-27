@@ -38,9 +38,17 @@ func TestConfigValidate(t *testing.T) {
 					Provider:             "p2",
 					Model:                "m2",
 					SystemPromptTemplate: "You are {{.AgentName}}",
+					RequestTimeout:       500 * time.Millisecond,
 				})
 			},
 			wantErrSubstring: "duplicate agent name",
+		},
+		{
+			name: "agent request timeout cannot exceed global",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].RequestTimeout = 2 * time.Second
+			},
+			wantErrSubstring: "exceeds global request_timeout",
 		},
 		{
 			name: "missing provider fails",
@@ -166,6 +174,7 @@ func validModuleConfig() Config {
 				},
 				MaxOutputTokens: 256,
 				Temperature:     0.2,
+				RequestTimeout:  900 * time.Millisecond,
 				RequestMetadata: map[string]string{
 					"gemini.google_search": "true",
 				},

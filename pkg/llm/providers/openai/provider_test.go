@@ -7,7 +7,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"ex-otogi/pkg/otogi"
 
@@ -29,7 +28,6 @@ func TestNewOpenAIProviderConfigValidation(t *testing.T) {
 			cfg: ProviderConfig{
 				APIKey:     "sk-test",
 				BaseURL:    "https://api.openai.com/v1",
-				Timeout:    30 * time.Second,
 				MaxRetries: &retries,
 			},
 		},
@@ -47,14 +45,6 @@ func TestNewOpenAIProviderConfigValidation(t *testing.T) {
 				BaseURL: "not a url",
 			},
 			wantErrSubstring: "parse base_url",
-		},
-		{
-			name: "negative timeout",
-			cfg: ProviderConfig{
-				APIKey:  "sk-test",
-				Timeout: -time.Second,
-			},
-			wantErrSubstring: "timeout must be >= 0",
 		},
 		{
 			name: "negative retries",

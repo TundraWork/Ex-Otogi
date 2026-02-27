@@ -21,9 +21,11 @@ const (
 
 	defaultGeminiAPIVersion = "v1beta"
 
-	metadataKeyAgent          = "agent"
-	metadataKeyProvider       = "provider"
-	metadataKeyConversationID = "conversation_id"
+	metadataKeyAgent             = "agent"
+	metadataKeyProvider          = "provider"
+	metadataKeyConversationID    = "conversation_id"
+	metadataGeminiThinkingBudget = "gemini.thinking_budget"
+	metadataGeminiThinkingLevel  = "gemini.thinking_level"
 
 	geminiThinkingLevelLow    = "low"
 	geminiThinkingLevelMedium = "medium"
@@ -51,8 +53,6 @@ type ProviderProfile struct {
 	APIKey string
 	// BaseURL optionally overrides provider API endpoint.
 	BaseURL string
-	// Timeout optionally sets per-request timeout for this profile.
-	Timeout *time.Duration
 	// OpenAI carries OpenAI-specific options.
 	OpenAI *OpenAIOptions
 	// Gemini carries Gemini-specific options.
@@ -84,10 +84,14 @@ type GeminiRequestDefaults struct {
 	// URLContext enables the URL Context tool.
 	URLContext *bool
 	// ThinkingBudget optionally sets thinking token budget.
+	//
+	// ThinkingBudget and ThinkingLevel are mutually exclusive.
 	ThinkingBudget *int
 	// IncludeThoughts requests thought parts when supported.
 	IncludeThoughts *bool
 	// ThinkingLevel sets model thinking level (low|medium|high).
+	//
+	// ThinkingLevel and ThinkingBudget are mutually exclusive.
 	ThinkingLevel string
 	// ResponseMIMEType sets output MIME type.
 	ResponseMIMEType string
@@ -111,6 +115,8 @@ type Agent struct {
 	MaxOutputTokens int
 	// Temperature optionally controls output randomness.
 	Temperature float64
+	// RequestTimeout bounds one LLM request lifecycle for this agent.
+	RequestTimeout time.Duration
 	// RequestMetadata carries provider-agnostic per-agent metadata overrides.
 	RequestMetadata map[string]string
 }
@@ -125,7 +131,6 @@ type fileProviderEntry struct {
 	Type    string           `json:"type"`
 	APIKey  string           `json:"api_key"`
 	BaseURL string           `json:"base_url"`
-	Timeout string           `json:"timeout"`
 	OpenAI  *fileOpenAIEntry `json:"openai"`
 	Gemini  *fileGeminiEntry `json:"gemini"`
 }
@@ -155,6 +160,7 @@ type fileAgent struct {
 	TemplateVariables    map[string]string `json:"template_variables"`
 	MaxOutputTokens      int               `json:"max_output_tokens"`
 	Temperature          float64           `json:"temperature"`
+	RequestTimeout       string            `json:"request_timeout"`
 	RequestMetadata      map[string]string `json:"request_metadata"`
 }
 
@@ -220,6 +226,18 @@ func LoadFile(path string) (Config, error) {
 	}
 
 	for index, rawAgent := range parsed.Agents {
+		rawRequestTimeout := strings.TrimSpace(rawAgent.RequestTimeout)
+		if rawRequestTimeout == "" {
+			return Config{}, fmt.Errorf("load llm config agents[%d]: missing request_timeout", index)
+		}
+		agentRequestTimeout, err := time.ParseDuration(rawRequestTimeout)
+		if err != nil {
+			return Config{}, fmt.Errorf("load llm config agents[%d]: parse request_timeout: %w", index, err)
+		}
+		if agentRequestTimeout <= 0 {
+			return Config{}, fmt.Errorf("load llm config agents[%d]: parse request_timeout: must be > 0", index)
+		}
+
 		agent := Agent{
 			Name:                 strings.TrimSpace(rawAgent.Name),
 			Description:          strings.TrimSpace(rawAgent.Description),
@@ -229,6 +247,7 @@ func LoadFile(path string) (Config, error) {
 			TemplateVariables:    cloneStringMap(rawAgent.TemplateVariables),
 			MaxOutputTokens:      rawAgent.MaxOutputTokens,
 			Temperature:          rawAgent.Temperature,
+			RequestTimeout:       agentRequestTimeout,
 			RequestMetadata:      cloneStringMap(rawAgent.RequestMetadata),
 		}
 		if err := validateAgent(agent); err != nil {
@@ -285,8 +304,22 @@ func (cfg Config) Validate() error {
 		seenNames[normalized] = struct{}{}
 
 		providerKey := strings.TrimSpace(agent.Provider)
-		if _, exists := cfg.Providers[providerKey]; !exists {
+		providerProfile, exists := cfg.Providers[providerKey]
+		if !exists {
 			return fmt.Errorf("validate llm config agents[%d]: provider %s is not configured", index, providerKey)
+		}
+		if strings.EqualFold(strings.TrimSpace(providerProfile.Type), providerTypeGemini) {
+			if err := validateGeminiAgentThinkingOptions(providerKey, providerProfile, agent); err != nil {
+				return fmt.Errorf("validate llm config agents[%d]: %w", index, err)
+			}
+		}
+		if agent.RequestTimeout > cfg.RequestTimeout {
+			return fmt.Errorf(
+				"validate llm config agents[%d]: request_timeout %s exceeds global request_timeout %s",
+				index,
+				agent.RequestTimeout,
+				cfg.RequestTimeout,
+			)
 		}
 	}
 
@@ -300,14 +333,6 @@ func parseProviderProfile(raw fileProviderEntry) (ProviderProfile, error) {
 		BaseURL: strings.TrimSpace(raw.BaseURL),
 		OpenAI:  parseOpenAIOptions(raw.OpenAI),
 		Gemini:  parseGeminiOptions(raw.Gemini),
-	}
-
-	if rawTimeout := strings.TrimSpace(raw.Timeout); rawTimeout != "" {
-		timeout, err := time.ParseDuration(rawTimeout)
-		if err != nil {
-			return ProviderProfile{}, fmt.Errorf("parse timeout: %w", err)
-		}
-		profile.Timeout = cloneDurationPointer(&timeout)
 	}
 
 	if profile.Type == providerTypeGemini {
@@ -398,9 +423,6 @@ func validateProviderProfile(profileKey string, profile ProviderProfile) error {
 			return fmt.Errorf("invalid base_url: must include scheme and host")
 		}
 	}
-	if profile.Timeout != nil && *profile.Timeout <= 0 {
-		return fmt.Errorf("timeout must be > 0")
-	}
 
 	return nil
 }
@@ -442,6 +464,9 @@ func validateGeminiRequestDefaults(options GeminiRequestDefaults) error {
 			return fmt.Errorf("unsupported thinking_level %q", options.ThinkingLevel)
 		}
 	}
+	if options.ThinkingBudget != nil && normalizeGeminiThinkingLevel(options.ThinkingLevel) != "" {
+		return fmt.Errorf("thinking_budget and thinking_level are mutually exclusive")
+	}
 	if mime := normalizeGeminiResponseMIMEType(options.ResponseMIMEType); mime != "" {
 		switch mime {
 		case geminiResponseMIMEText, geminiResponseMIMEJSON:
@@ -451,6 +476,41 @@ func validateGeminiRequestDefaults(options GeminiRequestDefaults) error {
 	}
 
 	return nil
+}
+
+func validateGeminiAgentThinkingOptions(
+	providerKey string,
+	profile ProviderProfile,
+	agent Agent,
+) error {
+	defaultBudgetSet := false
+	defaultLevelSet := false
+	if profile.Gemini != nil {
+		defaultBudgetSet = profile.Gemini.RequestDefaults.ThinkingBudget != nil
+		defaultLevelSet = normalizeGeminiThinkingLevel(profile.Gemini.RequestDefaults.ThinkingLevel) != ""
+	}
+
+	metadataBudgetSet := hasRequestMetadataKey(agent.RequestMetadata, metadataGeminiThinkingBudget)
+	metadataLevelSet := hasRequestMetadataKey(agent.RequestMetadata, metadataGeminiThinkingLevel)
+
+	effectiveBudgetSet := defaultBudgetSet || metadataBudgetSet
+	effectiveLevelSet := defaultLevelSet || metadataLevelSet
+	if effectiveBudgetSet && effectiveLevelSet {
+		return fmt.Errorf(
+			"provider %s agent %q sets both %s and %s across defaults/request_metadata",
+			providerKey,
+			agent.Name,
+			metadataGeminiThinkingBudget,
+			metadataGeminiThinkingLevel,
+		)
+	}
+
+	return nil
+}
+
+func hasRequestMetadataKey(metadata map[string]string, key string) bool {
+	_, exists := metadata[key]
+	return exists
 }
 
 func validateAgent(agent Agent) error {
@@ -474,6 +534,9 @@ func validateAgent(agent Agent) error {
 	}
 	if agent.Temperature < 0 {
 		return fmt.Errorf("temperature must be >= 0")
+	}
+	if agent.RequestTimeout <= 0 {
+		return fmt.Errorf("request_timeout must be > 0")
 	}
 	if _, err := template.New("system-prompt").Option("missingkey=error").Parse(agent.SystemPromptTemplate); err != nil {
 		return fmt.Errorf("invalid system_prompt_template: %w", err)
@@ -624,14 +687,6 @@ func cloneStringMap(values map[string]string) map[string]string {
 	}
 
 	return cloned
-}
-
-func cloneDurationPointer(value *time.Duration) *time.Duration {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func cloneIntPointer(value *int) *int {

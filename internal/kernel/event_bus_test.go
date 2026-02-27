@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -161,6 +163,166 @@ func TestEventBusPublishNilEventReturnsError(t *testing.T) {
 
 	if err := bus.Publish(context.Background(), nil); err == nil {
 		t.Fatal("expected nil event publish to fail")
+	}
+}
+
+func TestEventBusHandlerTimeoutOverridePrecedence(t *testing.T) {
+	t.Parallel()
+
+	bus := NewEventBus(8, 1, 30*time.Millisecond, nil)
+	t.Cleanup(func() {
+		_ = bus.Close(context.Background())
+	})
+
+	type deadlineObservation struct {
+		hasDeadline bool
+		remaining   time.Duration
+	}
+
+	observed := make(chan deadlineObservation, 1)
+	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
+		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+	}, otogi.SubscriptionSpec{
+		Name:           "override-timeout",
+		HandlerTimeout: 250 * time.Millisecond,
+	}, func(ctx context.Context, _ *otogi.Event) error {
+		deadline, hasDeadline := ctx.Deadline()
+		remaining := time.Duration(0)
+		if hasDeadline {
+			remaining = time.Until(deadline)
+		}
+		observed <- deadlineObservation{
+			hasDeadline: hasDeadline,
+			remaining:   remaining,
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	if err := bus.Publish(context.Background(), newTestEvent("e-timeout-override", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+
+	select {
+	case got := <-observed:
+		if !got.hasDeadline {
+			t.Fatal("handler context missing deadline")
+		}
+		if got.remaining < 150*time.Millisecond {
+			t.Fatalf("handler deadline remaining = %s, want at least 150ms for override timeout", got.remaining)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler observation")
+	}
+}
+
+func TestEventBusHandlerTimeoutDefaultsWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	bus := NewEventBus(8, 1, 30*time.Millisecond, nil)
+	t.Cleanup(func() {
+		_ = bus.Close(context.Background())
+	})
+
+	type deadlineObservation struct {
+		hasDeadline bool
+		remaining   time.Duration
+	}
+
+	observed := make(chan deadlineObservation, 1)
+	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
+		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+	}, otogi.SubscriptionSpec{
+		Name: "default-timeout",
+	}, func(ctx context.Context, _ *otogi.Event) error {
+		deadline, hasDeadline := ctx.Deadline()
+		remaining := time.Duration(0)
+		if hasDeadline {
+			remaining = time.Until(deadline)
+		}
+		observed <- deadlineObservation{
+			hasDeadline: hasDeadline,
+			remaining:   remaining,
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	if err := bus.Publish(context.Background(), newTestEvent("e-timeout-default", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+
+	select {
+	case got := <-observed:
+		if !got.hasDeadline {
+			t.Fatal("handler context missing deadline")
+		}
+		if got.remaining <= 0 {
+			t.Fatalf("handler deadline remaining = %s, want > 0", got.remaining)
+		}
+		if got.remaining > 120*time.Millisecond {
+			t.Fatalf("handler deadline remaining = %s, want <= 120ms for default timeout", got.remaining)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler observation")
+	}
+}
+
+func TestEventBusHandlerErrorIncludesTimeoutDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	asyncErr := make(chan error, 1)
+	bus := NewEventBus(8, 1, 30*time.Millisecond, func(_ context.Context, _ string, err error) {
+		select {
+		case asyncErr <- err:
+		default:
+		}
+	})
+	t.Cleanup(func() {
+		_ = bus.Close(context.Background())
+	})
+
+	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
+		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+	}, otogi.SubscriptionSpec{
+		Name: "handler-error-diagnostics",
+	}, func(_ context.Context, _ *otogi.Event) error {
+		return errors.New("boom")
+	})
+	if err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	if err := bus.Publish(context.Background(), newTestEvent("e-diagnostics", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+
+	select {
+	case err := <-asyncErr:
+		if err == nil {
+			t.Fatal("async error is nil")
+		}
+		text := err.Error()
+		if !strings.Contains(text, "handler_timeout=30ms") {
+			t.Fatalf("error = %q, want handler_timeout diagnostics", text)
+		}
+		if !strings.Contains(text, "handler_ctx_has_deadline=true") {
+			t.Fatalf("error = %q, want handler_ctx_has_deadline diagnostics", text)
+		}
+		if !strings.Contains(text, "handler_ctx_deadline=") {
+			t.Fatalf("error = %q, want handler_ctx_deadline diagnostics", text)
+		}
+		if !strings.Contains(text, "handler_ctx_deadline_remaining=") {
+			t.Fatalf("error = %q, want handler_ctx_deadline_remaining diagnostics", text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for async error")
 	}
 }
 

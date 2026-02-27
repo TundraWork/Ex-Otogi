@@ -12,6 +12,57 @@ import (
 	"ex-otogi/pkg/otogi"
 )
 
+func TestSpecSetsExplicitHandlerTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		requestTimeout time.Duration
+	}{
+		{name: "short timeout", requestTimeout: 15 * time.Second},
+		{name: "long timeout", requestTimeout: 2 * time.Minute},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			module, err := New(Config{
+				RequestTimeout: testCase.requestTimeout,
+				Agents: []Agent{
+					{
+						Name:                 "Otogi",
+						Description:          "assistant",
+						Provider:             "p",
+						Model:                "m",
+						SystemPromptTemplate: "You are {{.AgentName}}",
+						RequestTimeout:       time.Second,
+					},
+				},
+			})
+			if err != nil {
+				t.Fatalf("New failed: %v", err)
+			}
+
+			spec := module.Spec()
+			if len(spec.Handlers) != 1 {
+				t.Fatalf("handlers len = %d, want 1", len(spec.Handlers))
+			}
+
+			subscription := spec.Handlers[0].Subscription
+			if subscription.Name != "llmchat-articles" {
+				t.Fatalf("subscription name = %q, want llmchat-articles", subscription.Name)
+			}
+
+			wantTimeout := testCase.requestTimeout + llmchatHandlerTimeoutGrace
+			if subscription.HandlerTimeout != wantTimeout {
+				t.Fatalf("handler timeout = %s, want %s", subscription.HandlerTimeout, wantTimeout)
+			}
+		})
+	}
+}
+
 func TestMatchTriggeredAgent(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
@@ -22,6 +73,7 @@ func TestMatchTriggeredAgent(t *testing.T) {
 				Provider:             "p",
 				Model:                "m",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 			{
 				Name:                 "Ai",
@@ -29,6 +81,7 @@ func TestMatchTriggeredAgent(t *testing.T) {
 				Provider:             "p",
 				Model:                "m",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 		},
 	})
@@ -84,6 +137,7 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 				Provider:             "p",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}} at {{.DateTimeUTC}}",
+				RequestTimeout:       time.Second,
 				RequestMetadata: map[string]string{
 					"gemini.google_search":      "true",
 					"gemini.url_context":        "false",
@@ -193,6 +247,7 @@ func TestOnRegisterResolvesProviders(t *testing.T) {
 				Provider:             "openai",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 		},
 	})
@@ -273,6 +328,7 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 				Provider:             "openai",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 		},
 	})
@@ -315,6 +371,7 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
 		"src-1",
+		"placeholder-1",
 		provider,
 		req,
 	); err != nil {
@@ -339,6 +396,7 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 				Provider:             "openai",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 		},
 	})
@@ -348,6 +406,67 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{nil, errors.New("final edit failed")},
+	}
+	module.dispatcher = sink
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "hello"},
+		{Delta: " world"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"src-1",
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	if len(sink.sendRequests) != 1 {
+		t.Fatalf("send request count = %d, want 1 fallback", len(sink.sendRequests))
+	}
+	if sink.sendRequests[0].Text != "hello world" {
+		t.Fatalf("fallback text = %q, want hello world", sink.sendRequests[0].Text)
+	}
+	if sink.sendRequests[0].ReplyToMessageID != "src-1" {
+		t.Fatalf("fallback reply_to_message_id = %q, want src-1", sink.sendRequests[0].ReplyToMessageID)
+	}
+}
+
+func TestStreamProviderReplySkipsFinalEditWhenFinalTextAlreadyDelivered(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{
+		editErrors: []error{nil, errors.New("unexpected final edit")},
 	}
 	module.dispatcher = sink
 	module.clock = sequenceClock([]time.Time{
@@ -367,17 +486,21 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
 		"src-1",
+		"placeholder-1",
 		provider,
 		req,
 	); err != nil {
 		t.Fatalf("streamProviderReply failed: %v", err)
 	}
 
-	if len(sink.sendRequests) != 2 {
-		t.Fatalf("send request count = %d, want 2 (placeholder + fallback)", len(sink.sendRequests))
+	if len(sink.editRequests) != 1 {
+		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
 	}
-	if sink.sendRequests[1].Text != "hello" {
-		t.Fatalf("fallback text = %q, want hello", sink.sendRequests[1].Text)
+	if sink.editRequests[0].Text != "hello" {
+		t.Fatalf("edit text = %q, want hello", sink.editRequests[0].Text)
+	}
+	if len(sink.sendRequests) != 0 {
+		t.Fatalf("send request count = %d, want 0", len(sink.sendRequests))
 	}
 }
 
@@ -391,6 +514,7 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 				Provider:             "openai",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 		},
 	})
@@ -421,17 +545,15 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
 		"src-1",
+		"placeholder-1",
 		provider,
 		req,
 	); err != nil {
 		t.Fatalf("streamProviderReply failed: %v", err)
 	}
 
-	if len(sink.sendRequests) != 1 {
-		t.Fatalf("send request count = %d, want 1 placeholder only", len(sink.sendRequests))
-	}
-	if sink.sendRequests[0].Text != defaultThinkingPlaceholder {
-		t.Fatalf("placeholder text = %q, want %q", sink.sendRequests[0].Text, defaultThinkingPlaceholder)
+	if len(sink.sendRequests) != 0 {
+		t.Fatalf("send request count = %d, want 0", len(sink.sendRequests))
 	}
 	if len(sink.editRequests) < 2 {
 		t.Fatalf("edit request count = %d, want at least 2", len(sink.editRequests))
@@ -449,7 +571,7 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 	}
 }
 
-func TestStreamProviderReplyThinkingOnlyFallbackUsesTrimmedSummary(t *testing.T) {
+func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
@@ -459,6 +581,7 @@ func TestStreamProviderReplyThinkingOnlyFallbackUsesTrimmedSummary(t *testing.T)
 				Provider:             "openai",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 		},
 	})
@@ -484,31 +607,98 @@ func TestStreamProviderReplyThinkingOnlyFallbackUsesTrimmedSummary(t *testing.T)
 			{Role: otogi.LLMMessageRoleUser, Content: "u"},
 		},
 	}
-	if err := module.streamProviderReply(
+	err = module.streamProviderReply(
 		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
 		"src-1",
+		"placeholder-1",
 		provider,
 		req,
-	); err != nil {
-		t.Fatalf("streamProviderReply failed: %v", err)
+	)
+	if err == nil {
+		t.Fatal("streamProviderReply error = nil, want thinking-only error")
+	}
+	if !strings.Contains(err.Error(), "no output text received") {
+		t.Fatalf("error = %q, want no output text received", err)
+	}
+	if !strings.Contains(err.Error(), "thinking_chunks=1") {
+		t.Fatalf("error = %q, want thinking chunk diagnostics", err)
+	}
+	if !strings.Contains(err.Error(), "output_chunks=0") {
+		t.Fatalf("error = %q, want output chunk diagnostics", err)
+	}
+	if !strings.Contains(err.Error(), "deadline_remaining=none") {
+		t.Fatalf("error = %q, want deadline remaining diagnostics", err)
 	}
 
 	if len(sink.editRequests) == 0 {
 		t.Fatal("expected edit requests")
 	}
-
-	finalText := sink.editRequests[len(sink.editRequests)-1].Text
-	prefix := defaultThinkingPlaceholder + "\n\n"
-	if !strings.HasPrefix(finalText, prefix) {
-		t.Fatalf("final text prefix = %q, want %q", finalText, prefix)
+	if len(sink.sendRequests) != 0 {
+		t.Fatalf("send request count = %d, want 0", len(sink.sendRequests))
 	}
-	preview := strings.TrimPrefix(finalText, prefix)
+
+	thinkingText := sink.editRequests[len(sink.editRequests)-1].Text
+	prefix := defaultThinkingPlaceholder + "\n\n"
+	if !strings.HasPrefix(thinkingText, prefix) {
+		t.Fatalf("thinking text prefix = %q, want %q", thinkingText, prefix)
+	}
+	preview := strings.TrimPrefix(thinkingText, prefix)
 	if len([]rune(preview)) != maxThinkingPreviewRunes {
 		t.Fatalf("preview rune length = %d, want %d", len([]rune(preview)), maxThinkingPreviewRunes)
 	}
 	if !strings.HasSuffix(preview, "...") {
 		t.Fatalf("preview should be truncated with ellipsis, got %q", preview)
+	}
+}
+
+func TestStreamProviderReplyNoOutputReturnsContextErrorWhenCanceled(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = module.streamProviderReply(
+		ctx,
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"src-1",
+		"placeholder-1",
+		&providerStub{stream: &streamStub{}},
+		req,
+	)
+	if err == nil {
+		t.Fatal("streamProviderReply error = nil, want context cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if strings.Contains(err.Error(), "no output text received") {
+		t.Fatalf("error = %q, should not map canceled stream to no output text", err)
 	}
 }
 
@@ -518,6 +708,47 @@ func TestShapeThinkingSummaryNormalizesWhitespace(t *testing.T) {
 	shaped := shapeThinkingSummary("  a\tb\nc  ")
 	if shaped != "a b c" {
 		t.Fatalf("shapeThinkingSummary = %q, want %q", shaped, "a b c")
+	}
+}
+
+func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	err = module.streamProviderReply(
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"src-1",
+		"",
+		&providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "hello"}}}},
+		req,
+	)
+	if err == nil {
+		t.Fatal("streamProviderReply error = nil, want placeholder validation error")
+	}
+	if !strings.Contains(err.Error(), "empty placeholder message id") {
+		t.Fatalf("error = %q, want empty placeholder message id", err)
 	}
 }
 
@@ -531,6 +762,7 @@ func TestHandleArticleIgnoresBotMessages(t *testing.T) {
 				Provider:             "openai",
 				Model:                "gpt-test",
 				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
 			},
 		},
 	})
@@ -560,11 +792,365 @@ func TestHandleArticleIgnoresBotMessages(t *testing.T) {
 	}
 }
 
+func TestHandleArticleSendsPlaceholderBeforeBuildAndStream(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	callOrder := make([]string, 0, 3)
+	sink := &sinkDispatcherStub{
+		onSend: func(otogi.SendMessageRequest) {
+			callOrder = append(callOrder, "send")
+		},
+	}
+	memory := &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				IsCurrent:    true,
+			},
+		},
+		onGetReplyChain: func() {
+			callOrder = append(callOrder, "memory")
+		},
+	}
+	provider := &providerStub{
+		stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+			{Delta: "hello"},
+		}},
+		onGenerateStream: func() {
+			callOrder = append(callOrder, "provider")
+		},
+	}
+	module.dispatcher = sink
+	module.memory = memory
+	module.providers = map[string]otogi.LLMProvider{"openai": provider}
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(2, 0).UTC(),
+	})
+
+	event := testLLMChatEvent("Otogi hello")
+	if err := module.handleArticle(context.Background(), event); err != nil {
+		t.Fatalf("handleArticle failed: %v", err)
+	}
+
+	if len(sink.sendRequests) != 1 {
+		t.Fatalf("send request count = %d, want 1", len(sink.sendRequests))
+	}
+	if sink.sendRequests[0].Text != defaultThinkingPlaceholder {
+		t.Fatalf("placeholder text = %q, want %q", sink.sendRequests[0].Text, defaultThinkingPlaceholder)
+	}
+	if sink.sendRequests[0].ReplyToMessageID != event.Article.ID {
+		t.Fatalf("placeholder reply_to_message_id = %q, want %q", sink.sendRequests[0].ReplyToMessageID, event.Article.ID)
+	}
+
+	if got, want := strings.Join(callOrder, ","), "send,memory,provider"; got != want {
+		t.Fatalf("call order = %q, want %q", got, want)
+	}
+}
+
+func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: 90 * time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       90 * time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	providerCalled := false
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				IsCurrent:    true,
+			},
+		},
+	}
+	module.providers = map[string]otogi.LLMProvider{
+		"openai": &providerStub{
+			stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "unused"}}},
+			onGenerateStream: func() {
+				providerCalled = true
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	err = module.handleArticle(ctx, testLLMChatEvent("Otogi hello"))
+	if err == nil {
+		t.Fatal("handleArticle error = nil, want deadline preflight failure")
+	}
+	if !strings.Contains(err.Error(), "llmchat preflight for agent Otogi") {
+		t.Fatalf("error = %q, want llmchat preflight context", err)
+	}
+	if !strings.Contains(err.Error(), "insufficient handler deadline budget") {
+		t.Fatalf("error = %q, want insufficient handler deadline budget", err)
+	}
+	if !strings.Contains(err.Error(), "remaining=") {
+		t.Fatalf("error = %q, want remaining deadline detail", err)
+	}
+	if !strings.Contains(err.Error(), "request_timeout=1m30s") {
+		t.Fatalf("error = %q, want request timeout detail", err)
+	}
+	if !strings.Contains(err.Error(), "kernel.module_handler_timeout") {
+		t.Fatalf("error = %q, want handler timeout guidance", err)
+	}
+	if providerCalled {
+		t.Fatal("provider generate stream should not be called when deadline preflight fails")
+	}
+	if len(sink.sendRequests) != 1 {
+		t.Fatalf("send request count = %d, want 1", len(sink.sendRequests))
+	}
+	if sink.sendRequests[0].Text != defaultThinkingPlaceholder {
+		t.Fatalf("placeholder text = %q, want %q", sink.sendRequests[0].Text, defaultThinkingPlaceholder)
+	}
+	if len(sink.editRequests) != 1 {
+		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != placeholderFailureMessage {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[0].Text, placeholderFailureMessage)
+	}
+}
+
+func TestHandleArticleBuildFailureEditsPlaceholder(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	providerCalled := false
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.memory = &memoryStub{
+		replyErr: errors.New("reply chain failed"),
+	}
+	module.providers = map[string]otogi.LLMProvider{
+		"openai": &providerStub{
+			stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "unused"}}},
+			onGenerateStream: func() {
+				providerCalled = true
+			},
+		},
+	}
+
+	err = module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
+	if err == nil {
+		t.Fatal("handleArticle error = nil, want build failure")
+	}
+	if !strings.Contains(err.Error(), "llmchat build request for agent Otogi") {
+		t.Fatalf("error = %q, want build request context", err)
+	}
+	if providerCalled {
+		t.Fatal("provider generate stream should not be called on build failure")
+	}
+	if len(sink.sendRequests) != 1 {
+		t.Fatalf("send request count = %d, want 1", len(sink.sendRequests))
+	}
+	if len(sink.editRequests) != 1 {
+		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
+	}
+	if sink.editRequests[0].MessageID != "msg-1" {
+		t.Fatalf("failure edit message id = %q, want msg-1", sink.editRequests[0].MessageID)
+	}
+	if sink.editRequests[0].Text != placeholderFailureMessage {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[0].Text, placeholderFailureMessage)
+	}
+}
+
+func TestHandleArticleProviderStartFailureEditsPlaceholder(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				IsCurrent:    true,
+			},
+		},
+	}
+	module.providers = map[string]otogi.LLMProvider{
+		"openai": &providerStub{
+			streamErr: errors.New("provider start failed"),
+		},
+	}
+
+	err = module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
+	if err == nil {
+		t.Fatal("handleArticle error = nil, want stream startup failure")
+	}
+	if !strings.Contains(err.Error(), "llmchat stream response for agent Otogi") {
+		t.Fatalf("error = %q, want stream response context", err)
+	}
+	if len(sink.sendRequests) != 1 {
+		t.Fatalf("send request count = %d, want 1", len(sink.sendRequests))
+	}
+	if len(sink.editRequests) != 1 {
+		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
+	}
+	if sink.editRequests[0].MessageID != "msg-1" {
+		t.Fatalf("failure edit message id = %q, want msg-1", sink.editRequests[0].MessageID)
+	}
+	if sink.editRequests[0].Text != placeholderFailureMessage {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[0].Text, placeholderFailureMessage)
+	}
+}
+
+func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				IsCurrent:    true,
+			},
+		},
+	}
+	module.providers = map[string]otogi.LLMProvider{
+		"openai": &providerStub{
+			stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+				{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: "draft steps"},
+			}},
+		},
+	}
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+
+	err = module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
+	if err == nil {
+		t.Fatal("handleArticle error = nil, want thinking-only stream failure")
+	}
+	if !strings.Contains(err.Error(), "llmchat stream response for agent Otogi") {
+		t.Fatalf("error = %q, want stream response context", err)
+	}
+	if !strings.Contains(err.Error(), "no output text received") {
+		t.Fatalf("error = %q, want no output text received", err)
+	}
+	if len(sink.sendRequests) != 1 {
+		t.Fatalf("send request count = %d, want 1", len(sink.sendRequests))
+	}
+	if sink.sendRequests[0].Text != defaultThinkingPlaceholder {
+		t.Fatalf("placeholder text = %q, want %q", sink.sendRequests[0].Text, defaultThinkingPlaceholder)
+	}
+	if len(sink.editRequests) != 2 {
+		t.Fatalf("edit request count = %d, want 2", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "Thinking...\n\ndraft steps" {
+		t.Fatalf("thinking edit text = %q, want %q", sink.editRequests[0].Text, "Thinking...\n\ndraft steps")
+	}
+	if sink.editRequests[1].MessageID != "msg-1" {
+		t.Fatalf("failure edit message id = %q, want msg-1", sink.editRequests[1].MessageID)
+	}
+	if sink.editRequests[1].Text != placeholderFailureMessage {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[1].Text, placeholderFailureMessage)
+	}
+}
+
+func testLLMChatEvent(text string) *otogi.Event {
+	return &otogi.Event{
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(1, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor:   otogi.Actor{ID: "user-1", DisplayName: "Alice"},
+		Article: &otogi.Article{ID: "m-1", Text: text},
+	}
+}
+
 type sinkDispatcherStub struct {
 	sendRequests []otogi.SendMessageRequest
 	editRequests []otogi.EditMessageRequest
 	sendErrors   []error
 	editErrors   []error
+	onSend       func(otogi.SendMessageRequest)
+	onEdit       func(otogi.EditMessageRequest)
 }
 
 func (s *sinkDispatcherStub) SendMessage(
@@ -573,6 +1159,9 @@ func (s *sinkDispatcherStub) SendMessage(
 ) (*otogi.OutboundMessage, error) {
 	index := len(s.sendRequests)
 	s.sendRequests = append(s.sendRequests, req)
+	if s.onSend != nil {
+		s.onSend(req)
+	}
 	if index < len(s.sendErrors) && s.sendErrors[index] != nil {
 		return nil, s.sendErrors[index]
 	}
@@ -583,6 +1172,9 @@ func (s *sinkDispatcherStub) SendMessage(
 func (s *sinkDispatcherStub) EditMessage(_ context.Context, req otogi.EditMessageRequest) error {
 	index := len(s.editRequests)
 	s.editRequests = append(s.editRequests, req)
+	if s.onEdit != nil {
+		s.onEdit(req)
+	}
 	if index < len(s.editErrors) {
 		return s.editErrors[index]
 	}
@@ -600,8 +1192,9 @@ func (*sinkDispatcherStub) ListSinksByPlatform(context.Context, otogi.Platform) 
 }
 
 type memoryStub struct {
-	replyChain []otogi.ReplyChainEntry
-	replyErr   error
+	replyChain      []otogi.ReplyChainEntry
+	replyErr        error
+	onGetReplyChain func()
 }
 
 func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool, error) {
@@ -613,6 +1206,9 @@ func (*memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool
 }
 
 func (m *memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.ReplyChainEntry, error) {
+	if m.onGetReplyChain != nil {
+		m.onGetReplyChain()
+	}
 	if m.replyErr != nil {
 		return nil, m.replyErr
 	}
@@ -648,11 +1244,15 @@ func (r *providerRegistryStub) Resolve(provider string) (otogi.LLMProvider, erro
 }
 
 type providerStub struct {
-	stream    otogi.LLMStream
-	streamErr error
+	stream           otogi.LLMStream
+	streamErr        error
+	onGenerateStream func()
 }
 
 func (p *providerStub) GenerateStream(context.Context, otogi.LLMGenerateRequest) (otogi.LLMStream, error) {
+	if p.onGenerateStream != nil {
+		p.onGenerateStream()
+	}
 	if p.streamErr != nil {
 		return nil, p.streamErr
 	}

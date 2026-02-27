@@ -172,6 +172,79 @@ func TestRegisterModuleBindsDeclarativeHandlers(t *testing.T) {
 	}
 }
 
+func TestRegisterModuleDeclarativeHandlerTimeoutOverride(t *testing.T) {
+	t.Parallel()
+
+	kernelRuntime := New(WithDefaultHandlerTimeout(30 * time.Millisecond))
+	t.Cleanup(func() {
+		_ = kernelRuntime.EventBus().Close(context.Background())
+	})
+
+	type deadlineObservation struct {
+		hasDeadline bool
+		remaining   time.Duration
+	}
+
+	observed := make(chan deadlineObservation, 1)
+	module := &stubModule{
+		name: "declarative-timeout-override",
+		spec: otogi.ModuleSpec{
+			Handlers: []otogi.ModuleHandler{
+				{
+					Capability: otogi.Capability{
+						Name: "timeout-observer",
+						Interest: otogi.InterestSet{
+							Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+						},
+					},
+					Subscription: otogi.SubscriptionSpec{
+						Name:           "declarative-timeout-handler",
+						Buffer:         1,
+						Workers:        1,
+						HandlerTimeout: 250 * time.Millisecond,
+					},
+					Handler: func(ctx context.Context, _ *otogi.Event) error {
+						deadline, hasDeadline := ctx.Deadline()
+						remaining := time.Duration(0)
+						if hasDeadline {
+							remaining = time.Until(deadline)
+						}
+						observed <- deadlineObservation{
+							hasDeadline: hasDeadline,
+							remaining:   remaining,
+						}
+
+						return nil
+					},
+				},
+			},
+		},
+	}
+
+	if err := kernelRuntime.RegisterModule(context.Background(), module); err != nil {
+		t.Fatalf("register module failed: %v", err)
+	}
+
+	if err := kernelRuntime.EventBus().Publish(
+		context.Background(),
+		newTestEvent("e-timeout-override", otogi.EventKindArticleCreated),
+	); err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+
+	select {
+	case got := <-observed:
+		if !got.hasDeadline {
+			t.Fatal("handler context missing deadline")
+		}
+		if got.remaining < 150*time.Millisecond {
+			t.Fatalf("handler deadline remaining = %s, want at least 150ms for declarative override", got.remaining)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler observation")
+	}
+}
+
 // TestRegisterModuleImperativeSubscriptionCapabilityGate verifies imperative subscriptions
 // remain possible, but only when capabilities are explicitly declared.
 func TestRegisterModuleImperativeSubscriptionCapabilityGate(t *testing.T) {

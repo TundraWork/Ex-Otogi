@@ -376,13 +376,38 @@ func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *
 	}
 	defer cancel()
 
+	hasDeadline, deadlineText, deadlineRemainingText := describeContextDeadline(handlerCtx)
 	if err := runSafely(scope, func() error {
 		return s.handler(handlerCtx, event)
 	}); err != nil {
-		return fmt.Errorf("%s handle event %s: %w", scope, event.Kind, err)
+		return fmt.Errorf(
+			"%s handle event %s (handler_timeout=%s handler_ctx_has_deadline=%t handler_ctx_deadline=%s "+
+				"handler_ctx_deadline_remaining=%s): %w",
+			scope,
+			event.Kind,
+			s.spec.HandlerTimeout,
+			hasDeadline,
+			deadlineText,
+			deadlineRemainingText,
+			err,
+		)
 	}
 
 	return nil
+}
+
+func describeContextDeadline(ctx context.Context) (bool, string, string) {
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		return false, "none", "none"
+	}
+
+	remaining := time.Until(deadline)
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	return true, deadline.UTC().Format(time.RFC3339Nano), remaining.Round(time.Millisecond).String()
 }
 
 // signalClose marks the subscription closed exactly once and cancels workers.

@@ -44,19 +44,19 @@ type ProviderConfig struct {
 	//
 	// Zero defaults to v1beta.
 	APIVersion string
-	// Timeout optionally limits each request attempt.
-	//
-	// Zero keeps SDK default timeout behavior.
-	Timeout time.Duration
 	// GoogleSearch optionally enables Google Search tool for all requests.
 	GoogleSearch *bool
 	// URLContext optionally enables URL Context tool for all requests.
 	URLContext *bool
 	// ThinkingBudget optionally sets thinking token budget.
+	//
+	// ThinkingBudget and ThinkingLevel are mutually exclusive.
 	ThinkingBudget *int
 	// IncludeThoughts optionally asks models to include thought parts.
 	IncludeThoughts *bool
 	// ThinkingLevel optionally sets thinking level (low|medium|high).
+	//
+	// ThinkingLevel and ThinkingBudget are mutually exclusive.
 	ThinkingLevel string
 	// ResponseMIMEType optionally sets response MIME type.
 	//
@@ -83,7 +83,6 @@ type normalizedProviderConfig struct {
 	apiKey     string
 	baseURL    string
 	apiVersion string
-	timeout    time.Duration
 	defaults   requestOptions
 }
 
@@ -110,10 +109,6 @@ func New(cfg ProviderConfig) (*Provider, error) {
 			BaseURL:    normalized.baseURL,
 			APIVersion: normalized.apiVersion,
 		},
-	}
-	if normalized.timeout > 0 {
-		timeout := normalized.timeout
-		clientConfig.HTTPOptions.Timeout = &timeout
 	}
 
 	client, err := genai.NewClient(context.Background(), clientConfig)
@@ -152,6 +147,9 @@ func (p *Provider) GenerateStream(
 	if err != nil {
 		return nil, fmt.Errorf("gemini generate stream map request: %w", err)
 	}
+	// Force SDK request timeout off for streams so caller context is the only deadline authority.
+	streamTimeout := time.Duration(0)
+	config.HTTPOptions = &genai.HTTPOptions{Timeout: &streamTimeout}
 
 	stream := p.models.GenerateContentStream(ctx, strings.TrimSpace(req.Model), contents, config)
 	if stream == nil {
@@ -170,6 +168,9 @@ func mapGenerateRequest(
 		return nil, nil, requestOptions{}, err
 	}
 	effective := mergeRequestOptions(defaults, overrides)
+	if err := effective.validateThinkingSelection(); err != nil {
+		return nil, nil, requestOptions{}, fmt.Errorf("thinking options: %w", err)
+	}
 
 	systemParts := make([]string, 0, len(req.Messages))
 	contents := make([]*genai.Content, 0, len(req.Messages))
@@ -303,6 +304,9 @@ func parseMetadataOverrides(metadata map[string]string) (requestOptions, error) 
 		}
 		overrides.responseMIME = mime
 	}
+	if err := overrides.validateThinkingSelection(); err != nil {
+		return requestOptions{}, fmt.Errorf("metadata thinking options: %w", err)
+	}
 
 	return overrides, nil
 }
@@ -331,10 +335,6 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 	if !isValidAPIVersion(trimmedAPIVersion) {
 		return normalizedProviderConfig{}, fmt.Errorf("invalid api_version %q", cfg.APIVersion)
 	}
-	if cfg.Timeout < 0 {
-		return normalizedProviderConfig{}, fmt.Errorf("timeout must be >= 0")
-	}
-
 	defaults, err := optionsFromConfig(cfg)
 	if err != nil {
 		return normalizedProviderConfig{}, err
@@ -344,7 +344,6 @@ func normalizeProviderConfig(cfg ProviderConfig) (normalizedProviderConfig, erro
 		apiKey:     trimmedAPIKey,
 		baseURL:    trimmedBaseURL,
 		apiVersion: trimmedAPIVersion,
-		timeout:    cfg.Timeout,
 		defaults:   defaults,
 	}, nil
 }
@@ -363,14 +362,19 @@ func optionsFromConfig(cfg ProviderConfig) (requestOptions, error) {
 		return requestOptions{}, fmt.Errorf("response_mime_type: %w", err)
 	}
 
-	return requestOptions{
+	options := requestOptions{
 		googleSearch:    cloneBoolPointer(cfg.GoogleSearch),
 		urlContext:      cloneBoolPointer(cfg.URLContext),
 		thinkingBudget:  thinkingBudget,
 		includeThoughts: cloneBoolPointer(cfg.IncludeThoughts),
 		thinkingLevel:   thinkingLevel,
 		responseMIME:    responseMIME,
-	}, nil
+	}
+	if err := options.validateThinkingSelection(); err != nil {
+		return requestOptions{}, fmt.Errorf("thinking options: %w", err)
+	}
+
+	return options, nil
 }
 
 func mergeRequestOptions(defaults, overrides requestOptions) requestOptions {
@@ -502,6 +506,14 @@ func (o requestOptions) hasThinkingConfig() bool {
 
 func (o requestOptions) includeThoughtsEnabled() bool {
 	return isTrue(o.includeThoughts)
+}
+
+func (o requestOptions) validateThinkingSelection() error {
+	if o.thinkingBudget != nil && o.thinkingLevel != "" {
+		return fmt.Errorf("thinking_budget and thinking_level are mutually exclusive")
+	}
+
+	return nil
 }
 
 func cloneBoolPointer(value *bool) *bool {

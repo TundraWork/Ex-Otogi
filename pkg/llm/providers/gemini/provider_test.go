@@ -7,7 +7,6 @@ import (
 	"iter"
 	"strings"
 	"testing"
-	"time"
 
 	"ex-otogi/pkg/otogi"
 
@@ -28,8 +27,6 @@ func TestNewGeminiProviderConfigValidation(t *testing.T) {
 				APIKey:           "gm-test",
 				BaseURL:          "https://generativelanguage.googleapis.com/",
 				APIVersion:       "v1beta",
-				Timeout:          20 * time.Second,
-				ThinkingBudget:   ptrInt(64),
 				ThinkingLevel:    thinkingLevelMedium,
 				ResponseMIMEType: responseMIMEJSON,
 			},
@@ -58,14 +55,6 @@ func TestNewGeminiProviderConfigValidation(t *testing.T) {
 			wantErrSubstring: "invalid api_version",
 		},
 		{
-			name: "negative timeout",
-			cfg: ProviderConfig{
-				APIKey:  "gm-test",
-				Timeout: -time.Second,
-			},
-			wantErrSubstring: "timeout must be >= 0",
-		},
-		{
 			name: "negative thinking budget",
 			cfg: ProviderConfig{
 				APIKey:         "gm-test",
@@ -88,6 +77,15 @@ func TestNewGeminiProviderConfigValidation(t *testing.T) {
 				ResponseMIMEType: "application/xml",
 			},
 			wantErrSubstring: "response_mime_type",
+		},
+		{
+			name: "conflicting thinking options",
+			cfg: ProviderConfig{
+				APIKey:         "gm-test",
+				ThinkingBudget: ptrInt(64),
+				ThinkingLevel:  thinkingLevelMedium,
+			},
+			wantErrSubstring: "mutually exclusive",
 		},
 	}
 
@@ -155,7 +153,6 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 			googleSearch:    ptrBool(false),
 			urlContext:      ptrBool(false),
 			includeThoughts: ptrBool(false),
-			thinkingLevel:   genai.ThinkingLevelLow,
 		},
 	}
 
@@ -174,7 +171,6 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 			metadataURLContext:      "true",
 			metadataThinkingBudget:  "128",
 			metadataIncludeThoughts: "true",
-			metadataThinkingLevel:   "high",
 			metadataResponseMIME:    responseMIMEJSON,
 		},
 	}
@@ -233,11 +229,20 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 	if call.config.ThinkingConfig.ThinkingBudget == nil || *call.config.ThinkingConfig.ThinkingBudget != 128 {
 		t.Fatalf("thinking budget = %v, want 128", call.config.ThinkingConfig.ThinkingBudget)
 	}
-	if call.config.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelHigh {
-		t.Fatalf("thinking level = %q, want HIGH", call.config.ThinkingConfig.ThinkingLevel)
+	if call.config.ThinkingConfig.ThinkingLevel != "" {
+		t.Fatalf("thinking level = %q, want empty", call.config.ThinkingConfig.ThinkingLevel)
 	}
 	if call.config.ResponseMIMEType != responseMIMEJSON {
 		t.Fatalf("response mime = %q, want %q", call.config.ResponseMIMEType, responseMIMEJSON)
+	}
+	if call.config.HTTPOptions == nil {
+		t.Fatal("expected request http options")
+	}
+	if call.config.HTTPOptions.Timeout == nil {
+		t.Fatal("expected request timeout override")
+	}
+	if *call.config.HTTPOptions.Timeout != 0 {
+		t.Fatalf("request timeout = %s, want 0", *call.config.HTTPOptions.Timeout)
 	}
 
 	chunk, recvErr := stream.Recv(context.Background())
@@ -291,6 +296,61 @@ func TestGeminiProviderGenerateStreamInvalidMetadata(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), metadataThinkingBudget) {
 		t.Fatalf("error = %v, want metadata key in error", err)
+	}
+}
+
+func TestGeminiProviderGenerateStreamConflictingThinkingOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		defaults         requestOptions
+		metadata         map[string]string
+		wantErrSubstring string
+	}{
+		{
+			name: "metadata sets both",
+			metadata: map[string]string{
+				metadataThinkingBudget: "64",
+				metadataThinkingLevel:  "high",
+			},
+			wantErrSubstring: "mutually exclusive",
+		},
+		{
+			name: "defaults budget with metadata level",
+			defaults: requestOptions{
+				thinkingBudget: ptrInt32(32),
+			},
+			metadata: map[string]string{
+				metadataThinkingLevel: "high",
+			},
+			wantErrSubstring: "mutually exclusive",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			provider := &Provider{
+				models:   &modelsClientStub{stream: emptySeq()},
+				defaults: testCase.defaults,
+			}
+			_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+				Model: "gemini-2.5-flash",
+				Messages: []otogi.LLMMessage{
+					{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+				},
+				Metadata: testCase.metadata,
+			})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), testCase.wantErrSubstring) {
+				t.Fatalf("error = %v, want substring %q", err, testCase.wantErrSubstring)
+			}
+		})
 	}
 }
 
@@ -540,5 +600,9 @@ func ptrBool(value bool) *bool {
 }
 
 func ptrInt(value int) *int {
+	return &value
+}
+
+func ptrInt32(value int32) *int32 {
 	return &value
 }

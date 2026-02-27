@@ -30,50 +30,50 @@ func TestLoadFile(t *testing.T) {
 			name: "valid openai and gemini config",
 			fileBody: `{
 				"request_timeout":"45s",
-				"providers":{
-					"openai-main":{
-						"type":"openai",
-						"api_key":"sk-test",
-						"base_url":"https://api.openai.com/v1",
-						"timeout":"20s",
-						"openai":{
-							"organization":"org-test",
-							"project":"project-test",
+					"providers":{
+						"openai-main":{
+							"type":"openai",
+							"api_key":"sk-test",
+							"base_url":"https://api.openai.com/v1",
+							"openai":{
+								"organization":"org-test",
+								"project":"project-test",
 							"max_retries":3
 						}
 					},
-					"gemini-main":{
-						"type":"gemini",
-						"api_key":"gm-test",
-						"gemini":{
-							"api_version":"v1beta",
-							"google_search":true,
-							"url_context":false,
-							"thinking_budget":128,
-							"include_thoughts":false,
-							"thinking_level":"medium",
-							"response_mime_type":"application/json"
-						}
+						"gemini-main":{
+							"type":"gemini",
+							"api_key":"gm-test",
+							"gemini":{
+								"api_version":"v1beta",
+								"google_search":true,
+								"url_context":false,
+								"include_thoughts":false,
+								"thinking_level":"medium",
+								"response_mime_type":"application/json"
+							}
 					}
 				},
 				"agents":[
-					{
-						"name":"Otogi",
-						"description":"OpenAI agent",
-						"provider":"openai-main",
-						"model":"gpt-5-mini",
-						"system_prompt_template":"You are {{.AgentName}}",
-						"request_metadata":{"trace_id":"main"}
-					},
-					{
-						"name":"OtogiGemini",
-						"description":"Gemini agent",
-						"provider":"gemini-main",
-						"model":"gemini-2.5-flash",
-						"system_prompt_template":"You are {{.AgentName}}",
-						"request_metadata":{"gemini.thinking_level":"high"}
-					}
-				]
+						{
+							"name":"Otogi",
+							"description":"OpenAI agent",
+							"provider":"openai-main",
+							"model":"gpt-5-mini",
+							"system_prompt_template":"You are {{.AgentName}}",
+							"request_timeout":"30s",
+							"request_metadata":{"trace_id":"main"}
+						},
+						{
+							"name":"OtogiGemini",
+							"description":"Gemini agent",
+							"provider":"gemini-main",
+							"model":"gemini-2.5-flash",
+							"system_prompt_template":"You are {{.AgentName}}",
+							"request_timeout":"20s",
+							"request_metadata":{"gemini.thinking_level":"high"}
+						}
+					]
 			}`,
 			assert: func(t *testing.T, cfg Config) {
 				t.Helper()
@@ -95,9 +95,6 @@ func TestLoadFile(t *testing.T) {
 				if openaiProfile.OpenAI.MaxRetries == nil || *openaiProfile.OpenAI.MaxRetries != 3 {
 					t.Fatalf("openai max retries = %v, want 3", openaiProfile.OpenAI.MaxRetries)
 				}
-				if openaiProfile.Timeout == nil || *openaiProfile.Timeout != 20*time.Second {
-					t.Fatalf("openai timeout = %v, want 20s", openaiProfile.Timeout)
-				}
 
 				geminiProfile := cfg.Providers["gemini-main"]
 				if geminiProfile.Type != providerTypeGemini {
@@ -109,11 +106,16 @@ func TestLoadFile(t *testing.T) {
 				if geminiProfile.Gemini.APIVersion != "v1beta" {
 					t.Fatalf("gemini api version = %q, want v1beta", geminiProfile.Gemini.APIVersion)
 				}
-				if geminiProfile.Gemini.RequestDefaults.ThinkingBudget == nil ||
-					*geminiProfile.Gemini.RequestDefaults.ThinkingBudget != 128 {
+				if geminiProfile.Gemini.RequestDefaults.ThinkingBudget != nil {
 					t.Fatalf(
-						"gemini thinking budget = %v, want 128",
+						"gemini thinking budget = %v, want nil",
 						geminiProfile.Gemini.RequestDefaults.ThinkingBudget,
+					)
+				}
+				if geminiProfile.Gemini.RequestDefaults.ThinkingLevel != "medium" {
+					t.Fatalf(
+						"gemini thinking level = %q, want medium",
+						geminiProfile.Gemini.RequestDefaults.ThinkingLevel,
 					)
 				}
 				if geminiProfile.Gemini.RequestDefaults.ResponseMIMEType != "application/json" {
@@ -125,6 +127,12 @@ func TestLoadFile(t *testing.T) {
 
 				if len(cfg.Agents) != 2 {
 					t.Fatalf("agents len = %d, want 2", len(cfg.Agents))
+				}
+				if cfg.Agents[0].RequestTimeout != 30*time.Second {
+					t.Fatalf("agent[0] request_timeout = %s, want 30s", cfg.Agents[0].RequestTimeout)
+				}
+				if cfg.Agents[1].RequestTimeout != 20*time.Second {
+					t.Fatalf("agent[1] request_timeout = %s, want 20s", cfg.Agents[1].RequestTimeout)
 				}
 				if cfg.Agents[1].RequestMetadata["gemini.thinking_level"] != "high" {
 					t.Fatalf(
@@ -144,7 +152,7 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"anthropic-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
@@ -166,7 +174,7 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"gemini-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
@@ -188,11 +196,88 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"gemini-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
 			wantErrSubstring: "unsupported response_mime_type",
+		},
+		{
+			name: "conflicting gemini provider thinking options",
+			fileBody: `{
+					"providers":{
+						"gemini-main":{
+							"type":"gemini",
+							"api_key":"gm",
+							"gemini":{
+								"thinking_budget":64,
+								"thinking_level":"high"
+							}
+						}
+					},
+					"agents":[
+						{
+							"name":"Otogi",
+							"description":"d",
+							"provider":"gemini-main",
+							"model":"m",
+							"system_prompt_template":"ok","request_timeout":"10s"
+						}
+					]
+				}`,
+			wantErrSubstring: "mutually exclusive",
+		},
+		{
+			name: "conflicting gemini agent metadata thinking options",
+			fileBody: `{
+					"providers":{
+						"gemini-main":{
+							"type":"gemini",
+							"api_key":"gm"
+						}
+					},
+					"agents":[
+						{
+							"name":"Otogi",
+							"description":"d",
+							"provider":"gemini-main",
+							"model":"m",
+							"system_prompt_template":"ok","request_timeout":"10s",
+							"request_metadata":{
+								"gemini.thinking_budget":"32",
+								"gemini.thinking_level":"high"
+							}
+						}
+					]
+				}`,
+			wantErrSubstring: "sets both gemini.thinking_budget and gemini.thinking_level",
+		},
+		{
+			name: "conflicting gemini defaults and metadata thinking options",
+			fileBody: `{
+					"providers":{
+						"gemini-main":{
+							"type":"gemini",
+							"api_key":"gm",
+							"gemini":{
+								"thinking_budget":64
+							}
+						}
+					},
+					"agents":[
+						{
+							"name":"Otogi",
+							"description":"d",
+							"provider":"gemini-main",
+							"model":"m",
+							"system_prompt_template":"ok","request_timeout":"10s",
+							"request_metadata":{
+								"gemini.thinking_level":"high"
+							}
+						}
+					]
+				}`,
+			wantErrSubstring: "sets both gemini.thinking_budget and gemini.thinking_level",
 		},
 		{
 			name: "invalid gemini api version",
@@ -210,7 +295,7 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"gemini-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
@@ -232,14 +317,14 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"openai-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
 			wantErrSubstring: "max_retries must be >= 0",
 		},
 		{
-			name: "invalid provider timeout",
+			name: "provider timeout field is rejected",
 			fileBody: `{
 				"providers":{
 					"openai-main":{"type":"openai","api_key":"sk","timeout":"bad"}
@@ -250,11 +335,62 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"openai-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
-			wantErrSubstring: "parse timeout",
+			wantErrSubstring: "unknown field \"timeout\"",
+		},
+		{
+			name: "missing agent request timeout",
+			fileBody: `{
+					"providers":{"openai-main":{"type":"openai","api_key":"sk"}},
+					"agents":[
+						{
+							"name":"Otogi",
+							"description":"d",
+							"provider":"openai-main",
+							"model":"m",
+							"system_prompt_template":"ok"
+						}
+					]
+				}`,
+			wantErrSubstring: "missing request_timeout",
+		},
+		{
+			name: "invalid agent request timeout",
+			fileBody: `{
+					"providers":{"openai-main":{"type":"openai","api_key":"sk"}},
+					"agents":[
+						{
+							"name":"Otogi",
+							"description":"d",
+							"provider":"openai-main",
+							"model":"m",
+							"system_prompt_template":"ok",
+							"request_timeout":"bad"
+						}
+					]
+				}`,
+			wantErrSubstring: "parse request_timeout",
+		},
+		{
+			name: "agent request timeout cannot exceed global",
+			fileBody: `{
+					"request_timeout":"5s",
+					"providers":{"openai-main":{"type":"openai","api_key":"sk"}},
+					"agents":[
+						{
+							"name":"Otogi",
+							"description":"d",
+							"provider":"openai-main",
+							"model":"m",
+							"system_prompt_template":"ok",
+							"request_timeout":"6s"
+						}
+					]
+				}`,
+			wantErrSubstring: "exceeds global request_timeout",
 		},
 		{
 			name: "unknown provider referenced by agent",
@@ -266,7 +402,7 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"missing",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
@@ -285,7 +421,7 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"openai-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
@@ -301,14 +437,14 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"openai-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					},
 					{
 						"name":"otogi",
 						"description":"d2",
 						"provider":"openai-main",
 						"model":"m2",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,
@@ -324,7 +460,7 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"openai-main",
 						"model":"m",
-						"system_prompt_template":"ok",
+						"system_prompt_template":"ok","request_timeout":"10s",
 						"gemini":{"thinking_level":"high"}
 					}
 				]
@@ -347,7 +483,7 @@ func TestLoadFile(t *testing.T) {
 						"description":"d",
 						"provider":"openai-main",
 						"model":"m",
-						"system_prompt_template":"ok"
+						"system_prompt_template":"ok","request_timeout":"10s"
 					}
 				]
 			}`,

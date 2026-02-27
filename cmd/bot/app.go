@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -26,14 +27,18 @@ import (
 )
 
 const (
-	envConfigFile             = "OTOGI_CONFIG_FILE"
-	envLLMConfigFile          = "OTOGI_LLM_CONFIG_FILE"
-	defaultConfigFilePath     = "config/bot.json"
-	alternateConfigFilePath   = "bin/config/bot.json"
-	defaultModuleHookTimeout  = 3 * time.Second
-	defaultShutdownTimeout    = 10 * time.Second
-	defaultSubscriptionBuffer = 256
-	defaultSubscriptionWorker = 2
+	envConfigFile                 = "OTOGI_CONFIG_FILE"
+	envLLMConfigFile              = "OTOGI_LLM_CONFIG_FILE"
+	defaultConfigFilePath         = "config/bot.json"
+	alternateConfigFilePath       = "bin/config/bot.json"
+	defaultModuleLifecycleTimeout = 3 * time.Second
+	defaultModuleHandlerTimeout   = 3 * time.Second
+	defaultShutdownTimeout        = 10 * time.Second
+	defaultSubscriptionBuffer     = 256
+	defaultSubscriptionWorker     = 2
+	stdlibLogSource               = "stdlib"
+	stdlibLogComponent            = "google_genai_sdk"
+	stdlibLogKindContextCanceled  = "context_canceled"
 )
 
 var baseRuntimeModuleNames = []string{"memory", "pingpong", "help"}
@@ -41,10 +46,11 @@ var baseRuntimeModuleNames = []string{"memory", "pingpong", "help"}
 type appConfig struct {
 	logLevel slog.Level
 
-	moduleHookTimeout   time.Duration
-	shutdownTimeout     time.Duration
-	subscriptionBuffer  int
-	subscriptionWorkers int
+	moduleLifecycleTimeout time.Duration
+	moduleHandlerTimeout   time.Duration
+	shutdownTimeout        time.Duration
+	subscriptionBuffer     int
+	subscriptionWorkers    int
 
 	drivers        []driver.Definition
 	routingDefault *kernel.ModuleRoute
@@ -63,10 +69,11 @@ type fileConfig struct {
 }
 
 type fileKernelConfig struct {
-	ModuleHookTimeout   string `json:"module_hook_timeout"`
-	ShutdownTimeout     string `json:"shutdown_timeout"`
-	SubscriptionBuffer  *int   `json:"subscription_buffer"`
-	SubscriptionWorkers *int   `json:"subscription_workers"`
+	ModuleLifecycleTimeout string `json:"module_lifecycle_timeout"`
+	ModuleHandlerTimeout   string `json:"module_handler_timeout"`
+	ShutdownTimeout        string `json:"shutdown_timeout"`
+	SubscriptionBuffer     *int   `json:"subscription_buffer"`
+	SubscriptionWorkers    *int   `json:"subscription_workers"`
 }
 
 type fileDriverEntry struct {
@@ -112,6 +119,7 @@ func run() error {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
+	configureStdlibLogBridge(logger)
 	kernelRuntime := buildKernelRuntime(logger, cfg)
 
 	drivers, sinkDispatcher, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
@@ -137,6 +145,47 @@ func run() error {
 	}
 
 	return nil
+}
+
+func configureStdlibLogBridge(logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+
+	bridgeLogger := logger.With(
+		slog.String("source", stdlibLogSource),
+		slog.String("component", stdlibLogComponent),
+	)
+	log.SetFlags(0)
+	log.SetOutput(stdlibSlogWriter{logger: bridgeLogger})
+}
+
+type stdlibSlogWriter struct {
+	logger *slog.Logger
+}
+
+func (w stdlibSlogWriter) Write(payload []byte) (int, error) {
+	if w.logger == nil {
+		return len(payload), nil
+	}
+
+	message := strings.TrimRight(string(payload), "\r\n")
+	if message == "" {
+		return len(payload), nil
+	}
+
+	if isKnownSDKContextCanceledLogLine(message) {
+		w.logger.Warn(message, "sdk_log_kind", stdlibLogKindContextCanceled)
+		return len(payload), nil
+	}
+
+	w.logger.Error(message)
+
+	return len(payload), nil
+}
+
+func isKnownSDKContextCanceledLogLine(message string) bool {
+	return strings.EqualFold(strings.TrimSpace(message), "Error context canceled")
 }
 
 func loadConfig(registry *driver.Registry) (appConfig, error) {
@@ -197,10 +246,11 @@ func defaultAppConfig() appConfig {
 	return appConfig{
 		logLevel: slog.LevelInfo,
 
-		moduleHookTimeout:   defaultModuleHookTimeout,
-		shutdownTimeout:     defaultShutdownTimeout,
-		subscriptionBuffer:  defaultSubscriptionBuffer,
-		subscriptionWorkers: defaultSubscriptionWorker,
+		moduleLifecycleTimeout: defaultModuleLifecycleTimeout,
+		moduleHandlerTimeout:   defaultModuleHandlerTimeout,
+		shutdownTimeout:        defaultShutdownTimeout,
+		subscriptionBuffer:     defaultSubscriptionBuffer,
+		subscriptionWorkers:    defaultSubscriptionWorker,
 
 		drivers:      make([]driver.Definition, 0),
 		moduleRoutes: make(map[string]kernel.ModuleRoute),
@@ -224,6 +274,9 @@ func applyConfigFile(cfg *appConfig, path string) error {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return fmt.Errorf("parse config file %s: %w", path, err)
 	}
+	if err := rejectLegacyKernelHookTimeout(data); err != nil {
+		return err
+	}
 
 	if rawLevel := strings.TrimSpace(parsed.LogLevel); rawLevel != "" {
 		level, err := parseLogLevel(rawLevel)
@@ -233,15 +286,25 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		cfg.logLevel = level
 	}
 
-	if rawTimeout := strings.TrimSpace(parsed.Kernel.ModuleHookTimeout); rawTimeout != "" {
+	if rawTimeout := strings.TrimSpace(parsed.Kernel.ModuleLifecycleTimeout); rawTimeout != "" {
 		timeout, err := time.ParseDuration(rawTimeout)
 		if err != nil {
-			return fmt.Errorf("parse kernel.module_hook_timeout: %w", err)
+			return fmt.Errorf("parse kernel.module_lifecycle_timeout: %w", err)
 		}
 		if timeout <= 0 {
-			return fmt.Errorf("parse kernel.module_hook_timeout: must be > 0")
+			return fmt.Errorf("parse kernel.module_lifecycle_timeout: must be > 0")
 		}
-		cfg.moduleHookTimeout = timeout
+		cfg.moduleLifecycleTimeout = timeout
+	}
+	if rawTimeout := strings.TrimSpace(parsed.Kernel.ModuleHandlerTimeout); rawTimeout != "" {
+		timeout, err := time.ParseDuration(rawTimeout)
+		if err != nil {
+			return fmt.Errorf("parse kernel.module_handler_timeout: %w", err)
+		}
+		if timeout <= 0 {
+			return fmt.Errorf("parse kernel.module_handler_timeout: must be > 0")
+		}
+		cfg.moduleHandlerTimeout = timeout
 	}
 	if rawTimeout := strings.TrimSpace(parsed.Kernel.ShutdownTimeout); rawTimeout != "" {
 		timeout, err := time.ParseDuration(rawTimeout)
@@ -462,12 +525,37 @@ func parseLogLevel(raw string) (slog.Level, error) {
 func buildKernelRuntime(logger *slog.Logger, cfg appConfig) *kernel.Kernel {
 	return kernel.New(
 		kernel.WithLogger(logger),
-		kernel.WithModuleHookTimeout(cfg.moduleHookTimeout),
+		kernel.WithModuleHookTimeout(cfg.moduleLifecycleTimeout),
+		kernel.WithDefaultHandlerTimeout(cfg.moduleHandlerTimeout),
 		kernel.WithShutdownTimeout(cfg.shutdownTimeout),
 		kernel.WithDefaultSubscriptionBuffer(cfg.subscriptionBuffer),
 		kernel.WithDefaultSubscriptionWorkers(cfg.subscriptionWorkers),
 		kernel.WithModuleRouting(cfg.routingDefault, cfg.moduleRoutes),
 	)
+}
+
+func rejectLegacyKernelHookTimeout(data []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("parse config for legacy kernel timeout key: %w", err)
+	}
+
+	rawKernel, exists := root["kernel"]
+	if !exists || len(rawKernel) == 0 {
+		return nil
+	}
+
+	var kernelFields map[string]json.RawMessage
+	if err := json.Unmarshal(rawKernel, &kernelFields); err != nil {
+		return nil
+	}
+	if _, hasLegacyKey := kernelFields["module_hook_timeout"]; hasLegacyKey {
+		return fmt.Errorf(
+			"parse kernel.module_hook_timeout: renamed to kernel.module_lifecycle_timeout",
+		)
+	}
+
+	return nil
 }
 
 func buildDriverRuntime(
@@ -541,9 +629,6 @@ func buildLLMProviders(cfg llmconfig.Config) (map[string]otogi.LLMProvider, erro
 				APIKey:  profile.APIKey,
 				BaseURL: profile.BaseURL,
 			}
-			if profile.Timeout != nil {
-				openAICfg.Timeout = *profile.Timeout
-			}
 			if profile.OpenAI != nil {
 				openAICfg.Organization = profile.OpenAI.Organization
 				openAICfg.Project = profile.OpenAI.Project
@@ -559,9 +644,6 @@ func buildLLMProviders(cfg llmconfig.Config) (map[string]otogi.LLMProvider, erro
 			geminiCfg := gemini.ProviderConfig{
 				APIKey:  profile.APIKey,
 				BaseURL: profile.BaseURL,
-			}
-			if profile.Timeout != nil {
-				geminiCfg.Timeout = *profile.Timeout
 			}
 			if profile.Gemini != nil {
 				geminiCfg.APIVersion = profile.Gemini.APIVersion
@@ -641,6 +723,7 @@ func toLLMChatConfig(cfg llmconfig.Config) llmchat.Config {
 			TemplateVariables:    cloneStringMap(agent.TemplateVariables),
 			MaxOutputTokens:      agent.MaxOutputTokens,
 			Temperature:          agent.Temperature,
+			RequestTimeout:       agent.RequestTimeout,
 			RequestMetadata:      cloneStringMap(agent.RequestMetadata),
 		})
 	}

@@ -2,12 +2,17 @@ package llmchat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"ex-otogi/pkg/otogi"
 )
+
+const llmchatHandlerTimeoutGrace = 5 * time.Second
+
+const placeholderFailureMessage = "Sorry, I couldn't generate a response right now."
 
 // Module provides keyword-triggered LLM chat behavior.
 type Module struct {
@@ -49,6 +54,8 @@ func (m *Module) Name() string {
 
 // Spec declares llmchat article trigger capabilities.
 func (m *Module) Spec() otogi.ModuleSpec {
+	handlerTimeout := m.cfg.RequestTimeout + llmchatHandlerTimeoutGrace
+
 	return otogi.ModuleSpec{
 		Handlers: []otogi.ModuleHandler{
 			{
@@ -65,8 +72,11 @@ func (m *Module) Spec() otogi.ModuleSpec {
 						otogi.ServiceLLMProviderRegistry,
 					},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("llmchat-articles"),
-				Handler:      m.handleArticle,
+				Subscription: otogi.SubscriptionSpec{
+					Name:           "llmchat-articles",
+					HandlerTimeout: handlerTimeout,
+				},
+				Handler: m.handleArticle,
 			},
 		},
 	}
@@ -163,10 +173,28 @@ func (m *Module) handleArticle(ctx context.Context, event *otogi.Event) error {
 		return fmt.Errorf("llmchat handle article: provider %s for agent %s is not available", agent.Provider, agent.Name)
 	}
 
+	target, err := otogi.OutboundTargetFromEvent(event)
+	if err != nil {
+		return fmt.Errorf("llmchat derive outbound target for agent %s: %w", agent.Name, err)
+	}
+
+	placeholder, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+		Target:           target,
+		Text:             defaultThinkingPlaceholder,
+		ReplyToMessageID: event.Article.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("llmchat send placeholder for agent %s: %w", agent.Name, err)
+	}
+	if err := validateHandlerDeadlineBudget(ctx, agent.RequestTimeout); err != nil {
+		preflightErr := fmt.Errorf("llmchat preflight for agent %s: %w", agent.Name, err)
+		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, preflightErr)
+	}
+
 	reqCtx := ctx
 	cancel := func() {}
-	if m.cfg.RequestTimeout > 0 {
-		timeoutCtx, timeoutCancel := context.WithTimeout(ctx, m.cfg.RequestTimeout)
+	if agent.RequestTimeout > 0 {
+		timeoutCtx, timeoutCancel := context.WithTimeout(ctx, agent.RequestTimeout)
 		reqCtx = timeoutCtx
 		cancel = timeoutCancel
 	}
@@ -174,19 +202,78 @@ func (m *Module) handleArticle(ctx context.Context, event *otogi.Event) error {
 
 	req, err := m.buildGenerateRequest(reqCtx, event, agent, prompt)
 	if err != nil {
-		return fmt.Errorf("llmchat build request for agent %s: %w", agent.Name, err)
+		buildErr := fmt.Errorf("llmchat build request for agent %s: %w", agent.Name, err)
+		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, buildErr)
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
-	if err != nil {
-		return fmt.Errorf("llmchat derive outbound target for agent %s: %w", agent.Name, err)
-	}
-
-	if err := m.streamProviderReply(reqCtx, target, event.Article.ID, provider, req); err != nil {
-		return fmt.Errorf("llmchat stream response for agent %s: %w", agent.Name, err)
+	if err := m.streamProviderReply(reqCtx, target, event.Article.ID, placeholder.ID, provider, req); err != nil {
+		streamErr := fmt.Errorf("llmchat stream response for agent %s: %w", agent.Name, err)
+		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, streamErr)
 	}
 
 	return nil
+}
+
+func validateHandlerDeadlineBudget(ctx context.Context, requestTimeout time.Duration) error {
+	if requestTimeout <= 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("handler context canceled before llm request: %w", err)
+	}
+
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		return nil
+	}
+
+	remaining := time.Until(deadline)
+	if remaining >= requestTimeout {
+		return nil
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	return fmt.Errorf(
+		"insufficient handler deadline budget: remaining=%s request_timeout=%s; "+
+			"configure llmchat subscription handler timeout to request_timeout + %s grace "+
+			"or increase kernel.module_handler_timeout",
+		remaining.Round(time.Millisecond),
+		requestTimeout,
+		llmchatHandlerTimeoutGrace,
+	)
+}
+
+func (m *Module) finalizePlaceholderFailure(
+	ctx context.Context,
+	target otogi.OutboundTarget,
+	placeholderMessageID string,
+	handlerErr error,
+) error {
+	if handlerErr == nil {
+		return nil
+	}
+	if strings.TrimSpace(placeholderMessageID) == "" {
+		return handlerErr
+	}
+
+	editErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
+		Target:    target,
+		MessageID: placeholderMessageID,
+		Text:      placeholderFailureMessage,
+	})
+	if editErr == nil {
+		return handlerErr
+	}
+
+	return fmt.Errorf(
+		"llmchat finalize placeholder failure: %w",
+		errors.Join(
+			handlerErr,
+			fmt.Errorf("llmchat finalize placeholder failure %s: %w", placeholderMessageID, editErr),
+		),
+	)
 }
 
 func (m *Module) matchTriggeredAgent(text string) (agent Agent, prompt string, matched bool) {
