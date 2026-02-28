@@ -18,13 +18,19 @@ const (
 )
 
 func (m *Module) streamProviderReply(
-	ctx context.Context,
+	streamCtx context.Context,
+	deliveryCtx context.Context,
 	target otogi.OutboundTarget,
-	replyToMessageID string,
 	placeholderMessageID string,
 	provider otogi.LLMProvider,
 	req otogi.LLMGenerateRequest,
 ) (err error) {
+	if streamCtx == nil {
+		return fmt.Errorf("stream provider reply: nil stream context")
+	}
+	if deliveryCtx == nil {
+		return fmt.Errorf("stream provider reply: nil delivery context")
+	}
 	if strings.TrimSpace(placeholderMessageID) == "" {
 		return fmt.Errorf("stream provider reply: empty placeholder message id")
 	}
@@ -35,7 +41,7 @@ func (m *Module) streamProviderReply(
 		return fmt.Errorf("stream provider reply validate request: %w", err)
 	}
 
-	stream, err := provider.GenerateStream(ctx, req)
+	stream, err := provider.GenerateStream(streamCtx, req)
 	if err != nil {
 		return fmt.Errorf("stream provider reply generate stream: %w", err)
 	}
@@ -60,16 +66,18 @@ func (m *Module) streamProviderReply(
 	pacer := newEditPacer(m.now())
 	lastDeliveredText := defaultThinkingPlaceholder
 	for {
-		chunk, recvErr := stream.Recv(ctx)
+		chunk, recvErr := stream.Recv(streamCtx)
 		if recvErr != nil {
 			if errors.Is(recvErr, io.EOF) {
 				break
 			}
+
 			return fmt.Errorf("stream provider reply receive chunk: %w", recvErr)
 		}
 		if chunk.Delta == "" {
 			continue
 		}
+
 		switch chunk.Kind.Normalize() {
 		case otogi.LLMGenerateChunkKindThinkingSummary:
 			thinkingChunks++
@@ -94,13 +102,17 @@ func (m *Module) streamProviderReply(
 		if !pacer.ShouldAttemptEdit(now) {
 			continue
 		}
-		editErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
+
+		editErr := m.dispatcher.EditMessage(streamCtx, otogi.EditMessageRequest{
 			Target:    target,
 			MessageID: placeholderMessageID,
 			Text:      nextText,
 		})
 		if editErr != nil {
 			pacer.RecordEditFailure(now, editErr)
+			if pacer.consecutiveFailures == 1 {
+				m.warnIntermediateEditFailure(streamCtx, target, placeholderMessageID, 1, editErr)
+			}
 			continue
 		}
 		pacer.RecordEditSuccess(now)
@@ -109,39 +121,28 @@ func (m *Module) streamProviderReply(
 
 	finalText := strings.TrimSpace(answerBuilder.String())
 	if finalText == "" {
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := streamCtx.Err(); ctxErr != nil {
 			return fmt.Errorf("stream provider reply canceled: %w", ctxErr)
 		}
+
 		return fmt.Errorf(
 			"stream provider reply: no output text received (thinking_chunks=%d output_chunks=%d deadline_remaining=%s)",
 			thinkingChunks,
 			outputChunks,
-			describeContextDeadlineRemaining(ctx),
+			describeContextDeadlineRemaining(streamCtx),
 		)
 	}
 	if finalText == lastDeliveredText {
 		return nil
 	}
 
-	finalEditErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
+	finalEditErr := m.retryEditMessage(deliveryCtx, otogi.EditMessageRequest{
 		Target:    target,
 		MessageID: placeholderMessageID,
 		Text:      finalText,
 	})
-	if finalEditErr == nil {
-		return nil
-	}
-
-	_, sendErr := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
-		Target:           target,
-		Text:             finalText,
-		ReplyToMessageID: replyToMessageID,
-	})
-	if sendErr != nil {
-		return fmt.Errorf(
-			"stream provider reply finalize with fallback: %w",
-			errors.Join(finalEditErr, sendErr),
-		)
+	if finalEditErr != nil {
+		return fmt.Errorf("stream provider reply finalize placeholder %s: %w", placeholderMessageID, finalEditErr)
 	}
 
 	return nil
@@ -198,10 +199,6 @@ func newEditPacer(startedAt time.Time) *editPacer {
 
 // ShouldAttemptEdit reports whether one intermediate edit should be attempted.
 func (p *editPacer) ShouldAttemptEdit(now time.Time) bool {
-	if p.consecutiveFailures >= 3 {
-		return false
-	}
-
 	return !now.Before(p.nextEditAt)
 }
 
@@ -263,6 +260,9 @@ func (p *editPacer) baseInterval(now time.Time) time.Duration {
 func isRateLimitError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if _, ok := otogi.AsOutboundRateLimit(err); ok {
+		return true
 	}
 
 	lower := strings.ToLower(err.Error())

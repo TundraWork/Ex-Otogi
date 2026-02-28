@@ -123,7 +123,11 @@ func (d *SinkDispatcher) SendMessage(
 
 	id, err := d.telegram.SendText(rpcCtx, peer, request)
 	if err != nil {
-		return nil, fmt.Errorf("send message to %s: %w", request.Target.Conversation.ID, err)
+		return nil, fmt.Errorf(
+			"send message to %s: %w",
+			request.Target.Conversation.ID,
+			mapTelegramOutboundError(otogi.OutboundOperationSendMessage, d.cfg.sink, err),
+		)
 	}
 
 	d.logOutbound(
@@ -161,7 +165,11 @@ func (d *SinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMess
 	defer cancel()
 
 	if err := d.telegram.EditText(rpcCtx, peer, messageID, request); err != nil {
-		return fmt.Errorf("edit message %s: %w", request.MessageID, err)
+		return fmt.Errorf(
+			"edit message %s: %w",
+			request.MessageID,
+			mapTelegramOutboundError(otogi.OutboundOperationEditMessage, d.cfg.sink, err),
+		)
 	}
 
 	d.logOutbound(
@@ -195,7 +203,11 @@ func (d *SinkDispatcher) DeleteMessage(ctx context.Context, request otogi.Delete
 	defer cancel()
 
 	if err := d.telegram.DeleteMessage(rpcCtx, peer, messageID, request.Revoke); err != nil {
-		return fmt.Errorf("delete message %s: %w", request.MessageID, err)
+		return fmt.Errorf(
+			"delete message %s: %w",
+			request.MessageID,
+			mapTelegramOutboundError(otogi.OutboundOperationDeleteMessage, d.cfg.sink, err),
+		)
 	}
 
 	d.logOutbound(
@@ -239,7 +251,11 @@ func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReact
 	defer cancel()
 
 	if err := d.telegram.SetReaction(rpcCtx, peer, messageID, reactions); err != nil {
-		return fmt.Errorf("set reaction on message %s: %w", request.MessageID, err)
+		return fmt.Errorf(
+			"set reaction on message %s: %w",
+			request.MessageID,
+			mapTelegramOutboundError(otogi.OutboundOperationSetReaction, d.cfg.sink, err),
+		)
 	}
 
 	d.logOutbound(

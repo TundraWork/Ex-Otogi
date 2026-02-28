@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"ex-otogi/pkg/otogi"
 
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 func TestOutboundDispatcherSendMessage(t *testing.T) {
@@ -235,6 +237,128 @@ func TestOutboundDispatcherEditMessage(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestOutboundDispatcherEditMessageMapsFloodWaitToTypedRateLimit(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		&tg.InputPeerChat{ChatID: 42},
+	)
+
+	dispatcher, err := newOutboundDispatcherWithRPC(
+		&stubOutboundRPC{
+			editErr: tgerr.New(420, "FLOOD_WAIT_7"),
+		},
+		cache,
+		WithSinkRef(otogi.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
+	)
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+
+	editErr := dispatcher.EditMessage(context.Background(), otogi.EditMessageRequest{
+		Target: otogi.OutboundTarget{
+			Conversation: otogi.Conversation{
+				ID:   "42",
+				Type: otogi.ConversationTypeGroup,
+			},
+		},
+		MessageID: "10",
+		Text:      "updated",
+	})
+	if editErr == nil {
+		t.Fatal("edit error = nil, want outbound error")
+	}
+
+	outboundErr, ok := otogi.AsOutboundError(editErr)
+	if !ok {
+		t.Fatalf("AsOutboundError(%v) = false, want true", editErr)
+	}
+	if outboundErr.Operation != otogi.OutboundOperationEditMessage {
+		t.Fatalf("operation = %s, want %s", outboundErr.Operation, otogi.OutboundOperationEditMessage)
+	}
+	if outboundErr.Kind != otogi.OutboundErrorKindRateLimited {
+		t.Fatalf("kind = %s, want %s", outboundErr.Kind, otogi.OutboundErrorKindRateLimited)
+	}
+	if outboundErr.Platform != DriverPlatform {
+		t.Fatalf("platform = %s, want %s", outboundErr.Platform, DriverPlatform)
+	}
+	if outboundErr.SinkID != "tg-main" {
+		t.Fatalf("sink_id = %s, want tg-main", outboundErr.SinkID)
+	}
+	if outboundErr.RetryAfter != 7*time.Second {
+		t.Fatalf("retry_after = %s, want %s", outboundErr.RetryAfter, 7*time.Second)
+	}
+	if outboundErr.Code != 420 {
+		t.Fatalf("code = %d, want 420", outboundErr.Code)
+	}
+	if outboundErr.Type != "FLOOD_WAIT" {
+		t.Fatalf("type = %q, want %q", outboundErr.Type, "FLOOD_WAIT")
+	}
+
+	retryAfter, isRateLimited := otogi.AsOutboundRateLimit(editErr)
+	if !isRateLimited {
+		t.Fatalf("AsOutboundRateLimit(%v) = false, want true", editErr)
+	}
+	if retryAfter != 7*time.Second {
+		t.Fatalf("retry_after = %s, want %s", retryAfter, 7*time.Second)
+	}
+}
+
+func TestOutboundDispatcherEditMessageMapsRPCErrorToTypedKind(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		&tg.InputPeerChat{ChatID: 42},
+	)
+
+	rpcErr := tgerr.New(400, "MESSAGE_ID_INVALID")
+	dispatcher, err := newOutboundDispatcherWithRPC(
+		&stubOutboundRPC{
+			editErr: rpcErr,
+		},
+		cache,
+		WithSinkRef(otogi.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
+	)
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+
+	editErr := dispatcher.EditMessage(context.Background(), otogi.EditMessageRequest{
+		Target: otogi.OutboundTarget{
+			Conversation: otogi.Conversation{
+				ID:   "42",
+				Type: otogi.ConversationTypeGroup,
+			},
+		},
+		MessageID: "10",
+		Text:      "updated",
+	})
+	if editErr == nil {
+		t.Fatal("edit error = nil, want outbound error")
+	}
+
+	outboundErr, ok := otogi.AsOutboundError(editErr)
+	if !ok {
+		t.Fatalf("AsOutboundError(%v) = false, want true", editErr)
+	}
+	if outboundErr.Kind != otogi.OutboundErrorKindPermanent {
+		t.Fatalf("kind = %s, want %s", outboundErr.Kind, otogi.OutboundErrorKindPermanent)
+	}
+	if outboundErr.Code != 400 {
+		t.Fatalf("code = %d, want 400", outboundErr.Code)
+	}
+	if outboundErr.Type != "MESSAGE_ID_INVALID" {
+		t.Fatalf("type = %q, want %q", outboundErr.Type, "MESSAGE_ID_INVALID")
+	}
+	if !errors.Is(editErr, rpcErr) {
+		t.Fatalf("errors.Is(err, rpcErr) = false, want true (err=%v)", editErr)
 	}
 }
 
@@ -621,6 +745,9 @@ func TestMapOutboundTextEntities(t *testing.T) {
 type stubOutboundRPC struct {
 	sendID          int
 	sendErr         error
+	editErr         error
+	deleteErr       error
+	reactionErr     error
 	lastSendRequest otogi.SendMessageRequest
 	lastEditRequest otogi.EditMessageRequest
 	sendCalls       int
@@ -652,6 +779,10 @@ func (s *stubOutboundRPC) EditText(
 ) error {
 	s.editCalls++
 	s.lastEditRequest = request
+	if s.editErr != nil {
+		return s.editErr
+	}
+
 	return nil
 }
 
@@ -662,6 +793,9 @@ func (s *stubOutboundRPC) DeleteMessage(
 	revoke bool,
 ) error {
 	s.deleteCalls++
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	if _, isChannel := peer.(*tg.InputPeerChannel); isChannel && !revoke {
 		return otogi.ErrOutboundUnsupported
 	}
@@ -677,6 +811,10 @@ func (s *stubOutboundRPC) SetReaction(
 ) error {
 	s.reactionCalls++
 	s.reactions = reactions
+	if s.reactionErr != nil {
+		return s.reactionErr
+	}
+
 	return nil
 }
 

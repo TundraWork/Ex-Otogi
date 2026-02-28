@@ -1,10 +1,12 @@
 package llmchat
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -318,7 +320,7 @@ func TestEditPacerBackoffAndRateLimit(t *testing.T) {
 	}
 }
 
-func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
+func TestStreamProviderReplyIntermediateEditsContinueBeyondThreeFailures(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
@@ -341,6 +343,8 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 			errors.New("edit fail 1"),
 			errors.New("edit fail 2"),
 			errors.New("edit fail 3"),
+			errors.New("edit fail 4"),
+			nil,
 			nil,
 		},
 	}
@@ -351,6 +355,8 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 		time.Unix(4, 0).UTC(),
 		time.Unix(12, 0).UTC(),
 		time.Unix(22, 0).UTC(),
+		time.Unix(35, 0).UTC(),
+		time.Unix(50, 0).UTC(),
 	})
 	module.clock = clock
 
@@ -359,6 +365,8 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 		{Delta: "b"},
 		{Delta: "c"},
 		{Delta: "d"},
+		{Delta: "e"},
+		{Delta: "f"},
 	}}}
 	req := otogi.LLMGenerateRequest{
 		Model: "gpt-test",
@@ -369,8 +377,8 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
+		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
-		"src-1",
 		"placeholder-1",
 		provider,
 		req,
@@ -378,15 +386,18 @@ func TestStreamProviderReplyPausesIntermediateEditsAfterFailures(t *testing.T) {
 		t.Fatalf("streamProviderReply failed: %v", err)
 	}
 
-	if len(sink.editRequests) != 4 {
-		t.Fatalf("edit request count = %d, want 4 (3 failures + final)", len(sink.editRequests))
+	if len(sink.editRequests) != 6 {
+		t.Fatalf("edit request count = %d, want 6", len(sink.editRequests))
 	}
-	if sink.editRequests[len(sink.editRequests)-1].Text != "abcd" {
-		t.Fatalf("final edit text = %q, want abcd", sink.editRequests[len(sink.editRequests)-1].Text)
+	if sink.editRequests[4].Text != "abcde" {
+		t.Fatalf("edit request[4].text = %q, want abcde", sink.editRequests[4].Text)
+	}
+	if sink.editRequests[len(sink.editRequests)-1].Text != "abcdef" {
+		t.Fatalf("final edit text = %q, want abcdef", sink.editRequests[len(sink.editRequests)-1].Text)
 	}
 }
 
-func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
+func TestStreamProviderReplyFinalEditRetriesUntilSuccess(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
@@ -405,7 +416,12 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 	}
 
 	sink := &sinkDispatcherStub{
-		editErrors: []error{nil, errors.New("final edit failed")},
+		editErrors: []error{
+			nil,
+			errors.New("rpc error: FLOOD_WAIT_25"),
+			errors.New("retry after 2"),
+			nil,
+		},
 	}
 	module.dispatcher = sink
 	module.clock = sequenceClock([]time.Time{
@@ -413,6 +429,11 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 		time.Unix(0, 0).UTC(),
 		time.Unix(0, 0).UTC(),
 	})
+	sleeps := make([]time.Duration, 0, 2)
+	module.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
 
 	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
 		{Delta: "hello"},
@@ -427,8 +448,8 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
+		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
-		"src-1",
 		"placeholder-1",
 		provider,
 		req,
@@ -436,14 +457,262 @@ func TestStreamProviderReplyFinalEditFallbackSend(t *testing.T) {
 		t.Fatalf("streamProviderReply failed: %v", err)
 	}
 
-	if len(sink.sendRequests) != 1 {
-		t.Fatalf("send request count = %d, want 1 fallback", len(sink.sendRequests))
+	if len(sink.sendRequests) != 0 {
+		t.Fatalf("send request count = %d, want 0", len(sink.sendRequests))
 	}
-	if sink.sendRequests[0].Text != "hello world" {
-		t.Fatalf("fallback text = %q, want hello world", sink.sendRequests[0].Text)
+	if len(sink.editRequests) != 4 {
+		t.Fatalf("edit request count = %d, want 4", len(sink.editRequests))
 	}
-	if sink.sendRequests[0].ReplyToMessageID != "src-1" {
-		t.Fatalf("fallback reply_to_message_id = %q, want src-1", sink.sendRequests[0].ReplyToMessageID)
+	if got := sink.editRequests[len(sink.editRequests)-1].Text; got != "hello world" {
+		t.Fatalf("final edit text = %q, want hello world", got)
+	}
+	if len(sleeps) != 2 {
+		t.Fatalf("sleep count = %d, want 2", len(sleeps))
+	}
+	if sleeps[0] != maxEditInterval {
+		t.Fatalf("first retry sleep = %s, want %s", sleeps[0], maxEditInterval)
+	}
+	if sleeps[1] != 2*time.Second {
+		t.Fatalf("second retry sleep = %s, want %s", sleeps[1], 2*time.Second)
+	}
+}
+
+func TestStreamProviderReplyFinalEditHonorsTypedRetryAfter(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{
+		editErrors: []error{
+			nil,
+			&otogi.OutboundError{
+				Operation:  otogi.OutboundOperationEditMessage,
+				Kind:       otogi.OutboundErrorKindRateLimited,
+				Platform:   otogi.PlatformTelegram,
+				SinkID:     "tg-main",
+				RetryAfter: 4 * time.Second,
+				Cause:      errors.New("flood wait"),
+			},
+			nil,
+		},
+	}
+	module.dispatcher = sink
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+	sleeps := make([]time.Duration, 0, 1)
+	module.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "hello"},
+		{Delta: " world"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		context.Background(),
+		otogi.OutboundTarget{
+			Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+		},
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	if len(sink.sendRequests) != 0 {
+		t.Fatalf("send request count = %d, want 0", len(sink.sendRequests))
+	}
+	if len(sink.editRequests) != 3 {
+		t.Fatalf("edit request count = %d, want 3", len(sink.editRequests))
+	}
+	if got := sink.editRequests[len(sink.editRequests)-1].Text; got != "hello world" {
+		t.Fatalf("final edit text = %q, want hello world", got)
+	}
+	if len(sleeps) != 1 {
+		t.Fatalf("sleep count = %d, want 1", len(sleeps))
+	}
+	if sleeps[0] != 4*time.Second {
+		t.Fatalf("retry sleep = %s, want %s", sleeps[0], 4*time.Second)
+	}
+}
+
+func TestStreamProviderReplyFinalEditExhaustsAtHandlerDeadline(t *testing.T) {
+	module, err := New(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "openai",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{
+		editErrors: []error{
+			nil,
+			errors.New("429 too many requests"),
+		},
+	}
+	module.dispatcher = sink
+	var logs bytes.Buffer
+	module.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
+	module.sleep = func(_ context.Context, _ time.Duration) error {
+		cancelDelivery()
+		return deliveryCtx.Err()
+	}
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "hello"},
+		{Delta: " world"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	err = module.streamProviderReply(
+		context.Background(),
+		deliveryCtx,
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		req,
+	)
+	if err == nil {
+		t.Fatal("streamProviderReply error = nil, want exhausted retry error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if !strings.Contains(err.Error(), "exhausted before handler timeout") {
+		t.Fatalf("error = %q, want exhausted before handler timeout", err)
+	}
+	if len(sink.sendRequests) != 0 {
+		t.Fatalf("send request count = %d, want 0", len(sink.sendRequests))
+	}
+	logOutput := logs.String()
+	if !strings.Contains(logOutput, "llmchat edit retry exhausted") {
+		t.Fatalf("logs = %q, want exhaustion warning", logOutput)
+	}
+	if !strings.Contains(logOutput, "conversation_id=chat-1") {
+		t.Fatalf("logs = %q, want conversation_id", logOutput)
+	}
+	if !strings.Contains(logOutput, "placeholder_message_id=placeholder-1") {
+		t.Fatalf("logs = %q, want placeholder_message_id", logOutput)
+	}
+	if !strings.Contains(logOutput, "operation=edit_message") {
+		t.Fatalf("logs = %q, want operation", logOutput)
+	}
+	if !strings.Contains(logOutput, "kind=rate_limited") {
+		t.Fatalf("logs = %q, want kind", logOutput)
+	}
+	if !strings.Contains(logOutput, "attempts=1") {
+		t.Fatalf("logs = %q, want attempts", logOutput)
+	}
+	if !strings.Contains(logOutput, "deadline_remaining=none") {
+		t.Fatalf("logs = %q, want deadline_remaining", logOutput)
+	}
+}
+
+func TestStreamProviderReplyWarnsOncePerFailureStreak(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{
+		editErrors: []error{
+			errors.New("temporary edit failure"),
+			errors.New("temporary edit failure"),
+			nil,
+			nil,
+		},
+	}
+	module.dispatcher = sink
+	var logs bytes.Buffer
+	module.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+		time.Unix(4, 0).UTC(),
+		time.Unix(12, 0).UTC(),
+		time.Unix(22, 0).UTC(),
+	})
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "a"},
+		{Delta: "b"},
+		{Delta: "c"},
+		{Delta: "d"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	logOutput := logs.String()
+	if got := strings.Count(logOutput, "llmchat intermediate edit failed"); got != 1 {
+		t.Fatalf("warn count = %d, want 1 (logs=%q)", got, logOutput)
+	}
+	if !strings.Contains(logOutput, "conversation_id=chat-1") {
+		t.Fatalf("logs = %q, want conversation_id", logOutput)
+	}
+	if !strings.Contains(logOutput, "placeholder_message_id=placeholder-1") {
+		t.Fatalf("logs = %q, want placeholder_message_id", logOutput)
+	}
+	if !strings.Contains(logOutput, "operation=edit_message") {
+		t.Fatalf("logs = %q, want operation", logOutput)
+	}
+	if !strings.Contains(logOutput, "kind=unknown") {
+		t.Fatalf("logs = %q, want unknown kind for untyped error", logOutput)
+	}
+	if !strings.Contains(logOutput, "attempts=1") {
+		t.Fatalf("logs = %q, want attempts", logOutput)
+	}
+	if !strings.Contains(logOutput, "deadline_remaining=none") {
+		t.Fatalf("logs = %q, want deadline remaining", logOutput)
 	}
 }
 
@@ -484,8 +753,8 @@ func TestStreamProviderReplySkipsFinalEditWhenFinalTextAlreadyDelivered(t *testi
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
+		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
-		"src-1",
 		"placeholder-1",
 		provider,
 		req,
@@ -543,8 +812,8 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
+		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
-		"src-1",
 		"placeholder-1",
 		provider,
 		req,
@@ -609,8 +878,8 @@ func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 	}
 	err = module.streamProviderReply(
 		context.Background(),
+		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
-		"src-1",
 		"placeholder-1",
 		provider,
 		req,
@@ -685,8 +954,8 @@ func TestStreamProviderReplyNoOutputReturnsContextErrorWhenCanceled(t *testing.T
 
 	err = module.streamProviderReply(
 		ctx,
+		ctx,
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
-		"src-1",
 		"placeholder-1",
 		&providerStub{stream: &streamStub{}},
 		req,
@@ -738,8 +1007,8 @@ func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
 	}
 	err = module.streamProviderReply(
 		context.Background(),
+		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
-		"src-1",
 		"",
 		&providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "hello"}}}},
 		req,
@@ -749,6 +1018,72 @@ func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty placeholder message id") {
 		t.Fatalf("error = %q, want empty placeholder message id", err)
+	}
+}
+
+func TestFinalizePlaceholderFailureRetriesUntilSuccess(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{
+		editErrors: []error{
+			errors.New("retry after 3"),
+			nil,
+		},
+	}
+	module.dispatcher = sink
+	sleeps := make([]time.Duration, 0, 1)
+	module.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+
+	handlerErr := errors.New("handler failed")
+	target := otogi.OutboundTarget{
+		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+	}
+	err = module.finalizePlaceholderFailure(context.Background(), target, "placeholder-1", handlerErr)
+	if !errors.Is(err, handlerErr) {
+		t.Fatalf("error = %v, want handler error", err)
+	}
+	if len(sink.editRequests) != 2 {
+		t.Fatalf("edit request count = %d, want 2", len(sink.editRequests))
+	}
+	if sink.editRequests[1].Text != placeholderFailureMessage {
+		t.Fatalf("retry edit text = %q, want %q", sink.editRequests[1].Text, placeholderFailureMessage)
+	}
+	if len(sleeps) != 1 {
+		t.Fatalf("sleep count = %d, want 1", len(sleeps))
+	}
+	if sleeps[0] != 3*time.Second {
+		t.Fatalf("sleep[0] = %s, want %s", sleeps[0], 3*time.Second)
+	}
+}
+
+func TestFinalizePlaceholderFailureSkipsWhenContextDone(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	handlerErr := errors.New("handler failed")
+	target := otogi.OutboundTarget{
+		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+	}
+	err = module.finalizePlaceholderFailure(ctx, target, "placeholder-1", handlerErr)
+	if !errors.Is(err, handlerErr) {
+		t.Fatalf("error = %v, want handler error", err)
+	}
+	if len(sink.editRequests) != 0 {
+		t.Fatalf("edit request count = %d, want 0", len(sink.editRequests))
 	}
 }
 

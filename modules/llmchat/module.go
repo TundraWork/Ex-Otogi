@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ const llmchatHandlerTimeoutGrace = 5 * time.Second
 
 const placeholderFailureMessage = "Sorry, I couldn't generate a response right now."
 
+const serviceLogger = "logger"
+
 // Module provides keyword-triggered LLM chat behavior.
 type Module struct {
 	cfg Config
@@ -23,7 +26,9 @@ type Module struct {
 	providers  map[string]otogi.LLMProvider
 
 	providerRegistry otogi.LLMProviderRegistry
+	logger           *slog.Logger
 	clock            func() time.Time
+	sleep            func(context.Context, time.Duration) error
 }
 
 // Option mutates one llmchat module construction input.
@@ -38,7 +43,9 @@ func New(cfg Config, options ...Option) (*Module, error) {
 	module := &Module{
 		cfg:       cloneConfig(cfg),
 		providers: make(map[string]otogi.LLMProvider),
+		logger:    slog.Default(),
 		clock:     time.Now,
+		sleep:     sleepWithContext,
 	}
 	for _, option := range options {
 		option(module)
@@ -84,6 +91,15 @@ func (m *Module) Spec() otogi.ModuleSpec {
 
 // OnRegister resolves module dependencies.
 func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
+	logger, err := otogi.ResolveAs[*slog.Logger](runtime.Services(), serviceLogger)
+	switch {
+	case err == nil:
+		m.logger = logger
+	case errors.Is(err, otogi.ErrServiceNotFound):
+	default:
+		return fmt.Errorf("llmchat resolve logger: %w", err)
+	}
+
 	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
 		runtime.Services(),
 		otogi.ServiceSinkDispatcher,
@@ -206,7 +222,7 @@ func (m *Module) handleArticle(ctx context.Context, event *otogi.Event) error {
 		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, buildErr)
 	}
 
-	if err := m.streamProviderReply(reqCtx, target, event.Article.ID, placeholder.ID, provider, req); err != nil {
+	if err := m.streamProviderReply(reqCtx, ctx, target, placeholder.ID, provider, req); err != nil {
 		streamErr := fmt.Errorf("llmchat stream response for agent %s: %w", agent.Name, err)
 		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, streamErr)
 	}
@@ -257,8 +273,11 @@ func (m *Module) finalizePlaceholderFailure(
 	if strings.TrimSpace(placeholderMessageID) == "" {
 		return handlerErr
 	}
+	if err := ctx.Err(); err != nil {
+		return handlerErr
+	}
 
-	editErr := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
+	editErr := m.retryEditMessage(ctx, otogi.EditMessageRequest{
 		Target:    target,
 		MessageID: placeholderMessageID,
 		Text:      placeholderFailureMessage,

@@ -219,6 +219,59 @@ func TestSinkDispatcherAmbiguousPlatform(t *testing.T) {
 	}
 }
 
+func TestSinkDispatcherRouteEditPreservesOutboundError(t *testing.T) {
+	t.Parallel()
+
+	rootCause := errors.New("rpc flood wait")
+	routedErr := &otogi.OutboundError{
+		Operation:  otogi.OutboundOperationEditMessage,
+		Kind:       otogi.OutboundErrorKindRateLimited,
+		Platform:   testDriverPlatform,
+		SinkID:     "main",
+		RetryAfter: 5 * time.Second,
+		Cause:      rootCause,
+	}
+
+	dispatcher, err := NewSinkDispatcher([]Runtime{
+		{
+			Source: otogi.EventSource{
+				Platform: testDriverPlatform,
+				ID:       "main",
+			},
+			SinkDispatcher: &stubSinkDispatcher{editErr: routedErr},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new sink dispatcher failed: %v", err)
+	}
+
+	err = dispatcher.EditMessage(context.Background(), otogi.EditMessageRequest{
+		Target: otogi.OutboundTarget{
+			Conversation: otogi.Conversation{ID: "1", Type: otogi.ConversationTypeGroup},
+			Sink:         &otogi.EventSink{ID: "main"},
+		},
+		MessageID: "9",
+		Text:      "updated",
+	})
+	if err == nil {
+		t.Fatal("expected routed edit error")
+	}
+
+	outboundErr, ok := otogi.AsOutboundError(err)
+	if !ok {
+		t.Fatalf("AsOutboundError(%v) = false, want true", err)
+	}
+	if outboundErr.Kind != otogi.OutboundErrorKindRateLimited {
+		t.Fatalf("kind = %s, want %s", outboundErr.Kind, otogi.OutboundErrorKindRateLimited)
+	}
+	if outboundErr.Operation != otogi.OutboundOperationEditMessage {
+		t.Fatalf("operation = %s, want %s", outboundErr.Operation, otogi.OutboundOperationEditMessage)
+	}
+	if !errors.Is(err, rootCause) {
+		t.Fatalf("errors.Is(err, rootCause) = false, want true (err=%v)", err)
+	}
+}
+
 func TestSinkDispatcherListSinksByPlatform(t *testing.T) {
 	t.Parallel()
 
@@ -262,6 +315,8 @@ func (d stubDriver) Shutdown(_ context.Context) error {
 
 type stubSinkDispatcher struct {
 	sendCalls int
+	sendErr   error
+	editErr   error
 }
 
 func (d *stubSinkDispatcher) SendMessage(
@@ -269,6 +324,9 @@ func (d *stubSinkDispatcher) SendMessage(
 	request otogi.SendMessageRequest,
 ) (*otogi.OutboundMessage, error) {
 	d.sendCalls++
+	if d.sendErr != nil {
+		return nil, d.sendErr
+	}
 
 	return &otogi.OutboundMessage{
 		ID: "1",
@@ -279,8 +337,8 @@ func (d *stubSinkDispatcher) SendMessage(
 	}, nil
 }
 
-func (*stubSinkDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
-	return nil
+func (d *stubSinkDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+	return d.editErr
 }
 
 func (*stubSinkDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
