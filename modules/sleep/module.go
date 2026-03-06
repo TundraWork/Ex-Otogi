@@ -2,7 +2,9 @@ package sleep
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strings"
 
 	"ex-otogi/pkg/otogi"
 )
@@ -12,10 +14,10 @@ const (
 	wakeCommandName  = "wake"
 )
 
-// Config configures sleep-module wake-code generation.
-type Config struct {
-	// SigningKey authenticates stateless wake codes across process restarts.
-	SigningKey []byte
+// fileConfig is the JSON layout for sleep module configuration.
+type fileConfig struct {
+	// SigningKey is a base64url-encoded signing key for wake codes.
+	SigningKey string `json:"signing_key"`
 }
 
 // Module provides user self-mute functionality via /sleep and /wake commands.
@@ -29,16 +31,10 @@ type Module struct {
 	codeManager *codeManager
 }
 
-// New creates a sleep module with configured wake-code signing.
-func New(cfg Config) (*Module, error) {
-	cm, err := newCodeManager(cfg.SigningKey)
-	if err != nil {
-		return nil, fmt.Errorf("new sleep module: %w", err)
-	}
-
-	return &Module{
-		codeManager: cm,
-	}, nil
+// New creates a sleep module. Configuration is loaded from the
+// ConfigRegistry during OnRegister.
+func New() *Module {
+	return &Module{}
 }
 
 // Name returns the stable module identifier.
@@ -102,8 +98,19 @@ func (m *Module) Spec() otogi.ModuleSpec {
 	}
 }
 
-// OnRegister resolves outbound dependencies required by this module.
+// OnRegister loads configuration and resolves outbound dependencies.
 func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
+	signingKey, err := loadSigningKey(runtime.Config())
+	if err != nil {
+		return fmt.Errorf("sleep load config: %w", err)
+	}
+
+	cm, err := newCodeManager(signingKey)
+	if err != nil {
+		return fmt.Errorf("sleep init code manager: %w", err)
+	}
+	m.codeManager = cm
+
 	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
 		runtime.Services(),
 		otogi.ServiceSinkDispatcher,
@@ -133,4 +140,27 @@ func (m *Module) OnStart(_ context.Context) error {
 // OnShutdown stops the module lifecycle.
 func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
+}
+
+// loadSigningKey reads and decodes the base64url signing key from module config.
+func loadSigningKey(configs otogi.ConfigRegistry) ([]byte, error) {
+	cfg, err := otogi.ParseModuleConfig[fileConfig](configs, "sleep")
+	if err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	trimmed := strings.TrimSpace(cfg.SigningKey)
+	if trimmed == "" {
+		return nil, fmt.Errorf("signing_key is required")
+	}
+
+	signingKey, err := base64.RawURLEncoding.DecodeString(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("signing_key: decode base64url: %w", err)
+	}
+	if len(signingKey) < 32 {
+		return nil, fmt.Errorf("signing_key: must decode to at least 32 bytes")
+	}
+
+	return append([]byte(nil), signingKey...), nil
 }

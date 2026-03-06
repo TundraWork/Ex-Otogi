@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,16 +20,11 @@ import (
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/modules/sleep"
-	"ex-otogi/pkg/llm"
-	llmconfig "ex-otogi/pkg/llm/config"
-	"ex-otogi/pkg/llm/providers/gemini"
-	"ex-otogi/pkg/llm/providers/openai"
 	"ex-otogi/pkg/otogi"
 )
 
 const (
 	envConfigFile                 = "OTOGI_CONFIG_FILE"
-	envLLMConfigFile              = "OTOGI_LLM_CONFIG_FILE"
 	defaultConfigFilePath         = "config/bot.json"
 	alternateConfigFilePath       = "bin/config/bot.json"
 	defaultModuleLifecycleTimeout = 3 * time.Second
@@ -43,7 +37,13 @@ const (
 	stdlibLogKindContextCanceled  = "context_canceled"
 )
 
-var baseRuntimeModuleNames = []string{"memory", "pingpong", "help", "sleep"}
+var runtimeModules = []func() otogi.Module{
+	func() otogi.Module { return memory.New() },
+	func() otogi.Module { return pingpong.New() },
+	func() otogi.Module { return help.New() },
+	func() otogi.Module { return sleep.New() },
+	func() otogi.Module { return llmchat.New() },
+}
 
 type appConfig struct {
 	logLevel slog.Level
@@ -58,18 +58,15 @@ type appConfig struct {
 	routingDefault *kernel.ModuleRoute
 	moduleRoutes   map[string]kernel.ModuleRoute
 
-	sleepConfig   sleep.Config
-	llmConfigFile string
-	llmConfig     *llmconfig.Config
+	moduleConfigs map[string]json.RawMessage
 }
 
 type fileConfig struct {
-	LogLevel string            `json:"log_level"`
-	Kernel   fileKernelConfig  `json:"kernel"`
-	Drivers  []fileDriverEntry `json:"drivers"`
-	Routing  fileRoutingConfig `json:"routing"`
-	Sleep    fileSleepConfig   `json:"sleep"`
-	LLM      fileLLMConfig     `json:"llm"`
+	LogLevel string                     `json:"log_level"`
+	Kernel   fileKernelConfig           `json:"kernel"`
+	Drivers  []fileDriverEntry          `json:"drivers"`
+	Routing  fileRoutingConfig          `json:"routing"`
+	Modules  map[string]json.RawMessage `json:"modules"`
 }
 
 type fileKernelConfig struct {
@@ -107,14 +104,6 @@ type fileSinkRef struct {
 	ID       string `json:"id"`
 }
 
-type fileLLMConfig struct {
-	ConfigFile string `json:"config_file"`
-}
-
-type fileSleepConfig struct {
-	SigningKey string `json:"signing_key"`
-}
-
 func run() error {
 	registry, err := driver.NewBuiltinRegistry()
 	if err != nil {
@@ -141,10 +130,13 @@ func run() error {
 	if err := registerRuntimeDrivers(kernelRuntime, runtimes.drivers); err != nil {
 		return err
 	}
-	if err := registerRuntimeServices(context.Background(), kernelRuntime, logger, runtimes, cfg); err != nil {
+	if err := registerRuntimeServices(kernelRuntime, logger, runtimes); err != nil {
 		return err
 	}
-	if err := registerRuntimeModules(context.Background(), kernelRuntime, cfg); err != nil {
+	if err := registerModuleConfigs(kernelRuntime, cfg.moduleConfigs); err != nil {
+		return err
+	}
+	if err := registerRuntimeModules(context.Background(), kernelRuntime); err != nil {
 		return err
 	}
 
@@ -209,16 +201,6 @@ func loadConfig(registry *driver.Registry) (appConfig, error) {
 	if err := applyConfigFile(&cfg, configFile); err != nil {
 		return appConfig{}, err
 	}
-	if envPath := strings.TrimSpace(os.Getenv(envLLMConfigFile)); envPath != "" {
-		cfg.llmConfigFile = envPath
-	}
-	if cfg.llmConfigFile != "" {
-		llmConfig, err := llmconfig.LoadFile(cfg.llmConfigFile)
-		if err != nil {
-			return appConfig{}, fmt.Errorf("load llm config file %s: %w", cfg.llmConfigFile, err)
-		}
-		cfg.llmConfig = &llmConfig
-	}
 	if err := validateAppConfig(&cfg, registry); err != nil {
 		return appConfig{}, fmt.Errorf("validate config file %s: %w", configFile, err)
 	}
@@ -263,8 +245,9 @@ func defaultAppConfig() appConfig {
 		subscriptionBuffer:     defaultSubscriptionBuffer,
 		subscriptionWorkers:    defaultSubscriptionWorker,
 
-		drivers:      make([]driver.Definition, 0),
-		moduleRoutes: make(map[string]kernel.ModuleRoute),
+		drivers:       make([]driver.Definition, 0),
+		moduleRoutes:  make(map[string]kernel.ModuleRoute),
+		moduleConfigs: make(map[string]json.RawMessage),
 	}
 }
 
@@ -370,33 +353,13 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		}
 		cfg.moduleRoutes[moduleName] = route
 	}
-	signingKey, err := parseSleepSigningKey(parsed.Sleep.SigningKey)
-	if err != nil {
-		return err
+
+	cfg.moduleConfigs = make(map[string]json.RawMessage, len(parsed.Modules))
+	for moduleName, raw := range parsed.Modules {
+		cfg.moduleConfigs[moduleName] = append(json.RawMessage(nil), raw...)
 	}
-	cfg.sleepConfig = sleep.Config{
-		SigningKey: signingKey,
-	}
-	cfg.llmConfigFile = strings.TrimSpace(parsed.LLM.ConfigFile)
 
 	return nil
-}
-
-func parseSleepSigningKey(raw string) ([]byte, error) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return nil, fmt.Errorf("parse sleep.signing_key: required")
-	}
-
-	signingKey, err := base64.RawURLEncoding.DecodeString(trimmed)
-	if err != nil {
-		return nil, fmt.Errorf("parse sleep.signing_key: decode base64url: %w", err)
-	}
-	if len(signingKey) < 32 {
-		return nil, fmt.Errorf("parse sleep.signing_key: must decode to at least 32 bytes")
-	}
-
-	return append([]byte(nil), signingKey...), nil
 }
 
 func parseModuleRoute(raw fileModuleRoute, scope string) (kernel.ModuleRoute, error) {
@@ -463,7 +426,7 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 		return fmt.Errorf("at least one enabled driver is required")
 	}
 
-	moduleNames := configuredRuntimeModuleNames(cfg)
+	moduleNames := configuredRuntimeModuleNames()
 	knownModules := make(map[string]struct{}, len(moduleNames))
 	for _, moduleName := range moduleNames {
 		knownModules[moduleName] = struct{}{}
@@ -508,13 +471,13 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 	return nil
 }
 
-func configuredRuntimeModuleNames(cfg *appConfig) []string {
-	moduleNames := append([]string(nil), baseRuntimeModuleNames...)
-	if cfg != nil && cfg.llmConfig != nil {
-		moduleNames = append(moduleNames, "llmchat")
+func configuredRuntimeModuleNames() []string {
+	names := make([]string, 0, len(runtimeModules))
+	for _, factory := range runtimeModules {
+		names = append(names, factory().Name())
 	}
 
-	return moduleNames
+	return names
 }
 
 func validateRouteRefs(
@@ -614,17 +577,11 @@ func buildDriverRuntime(
 }
 
 func registerRuntimeServices(
-	ctx context.Context,
 	kernelRuntime *kernel.Kernel,
 	logger *slog.Logger,
 	dr driverRuntimes,
-	cfg appConfig,
 ) error {
-	if ctx == nil {
-		return fmt.Errorf("register runtime services: nil context")
-	}
-
-	if err := kernelRuntime.RegisterService(memory.ServiceLogger, logger); err != nil {
+	if err := kernelRuntime.RegisterService("logger", logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
 	}
 	if dr.sinkDispatcher == nil {
@@ -638,161 +595,29 @@ func registerRuntimeServices(
 			return fmt.Errorf("register moderation dispatcher service: %w", err)
 		}
 	}
-	if cfg.llmConfig != nil {
-		providers, err := buildLLMProviders(ctx, *cfg.llmConfig)
-		if err != nil {
-			return fmt.Errorf("build llm providers: %w", err)
-		}
 
-		registry, err := llm.NewRegistry(providers)
-		if err != nil {
-			return fmt.Errorf("new llm provider registry: %w", err)
-		}
-		if err := kernelRuntime.RegisterService(otogi.ServiceLLMProviderRegistry, registry); err != nil {
-			return fmt.Errorf("register llm provider registry service: %w", err)
+	return nil
+}
+
+func registerModuleConfigs(kernelRuntime *kernel.Kernel, configs map[string]json.RawMessage) error {
+	for moduleName, raw := range configs {
+		if err := kernelRuntime.RegisterModuleConfig(moduleName, raw); err != nil {
+			return fmt.Errorf("register module config %s: %w", moduleName, err)
 		}
 	}
 
 	return nil
 }
 
-func buildLLMProviders(ctx context.Context, cfg llmconfig.Config) (map[string]otogi.LLMProvider, error) {
-	if ctx == nil {
-		return nil, fmt.Errorf("build llm providers: nil context")
-	}
-
-	providers := make(map[string]otogi.LLMProvider, len(cfg.Providers))
-	for profileKey, profile := range cfg.Providers {
-		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
-		switch providerType {
-		case "openai":
-			openAICfg := openai.ProviderConfig{
-				APIKey:  profile.APIKey,
-				BaseURL: profile.BaseURL,
-			}
-			if profile.OpenAI != nil {
-				openAICfg.Organization = profile.OpenAI.Organization
-				openAICfg.Project = profile.OpenAI.Project
-				openAICfg.MaxRetries = cloneOptionalInt(profile.OpenAI.MaxRetries)
-			}
-
-			provider, err := openai.New(openAICfg)
-			if err != nil {
-				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
-			}
-			providers[profileKey] = provider
-		case "gemini":
-			geminiCfg := gemini.ProviderConfig{
-				APIKey:  profile.APIKey,
-				BaseURL: profile.BaseURL,
-			}
-			if profile.Gemini != nil {
-				geminiCfg.APIVersion = profile.Gemini.APIVersion
-				geminiCfg.GoogleSearch = cloneOptionalBool(profile.Gemini.RequestDefaults.GoogleSearch)
-				geminiCfg.URLContext = cloneOptionalBool(profile.Gemini.RequestDefaults.URLContext)
-				geminiCfg.ThinkingBudget = cloneOptionalInt(profile.Gemini.RequestDefaults.ThinkingBudget)
-				geminiCfg.IncludeThoughts = cloneOptionalBool(profile.Gemini.RequestDefaults.IncludeThoughts)
-				geminiCfg.ThinkingLevel = profile.Gemini.RequestDefaults.ThinkingLevel
-				geminiCfg.ResponseMIMEType = profile.Gemini.RequestDefaults.ResponseMIMEType
-			}
-
-			provider, err := gemini.New(ctx, geminiCfg)
-			if err != nil {
-				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
-			}
-			providers[profileKey] = provider
-		default:
-			return nil, fmt.Errorf("provider profile %s: unsupported type %q", profileKey, profile.Type)
-		}
-	}
-
-	return providers, nil
-}
-
-func cloneOptionalInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-func cloneOptionalBool(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel, cfg appConfig) error {
-	memoryModule := memory.New()
-	if err := kernelRuntime.RegisterModule(ctx, memoryModule); err != nil {
-		return fmt.Errorf("register memory module: %w", err)
-	}
-	pingPongModule := pingpong.New()
-	if err := kernelRuntime.RegisterModule(ctx, pingPongModule); err != nil {
-		return fmt.Errorf("register pingpong module: %w", err)
-	}
-	helpModule := help.New()
-	if err := kernelRuntime.RegisterModule(ctx, helpModule); err != nil {
-		return fmt.Errorf("register help module: %w", err)
-	}
-	sleepModule, err := sleep.New(cfg.sleepConfig)
-	if err != nil {
-		return fmt.Errorf("new sleep module: %w", err)
-	}
-	if err := kernelRuntime.RegisterModule(ctx, sleepModule); err != nil {
-		return fmt.Errorf("register sleep module: %w", err)
-	}
-	if cfg.llmConfig != nil {
-		llmModuleConfig := toLLMChatConfig(*cfg.llmConfig)
-		llmModule, err := llmchat.New(llmModuleConfig)
-		if err != nil {
-			return fmt.Errorf("new llmchat module: %w", err)
-		}
-		if err := kernelRuntime.RegisterModule(ctx, llmModule); err != nil {
-			return fmt.Errorf("register llmchat module: %w", err)
+func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) error {
+	for _, factory := range runtimeModules {
+		module := factory()
+		if err := kernelRuntime.RegisterModule(ctx, module); err != nil {
+			return fmt.Errorf("register module %s: %w", module.Name(), err)
 		}
 	}
 
 	return nil
-}
-
-func toLLMChatConfig(cfg llmconfig.Config) llmchat.Config {
-	agents := make([]llmchat.Agent, 0, len(cfg.Agents))
-	for _, agent := range cfg.Agents {
-		agents = append(agents, llmchat.Agent{
-			Name:                 agent.Name,
-			Description:          agent.Description,
-			Provider:             agent.Provider,
-			Model:                agent.Model,
-			SystemPromptTemplate: agent.SystemPromptTemplate,
-			TemplateVariables:    cloneStringMap(agent.TemplateVariables),
-			MaxOutputTokens:      agent.MaxOutputTokens,
-			Temperature:          agent.Temperature,
-			RequestTimeout:       agent.RequestTimeout,
-			RequestMetadata:      cloneStringMap(agent.RequestMetadata),
-		})
-	}
-
-	return llmchat.Config{
-		RequestTimeout: cfg.RequestTimeout,
-		Agents:         agents,
-	}
-}
-
-func cloneStringMap(values map[string]string) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-
-	cloned := make(map[string]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
-	}
-
-	return cloned
 }
 
 func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, drivers []otogi.Driver) error {

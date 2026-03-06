@@ -24,12 +24,13 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
    - configure at least one entry in `drivers[]` (`type: "telegram"` is currently supported)
    - set Telegram credentials in `drivers[].config`
    - set routing defaults in `routing.default`
-3. Optional LLM setup:
+   - replace `modules.sleep.signing_key` with a unique base64url-encoded key
+3. Create LLM configuration:
    ```sh
    cp config/llm.example.json config/llm.json
    ```
    - configure provider profiles in `config/llm.json`
-   - set `llm.config_file` in `config/bot.json` or `OTOGI_LLM_CONFIG_FILE`
+   - set `modules.llmchat.config_file` in `config/bot.json` or `OTOGI_LLM_CONFIG_FILE`
 4. Run:
    ```sh
    go run ./cmd/bot

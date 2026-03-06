@@ -327,7 +327,7 @@ func TestHandleWakeNilEvent(t *testing.T) {
 func TestModuleOnRegister(t *testing.T) {
 	t.Parallel()
 
-	module := mustNew(t)
+	module := New()
 	dispatcher := &captureDispatcher{messageID: "sent-1"}
 	moderation := &captureModerationDispatcher{}
 	runtime := moduleRuntimeStub{
@@ -337,6 +337,7 @@ func TestModuleOnRegister(t *testing.T) {
 				otogi.ServiceModerationDispatcher: moderation,
 			},
 		},
+		configs: testConfigRegistry(t),
 	}
 
 	if err := module.OnRegister(context.Background(), runtime); err != nil {
@@ -348,12 +349,15 @@ func TestModuleOnRegister(t *testing.T) {
 	if module.moderation == nil {
 		t.Fatal("expected moderation dispatcher to be configured")
 	}
+	if module.codeManager == nil {
+		t.Fatal("expected code manager to be configured")
+	}
 }
 
 func TestModuleSpec(t *testing.T) {
 	t.Parallel()
 
-	module := mustNew(t)
+	module := New()
 	spec := module.Spec()
 	if len(spec.Handlers) != 2 {
 		t.Fatalf("handler count = %d, want 2", len(spec.Handlers))
@@ -503,10 +507,15 @@ func (d *captureModerationDispatcher) RestrictMember(
 
 type moduleRuntimeStub struct {
 	registry otogi.ServiceRegistry
+	configs  otogi.ConfigRegistry
 }
 
 func (s moduleRuntimeStub) Services() otogi.ServiceRegistry {
 	return s.registry
+}
+
+func (s moduleRuntimeStub) Config() otogi.ConfigRegistry {
+	return s.configs
 }
 
 func (moduleRuntimeStub) Subscribe(
@@ -538,10 +547,25 @@ func (s serviceRegistryStub) Resolve(name string) (any, error) {
 func mustNew(t *testing.T) *Module {
 	t.Helper()
 
-	m, err := New(Config{SigningKey: testSigningKey()})
-	if err != nil {
-		t.Fatalf("New() error: %v", err)
+	m := New()
+	configs := testConfigRegistry(t)
+	dispatcher := &captureDispatcher{messageID: "sent-1"}
+	moderation := &captureModerationDispatcher{}
+	runtime := moduleRuntimeStub{
+		registry: serviceRegistryStub{
+			values: map[string]any{
+				otogi.ServiceSinkDispatcher:       dispatcher,
+				otogi.ServiceModerationDispatcher: moderation,
+			},
+		},
+		configs: configs,
 	}
+	if err := m.OnRegister(context.Background(), runtime); err != nil {
+		t.Fatalf("OnRegister() error: %v", err)
+	}
+	// Reset dispatchers so tests can set their own.
+	m.dispatcher = nil
+	m.moderation = nil
 
 	return m
 }

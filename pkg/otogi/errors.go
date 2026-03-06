@@ -23,4 +23,8 @@ var (
 	ErrModuleAlreadyRegistered = errors.New("otogi: module already registered")
 	// ErrDriverAlreadyRegistered indicates duplicate driver registration.
 	ErrDriverAlreadyRegistered = errors.New("otogi: driver already registered")
+	// ErrConfigNotFound indicates a module config lookup miss.
+	ErrConfigNotFound = errors.New("otogi: module config not found")
+	// ErrConfigAlreadyRegistered indicates duplicate module config registration.
+	ErrConfigAlreadyRegistered = errors.New("otogi: module config already registered")
 )

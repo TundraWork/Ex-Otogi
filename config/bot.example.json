@@ -39,10 +39,12 @@
       }
     }
   },
-  "sleep": {
-    "signing_key": "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY"
-  },
-  "llm": {
-    "config_file": ""
+  "modules": {
+    "sleep": {
+      "signing_key": "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY"
+    },
+    "llmchat": {
+      "config_file": "config/llm.json"
+    }
   }
 }

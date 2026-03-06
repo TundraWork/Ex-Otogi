@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -16,6 +17,7 @@ type Kernel struct {
 
 	bus      *EventBus
 	services *ServiceRegistry
+	configs  *ConfigRegistry
 
 	mu          sync.RWMutex
 	modules     map[string]*moduleRecord
@@ -41,6 +43,7 @@ func New(options ...Option) (*Kernel, error) {
 	}
 
 	services := NewServiceRegistry()
+	configs := NewConfigRegistry()
 	bus := NewEventBus(
 		cfg.subscriptionBuffer,
 		cfg.subscriptionWorker,
@@ -52,6 +55,7 @@ func New(options ...Option) (*Kernel, error) {
 		cfg:         cfg,
 		bus:         bus,
 		services:    services,
+		configs:     configs,
 		modules:     make(map[string]*moduleRecord),
 		commands:    make(map[string]commandRegistration),
 		drivers:     make(map[string]otogi.Driver),
@@ -99,6 +103,20 @@ func (k *Kernel) Services() otogi.ServiceRegistry {
 	return k.services
 }
 
+// Configs exposes the kernel module config registry.
+func (k *Kernel) Configs() otogi.ConfigRegistry {
+	return k.configs
+}
+
+// RegisterModuleConfig stores raw JSON configuration for a named module.
+func (k *Kernel) RegisterModuleConfig(moduleName string, raw json.RawMessage) error {
+	if err := k.configs.Register(moduleName, raw); err != nil {
+		return fmt.Errorf("register module config %s: %w", moduleName, err)
+	}
+
+	return nil
+}
+
 // RegisterService registers a runtime service singleton.
 func (k *Kernel) RegisterService(name string, service any) error {
 	if err := k.services.Register(name, service); err != nil {
@@ -144,6 +162,7 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 	runtime := &moduleRuntime{
 		moduleName:    name,
 		serviceLookup: k.services,
+		configLookup:  k.configs,
 		bus:           k.bus,
 		record:        record,
 		defaultSink:   k.moduleRouteFor(name).Sink,

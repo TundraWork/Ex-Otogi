@@ -14,59 +14,29 @@ import (
 	"ex-otogi/pkg/otogi"
 )
 
-func TestSpecSetsExplicitHandlerTimeout(t *testing.T) {
+func TestSpecDeclaresAdditionalCapabilities(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name           string
-		requestTimeout time.Duration
-	}{
-		{name: "short timeout", requestTimeout: 15 * time.Second},
-		{name: "long timeout", requestTimeout: 2 * time.Minute},
+	module := New()
+	spec := module.Spec()
+
+	if len(spec.AdditionalCapabilities) != 1 {
+		t.Fatalf("additional capabilities len = %d, want 1", len(spec.AdditionalCapabilities))
 	}
-
-	for _, testCase := range tests {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			module, err := New(Config{
-				RequestTimeout: testCase.requestTimeout,
-				Agents: []Agent{
-					{
-						Name:                 "Otogi",
-						Description:          "assistant",
-						Provider:             "p",
-						Model:                "m",
-						SystemPromptTemplate: "You are {{.AgentName}}",
-						RequestTimeout:       time.Second,
-					},
-				},
-			})
-			if err != nil {
-				t.Fatalf("New failed: %v", err)
-			}
-
-			spec := module.Spec()
-			if len(spec.Handlers) != 1 {
-				t.Fatalf("handlers len = %d, want 1", len(spec.Handlers))
-			}
-
-			subscription := spec.Handlers[0].Subscription
-			if subscription.Name != "llmchat-articles" {
-				t.Fatalf("subscription name = %q, want llmchat-articles", subscription.Name)
-			}
-
-			wantTimeout := testCase.requestTimeout + llmchatHandlerTimeoutGrace
-			if subscription.HandlerTimeout != wantTimeout {
-				t.Fatalf("handler timeout = %s, want %s", subscription.HandlerTimeout, wantTimeout)
-			}
-		})
+	capability := spec.AdditionalCapabilities[0]
+	if capability.Name != "llm-chat-trigger" {
+		t.Fatalf("capability name = %q, want llm-chat-trigger", capability.Name)
+	}
+	if !capability.Interest.RequireArticle {
+		t.Fatal("expected RequireArticle to be true")
+	}
+	if len(capability.Interest.Kinds) != 1 || capability.Interest.Kinds[0] != otogi.EventKindArticleCreated {
+		t.Fatalf("kinds = %v, want [%s]", capability.Interest.Kinds, otogi.EventKindArticleCreated)
 	}
 }
 
 func TestMatchTriggeredAgent(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -87,9 +57,6 @@ func TestMatchTriggeredAgent(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	tests := []struct {
 		name      string
@@ -130,7 +97,7 @@ func TestMatchTriggeredAgent(t *testing.T) {
 }
 
 func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -151,9 +118,6 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	module.memory = &memoryStub{
 		replyChain: []otogi.ReplyChainEntry{
@@ -274,64 +238,20 @@ func TestRenderSystemPromptTemplateVariablesDoNotOverrideBuiltIns(t *testing.T) 
 	}
 }
 
-func TestOnRegisterResolvesProviders(t *testing.T) {
-	module, err := New(Config{
-		RequestTimeout: time.Second,
-		Agents: []Agent{
-			{
-				Name:                 "Otogi",
-				Description:          "assistant",
-				Provider:             "openai",
-				Model:                "gpt-test",
-				SystemPromptTemplate: "You are {{.AgentName}}",
-				RequestTimeout:       time.Second,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
+func TestOnRegisterFailsWithoutConfig(t *testing.T) {
+	t.Parallel()
+
+	module := New()
+	runtime := moduleRuntimeStub{
+		registry: serviceRegistryStub{values: map[string]any{}},
 	}
 
-	provider := &providerStub{}
-	registry := &providerRegistryStub{providers: map[string]otogi.LLMProvider{"openai": provider}}
-	runtime := moduleRuntimeStub{registry: serviceRegistryStub{values: map[string]any{
-		otogi.ServiceSinkDispatcher:      &sinkDispatcherStub{},
-		otogi.ServiceMemory:              &memoryStub{},
-		otogi.ServiceMarkdownParser:      markdownParserStub{},
-		otogi.ServiceLLMProviderRegistry: registry,
-	}}}
-
-	if err := module.OnRegister(context.Background(), runtime); err != nil {
-		t.Fatalf("OnRegister failed: %v", err)
-	}
-	if module.providers["openai"] == nil {
-		t.Fatal("expected openai provider to be resolved")
-	}
-}
-
-func TestOnRegisterRequiresMarkdownParserService(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-
-	registry := &providerRegistryStub{
-		providers: map[string]otogi.LLMProvider{
-			"openai": &providerStub{},
-		},
-	}
-	runtime := moduleRuntimeStub{registry: serviceRegistryStub{values: map[string]any{
-		otogi.ServiceSinkDispatcher:      &sinkDispatcherStub{},
-		otogi.ServiceMemory:              &memoryStub{},
-		otogi.ServiceLLMProviderRegistry: registry,
-	}}}
-
-	err = module.OnRegister(context.Background(), runtime)
+	err := module.OnRegister(context.Background(), runtime)
 	if err == nil {
-		t.Fatal("OnRegister error = nil, want missing markdown parser service error")
+		t.Fatal("OnRegister error = nil, want config load failure")
 	}
-	if !strings.Contains(err.Error(), "markdown parser") {
-		t.Fatalf("OnRegister error = %q, want markdown parser context", err.Error())
+	if !strings.Contains(err.Error(), "llmchat load config") {
+		t.Fatalf("OnRegister error = %q, want llmchat load config context", err.Error())
 	}
 }
 
@@ -359,10 +279,7 @@ func TestEditPacerBaseIntervals(t *testing.T) {
 }
 
 func TestStreamProviderReplyUsesMarkdownParserPayload(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	module.dispatcher = &sinkDispatcherStub{}
 	module.parser = markdownParserResultStub{
@@ -418,10 +335,7 @@ func TestStreamProviderReplyUsesMarkdownParserPayload(t *testing.T) {
 }
 
 func TestStreamProviderReplyMarkdownParseErrorFallsBackToPlainText(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	module.dispatcher = &sinkDispatcherStub{}
 	module.parser = markdownParserResultStub{
@@ -469,10 +383,7 @@ func TestStreamProviderReplyMarkdownParseErrorFallsBackToPlainText(t *testing.T)
 }
 
 func TestStreamProviderReplyDedupeConsidersEntities(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	module.dispatcher = &sinkDispatcherStub{}
 	module.parser = &markdownParserSequenceStub{
@@ -561,7 +472,7 @@ func TestEditPacerBackoffAndRateLimit(t *testing.T) {
 }
 
 func TestStreamProviderReplyIntermediateEditsContinueBeyondThreeFailures(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -574,9 +485,6 @@ func TestStreamProviderReplyIntermediateEditsContinueBeyondThreeFailures(t *test
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{
@@ -638,7 +546,7 @@ func TestStreamProviderReplyIntermediateEditsContinueBeyondThreeFailures(t *test
 }
 
 func TestStreamProviderReplyFinalEditRetriesUntilSuccess(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -651,9 +559,6 @@ func TestStreamProviderReplyFinalEditRetriesUntilSuccess(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{
@@ -718,10 +623,7 @@ func TestStreamProviderReplyFinalEditRetriesUntilSuccess(t *testing.T) {
 }
 
 func TestStreamProviderReplyFinalEditHonorsTypedRetryAfter(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{
@@ -791,7 +693,7 @@ func TestStreamProviderReplyFinalEditHonorsTypedRetryAfter(t *testing.T) {
 }
 
 func TestStreamProviderReplyFinalEditExhaustsAtHandlerDeadline(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -804,9 +706,6 @@ func TestStreamProviderReplyFinalEditExhaustsAtHandlerDeadline(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{
@@ -839,7 +738,7 @@ func TestStreamProviderReplyFinalEditExhaustsAtHandlerDeadline(t *testing.T) {
 			{Role: otogi.LLMMessageRoleUser, Content: "u"},
 		},
 	}
-	err = module.streamProviderReply(
+	err := module.streamProviderReply(
 		context.Background(),
 		deliveryCtx,
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
@@ -884,10 +783,7 @@ func TestStreamProviderReplyFinalEditExhaustsAtHandlerDeadline(t *testing.T) {
 }
 
 func TestStreamProviderReplyWarnsOncePerFailureStreak(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{
@@ -957,7 +853,7 @@ func TestStreamProviderReplyWarnsOncePerFailureStreak(t *testing.T) {
 }
 
 func TestStreamProviderReplySkipsFinalEditWhenFinalTextAlreadyDelivered(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -970,9 +866,6 @@ func TestStreamProviderReplySkipsFinalEditWhenFinalTextAlreadyDelivered(t *testi
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{nil, errors.New("unexpected final edit")},
@@ -1014,7 +907,7 @@ func TestStreamProviderReplySkipsFinalEditWhenFinalTextAlreadyDelivered(t *testi
 }
 
 func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1027,9 +920,6 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
@@ -1081,7 +971,7 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 }
 
 func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1094,9 +984,6 @@ func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
@@ -1116,7 +1003,7 @@ func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 			{Role: otogi.LLMMessageRoleUser, Content: "u"},
 		},
 	}
-	err = module.streamProviderReply(
+	err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
@@ -1162,7 +1049,7 @@ func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 }
 
 func TestStreamProviderReplyNoOutputReturnsContextErrorWhenCanceled(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1175,9 +1062,6 @@ func TestStreamProviderReplyNoOutputReturnsContextErrorWhenCanceled(t *testing.T
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
@@ -1192,7 +1076,7 @@ func TestStreamProviderReplyNoOutputReturnsContextErrorWhenCanceled(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = module.streamProviderReply(
+	err := module.streamProviderReply(
 		ctx,
 		ctx,
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
@@ -1221,7 +1105,7 @@ func TestShapeThinkingSummaryNormalizesWhitespace(t *testing.T) {
 }
 
 func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1234,9 +1118,6 @@ func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	req := otogi.LLMGenerateRequest{
 		Model: "gpt-test",
@@ -1245,7 +1126,7 @@ func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
 			{Role: otogi.LLMMessageRoleUser, Content: "u"},
 		},
 	}
-	err = module.streamProviderReply(
+	err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
 		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
@@ -1262,10 +1143,7 @@ func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
 }
 
 func TestFinalizePlaceholderFailureRetriesUntilSuccess(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{
@@ -1284,7 +1162,7 @@ func TestFinalizePlaceholderFailureRetriesUntilSuccess(t *testing.T) {
 	target := otogi.OutboundTarget{
 		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
 	}
-	err = module.finalizePlaceholderFailure(context.Background(), target, "placeholder-1", handlerErr)
+	err := module.finalizePlaceholderFailure(context.Background(), target, "placeholder-1", handlerErr)
 	if !errors.Is(err, handlerErr) {
 		t.Fatalf("error = %v, want handler error", err)
 	}
@@ -1303,10 +1181,7 @@ func TestFinalizePlaceholderFailureRetriesUntilSuccess(t *testing.T) {
 }
 
 func TestFinalizePlaceholderFailureSkipsWhenContextDone(t *testing.T) {
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
@@ -1318,7 +1193,7 @@ func TestFinalizePlaceholderFailureSkipsWhenContextDone(t *testing.T) {
 	target := otogi.OutboundTarget{
 		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
 	}
-	err = module.finalizePlaceholderFailure(ctx, target, "placeholder-1", handlerErr)
+	err := module.finalizePlaceholderFailure(ctx, target, "placeholder-1", handlerErr)
 	if !errors.Is(err, handlerErr) {
 		t.Fatalf("error = %v, want handler error", err)
 	}
@@ -1328,7 +1203,7 @@ func TestFinalizePlaceholderFailureSkipsWhenContextDone(t *testing.T) {
 }
 
 func TestHandleArticleIgnoresBotMessages(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1341,9 +1216,6 @@ func TestHandleArticleIgnoresBotMessages(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	module.dispatcher = &sinkDispatcherStub{}
 	module.memory = &memoryStub{}
@@ -1351,7 +1223,7 @@ func TestHandleArticleIgnoresBotMessages(t *testing.T) {
 		"openai": &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "hello"}}}},
 	}
 
-	err = module.handleArticle(context.Background(), &otogi.Event{
+	err := module.handleArticle(context.Background(), &otogi.Event{
 		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: time.Unix(1, 0).UTC(),
 		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
@@ -1368,7 +1240,7 @@ func TestHandleArticleIgnoresBotMessages(t *testing.T) {
 }
 
 func TestHandleArticleSendsPlaceholderBeforeBuildAndStream(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1381,9 +1253,6 @@ func TestHandleArticleSendsPlaceholderBeforeBuildAndStream(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	callOrder := make([]string, 0, 3)
 	sink := &sinkDispatcherStub{
@@ -1441,7 +1310,7 @@ func TestHandleArticleSendsPlaceholderBeforeBuildAndStream(t *testing.T) {
 }
 
 func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: 90 * time.Second,
 		Agents: []Agent{
 			{
@@ -1454,9 +1323,6 @@ func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	providerCalled := false
 	sink := &sinkDispatcherStub{}
@@ -1483,7 +1349,7 @@ func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err = module.handleArticle(ctx, testLLMChatEvent("Otogi hello"))
+	err := module.handleArticle(ctx, testLLMChatEvent("Otogi hello"))
 	if err == nil {
 		t.Fatal("handleArticle error = nil, want deadline preflight failure")
 	}
@@ -1520,7 +1386,7 @@ func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
 }
 
 func TestHandleArticleBuildFailureEditsPlaceholder(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1533,9 +1399,6 @@ func TestHandleArticleBuildFailureEditsPlaceholder(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	providerCalled := false
 	sink := &sinkDispatcherStub{}
@@ -1552,7 +1415,7 @@ func TestHandleArticleBuildFailureEditsPlaceholder(t *testing.T) {
 		},
 	}
 
-	err = module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
+	err := module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
 	if err == nil {
 		t.Fatal("handleArticle error = nil, want build failure")
 	}
@@ -1577,7 +1440,7 @@ func TestHandleArticleBuildFailureEditsPlaceholder(t *testing.T) {
 }
 
 func TestHandleArticleProviderStartFailureEditsPlaceholder(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1590,9 +1453,6 @@ func TestHandleArticleProviderStartFailureEditsPlaceholder(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
@@ -1612,7 +1472,7 @@ func TestHandleArticleProviderStartFailureEditsPlaceholder(t *testing.T) {
 		},
 	}
 
-	err = module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
+	err := module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
 	if err == nil {
 		t.Fatal("handleArticle error = nil, want stream startup failure")
 	}
@@ -1634,7 +1494,7 @@ func TestHandleArticleProviderStartFailureEditsPlaceholder(t *testing.T) {
 }
 
 func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
-	module, err := New(Config{
+	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
 			{
@@ -1647,9 +1507,6 @@ func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
 
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
@@ -1675,7 +1532,7 @@ func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
 		time.Unix(0, 0).UTC(),
 	})
 
-	err = module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
+	err := module.handleArticle(context.Background(), testLLMChatEvent("Otogi hello"))
 	if err == nil {
 		t.Fatal("handleArticle error = nil, want thinking-only stream failure")
 	}
@@ -1801,23 +1658,6 @@ func (m *memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.Reply
 	return cloned, nil
 }
 
-type providerRegistryStub struct {
-	providers map[string]otogi.LLMProvider
-	err       error
-}
-
-func (r *providerRegistryStub) Resolve(provider string) (otogi.LLMProvider, error) {
-	if r.err != nil {
-		return nil, r.err
-	}
-	resolved, exists := r.providers[provider]
-	if !exists {
-		return nil, fmt.Errorf("provider %s not found", provider)
-	}
-
-	return resolved, nil
-}
-
 type providerStub struct {
 	stream           otogi.LLMStream
 	streamErr        error
@@ -1920,9 +1760,12 @@ func (s *streamStub) Close() error {
 
 type moduleRuntimeStub struct {
 	registry otogi.ServiceRegistry
+	configs  otogi.ConfigRegistry
 }
 
 func (s moduleRuntimeStub) Services() otogi.ServiceRegistry { return s.registry }
+
+func (s moduleRuntimeStub) Config() otogi.ConfigRegistry { return s.configs }
 
 func (moduleRuntimeStub) Subscribe(
 	context.Context,
@@ -1946,6 +1789,12 @@ func (s serviceRegistryStub) Resolve(name string) (any, error) {
 	}
 
 	return value, nil
+}
+
+func newTestModule(cfg Config) *Module {
+	module := New()
+	module.cfg = cfg
+	return module
 }
 
 func sequenceClock(times []time.Time) func() time.Time {

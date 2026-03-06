@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -78,6 +79,51 @@ func TestNewFailsWhenBootstrapServiceRegistrationFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "register bootstrap service") {
 		t.Fatalf("error = %v, want bootstrap registration context", err)
+	}
+}
+
+func TestRegisterModuleExposesConfigRegistryToOnRegister(t *testing.T) {
+	t.Parallel()
+
+	kernelRuntime := newTestKernel(t)
+	rawConfig := json.RawMessage(`{"value":"configured"}`)
+	if err := kernelRuntime.RegisterModuleConfig("config-reader", rawConfig); err != nil {
+		t.Fatalf("RegisterModuleConfig failed: %v", err)
+	}
+
+	configSeen := make(chan string, 1)
+	module := &stubModule{
+		name: "config-reader",
+		onRegister: func(_ context.Context, runtime otogi.ModuleRuntime) error {
+			resolved, err := runtime.Config().Resolve("config-reader")
+			if err != nil {
+				return fmt.Errorf("resolve module config: %w", err)
+			}
+
+			var cfg struct {
+				Value string `json:"value"`
+			}
+			if err := json.Unmarshal(resolved, &cfg); err != nil {
+				return fmt.Errorf("unmarshal module config: %w", err)
+			}
+
+			configSeen <- cfg.Value
+
+			return nil
+		},
+	}
+
+	if err := kernelRuntime.RegisterModule(context.Background(), module); err != nil {
+		t.Fatalf("RegisterModule failed: %v", err)
+	}
+
+	select {
+	case got := <-configSeen:
+		if got != "configured" {
+			t.Fatalf("config value = %q, want configured", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OnRegister config read")
 	}
 }
 

@@ -13,10 +13,7 @@ import (
 func TestRetryEditMessageExhaustsAtMaxAttempts(t *testing.T) {
 	t.Parallel()
 
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	sink := &sinkDispatcherStub{
 		editErrors: make([]error, editRetryMaxAttempts+2),
@@ -32,7 +29,7 @@ func TestRetryEditMessageExhaustsAtMaxAttempts(t *testing.T) {
 		return nil
 	}
 
-	err = module.retryEditMessage(context.Background(), otogi.EditMessageRequest{
+	err := module.retryEditMessage(context.Background(), otogi.EditMessageRequest{
 		MessageID: "msg-1",
 		Text:      "hello",
 	})
@@ -53,10 +50,7 @@ func TestRetryEditMessageExhaustsAtMaxAttempts(t *testing.T) {
 func TestRetryEditMessageSucceedsWithinMaxAttempts(t *testing.T) {
 	t.Parallel()
 
-	module, err := New(validModuleConfig())
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
+	module := newTestModule(validModuleConfig())
 
 	sink := &sinkDispatcherStub{
 		editErrors: []error{

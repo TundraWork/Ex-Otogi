@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"io"
 	"log"
 	"log/slog"
@@ -15,13 +15,8 @@ import (
 
 	driverpkg "ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
-	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/otogi"
 )
-
-var testSleepSigningKey = []byte("0123456789abcdefghijklmnopqrstuv")
-
-const testSleepSigningKeyBase64 = "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY"
 
 func writeConfigFile(t *testing.T, path string, contents string) {
 	t.Helper()
@@ -32,32 +27,6 @@ func writeConfigFile(t *testing.T, path string, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write config file: %v", err)
 	}
-}
-
-func writeLLMConfigFile(t *testing.T, path string) {
-	t.Helper()
-
-	writeConfigFile(t, path, `{
-		"request_timeout":"30s",
-		"providers":{
-			"openai-main":{
-				"type":"openai",
-				"api_key":"sk-test",
-				"base_url":"https://api.openai.com/v1",
-				"openai":{"max_retries":2}
-			}
-		},
-		"agents":[
-			{
-				"name":"Otogi",
-				"description":"Assistant",
-				"provider":"openai-main",
-				"model":"gpt-5-mini",
-				"system_prompt_template":"You are {{.AgentName}}",
-				"request_timeout":"30s"
-			}
-		]
-	}`)
 }
 
 func mustBuiltinDriverRegistry(t *testing.T) *driverpkg.Registry {
@@ -134,9 +103,6 @@ func TestLoadConfig(t *testing.T) {
 					"sources":[{"platform":"telegram","id":"tg-main"}],
 					"sink":{"platform":"telegram","id":"tg-main"}
 				}
-			},
-			"sleep":{
-				"signing_key":"`+testSleepSigningKeyBase64+`"
 			}
 		}`)
 		t.Setenv(envConfigFile, configPath)
@@ -176,9 +142,6 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.routingDefault.Sink.ID != "tg-main" {
 			t.Fatalf("default sink id = %q, want tg-main", cfg.routingDefault.Sink.ID)
 		}
-		if !bytes.Equal(cfg.sleepConfig.SigningKey, testSleepSigningKey) {
-			t.Fatalf("sleep signing key = %q, want configured test key", cfg.sleepConfig.SigningKey)
-		}
 	})
 
 	t.Run("single-driver mode infers default route", func(t *testing.T) {
@@ -190,8 +153,7 @@ func TestLoadConfig(t *testing.T) {
 					"type":"telegram",
 					"config":{"app_id":123456,"app_hash":"sample_hash"}
 				}
-			],
-			"sleep":{"signing_key":"`+testSleepSigningKeyBase64+`"}
+			]
 		}`)
 		t.Setenv(envConfigFile, configPath)
 
@@ -213,8 +175,7 @@ func TestLoadConfig(t *testing.T) {
 		writeConfigFile(t, configPath, `{
 			"drivers":[
 				{"name":"tg-main","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}
-			],
-			"sleep":{"signing_key":"`+testSleepSigningKeyBase64+`"}
+			]
 		}`)
 
 		currentDir, err := os.Getwd()
@@ -248,48 +209,33 @@ func TestLoadConfig(t *testing.T) {
 		}{
 			{
 				name:       "invalid log level",
-				fileJSON:   `{"log_level":"trace","drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
+				fileJSON:   `{"log_level":"trace","drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
 				wantErrSub: "parse log_level",
 			},
 			{
 				name:       "invalid lifecycle timeout",
-				fileJSON:   `{"kernel":{"module_lifecycle_timeout":"bad"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
+				fileJSON:   `{"kernel":{"module_lifecycle_timeout":"bad"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
 				wantErrSub: "parse kernel.module_lifecycle_timeout",
 			},
 			{
 				name:       "invalid handler timeout",
-				fileJSON:   `{"kernel":{"module_handler_timeout":"0s"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
+				fileJSON:   `{"kernel":{"module_handler_timeout":"0s"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
 				wantErrSub: "parse kernel.module_handler_timeout",
 			},
 			{
 				name:       "missing drivers",
-				fileJSON:   `{"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
+				fileJSON:   `{}`,
 				wantErrSub: "at least one enabled driver",
 			},
 			{
 				name:       "legacy telegram section fails with missing drivers",
-				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash"},"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
+				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash"}}`,
 				wantErrSub: "at least one enabled driver",
 			},
 			{
 				name:       "unsupported driver type",
-				fileJSON:   `{"drivers":[{"name":"legacy","type":"discord","config":{"token":"x"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
+				fileJSON:   `{"drivers":[{"name":"legacy","type":"discord","config":{"token":"x"}}]}`,
 				wantErrSub: "unsupported type discord",
-			},
-			{
-				name:       "missing sleep signing key",
-				fileJSON:   `{"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
-				wantErrSub: "parse sleep.signing_key: required",
-			},
-			{
-				name:       "invalid sleep signing key encoding",
-				fileJSON:   `{"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"!!!"}}`,
-				wantErrSub: "parse sleep.signing_key: decode base64url",
-			},
-			{
-				name:       "sleep signing key too short",
-				fileJSON:   `{"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"c2hvcnQ"}}`,
-				wantErrSub: "parse sleep.signing_key: must decode to at least 32 bytes",
 			},
 		}
 
@@ -317,8 +263,7 @@ func TestLoadConfig(t *testing.T) {
 			"drivers":[
 				{"name":"tg-main","type":"telegram","config":{"app_id":1,"app_hash":"hash"}},
 				{"name":"tg-alt","type":"telegram","config":{"app_id":2,"app_hash":"hash2"}}
-			],
-			"sleep":{"signing_key":"`+testSleepSigningKeyBase64+`"}
+			]
 		}`)
 		t.Setenv(envConfigFile, configPath)
 
@@ -338,12 +283,8 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("llm config file from bot config enables llm module", func(t *testing.T) {
-		rootDir := t.TempDir()
-		llmConfigPath := filepath.Join(rootDir, "llm.json")
-		writeLLMConfigFile(t, llmConfigPath)
-
-		configPath := filepath.Join(rootDir, "bot.json")
+	t.Run("module configs are loaded from modules section", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "bot.json")
 		writeConfigFile(t, configPath, `{
 			"drivers":[
 				{
@@ -352,11 +293,9 @@ func TestLoadConfig(t *testing.T) {
 					"config":{"app_id":123456,"app_hash":"sample_hash"}
 				}
 			],
-			"sleep":{
-				"signing_key":"`+testSleepSigningKeyBase64+`"
-			},
-			"llm":{
-				"config_file":"`+llmConfigPath+`"
+			"modules":{
+				"sleep":{"signing_key":"test-key"},
+				"llmchat":{"config_file":"/tmp/llm.json"}
 			}
 		}`)
 		t.Setenv(envConfigFile, configPath)
@@ -365,254 +304,56 @@ func TestLoadConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load config failed: %v", err)
 		}
-		if cfg.llmConfig == nil {
-			t.Fatal("expected llm config to be loaded")
+
+		if len(cfg.moduleConfigs) != 2 {
+			t.Fatalf("module configs len = %d, want 2", len(cfg.moduleConfigs))
 		}
-		if cfg.llmConfigFile != llmConfigPath {
-			t.Fatalf("llm config file = %q, want %q", cfg.llmConfigFile, llmConfigPath)
+		sleepRaw, ok := cfg.moduleConfigs["sleep"]
+		if !ok {
+			t.Fatal("expected sleep module config")
+		}
+		var sleepCfg struct {
+			SigningKey string `json:"signing_key"`
+		}
+		if err := json.Unmarshal(sleepRaw, &sleepCfg); err != nil {
+			t.Fatalf("unmarshal sleep config: %v", err)
+		}
+		if sleepCfg.SigningKey != "test-key" {
+			t.Fatalf("sleep signing_key = %q, want test-key", sleepCfg.SigningKey)
 		}
 
-		moduleNames := configuredRuntimeModuleNames(&cfg)
-		found := false
-		for _, moduleName := range moduleNames {
-			if moduleName == "llmchat" {
-				found = true
-				break
-			}
+		llmchatRaw, ok := cfg.moduleConfigs["llmchat"]
+		if !ok {
+			t.Fatal("expected llmchat module config")
 		}
-		if !found {
-			t.Fatalf("configured modules = %v, want llmchat included", moduleNames)
+		var llmchatCfg struct {
+			ConfigFile string `json:"config_file"`
 		}
-	})
-
-	t.Run("llm config env override takes precedence", func(t *testing.T) {
-		rootDir := t.TempDir()
-		llmConfigFromFile := filepath.Join(rootDir, "llm-file.json")
-		llmConfigFromEnv := filepath.Join(rootDir, "llm-env.json")
-		writeLLMConfigFile(t, llmConfigFromFile)
-		writeLLMConfigFile(t, llmConfigFromEnv)
-
-		configPath := filepath.Join(rootDir, "bot.json")
-		writeConfigFile(t, configPath, `{
-			"drivers":[
-				{
-					"name":"tg-main",
-					"type":"telegram",
-					"config":{"app_id":123456,"app_hash":"sample_hash"}
-				}
-			],
-			"sleep":{
-				"signing_key":"`+testSleepSigningKeyBase64+`"
-			},
-			"llm":{
-				"config_file":"`+llmConfigFromFile+`"
-			}
-		}`)
-		t.Setenv(envConfigFile, configPath)
-		t.Setenv(envLLMConfigFile, llmConfigFromEnv)
-
-		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
-		if err != nil {
-			t.Fatalf("load config failed: %v", err)
+		if err := json.Unmarshal(llmchatRaw, &llmchatCfg); err != nil {
+			t.Fatalf("unmarshal llmchat config: %v", err)
 		}
-		if cfg.llmConfigFile != llmConfigFromEnv {
-			t.Fatalf("llm config file = %q, want env override %q", cfg.llmConfigFile, llmConfigFromEnv)
-		}
-	})
-
-	t.Run("configured llm path missing fails fast", func(t *testing.T) {
-		rootDir := t.TempDir()
-		configPath := filepath.Join(rootDir, "bot.json")
-		missingLLMConfigPath := filepath.Join(rootDir, "missing-llm.json")
-		writeConfigFile(t, configPath, `{
-			"drivers":[
-				{
-					"name":"tg-main",
-					"type":"telegram",
-					"config":{"app_id":123456,"app_hash":"sample_hash"}
-				}
-			],
-			"sleep":{
-				"signing_key":"`+testSleepSigningKeyBase64+`"
-			},
-			"llm":{
-				"config_file":"`+missingLLMConfigPath+`"
-			}
-		}`)
-		t.Setenv(envConfigFile, configPath)
-
-		_, err := loadConfig(mustBuiltinDriverRegistry(t))
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "load llm config file") {
-			t.Fatalf("error = %v, want llm config load failure", err)
-		}
-	})
-
-	t.Run("invalid llm provider profile fails fast", func(t *testing.T) {
-		rootDir := t.TempDir()
-		llmConfigPath := filepath.Join(rootDir, "llm-invalid.json")
-		writeConfigFile(t, llmConfigPath, `{
-			"providers":{
-				"openai-main":{"type":"openai","api_key":""}
-			},
-			"agents":[
-				{
-					"name":"Otogi",
-					"description":"Assistant",
-					"provider":"openai-main",
-					"model":"gpt-5-mini",
-					"system_prompt_template":"You are {{.AgentName}}"
-				}
-			]
-		}`)
-
-		configPath := filepath.Join(rootDir, "bot.json")
-		writeConfigFile(t, configPath, `{
-			"drivers":[
-				{
-					"name":"tg-main",
-					"type":"telegram",
-					"config":{"app_id":123456,"app_hash":"sample_hash"}
-				}
-			],
-			"sleep":{
-				"signing_key":"`+testSleepSigningKeyBase64+`"
-			},
-			"llm":{
-				"config_file":"`+llmConfigPath+`"
-			}
-		}`)
-		t.Setenv(envConfigFile, configPath)
-
-		_, err := loadConfig(mustBuiltinDriverRegistry(t))
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "load llm config file") {
-			t.Fatalf("error = %v, want llm config load failure", err)
+		if llmchatCfg.ConfigFile != "/tmp/llm.json" {
+			t.Fatalf("llmchat config_file = %q, want /tmp/llm.json", llmchatCfg.ConfigFile)
 		}
 	})
 }
 
-func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
+func TestRegisterRuntimeServices(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	t.Run("llm disabled does not register provider registry", func(t *testing.T) {
+	t.Run("registers core services", func(t *testing.T) {
 		kernelRuntime, err := kernel.New()
 		if err != nil {
 			t.Fatalf("new kernel failed: %v", err)
 		}
-		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, driverRuntimes{sinkDispatcher: &sinkDispatcherTestStub{}}, appConfig{})
+		err = registerRuntimeServices(kernelRuntime, logger, driverRuntimes{sinkDispatcher: &sinkDispatcherTestStub{}})
 		if err != nil {
 			t.Fatalf("registerRuntimeServices failed: %v", err)
 		}
 
-		_, resolveErr := kernelRuntime.Services().Resolve(otogi.ServiceLLMProviderRegistry)
-		if !errors.Is(resolveErr, otogi.ErrServiceNotFound) {
-			t.Fatalf("resolve provider registry error = %v, want ErrServiceNotFound", resolveErr)
-		}
-	})
-
-	t.Run("llm enabled registers provider registry with multiple profiles", func(t *testing.T) {
-		kernelRuntime, err := kernel.New()
-		if err != nil {
-			t.Fatalf("new kernel failed: %v", err)
-		}
-		cfg := appConfig{
-			llmConfig: &llmconfig.Config{
-				RequestTimeout: time.Second,
-				Providers: map[string]llmconfig.ProviderProfile{
-					"openai-main": {
-						Type:   "openai",
-						APIKey: "sk-main",
-					},
-					"gemini-main": {
-						Type:   "gemini",
-						APIKey: "gm-main",
-						Gemini: &llmconfig.GeminiOptions{
-							RequestDefaults: llmconfig.GeminiRequestDefaults{
-								GoogleSearch: ptrBool(true),
-							},
-						},
-					},
-				},
-				Agents: []llmconfig.Agent{
-					{
-						Name:                 "Otogi",
-						Description:          "Primary",
-						Provider:             "openai-main",
-						Model:                "gpt-5-mini",
-						SystemPromptTemplate: "You are {{.AgentName}}",
-						RequestTimeout:       time.Second,
-					},
-					{
-						Name:                 "OtogiGemini",
-						Description:          "Gemini",
-						Provider:             "gemini-main",
-						Model:                "gemini-2.5-flash",
-						SystemPromptTemplate: "You are {{.AgentName}}",
-						RequestTimeout:       time.Second,
-					},
-				},
-			},
-		}
-
-		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, driverRuntimes{sinkDispatcher: &sinkDispatcherTestStub{}}, cfg)
-		if err != nil {
-			t.Fatalf("registerRuntimeServices failed: %v", err)
-		}
-
-		resolved, err := kernelRuntime.Services().Resolve(otogi.ServiceLLMProviderRegistry)
-		if err != nil {
-			t.Fatalf("resolve provider registry failed: %v", err)
-		}
-		registry, ok := resolved.(otogi.LLMProviderRegistry)
-		if !ok {
-			t.Fatalf("resolved registry type = %T, want otogi.LLMProviderRegistry", resolved)
-		}
-		if _, err := registry.Resolve("openai-main"); err != nil {
-			t.Fatalf("resolve openai-main failed: %v", err)
-		}
-		if _, err := registry.Resolve("gemini-main"); err != nil {
-			t.Fatalf("resolve gemini-main failed: %v", err)
-		}
-	})
-
-	t.Run("invalid provider config fails fast during service registration", func(t *testing.T) {
-		kernelRuntime, err := kernel.New()
-		if err != nil {
-			t.Fatalf("new kernel failed: %v", err)
-		}
-		cfg := appConfig{
-			llmConfig: &llmconfig.Config{
-				RequestTimeout: time.Second,
-				Providers: map[string]llmconfig.ProviderProfile{
-					"openai-main": {
-						Type:   "openai",
-						APIKey: "",
-					},
-				},
-				Agents: []llmconfig.Agent{
-					{
-						Name:                 "Otogi",
-						Description:          "Primary",
-						Provider:             "openai-main",
-						Model:                "gpt-5-mini",
-						SystemPromptTemplate: "You are {{.AgentName}}",
-						RequestTimeout:       time.Second,
-					},
-				},
-			},
-		}
-
-		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, driverRuntimes{sinkDispatcher: &sinkDispatcherTestStub{}}, cfg)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !strings.Contains(err.Error(), "build llm providers") {
-			t.Fatalf("error = %v, want build llm providers failure", err)
+		_, resolveErr := kernelRuntime.Services().Resolve(otogi.ServiceSinkDispatcher)
+		if resolveErr != nil {
+			t.Fatalf("resolve sink dispatcher failed: %v", resolveErr)
 		}
 	})
 }
@@ -679,10 +420,6 @@ func TestConfigureStdlibLogBridgeKeepsOtherLogsAsError(t *testing.T) {
 }
 
 type sinkDispatcherTestStub struct{}
-
-func ptrBool(value bool) *bool {
-	return &value
-}
 
 func (*sinkDispatcherTestStub) SendMessage(context.Context, otogi.SendMessageRequest) (*otogi.OutboundMessage, error) {
 	return &otogi.OutboundMessage{ID: "msg-1"}, nil

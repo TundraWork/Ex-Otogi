@@ -5,9 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
+	"ex-otogi/pkg/llm"
+	llmconfig "ex-otogi/pkg/llm/config"
+	"ex-otogi/pkg/llm/providers/gemini"
+	"ex-otogi/pkg/llm/providers/openai"
 	"ex-otogi/pkg/otogi"
 )
 
@@ -16,6 +21,12 @@ const llmchatHandlerTimeoutGrace = 5 * time.Second
 const placeholderFailureMessage = "Sorry, I couldn't generate a response right now."
 
 const serviceLogger = "logger"
+
+// fileModuleConfig is the JSON layout for llmchat module configuration.
+type fileModuleConfig struct {
+	// ConfigFile is the path to the LLM configuration file.
+	ConfigFile string `json:"config_file"`
+}
 
 // Module provides keyword-triggered LLM chat behavior.
 type Module struct {
@@ -35,14 +46,10 @@ type Module struct {
 // Option mutates one llmchat module construction input.
 type Option func(*Module)
 
-// New creates one llmchat module instance.
-func New(cfg Config, options ...Option) (*Module, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("new llmchat module: %w", err)
-	}
-
+// New creates one llmchat module instance. Configuration is loaded from
+// the ConfigRegistry during OnRegister.
+func New(options ...Option) *Module {
 	module := &Module{
-		cfg:       cloneConfig(cfg),
 		providers: make(map[string]otogi.LLMProvider),
 		logger:    slog.Default(),
 		clock:     time.Now,
@@ -52,7 +59,7 @@ func New(cfg Config, options ...Option) (*Module, error) {
 		option(module)
 	}
 
-	return module, nil
+	return module
 }
 
 // Name returns the stable module identifier.
@@ -61,38 +68,37 @@ func (m *Module) Name() string {
 }
 
 // Spec declares llmchat article trigger capabilities.
+//
+// Handler subscription is registered imperatively in OnRegister after config
+// is loaded, so the handler timeout can incorporate the configured request timeout.
 func (m *Module) Spec() otogi.ModuleSpec {
-	handlerTimeout := m.cfg.RequestTimeout + llmchatHandlerTimeoutGrace
-
 	return otogi.ModuleSpec{
-		Handlers: []otogi.ModuleHandler{
+		AdditionalCapabilities: []otogi.Capability{
 			{
-				Capability: otogi.Capability{
-					Name:        "llm-chat-trigger",
-					Description: "handles keyword-triggered llm chat from article events",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
-						RequireArticle: true,
-					},
-					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceMemory,
-						otogi.ServiceMarkdownParser,
-						otogi.ServiceLLMProviderRegistry,
-					},
+				Name:        "llm-chat-trigger",
+				Description: "handles keyword-triggered llm chat from article events",
+				Interest: otogi.InterestSet{
+					Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
+					RequireArticle: true,
 				},
-				Subscription: otogi.SubscriptionSpec{
-					Name:           "llmchat-articles",
-					HandlerTimeout: handlerTimeout,
+				RequiredServices: []string{
+					otogi.ServiceSinkDispatcher,
+					otogi.ServiceMemory,
+					otogi.ServiceMarkdownParser,
 				},
-				Handler: m.handleArticle,
 			},
 		},
 	}
 }
 
-// OnRegister resolves module dependencies.
-func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
+// OnRegister loads configuration, builds LLM providers, and resolves dependencies.
+func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) error {
+	cfg, registry, err := m.loadConfig(ctx, runtime)
+	if err != nil {
+		return fmt.Errorf("llmchat load config: %w", err)
+	}
+	m.cfg = cfg
+
 	logger, err := otogi.ResolveAs[*slog.Logger](runtime.Services(), serviceLogger)
 	switch {
 	case err == nil:
@@ -116,14 +122,6 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 	)
 	if err != nil {
 		return fmt.Errorf("llmchat resolve memory service: %w", err)
-	}
-
-	registry, err := otogi.ResolveAs[otogi.LLMProviderRegistry](
-		runtime.Services(),
-		otogi.ServiceLLMProviderRegistry,
-	)
-	if err != nil {
-		return fmt.Errorf("llmchat resolve provider registry: %w", err)
 	}
 
 	markdownParser, err := otogi.ResolveAs[otogi.MarkdownParser](
@@ -157,7 +155,154 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 	m.providerRegistry = registry
 	m.providers = resolvedProviders
 
+	handlerTimeout := m.cfg.RequestTimeout + llmchatHandlerTimeoutGrace
+	if _, err := runtime.Subscribe(ctx, otogi.InterestSet{
+		Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
+		RequireArticle: true,
+	}, otogi.SubscriptionSpec{
+		Name:           "llmchat-articles",
+		HandlerTimeout: handlerTimeout,
+	}, m.handleArticle); err != nil {
+		return fmt.Errorf("llmchat subscribe: %w", err)
+	}
+	if err := runtime.Services().Register(otogi.ServiceLLMProviderRegistry, registry); err != nil {
+		return fmt.Errorf("llmchat register provider registry service: %w", err)
+	}
+
 	return nil
+}
+
+// loadConfig reads the module config from the registry and loads the LLM config file.
+func (m *Module) loadConfig(
+	ctx context.Context,
+	runtime otogi.ModuleRuntime,
+) (Config, otogi.LLMProviderRegistry, error) {
+	moduleCfg, err := otogi.ParseModuleConfig[fileModuleConfig](runtime.Config(), "llmchat")
+	if err != nil {
+		return Config{}, nil, fmt.Errorf("parse module config: %w", err)
+	}
+
+	configFile := strings.TrimSpace(moduleCfg.ConfigFile)
+	if envPath := strings.TrimSpace(os.Getenv("OTOGI_LLM_CONFIG_FILE")); envPath != "" {
+		configFile = envPath
+	}
+	if configFile == "" {
+		return Config{}, nil, fmt.Errorf("config_file is required")
+	}
+
+	llmCfg, err := llmconfig.LoadFile(configFile)
+	if err != nil {
+		return Config{}, nil, fmt.Errorf("load llm config file %s: %w", configFile, err)
+	}
+
+	registry, err := buildProviderRegistry(ctx, llmCfg)
+	if err != nil {
+		return Config{}, nil, err
+	}
+
+	chatCfg := toLLMChatConfig(llmCfg)
+	if err := chatCfg.Validate(); err != nil {
+		return Config{}, nil, fmt.Errorf("validate config: %w", err)
+	}
+
+	return chatCfg, registry, nil
+}
+
+// buildProviderRegistry builds the provider registry from one runtime LLM config file.
+func buildProviderRegistry(
+	ctx context.Context,
+	cfg llmconfig.Config,
+) (otogi.LLMProviderRegistry, error) {
+	providers := make(map[string]otogi.LLMProvider, len(cfg.Providers))
+	for profileKey, profile := range cfg.Providers {
+		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
+		switch providerType {
+		case "openai":
+			openAICfg := openai.ProviderConfig{
+				APIKey:  profile.APIKey,
+				BaseURL: profile.BaseURL,
+			}
+			if profile.OpenAI != nil {
+				openAICfg.Organization = profile.OpenAI.Organization
+				openAICfg.Project = profile.OpenAI.Project
+				openAICfg.MaxRetries = cloneOptionalInt(profile.OpenAI.MaxRetries)
+			}
+
+			provider, err := openai.New(openAICfg)
+			if err != nil {
+				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
+			}
+			providers[profileKey] = provider
+		case "gemini":
+			geminiCfg := gemini.ProviderConfig{
+				APIKey:  profile.APIKey,
+				BaseURL: profile.BaseURL,
+			}
+			if profile.Gemini != nil {
+				geminiCfg.APIVersion = profile.Gemini.APIVersion
+				geminiCfg.GoogleSearch = cloneOptionalBool(profile.Gemini.RequestDefaults.GoogleSearch)
+				geminiCfg.URLContext = cloneOptionalBool(profile.Gemini.RequestDefaults.URLContext)
+				geminiCfg.ThinkingBudget = cloneOptionalInt(profile.Gemini.RequestDefaults.ThinkingBudget)
+				geminiCfg.IncludeThoughts = cloneOptionalBool(profile.Gemini.RequestDefaults.IncludeThoughts)
+				geminiCfg.ThinkingLevel = profile.Gemini.RequestDefaults.ThinkingLevel
+				geminiCfg.ResponseMIMEType = profile.Gemini.RequestDefaults.ResponseMIMEType
+			}
+
+			provider, err := gemini.New(ctx, geminiCfg)
+			if err != nil {
+				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
+			}
+			providers[profileKey] = provider
+		default:
+			return nil, fmt.Errorf("provider profile %s: unsupported type %q", profileKey, profile.Type)
+		}
+	}
+
+	registry, err := llm.NewRegistry(providers)
+	if err != nil {
+		return nil, fmt.Errorf("new llm provider registry: %w", err)
+	}
+
+	return registry, nil
+}
+
+func toLLMChatConfig(cfg llmconfig.Config) Config {
+	agents := make([]Agent, 0, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		agents = append(agents, Agent{
+			Name:                 agent.Name,
+			Description:          agent.Description,
+			Provider:             agent.Provider,
+			Model:                agent.Model,
+			SystemPromptTemplate: agent.SystemPromptTemplate,
+			TemplateVariables:    cloneStringMap(agent.TemplateVariables),
+			MaxOutputTokens:      agent.MaxOutputTokens,
+			Temperature:          agent.Temperature,
+			RequestTimeout:       agent.RequestTimeout,
+			RequestMetadata:      cloneStringMap(agent.RequestMetadata),
+		})
+	}
+
+	return Config{
+		RequestTimeout: cfg.RequestTimeout,
+		Agents:         agents,
+	}
+}
+
+func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneOptionalBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 // OnStart starts the module lifecycle.

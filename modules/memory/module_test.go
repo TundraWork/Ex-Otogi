@@ -1455,10 +1455,15 @@ func newReactionEventAt(
 
 type moduleRuntimeStub struct {
 	registry otogi.ServiceRegistry
+	configs  otogi.ConfigRegistry
 }
 
 func (s moduleRuntimeStub) Services() otogi.ServiceRegistry {
 	return s.registry
+}
+
+func (s moduleRuntimeStub) Config() otogi.ConfigRegistry {
+	return s.configs
 }
 
 func (moduleRuntimeStub) Subscribe(

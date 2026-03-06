@@ -47,6 +47,7 @@ func (m *moduleRecord) closeSubscriptions(ctx context.Context) error {
 type moduleRuntime struct {
 	moduleName    string
 	serviceLookup otogi.ServiceRegistry
+	configLookup  otogi.ConfigRegistry
 	bus           otogi.EventBus
 	record        *moduleRecord
 	defaultSink   *otogi.EventSink
@@ -58,6 +59,11 @@ func (r *moduleRuntime) Services() otogi.ServiceRegistry {
 		base:        r.serviceLookup,
 		defaultSink: cloneSinkRef(r.defaultSink),
 	}
+}
+
+// Config returns the kernel module config registry.
+func (r *moduleRuntime) Config() otogi.ConfigRegistry {
+	return r.configLookup
 }
 
 // Subscribe registers a module-owned subscription after capability checks.
