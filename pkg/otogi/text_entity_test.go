@@ -55,6 +55,89 @@ func TestValidateTextEntities(t *testing.T) {
 			},
 		},
 		{
+			name: "valid heading entity",
+			text: "## heading",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeHeading,
+					Offset: 0,
+					Length: 10,
+					Heading: &TextEntityHeadingMeta{
+						Level: 2,
+					},
+				},
+			},
+		},
+		{
+			name: "valid list item entity",
+			text: "- item",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeListItem,
+					Offset: 0,
+					Length: 6,
+					List: &TextEntityListMeta{
+						Depth:      1,
+						Ordered:    false,
+						ItemNumber: 0,
+					},
+				},
+			},
+		},
+		{
+			name: "valid task item entity",
+			text: "- [x] done",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeTaskItem,
+					Offset: 0,
+					Length: 10,
+					List: &TextEntityListMeta{
+						Depth:      1,
+						Ordered:    false,
+						ItemNumber: 0,
+					},
+					Task: &TextEntityTaskMeta{
+						Checked: true,
+					},
+				},
+			},
+		},
+		{
+			name: "valid table cell entity",
+			text: "| a |",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeTableCell,
+					Offset: 2,
+					Length: 1,
+					Table: &TextEntityTableMeta{
+						GroupID:   "table:1",
+						Row:       0,
+						Column:    0,
+						Header:    true,
+						Alignment: "left",
+					},
+				},
+			},
+		},
+		{
+			name: "valid image entity",
+			text: "![alt](https://example.com)",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeImage,
+					Offset: 0,
+					Length: 27,
+					Image: &TextEntityImageMeta{
+						URL:   "https://example.com",
+						Alt:   "alt",
+						Title: "",
+					},
+				},
+			},
+		},
+		{
 			name: "missing type fails",
 			text: "hello",
 			entities: []TextEntity{
@@ -107,6 +190,92 @@ func TestValidateTextEntities(t *testing.T) {
 			text: "😀",
 			entities: []TextEntity{
 				{Type: TextEntityTypeCustomEmoji, Offset: 0, Length: 1},
+			},
+			wantErr: true,
+		},
+		{
+			name: "heading without metadata fails",
+			text: "## heading",
+			entities: []TextEntity{
+				{Type: TextEntityTypeHeading, Offset: 0, Length: 10},
+			},
+			wantErr: true,
+		},
+		{
+			name: "list depth must be positive",
+			text: "- item",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeList,
+					Offset: 0,
+					Length: 6,
+					List: &TextEntityListMeta{
+						Depth: 0,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "ordered list item requires item number",
+			text: "1. item",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeListItem,
+					Offset: 0,
+					Length: 7,
+					List: &TextEntityListMeta{
+						Depth:      1,
+						Ordered:    true,
+						ItemNumber: 0,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "task item requires task metadata",
+			text: "- [x] done",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeTaskItem,
+					Offset: 0,
+					Length: 10,
+					List: &TextEntityListMeta{
+						Depth: 1,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "table cell requires group id",
+			text: "| a |",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeTableCell,
+					Offset: 2,
+					Length: 1,
+					Table: &TextEntityTableMeta{
+						Row:    0,
+						Column: 0,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "image requires url",
+			text: "![alt]()",
+			entities: []TextEntity{
+				{
+					Type:   TextEntityTypeImage,
+					Offset: 0,
+					Length: 8,
+					Image: &TextEntityImageMeta{
+						Alt: "alt",
+					},
+				},
 			},
 			wantErr: true,
 		},

@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	gotdtelegram "github.com/gotd/td/telegram"
@@ -43,6 +44,8 @@ func (c *GotdClientAdapter) Run(ctx context.Context, fn func(runCtx context.Cont
 type GotdUpdateChannel struct {
 	buffer  int
 	updates chan any
+	mu      sync.RWMutex
+	closed  bool
 }
 
 // NewGotdUpdateChannel creates a stream bridge between gotd updates and adapter source.
@@ -62,11 +65,32 @@ func (s *GotdUpdateChannel) Updates(ctx context.Context) (<-chan any, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("gotd update channel: nil context")
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.updates == nil {
 		return nil, fmt.Errorf("gotd update channel: not initialized")
 	}
 
 	return s.updates, nil
+}
+
+// Close releases the update stream and unblocks stream consumers.
+func (s *GotdUpdateChannel) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+	if s.updates == nil {
+		s.closed = true
+		return nil
+	}
+
+	close(s.updates)
+	s.closed = true
+
+	return nil
 }
 
 // Handle flattens gotd update batches and forwards each unit to the active stream.
@@ -86,8 +110,14 @@ func (s *GotdUpdateChannel) Handle(ctx context.Context, updates tg.UpdatesClass)
 }
 
 func (s *GotdUpdateChannel) publish(ctx context.Context, item gotdUpdateEnvelope) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if s.updates == nil {
 		return fmt.Errorf("publish gotd update: stream not initialized")
+	}
+	if s.closed {
+		return fmt.Errorf("publish gotd update: stream closed")
 	}
 
 	select {

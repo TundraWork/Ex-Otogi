@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -1244,8 +1245,8 @@ func (m DefaultGotdUpdateMapper) rememberMessageReactionCounts(chatID string, me
 
 	key := messageReactionCacheKey(chatID, message.ID)
 	m.reactionCache.mu.Lock()
+	defer m.reactionCache.mu.Unlock()
 	m.reactionCache.byMessage[key] = cloneReactionCounts(counts)
-	m.reactionCache.mu.Unlock()
 }
 
 func (m DefaultGotdUpdateMapper) rememberArticleSnapshot(chatID string, message *tg.Message) {
@@ -1259,11 +1260,11 @@ func (m DefaultGotdUpdateMapper) rememberArticleSnapshot(chatID string, message 
 
 	key := messageReactionCacheKey(chatID, message.ID)
 	m.articleSnapshotCache.mu.Lock()
+	defer m.articleSnapshotCache.mu.Unlock()
 	m.articleSnapshotCache.byArticle[key] = articleSnapshotRecord{
 		fingerprint: articleSnapshotFingerprint(*snapshot),
 		snapshot:    cloneSnapshotPayload(*snapshot),
 	}
-	m.articleSnapshotCache.mu.Unlock()
 }
 
 func (m DefaultGotdUpdateMapper) isArticleSnapshotUnchanged(chatID string, message *tg.Message) (known bool, unchanged bool) {
@@ -1279,8 +1280,8 @@ func (m DefaultGotdUpdateMapper) isArticleSnapshotUnchanged(chatID string, messa
 	current := articleSnapshotFingerprint(*currentSnapshot)
 
 	m.articleSnapshotCache.mu.Lock()
+	defer m.articleSnapshotCache.mu.Unlock()
 	previous, exists := m.articleSnapshotCache.byArticle[key]
-	m.articleSnapshotCache.mu.Unlock()
 	if !exists {
 		return false, false
 	}
@@ -1369,8 +1370,16 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 				"attempt", attempt,
 				"error", err,
 			)
-
-			return gotdReactionDelta{}, nil, false
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || resolveCtx.Err() != nil {
+				break
+			}
+			if attempt >= reactionResolveMaxAttempts {
+				break
+			}
+			if !waitForReactionResolverRetry(resolveCtx) {
+				break
+			}
+			continue
 		}
 		if counts == nil {
 			counts = map[string]int{}
@@ -1400,12 +1409,8 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 		if attempt >= reactionResolveMaxAttempts {
 			break
 		}
-		timer := time.NewTimer(reactionResolveRetryDelay)
-		select {
-		case <-resolveCtx.Done():
-			timer.Stop()
-			attempt = reactionResolveMaxAttempts
-		case <-timer.C:
+		if !waitForReactionResolverRetry(resolveCtx) {
+			break
 		}
 	}
 	if lastCounts != nil {
@@ -1413,6 +1418,25 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 	}
 
 	return gotdReactionDelta{}, nil, false
+}
+
+func waitForReactionResolverRetry(ctx context.Context) bool {
+	timer := time.NewTimer(reactionResolveRetryDelay)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func (m DefaultGotdUpdateMapper) setReactionCountCache(chatID string, messageID int, counts map[string]int) {

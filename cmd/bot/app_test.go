@@ -465,8 +465,11 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	t.Run("llm disabled does not register provider registry", func(t *testing.T) {
-		kernelRuntime := kernel.New()
-		err := registerRuntimeServices(kernelRuntime, logger, &sinkDispatcherTestStub{}, appConfig{})
+		kernelRuntime, err := kernel.New()
+		if err != nil {
+			t.Fatalf("new kernel failed: %v", err)
+		}
+		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, &sinkDispatcherTestStub{}, appConfig{})
 		if err != nil {
 			t.Fatalf("registerRuntimeServices failed: %v", err)
 		}
@@ -478,7 +481,10 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 	})
 
 	t.Run("llm enabled registers provider registry with multiple profiles", func(t *testing.T) {
-		kernelRuntime := kernel.New()
+		kernelRuntime, err := kernel.New()
+		if err != nil {
+			t.Fatalf("new kernel failed: %v", err)
+		}
 		cfg := appConfig{
 			llmConfig: &llmconfig.Config{
 				RequestTimeout: time.Second,
@@ -518,7 +524,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 			},
 		}
 
-		err := registerRuntimeServices(kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
+		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
 		if err != nil {
 			t.Fatalf("registerRuntimeServices failed: %v", err)
 		}
@@ -540,7 +546,10 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 	})
 
 	t.Run("invalid provider config fails fast during service registration", func(t *testing.T) {
-		kernelRuntime := kernel.New()
+		kernelRuntime, err := kernel.New()
+		if err != nil {
+			t.Fatalf("new kernel failed: %v", err)
+		}
 		cfg := appConfig{
 			llmConfig: &llmconfig.Config{
 				RequestTimeout: time.Second,
@@ -563,7 +572,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 			},
 		}
 
-		err := registerRuntimeServices(kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
+		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
 		if err == nil {
 			t.Fatal("expected error")
 		}

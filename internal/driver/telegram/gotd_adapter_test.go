@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,57 @@ func TestGotdUpdateChannelUpdatesNilContext(t *testing.T) {
 	var nilCtx context.Context
 	if _, err := stream.Updates(nilCtx); err == nil {
 		t.Fatal("expected nil context error")
+	}
+}
+
+func TestGotdUpdateChannelCloseClosesUpdates(t *testing.T) {
+	t.Parallel()
+
+	stream, err := NewGotdUpdateChannel(8)
+	if err != nil {
+		t.Fatalf("new gotd update channel failed: %v", err)
+	}
+
+	updates, err := stream.Updates(context.Background())
+	if err != nil {
+		t.Fatalf("open updates stream failed: %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close stream failed: %v", err)
+	}
+
+	select {
+	case _, ok := <-updates:
+		if ok {
+			t.Fatal("updates channel open after Close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for updates channel close")
+	}
+}
+
+func TestGotdUpdateChannelHandleFailsAfterClose(t *testing.T) {
+	t.Parallel()
+
+	stream, err := NewGotdUpdateChannel(8)
+	if err != nil {
+		t.Fatalf("new gotd update channel failed: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close stream failed: %v", err)
+	}
+
+	err = stream.Handle(context.Background(), &tg.Updates{
+		Updates: []tg.UpdateClass{
+			&tg.UpdateDeleteMessages{Messages: []int{1}},
+		},
+	})
+	if err == nil {
+		t.Fatal("handle error = nil, want stream closed error")
+	}
+	if !strings.Contains(err.Error(), "stream closed") {
+		t.Fatalf("error = %q, want stream closed", err)
 	}
 }
 

@@ -16,6 +16,7 @@ const (
 	editRetryBaseInterval          = 500 * time.Millisecond
 	editRetryRateLimitBaseInterval = 2 * time.Second
 	editRetryMinInterval           = 200 * time.Millisecond
+	editRetryMaxAttempts           = 12
 )
 
 var (
@@ -47,6 +48,15 @@ func (m *Module) retryEditMessage(ctx context.Context, request otogi.EditMessage
 		}
 		if errors.Is(editErr, otogi.ErrInvalidOutboundRequest) {
 			return fmt.Errorf("retry edit message %s: non-retryable edit error: %w", request.MessageID, editErr)
+		}
+		if attempts >= editRetryMaxAttempts {
+			m.warnEditRetryExhausted(ctx, request, attempts, editErr)
+			return fmt.Errorf(
+				"retry edit message %s exhausted after %d attempts: %w",
+				request.MessageID,
+				attempts,
+				editErr,
+			)
 		}
 
 		delay := nextRetryDelay(attempts, editErr)

@@ -112,6 +112,7 @@ func (d *SinkDispatcher) SendMessage(
 	if err := request.Validate(); err != nil {
 		return nil, fmt.Errorf("send message validate: %w", err)
 	}
+	request = d.renderReadableSendMessageRequest(ctx, request)
 
 	peer, err := d.resolvePeer(request.Target)
 	if err != nil {
@@ -150,6 +151,7 @@ func (d *SinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMess
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("edit message validate: %w", err)
 	}
+	request = d.renderReadableEditMessageRequest(ctx, request)
 
 	peer, err := d.resolvePeer(request.Target)
 	if err != nil {
@@ -327,6 +329,91 @@ func (d *SinkDispatcher) logOutbound(ctx context.Context, operation string, attr
 	d.cfg.logger.InfoContext(ctx, "telegram outbound operation", values...)
 }
 
+func (d *SinkDispatcher) renderReadableSendMessageRequest(
+	ctx context.Context,
+	request otogi.SendMessageRequest,
+) otogi.SendMessageRequest {
+	rendered, err := renderTelegramReadableText(request.Text, request.Entities)
+	if err != nil {
+		d.logReadableRenderFallback(
+			ctx,
+			"send_message",
+			request.Target,
+			"",
+			err,
+		)
+		return request
+	}
+	if strings.TrimSpace(rendered.renderedText) == "" {
+		d.logReadableRenderFallback(
+			ctx,
+			"send_message",
+			request.Target,
+			"",
+			fmt.Errorf("rendered text is empty"),
+		)
+		return request
+	}
+
+	request.Text = rendered.renderedText
+	request.Entities = rendered.renderedEntities
+	return request
+}
+
+func (d *SinkDispatcher) renderReadableEditMessageRequest(
+	ctx context.Context,
+	request otogi.EditMessageRequest,
+) otogi.EditMessageRequest {
+	rendered, err := renderTelegramReadableText(request.Text, request.Entities)
+	if err != nil {
+		d.logReadableRenderFallback(
+			ctx,
+			"edit_message",
+			request.Target,
+			request.MessageID,
+			err,
+		)
+		return request
+	}
+	if strings.TrimSpace(rendered.renderedText) == "" {
+		d.logReadableRenderFallback(
+			ctx,
+			"edit_message",
+			request.Target,
+			request.MessageID,
+			fmt.Errorf("rendered text is empty"),
+		)
+		return request
+	}
+
+	request.Text = rendered.renderedText
+	request.Entities = rendered.renderedEntities
+	return request
+}
+
+func (d *SinkDispatcher) logReadableRenderFallback(
+	ctx context.Context,
+	operation string,
+	target otogi.OutboundTarget,
+	messageID string,
+	err error,
+) {
+	if d == nil || d.cfg.logger == nil || err == nil {
+		return
+	}
+
+	d.cfg.logger.WarnContext(
+		ctx,
+		"telegram readability render fallback to original payload",
+		"operation", operation,
+		"platform", otogi.PlatformTelegram,
+		"conversation", target.Conversation.ID,
+		"conversation_type", target.Conversation.Type,
+		"message_id", messageID,
+		"error", err,
+	)
+}
+
 func parseMessageID(raw string) (int, error) {
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
@@ -367,6 +454,10 @@ func mapOutboundTextEntities(text string, entities []otogi.TextEntity) ([]tg.Mes
 	utf16Offsets := buildUTF16Offsets(text)
 	converted := make([]tg.MessageEntityClass, 0, len(entities))
 	for index, entity := range entities {
+		if isTelegramUnsupportedMarkdownEntityType(normalizeEntityType(entity.Type)) {
+			continue
+		}
+
 		start := entity.Offset
 		end := entity.Offset + entity.Length
 		if start < 0 || end < start || end >= len(utf16Offsets) {
@@ -508,6 +599,23 @@ func normalizeEntityType(value otogi.TextEntityType) otogi.TextEntityType {
 		return otogi.TextEntityTypeCustomEmoji
 	default:
 		return value
+	}
+}
+
+func isTelegramUnsupportedMarkdownEntityType(value otogi.TextEntityType) bool {
+	switch value {
+	case otogi.TextEntityTypeHeading,
+		otogi.TextEntityTypeList,
+		otogi.TextEntityTypeListItem,
+		otogi.TextEntityTypeTaskItem,
+		otogi.TextEntityTypeThematicBreak,
+		otogi.TextEntityTypeTable,
+		otogi.TextEntityTypeTableRow,
+		otogi.TextEntityTypeTableCell,
+		otogi.TextEntityTypeImage:
+		return true
+	default:
+		return false
 	}
 }
 

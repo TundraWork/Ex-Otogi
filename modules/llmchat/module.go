@@ -24,6 +24,7 @@ type Module struct {
 	dispatcher otogi.SinkDispatcher
 	memory     otogi.MemoryService
 	providers  map[string]otogi.LLMProvider
+	parser     otogi.MarkdownParser
 
 	providerRegistry otogi.LLMProviderRegistry
 	logger           *slog.Logger
@@ -76,6 +77,7 @@ func (m *Module) Spec() otogi.ModuleSpec {
 					RequiredServices: []string{
 						otogi.ServiceSinkDispatcher,
 						otogi.ServiceMemory,
+						otogi.ServiceMarkdownParser,
 						otogi.ServiceLLMProviderRegistry,
 					},
 				},
@@ -124,6 +126,14 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 		return fmt.Errorf("llmchat resolve provider registry: %w", err)
 	}
 
+	markdownParser, err := otogi.ResolveAs[otogi.MarkdownParser](
+		runtime.Services(),
+		otogi.ServiceMarkdownParser,
+	)
+	if err != nil {
+		return fmt.Errorf("llmchat resolve markdown parser: %w", err)
+	}
+
 	resolvedProviders := make(map[string]otogi.LLMProvider)
 	for _, agent := range m.cfg.Agents {
 		providerName := strings.TrimSpace(agent.Provider)
@@ -143,6 +153,7 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 
 	m.dispatcher = dispatcher
 	m.memory = memoryService
+	m.parser = markdownParser
 	m.providerRegistry = registry
 	m.providers = resolvedProviders
 

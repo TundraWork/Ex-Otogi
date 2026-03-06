@@ -94,7 +94,7 @@ func TestNewGeminiProviderConfigValidation(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			provider, err := New(testCase.cfg)
+			provider, err := New(context.Background(), testCase.cfg)
 			if testCase.wantErrSubstring != "" {
 				if err == nil {
 					t.Fatal("expected error")
@@ -111,6 +111,19 @@ func TestNewGeminiProviderConfigValidation(t *testing.T) {
 				t.Fatal("expected provider instance")
 			}
 		})
+	}
+}
+
+func TestNewGeminiProviderNilContext(t *testing.T) {
+	t.Parallel()
+
+	var nilCtx context.Context
+	_, err := New(nilCtx, ProviderConfig{APIKey: "gm-test"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "nil context") {
+		t.Fatalf("error = %v, want nil context error", err)
 	}
 }
 

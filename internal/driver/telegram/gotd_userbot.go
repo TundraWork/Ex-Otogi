@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -18,6 +19,10 @@ type GotdUserbotClient interface {
 type GotdRawUpdateStream interface {
 	// Updates returns a channel of raw gotd updates bound to ctx lifetime.
 	Updates(ctx context.Context) (<-chan any, error)
+}
+
+type gotdRawUpdateStreamCloser interface {
+	Close() error
 }
 
 // GotdUpdateMapper maps raw gotd updates into adapter Update DTOs.
@@ -77,7 +82,23 @@ func (s *GotdUserbotSource) Consume(ctx context.Context, handler UpdateHandler) 
 		return fmt.Errorf("consume gotd userbot updates: nil handler")
 	}
 
-	err := s.client.Run(ctx, func(runCtx context.Context) error {
+	err := s.client.Run(ctx, func(runCtx context.Context) (consumeErr error) {
+		if closer, ok := s.stream.(gotdRawUpdateStreamCloser); ok {
+			defer func() {
+				closeErr := closer.Close()
+				if closeErr == nil {
+					return
+				}
+
+				wrappedCloseErr := fmt.Errorf("close gotd updates stream: %w", closeErr)
+				if consumeErr == nil {
+					consumeErr = wrappedCloseErr
+					return
+				}
+				consumeErr = errors.Join(consumeErr, wrappedCloseErr)
+			}()
+		}
+
 		updates, err := s.stream.Updates(runCtx)
 		if err != nil {
 			return fmt.Errorf("get gotd updates stream: %w", err)
@@ -95,14 +116,33 @@ func (s *GotdUserbotSource) Consume(ctx context.Context, handler UpdateHandler) 
 		}
 
 		for {
+			if reactionPoller == nil {
+				select {
+				case <-runCtx.Done():
+					return nil
+				case rawUpdate, ok := <-updates:
+					if !ok {
+						return nil
+					}
+
+					mapped, mapErr := s.mapUpdateSafely(runCtx, rawUpdate)
+					if mapErr != nil {
+						return fmt.Errorf("map gotd update: %w", mapErr)
+					}
+					for _, update := range mapped {
+						if err := handler(runCtx, update); err != nil {
+							return fmt.Errorf("consume gotd update %s: %w", update.Type, err)
+						}
+					}
+				}
+
+				continue
+			}
+
 			select {
 			case <-runCtx.Done():
 				return nil
 			case <-pollTick:
-				if reactionPoller == nil {
-					continue
-				}
-
 				polled, pollErr := reactionPoller.PollReactionUpdates(runCtx)
 				if pollErr != nil {
 					return fmt.Errorf("poll gotd reaction updates: %w", pollErr)

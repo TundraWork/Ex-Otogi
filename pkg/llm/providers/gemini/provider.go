@@ -96,7 +96,11 @@ type requestOptions struct {
 }
 
 // New builds one Gemini API provider instance.
-func New(cfg ProviderConfig) (*Provider, error) {
+func New(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("new gemini provider: nil context")
+	}
+
 	normalized, err := normalizeProviderConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new gemini provider: %w", err)
@@ -111,7 +115,7 @@ func New(cfg ProviderConfig) (*Provider, error) {
 		},
 	}
 
-	client, err := genai.NewClient(context.Background(), clientConfig)
+	client, err := genai.NewClient(ctx, clientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("new gemini client: %w", err)
 	}

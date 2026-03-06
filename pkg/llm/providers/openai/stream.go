@@ -97,16 +97,16 @@ func (s *openAIStream) nextEvent(ctx context.Context) (responses.ResponseStreamE
 		s.mu.Unlock()
 		return responses.ResponseStreamEventUnion{}, io.EOF
 	}
+	s.mu.Unlock()
 
 	if !stream.Next() {
 		err := stream.Err()
-		if err == nil {
-			s.finished = true
-			s.mu.Unlock()
-			return responses.ResponseStreamEventUnion{}, io.EOF
-		}
+		s.mu.Lock()
 		s.finished = true
 		s.mu.Unlock()
+		if err == nil {
+			return responses.ResponseStreamEventUnion{}, io.EOF
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return responses.ResponseStreamEventUnion{}, fmt.Errorf("openai stream context: %w", ctxErr)
 		}
@@ -118,7 +118,14 @@ func (s *openAIStream) nextEvent(ctx context.Context) (responses.ResponseStreamE
 	}
 
 	event := stream.Current()
+
+	s.mu.Lock()
+	if s.closed || s.finished || s.stream == nil {
+		s.mu.Unlock()
+		return responses.ResponseStreamEventUnion{}, io.EOF
+	}
 	s.mu.Unlock()
+
 	return event, nil
 }
 

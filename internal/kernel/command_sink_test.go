@@ -72,7 +72,7 @@ func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) 
 	}
 }
 
-func TestCommandDerivingSinkPublishesDerivedEditedCommandEvent(t *testing.T) {
+func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testing.T) {
 	t.Parallel()
 
 	bus := NewEventBus(8, 1, time.Second, nil)
@@ -80,13 +80,26 @@ func TestCommandDerivingSinkPublishesDerivedEditedCommandEvent(t *testing.T) {
 		_ = bus.Close(context.Background())
 	})
 
-	received := make(chan *otogi.Event, 1)
+	editedEvents := make(chan *otogi.Event, 1)
+	commandEvents := make(chan *otogi.Event, 1)
 	_, err := bus.Subscribe(
+		context.Background(),
+		otogi.InterestSet{Kinds: []otogi.EventKind{otogi.EventKindArticleEdited}},
+		otogi.SubscriptionSpec{Name: "edited-events", Buffer: 2, Workers: 1},
+		func(_ context.Context, event *otogi.Event) error {
+			editedEvents <- event
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("subscribe edited events failed: %v", err)
+	}
+	_, err = bus.Subscribe(
 		context.Background(),
 		otogi.InterestSet{Kinds: []otogi.EventKind{otogi.EventKindSystemCommandReceived}},
 		otogi.SubscriptionSpec{Name: "command-events", Buffer: 2, Workers: 1},
 		func(_ context.Context, event *otogi.Event) error {
-			received <- event
+			commandEvents <- event
 			return nil
 		},
 	)
@@ -110,21 +123,18 @@ func TestCommandDerivingSinkPublishesDerivedEditedCommandEvent(t *testing.T) {
 		t.Fatalf("publish failed: %v", err)
 	}
 
-	commandEvent := waitEvent(t, received)
-	if commandEvent.Kind != otogi.EventKindSystemCommandReceived {
-		t.Fatalf("kind = %s, want %s", commandEvent.Kind, otogi.EventKindSystemCommandReceived)
+	editedEvent := waitEvent(t, editedEvents)
+	if editedEvent.Kind != otogi.EventKindArticleEdited {
+		t.Fatalf("kind = %s, want %s", editedEvent.Kind, otogi.EventKindArticleEdited)
 	}
-	if commandEvent.Command == nil {
-		t.Fatal("expected command payload")
+	if editedEvent.Mutation == nil || editedEvent.Mutation.TargetArticleID != "msg-9" {
+		t.Fatalf("mutation = %+v, want target article id msg-9", editedEvent.Mutation)
 	}
-	if commandEvent.Command.Name != "history" {
-		t.Fatalf("command name = %q, want history", commandEvent.Command.Name)
-	}
-	if commandEvent.Command.SourceEventKind != otogi.EventKindArticleEdited {
-		t.Fatalf("source event kind = %q, want %q", commandEvent.Command.SourceEventKind, otogi.EventKindArticleEdited)
-	}
-	if commandEvent.Article == nil || commandEvent.Article.ID != "msg-9" {
-		t.Fatalf("article = %+v, want id msg-9", commandEvent.Article)
+
+	select {
+	case event := <-commandEvents:
+		t.Fatalf("unexpected derived command event from edit: %+v", event)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 
@@ -239,7 +249,7 @@ func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *te
 func TestKernelRegisterModuleRejectsDuplicateCommandAcrossModules(t *testing.T) {
 	t.Parallel()
 
-	kernelRuntime := New()
+	kernelRuntime := newTestKernel(t)
 	moduleA := &stubModule{
 		name: "command-a",
 		spec: otogi.ModuleSpec{

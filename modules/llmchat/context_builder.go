@@ -131,6 +131,9 @@ func renderSystemPrompt(agent Agent, event *otogi.Event, now time.Time) (string,
 		"EventConversationID": event.Conversation.ID,
 	}
 	for key, value := range agent.TemplateVariables {
+		if _, exists := data[key]; exists {
+			continue
+		}
 		data[key] = value
 	}
 

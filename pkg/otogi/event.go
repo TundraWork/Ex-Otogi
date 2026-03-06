@@ -202,6 +202,24 @@ const (
 	TextEntityTypeSpoiler TextEntityType = "spoiler"
 	// TextEntityTypeCustomEmoji identifies custom emoji entity rendering.
 	TextEntityTypeCustomEmoji TextEntityType = "custom_emoji"
+	// TextEntityTypeHeading identifies one markdown heading line.
+	TextEntityTypeHeading TextEntityType = "heading"
+	// TextEntityTypeList identifies one markdown list region.
+	TextEntityTypeList TextEntityType = "list"
+	// TextEntityTypeListItem identifies one markdown list item line.
+	TextEntityTypeListItem TextEntityType = "list_item"
+	// TextEntityTypeTaskItem identifies one markdown task-list item line.
+	TextEntityTypeTaskItem TextEntityType = "task_item"
+	// TextEntityTypeThematicBreak identifies one markdown thematic break line.
+	TextEntityTypeThematicBreak TextEntityType = "thematic_break"
+	// TextEntityTypeTable identifies one markdown table region.
+	TextEntityTypeTable TextEntityType = "table"
+	// TextEntityTypeTableRow identifies one markdown table row line.
+	TextEntityTypeTableRow TextEntityType = "table_row"
+	// TextEntityTypeTableCell identifies one markdown table cell region.
+	TextEntityTypeTableCell TextEntityType = "table_cell"
+	// TextEntityTypeImage identifies one markdown image reference.
+	TextEntityTypeImage TextEntityType = "image"
 )
 
 // TextEntity marks a rich text fragment.
@@ -222,6 +240,62 @@ type TextEntity struct {
 	CustomEmojiID string
 	// Collapsed indicates whether blockquote entities should be collapsed by default.
 	Collapsed bool
+	// Heading stores heading-specific metadata for heading entities.
+	Heading *TextEntityHeadingMeta
+	// List stores list-specific metadata for list and list_item entities.
+	List *TextEntityListMeta
+	// Task stores task-list-specific metadata for task_item entities.
+	Task *TextEntityTaskMeta
+	// Table stores table-specific metadata for table family entities.
+	Table *TextEntityTableMeta
+	// Image stores image-specific metadata for image entities.
+	Image *TextEntityImageMeta
+}
+
+// TextEntityHeadingMeta stores heading-specific entity metadata.
+type TextEntityHeadingMeta struct {
+	// Level is the markdown heading depth (1..6).
+	Level int
+}
+
+// TextEntityListMeta stores list-specific entity metadata.
+type TextEntityListMeta struct {
+	// Depth is the 1-based nesting depth of the list structure.
+	Depth int
+	// Ordered reports whether the list item/list uses ordered numbering.
+	Ordered bool
+	// ItemNumber is the 1-based visible number for ordered list items.
+	ItemNumber int
+}
+
+// TextEntityTaskMeta stores task-list-specific entity metadata.
+type TextEntityTaskMeta struct {
+	// Checked reports whether the task item is checked.
+	Checked bool
+}
+
+// TextEntityTableMeta stores table-specific entity metadata.
+type TextEntityTableMeta struct {
+	// GroupID is the stable table grouping identifier for related rows/cells.
+	GroupID string
+	// Row is the 0-based row index within one grouped table.
+	Row int
+	// Column is the 0-based column index within one grouped table.
+	Column int
+	// Header reports whether this row/cell belongs to table header content.
+	Header bool
+	// Alignment is one of: none, left, center, right.
+	Alignment string
+}
+
+// TextEntityImageMeta stores image-specific entity metadata.
+type TextEntityImageMeta struct {
+	// URL is the image destination URL.
+	URL string
+	// Title is the optional image title text.
+	Title string
+	// Alt is the optional image alternate text.
+	Alt string
 }
 
 // ValidateTextEntities validates rich-text entities against one article text body.
@@ -266,6 +340,75 @@ func ValidateTextEntities(text string, entities []TextEntity) error {
 		case TextEntityTypeCustomEmoji:
 			if entity.CustomEmojiID == "" {
 				return fmt.Errorf("entity[%d]: custom_emoji requires custom_emoji_id", index)
+			}
+		case TextEntityTypeHeading:
+			if entity.Heading == nil {
+				return fmt.Errorf("entity[%d]: heading requires heading metadata", index)
+			}
+			if entity.Heading.Level < 1 || entity.Heading.Level > 6 {
+				return fmt.Errorf("entity[%d]: heading level %d must be within [1,6]", index, entity.Heading.Level)
+			}
+		case TextEntityTypeList:
+			if entity.List == nil {
+				return fmt.Errorf("entity[%d]: list requires list metadata", index)
+			}
+			if entity.List.Depth < 1 {
+				return fmt.Errorf("entity[%d]: list depth %d must be >= 1", index, entity.List.Depth)
+			}
+		case TextEntityTypeListItem:
+			if entity.List == nil {
+				return fmt.Errorf("entity[%d]: list_item requires list metadata", index)
+			}
+			if entity.List.Depth < 1 {
+				return fmt.Errorf("entity[%d]: list_item depth %d must be >= 1", index, entity.List.Depth)
+			}
+			if entity.List.Ordered && entity.List.ItemNumber < 1 {
+				return fmt.Errorf(
+					"entity[%d]: list_item ordered item_number %d must be >= 1",
+					index,
+					entity.List.ItemNumber,
+				)
+			}
+		case TextEntityTypeTaskItem:
+			if entity.Task == nil {
+				return fmt.Errorf("entity[%d]: task_item requires task metadata", index)
+			}
+			if entity.List == nil {
+				return fmt.Errorf("entity[%d]: task_item requires list metadata", index)
+			}
+			if entity.List.Depth < 1 {
+				return fmt.Errorf("entity[%d]: task_item depth %d must be >= 1", index, entity.List.Depth)
+			}
+		case TextEntityTypeTable, TextEntityTypeTableRow, TextEntityTypeTableCell:
+			if entity.Table == nil {
+				return fmt.Errorf("entity[%d]: %s requires table metadata", index, entity.Type)
+			}
+			if entity.Table.GroupID == "" {
+				return fmt.Errorf("entity[%d]: %s requires table group_id", index, entity.Type)
+			}
+			if entity.Type == TextEntityTypeTableCell {
+				if entity.Table.Row < 0 {
+					return fmt.Errorf("entity[%d]: table_cell row %d must be >= 0", index, entity.Table.Row)
+				}
+				if entity.Table.Column < 0 {
+					return fmt.Errorf(
+						"entity[%d]: table_cell column %d must be >= 0",
+						index,
+						entity.Table.Column,
+					)
+				}
+			}
+			if entity.Type == TextEntityTypeTableRow {
+				if entity.Table.Row < 0 {
+					return fmt.Errorf("entity[%d]: table_row row %d must be >= 0", index, entity.Table.Row)
+				}
+			}
+		case TextEntityTypeImage:
+			if entity.Image == nil {
+				return fmt.Errorf("entity[%d]: image requires image metadata", index)
+			}
+			if entity.Image.URL == "" {
+				return fmt.Errorf("entity[%d]: image requires image url", index)
 			}
 		default:
 		}
@@ -473,7 +616,7 @@ func validatePayloadByKind(e *Event) error {
 			return fmt.Errorf("%w: article.created requires article id", ErrInvalidEvent)
 		}
 		if err := ValidateTextEntities(e.Article.Text, e.Article.Entities); err != nil {
-			return fmt.Errorf("%w: article.created invalid entities: %w", ErrInvalidEvent, err)
+			return newInvalidEventDetailError("article.created invalid entities", err)
 		}
 	case EventKindArticleEdited, EventKindArticleRetracted:
 		if e.Mutation == nil {
@@ -483,7 +626,7 @@ func validatePayloadByKind(e *Event) error {
 			return fmt.Errorf("%w: article mutation event requires target article id", ErrInvalidEvent)
 		}
 		if err := validateMutationSnapshotEntities(e.Mutation); err != nil {
-			return fmt.Errorf("%w: mutation invalid entities: %w", ErrInvalidEvent, err)
+			return newInvalidEventDetailError("mutation invalid entities", err)
 		}
 	case EventKindArticleReactionAdded, EventKindArticleReactionRemoved:
 		if e.Reaction == nil {
@@ -497,7 +640,7 @@ func validatePayloadByKind(e *Event) error {
 			return fmt.Errorf("%w: command event requires command payload", ErrInvalidEvent)
 		}
 		if err := e.Command.Validate(); err != nil {
-			return fmt.Errorf("%w: command event invalid command payload: %w", ErrInvalidEvent, err)
+			return newInvalidEventDetailError("command event invalid command payload", err)
 		}
 		if e.Article == nil {
 			return fmt.Errorf("%w: command event requires article payload", ErrInvalidEvent)
@@ -506,7 +649,7 @@ func validatePayloadByKind(e *Event) error {
 			return fmt.Errorf("%w: command event requires article id", ErrInvalidEvent)
 		}
 		if err := ValidateTextEntities(e.Article.Text, e.Article.Entities); err != nil {
-			return fmt.Errorf("%w: command event invalid article entities: %w", ErrInvalidEvent, err)
+			return newInvalidEventDetailError("command event invalid article entities", err)
 		}
 	case EventKindMemberJoined, EventKindMemberLeft, EventKindRoleUpdated, EventKindChatMigrated:
 		if e.StateChange == nil {
@@ -517,6 +660,30 @@ func validatePayloadByKind(e *Event) error {
 	}
 
 	return nil
+}
+
+type invalidEventDetailError struct {
+	detail string
+	cause  error
+}
+
+func newInvalidEventDetailError(detail string, cause error) error {
+	if cause == nil {
+		return fmt.Errorf("%w: %s", ErrInvalidEvent, detail)
+	}
+
+	return invalidEventDetailError{
+		detail: detail,
+		cause:  cause,
+	}
+}
+
+func (e invalidEventDetailError) Error() string {
+	return fmt.Sprintf("%v: %s: %v", ErrInvalidEvent, e.detail, e.cause)
+}
+
+func (e invalidEventDetailError) Unwrap() []error {
+	return []error{ErrInvalidEvent, e.cause}
 }
 
 func validateMutationSnapshotEntities(mutation *ArticleMutation) error {

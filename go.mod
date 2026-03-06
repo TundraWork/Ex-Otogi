@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/gotd/td v0.139.0
 	github.com/openai/openai-go/v3 v3.24.0
+	github.com/yuin/goldmark v1.7.16
 	go.uber.org/goleak v1.3.0
 	google.golang.org/genai v1.47.0
 )

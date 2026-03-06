@@ -240,6 +240,196 @@ func TestOutboundDispatcherEditMessage(t *testing.T) {
 	}
 }
 
+func TestOutboundDispatcherSendMessageAppliesReadableRender(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		&tg.InputPeerChat{ChatID: 42},
+	)
+
+	rpc := &stubOutboundRPC{sendID: 901}
+	dispatcher, err := newOutboundDispatcherWithRPC(rpc, cache)
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+
+	request := otogi.SendMessageRequest{
+		Target: otogi.OutboundTarget{
+			Conversation: otogi.Conversation{
+				ID:   "42",
+				Type: otogi.ConversationTypeGroup,
+			},
+		},
+		Text: "# Hi",
+		Entities: []otogi.TextEntity{
+			{
+				Type:   otogi.TextEntityTypeHeading,
+				Offset: 0,
+				Length: 4,
+				Heading: &otogi.TextEntityHeadingMeta{
+					Level: 1,
+				},
+			},
+			{
+				Type:   otogi.TextEntityTypeBold,
+				Offset: 2,
+				Length: 2,
+			},
+		},
+	}
+
+	if _, err := dispatcher.SendMessage(context.Background(), request); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	if rpc.lastSendRequest.Text != "Hi" {
+		t.Fatalf("rendered text = %q, want %q", rpc.lastSendRequest.Text, "Hi")
+	}
+	bold, ok := findEntityByType(rpc.lastSendRequest.Entities, otogi.TextEntityTypeBold)
+	if !ok {
+		t.Fatal("bold entity not found")
+	}
+	if bold.Offset != 0 || bold.Length != 2 {
+		t.Fatalf("bold range = [%d,%d), want [0,2)", bold.Offset, bold.Offset+bold.Length)
+	}
+}
+
+func TestOutboundDispatcherEditMessageAppliesReadableRender(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		&tg.InputPeerChat{ChatID: 42},
+	)
+
+	rpc := &stubOutboundRPC{}
+	dispatcher, err := newOutboundDispatcherWithRPC(rpc, cache)
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+
+	request := otogi.EditMessageRequest{
+		Target: otogi.OutboundTarget{
+			Conversation: otogi.Conversation{
+				ID:   "42",
+				Type: otogi.ConversationTypeGroup,
+			},
+		},
+		MessageID: "10",
+		Text:      "| h1 | h2 |\n| --- | :---: |\n| x | y |",
+		Entities: []otogi.TextEntity{
+			{
+				Type:   otogi.TextEntityTypeTable,
+				Offset: 0,
+				Length: runeLen("| h1 | h2 |\n| --- | :---: |\n| x | y |"),
+				Table: &otogi.TextEntityTableMeta{
+					GroupID: "table:1",
+				},
+			},
+			{
+				Type:   otogi.TextEntityTypeTableRow,
+				Offset: 0,
+				Length: 11,
+				Table: &otogi.TextEntityTableMeta{
+					GroupID: "table:1",
+					Row:     0,
+					Header:  true,
+				},
+			},
+			{
+				Type:   otogi.TextEntityTypeTableRow,
+				Offset: runeIndex("| h1 | h2 |\n| --- | :---: |\n| x | y |", "| x | y |"),
+				Length: 9,
+				Table: &otogi.TextEntityTableMeta{
+					GroupID: "table:1",
+					Row:     1,
+					Header:  false,
+				},
+			},
+			{
+				Type:   otogi.TextEntityTypeBold,
+				Offset: runeIndex("| h1 | h2 |\n| --- | :---: |\n| x | y |", "x"),
+				Length: 1,
+			},
+		},
+	}
+
+	if err := dispatcher.EditMessage(context.Background(), request); err != nil {
+		t.Fatalf("EditMessage failed: %v", err)
+	}
+
+	if rpc.lastEditRequest.Text != "h1 | h2\nx | y" {
+		t.Fatalf("rendered text = %q, want %q", rpc.lastEditRequest.Text, "h1 | h2\nx | y")
+	}
+	bold, ok := findEntityByType(rpc.lastEditRequest.Entities, otogi.TextEntityTypeBold)
+	if !ok {
+		t.Fatal("bold entity not found")
+	}
+	if bold.Offset != 8 || bold.Length != 1 {
+		t.Fatalf("bold range = [%d,%d), want [8,9)", bold.Offset, bold.Offset+bold.Length)
+	}
+}
+
+func TestOutboundDispatcherSendMessageReadabilityFallbackUsesOriginalPayload(t *testing.T) {
+	t.Parallel()
+
+	cache := NewPeerCache()
+	cache.RememberConversation(
+		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		&tg.InputPeerChat{ChatID: 42},
+	)
+
+	rpc := &stubOutboundRPC{sendID: 901}
+	dispatcher, err := newOutboundDispatcherWithRPC(rpc, cache)
+	if err != nil {
+		t.Fatalf("new dispatcher failed: %v", err)
+	}
+
+	request := otogi.SendMessageRequest{
+		Target: otogi.OutboundTarget{
+			Conversation: otogi.Conversation{
+				ID:   "42",
+				Type: otogi.ConversationTypeGroup,
+			},
+		},
+		Text: "![alt](https://a)",
+		Entities: []otogi.TextEntity{
+			{
+				Type:   otogi.TextEntityTypeImage,
+				Offset: 0,
+				Length: 17,
+				Image: &otogi.TextEntityImageMeta{
+					URL: "https://a",
+					Alt: "alt",
+				},
+			},
+			{
+				Type:   otogi.TextEntityTypeImage,
+				Offset: 2,
+				Length: 5,
+				Image: &otogi.TextEntityImageMeta{
+					URL: "https://b",
+					Alt: "dup",
+				},
+			},
+		},
+	}
+
+	if _, err := dispatcher.SendMessage(context.Background(), request); err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	if rpc.lastSendRequest.Text != request.Text {
+		t.Fatalf("fallback text = %q, want %q", rpc.lastSendRequest.Text, request.Text)
+	}
+	if len(rpc.lastSendRequest.Entities) != len(request.Entities) {
+		t.Fatalf("fallback entities len = %d, want %d", len(rpc.lastSendRequest.Entities), len(request.Entities))
+	}
+}
+
 func TestOutboundDispatcherEditMessageMapsFloodWaitToTypedRateLimit(t *testing.T) {
 	t.Parallel()
 
@@ -688,6 +878,21 @@ func TestMapOutboundTextEntities(t *testing.T) {
 				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 6},
 			},
 			wantErr: true,
+		},
+		{
+			name: "markdown structural entity skipped",
+			text: "## hello",
+			entities: []otogi.TextEntity{
+				{
+					Type:   otogi.TextEntityTypeHeading,
+					Offset: 0,
+					Length: 8,
+					Heading: &otogi.TextEntityHeadingMeta{
+						Level: 2,
+					},
+				},
+			},
+			wantLen: 0,
 		},
 		{
 			name: "unsupported type fails",

@@ -38,7 +38,7 @@ func TestRegisterModuleDependencyValidation(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			kernelRuntime := New()
+			kernelRuntime := newTestKernel(t)
 			if testCase.registerLogger {
 				if err := kernelRuntime.RegisterService("logger", struct{}{}); err != nil {
 					t.Fatalf("register logger service failed: %v", err)
@@ -64,11 +64,28 @@ func TestRegisterModuleDependencyValidation(t *testing.T) {
 	}
 }
 
+func TestNewFailsWhenBootstrapServiceRegistrationFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(withBootstrapServicesForTest(
+		bootstrapServiceRegistration{
+			name:    otogi.ServiceCommandCatalog,
+			service: nil,
+		},
+	))
+	if err == nil {
+		t.Fatal("expected constructor error")
+	}
+	if !strings.Contains(err.Error(), "register bootstrap service") {
+		t.Fatalf("error = %v, want bootstrap registration context", err)
+	}
+}
+
 // TestKernelRunCallsModuleLifecycle verifies lifecycle hook execution during run/shutdown.
 func TestKernelRunCallsModuleLifecycle(t *testing.T) {
 	t.Parallel()
 
-	kernelRuntime := New()
+	kernelRuntime := newTestKernel(t)
 	if err := kernelRuntime.RegisterService("logger", struct{}{}); err != nil {
 		t.Fatalf("register service failed: %v", err)
 	}
@@ -124,7 +141,7 @@ func TestKernelRunCallsModuleLifecycle(t *testing.T) {
 func TestRegisterModuleBindsDeclarativeHandlers(t *testing.T) {
 	t.Parallel()
 
-	kernelRuntime := New()
+	kernelRuntime := newTestKernel(t)
 	t.Cleanup(func() {
 		_ = kernelRuntime.EventBus().Close(context.Background())
 	})
@@ -175,7 +192,7 @@ func TestRegisterModuleBindsDeclarativeHandlers(t *testing.T) {
 func TestRegisterModuleDeclarativeHandlerTimeoutOverride(t *testing.T) {
 	t.Parallel()
 
-	kernelRuntime := New(WithDefaultHandlerTimeout(30 * time.Millisecond))
+	kernelRuntime := newTestKernel(t, WithDefaultHandlerTimeout(30*time.Millisecond))
 	t.Cleanup(func() {
 		_ = kernelRuntime.EventBus().Close(context.Background())
 	})
@@ -281,7 +298,7 @@ func TestRegisterModuleImperativeSubscriptionCapabilityGate(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			kernelRuntime := New()
+			kernelRuntime := newTestKernel(t)
 			t.Cleanup(func() {
 				_ = kernelRuntime.EventBus().Close(context.Background())
 			})
@@ -477,7 +494,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			kernelRuntime := New()
+			kernelRuntime := newTestKernel(t)
 			module := &stubModule{
 				name: "invalid",
 				spec: testCase.spec,
@@ -497,7 +514,7 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 func TestKernelProvidesCommandCatalogService(t *testing.T) {
 	t.Parallel()
 
-	kernelRuntime := New()
+	kernelRuntime := newTestKernel(t)
 	catalog, err := otogi.ResolveAs[otogi.CommandCatalog](
 		kernelRuntime.Services(),
 		otogi.ServiceCommandCatalog,

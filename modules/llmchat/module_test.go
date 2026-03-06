@@ -239,6 +239,41 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 	}
 }
 
+func TestRenderSystemPromptTemplateVariablesDoNotOverrideBuiltIns(t *testing.T) {
+	t.Parallel()
+
+	agent := Agent{
+		Name:                 "Otogi",
+		Description:          "assistant",
+		SystemPromptTemplate: "built_in={{.AgentName}} user={{index .TemplateVariables \"AgentName\"}}",
+		TemplateVariables: map[string]string{
+			"AgentName": "custom-name",
+		},
+	}
+	event := &otogi.Event{
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor:   otogi.Actor{ID: "u2", DisplayName: "Bob"},
+		Article: &otogi.Article{ID: "m2", Text: "Otogi hi"},
+	}
+
+	rendered, err := renderSystemPrompt(agent, event, time.Unix(100, 0).UTC())
+	if err != nil {
+		t.Fatalf("renderSystemPrompt failed: %v", err)
+	}
+	if rendered != "built_in=Otogi user=custom-name" {
+		t.Fatalf("rendered prompt = %q, want built-in precedence", rendered)
+	}
+}
+
 func TestOnRegisterResolvesProviders(t *testing.T) {
 	module, err := New(Config{
 		RequestTimeout: time.Second,
@@ -262,6 +297,7 @@ func TestOnRegisterResolvesProviders(t *testing.T) {
 	runtime := moduleRuntimeStub{registry: serviceRegistryStub{values: map[string]any{
 		otogi.ServiceSinkDispatcher:      &sinkDispatcherStub{},
 		otogi.ServiceMemory:              &memoryStub{},
+		otogi.ServiceMarkdownParser:      markdownParserStub{},
 		otogi.ServiceLLMProviderRegistry: registry,
 	}}}
 
@@ -270,6 +306,32 @@ func TestOnRegisterResolvesProviders(t *testing.T) {
 	}
 	if module.providers["openai"] == nil {
 		t.Fatal("expected openai provider to be resolved")
+	}
+}
+
+func TestOnRegisterRequiresMarkdownParserService(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	registry := &providerRegistryStub{
+		providers: map[string]otogi.LLMProvider{
+			"openai": &providerStub{},
+		},
+	}
+	runtime := moduleRuntimeStub{registry: serviceRegistryStub{values: map[string]any{
+		otogi.ServiceSinkDispatcher:      &sinkDispatcherStub{},
+		otogi.ServiceMemory:              &memoryStub{},
+		otogi.ServiceLLMProviderRegistry: registry,
+	}}}
+
+	err = module.OnRegister(context.Background(), runtime)
+	if err == nil {
+		t.Fatal("OnRegister error = nil, want missing markdown parser service error")
+	}
+	if !strings.Contains(err.Error(), "markdown parser") {
+		t.Fatalf("OnRegister error = %q, want markdown parser context", err.Error())
 	}
 }
 
@@ -293,6 +355,184 @@ func TestEditPacerBaseIntervals(t *testing.T) {
 		if got != testCase.want {
 			t.Fatalf("base interval at %s = %s, want %s", testCase.at, got, testCase.want)
 		}
+	}
+}
+
+func TestStreamProviderReplyUsesMarkdownParserPayload(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	module.dispatcher = &sinkDispatcherStub{}
+	module.parser = markdownParserResultStub{
+		result: otogi.ParsedText{
+			Text: "converted",
+			Entities: []otogi.TextEntity{
+				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 9},
+			},
+		},
+	}
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "hello"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	sink, ok := module.dispatcher.(*sinkDispatcherStub)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *sinkDispatcherStub", module.dispatcher)
+	}
+	if len(sink.editRequests) != 1 {
+		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "converted" {
+		t.Fatalf("edit text = %q, want converted", sink.editRequests[0].Text)
+	}
+	if len(sink.editRequests[0].Entities) != 1 {
+		t.Fatalf("edit entities len = %d, want 1", len(sink.editRequests[0].Entities))
+	}
+	if sink.editRequests[0].Entities[0].Type != otogi.TextEntityTypeBold {
+		t.Fatalf("entity type = %q, want %q", sink.editRequests[0].Entities[0].Type, otogi.TextEntityTypeBold)
+	}
+}
+
+func TestStreamProviderReplyMarkdownParseErrorFallsBackToPlainText(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	module.dispatcher = &sinkDispatcherStub{}
+	module.parser = markdownParserResultStub{
+		err: errors.New("parse failed"),
+	}
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "hello"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	sink, ok := module.dispatcher.(*sinkDispatcherStub)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *sinkDispatcherStub", module.dispatcher)
+	}
+	if len(sink.editRequests) != 1 {
+		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "hello" {
+		t.Fatalf("edit text = %q, want hello", sink.editRequests[0].Text)
+	}
+	if len(sink.editRequests[0].Entities) != 0 {
+		t.Fatalf("edit entities len = %d, want 0", len(sink.editRequests[0].Entities))
+	}
+}
+
+func TestStreamProviderReplyDedupeConsidersEntities(t *testing.T) {
+	module, err := New(validModuleConfig())
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	module.dispatcher = &sinkDispatcherStub{}
+	module.parser = &markdownParserSequenceStub{
+		results: []otogi.ParsedText{
+			{
+				Text: "normalized",
+				Entities: []otogi.TextEntity{
+					{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 10},
+				},
+			},
+			{
+				Text: "normalized",
+				Entities: []otogi.TextEntity{
+					{Type: otogi.TextEntityTypeItalic, Offset: 0, Length: 10},
+				},
+			},
+		},
+	}
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(3, 0).UTC(),
+	})
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "a"},
+		{Delta: "b"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	sink, ok := module.dispatcher.(*sinkDispatcherStub)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *sinkDispatcherStub", module.dispatcher)
+	}
+	if len(sink.editRequests) != 2 {
+		t.Fatalf("edit request count = %d, want 2", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "normalized" || sink.editRequests[1].Text != "normalized" {
+		t.Fatalf("edit texts = [%q, %q], want both normalized", sink.editRequests[0].Text, sink.editRequests[1].Text)
+	}
+	if sink.editRequests[0].Entities[0].Type != otogi.TextEntityTypeBold {
+		t.Fatalf("first entity type = %q, want %q", sink.editRequests[0].Entities[0].Type, otogi.TextEntityTypeBold)
+	}
+	if sink.editRequests[1].Entities[0].Type != otogi.TextEntityTypeItalic {
+		t.Fatalf("second entity type = %q, want %q", sink.editRequests[1].Entities[0].Type, otogi.TextEntityTypeItalic)
 	}
 }
 
@@ -1582,6 +1822,62 @@ type providerStub struct {
 	stream           otogi.LLMStream
 	streamErr        error
 	onGenerateStream func()
+}
+
+type markdownParserStub struct{}
+
+func (markdownParserStub) ParseMarkdown(
+	_ context.Context,
+	markdown string,
+) (otogi.ParsedText, error) {
+	return otogi.ParsedText{
+		Text: markdown,
+	}, nil
+}
+
+type markdownParserResultStub struct {
+	result otogi.ParsedText
+	err    error
+}
+
+func (s markdownParserResultStub) ParseMarkdown(
+	_ context.Context,
+	markdown string,
+) (otogi.ParsedText, error) {
+	if s.err != nil {
+		return otogi.ParsedText{}, s.err
+	}
+	if s.result.Text == "" {
+		s.result.Text = markdown
+	}
+
+	return s.result, nil
+}
+
+type markdownParserSequenceStub struct {
+	results []otogi.ParsedText
+	calls   int
+}
+
+func (s *markdownParserSequenceStub) ParseMarkdown(
+	_ context.Context,
+	markdown string,
+) (otogi.ParsedText, error) {
+	if s == nil || len(s.results) == 0 {
+		return otogi.ParsedText{Text: markdown}, nil
+	}
+
+	index := s.calls
+	s.calls++
+	if index >= len(s.results) {
+		index = len(s.results) - 1
+	}
+	result := s.results[index]
+	if result.Text == "" {
+		result.Text = markdown
+	}
+
+	return result, nil
 }
 
 func (p *providerStub) GenerateStream(context.Context, otogi.LLMGenerateRequest) (otogi.LLMStream, error) {

@@ -64,7 +64,7 @@ func (m *Module) streamProviderReply(
 	thinkingChunks := 0
 	outputChunks := 0
 	pacer := newEditPacer(m.now())
-	lastDeliveredText := defaultThinkingPlaceholder
+	lastDeliveredPayload := plainEditPayload(defaultThinkingPlaceholder)
 	for {
 		chunk, recvErr := stream.Recv(streamCtx)
 		if recvErr != nil {
@@ -94,7 +94,11 @@ func (m *Module) streamProviderReply(
 		if nextText == "" {
 			nextText = defaultThinkingPlaceholder
 		}
-		if nextText == lastDeliveredText {
+		payload, parseErr := m.parseEditPayload(streamCtx, nextText)
+		if parseErr != nil {
+			m.warnMarkdownParseFallback(streamCtx, target, placeholderMessageID, parseErr)
+		}
+		if payload.Equal(lastDeliveredPayload) {
 			continue
 		}
 
@@ -106,7 +110,8 @@ func (m *Module) streamProviderReply(
 		editErr := m.dispatcher.EditMessage(streamCtx, otogi.EditMessageRequest{
 			Target:    target,
 			MessageID: placeholderMessageID,
-			Text:      nextText,
+			Text:      payload.Text,
+			Entities:  payload.Entities,
 		})
 		if editErr != nil {
 			pacer.RecordEditFailure(now, editErr)
@@ -116,7 +121,7 @@ func (m *Module) streamProviderReply(
 			continue
 		}
 		pacer.RecordEditSuccess(now)
-		lastDeliveredText = nextText
+		lastDeliveredPayload = payload
 	}
 
 	finalText := strings.TrimSpace(answerBuilder.String())
@@ -132,14 +137,19 @@ func (m *Module) streamProviderReply(
 			describeContextDeadlineRemaining(streamCtx),
 		)
 	}
-	if finalText == lastDeliveredText {
+	finalPayload, parseErr := m.parseEditPayload(deliveryCtx, finalText)
+	if parseErr != nil {
+		m.warnMarkdownParseFallback(deliveryCtx, target, placeholderMessageID, parseErr)
+	}
+	if finalPayload.Equal(lastDeliveredPayload) {
 		return nil
 	}
 
 	finalEditErr := m.retryEditMessage(deliveryCtx, otogi.EditMessageRequest{
 		Target:    target,
 		MessageID: placeholderMessageID,
-		Text:      finalText,
+		Text:      finalPayload.Text,
+		Entities:  finalPayload.Entities,
 	})
 	if finalEditErr != nil {
 		return fmt.Errorf("stream provider reply finalize placeholder %s: %w", placeholderMessageID, finalEditErr)

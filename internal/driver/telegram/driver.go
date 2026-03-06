@@ -113,16 +113,17 @@ func (d *Driver) handleUpdate(ctx context.Context, update Update, sink otogi.Eve
 		d.cfg.onAsyncError(ctx, err)
 		return fmt.Errorf("handle update %s: %w", update.Type, err)
 	}
-	if event != nil {
-		if event.Source.Platform == "" {
-			event.Source.Platform = DriverPlatform
-		}
-		if event.Source.ID == "" {
-			event.Source.ID = d.cfg.name
-		}
-		if event.Platform == "" {
-			event.Platform = event.Source.Platform
-		}
+	if event == nil {
+		return nil
+	}
+	if event.Source.Platform == "" {
+		event.Source.Platform = DriverPlatform
+	}
+	if event.Source.ID == "" {
+		event.Source.ID = d.cfg.name
+	}
+	if event.Platform == "" {
+		event.Platform = event.Source.Platform
 	}
 
 	publishCtx := ctx

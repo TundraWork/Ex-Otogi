@@ -120,7 +120,10 @@ func run() error {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 	configureStdlibLogBridge(logger)
-	kernelRuntime := buildKernelRuntime(logger, cfg)
+	kernelRuntime, err := buildKernelRuntime(logger, cfg)
+	if err != nil {
+		return fmt.Errorf("build kernel runtime: %w", err)
+	}
 
 	drivers, sinkDispatcher, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
 	if err != nil {
@@ -130,7 +133,7 @@ func run() error {
 	if err := registerRuntimeDrivers(kernelRuntime, drivers); err != nil {
 		return err
 	}
-	if err := registerRuntimeServices(kernelRuntime, logger, sinkDispatcher, cfg); err != nil {
+	if err := registerRuntimeServices(context.Background(), kernelRuntime, logger, sinkDispatcher, cfg); err != nil {
 		return err
 	}
 	if err := registerRuntimeModules(context.Background(), kernelRuntime, cfg); err != nil {
@@ -522,8 +525,8 @@ func parseLogLevel(raw string) (slog.Level, error) {
 	}
 }
 
-func buildKernelRuntime(logger *slog.Logger, cfg appConfig) *kernel.Kernel {
-	return kernel.New(
+func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, error) {
+	kernelRuntime, err := kernel.New(
 		kernel.WithLogger(logger),
 		kernel.WithModuleHookTimeout(cfg.moduleLifecycleTimeout),
 		kernel.WithDefaultHandlerTimeout(cfg.moduleHandlerTimeout),
@@ -532,6 +535,11 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) *kernel.Kernel {
 		kernel.WithDefaultSubscriptionWorkers(cfg.subscriptionWorkers),
 		kernel.WithModuleRouting(cfg.routingDefault, cfg.moduleRoutes),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("build kernel runtime: %w", err)
+	}
+
+	return kernelRuntime, nil
 }
 
 func rejectLegacyKernelHookTimeout(data []byte) error {
@@ -587,11 +595,16 @@ func buildDriverRuntime(
 }
 
 func registerRuntimeServices(
+	ctx context.Context,
 	kernelRuntime *kernel.Kernel,
 	logger *slog.Logger,
 	sinkDispatcher otogi.SinkDispatcher,
 	cfg appConfig,
 ) error {
+	if ctx == nil {
+		return fmt.Errorf("register runtime services: nil context")
+	}
+
 	if err := kernelRuntime.RegisterService(memory.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
 	}
@@ -602,7 +615,7 @@ func registerRuntimeServices(
 		return fmt.Errorf("register sink dispatcher service: %w", err)
 	}
 	if cfg.llmConfig != nil {
-		providers, err := buildLLMProviders(*cfg.llmConfig)
+		providers, err := buildLLMProviders(ctx, *cfg.llmConfig)
 		if err != nil {
 			return fmt.Errorf("build llm providers: %w", err)
 		}
@@ -619,7 +632,11 @@ func registerRuntimeServices(
 	return nil
 }
 
-func buildLLMProviders(cfg llmconfig.Config) (map[string]otogi.LLMProvider, error) {
+func buildLLMProviders(ctx context.Context, cfg llmconfig.Config) (map[string]otogi.LLMProvider, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("build llm providers: nil context")
+	}
+
 	providers := make(map[string]otogi.LLMProvider, len(cfg.Providers))
 	for profileKey, profile := range cfg.Providers {
 		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
@@ -655,7 +672,7 @@ func buildLLMProviders(cfg llmconfig.Config) (map[string]otogi.LLMProvider, erro
 				geminiCfg.ResponseMIMEType = profile.Gemini.RequestDefaults.ResponseMIMEType
 			}
 
-			provider, err := gemini.New(geminiCfg)
+			provider, err := gemini.New(ctx, geminiCfg)
 			if err != nil {
 				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
 			}

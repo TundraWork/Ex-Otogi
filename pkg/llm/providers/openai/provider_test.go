@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"ex-otogi/pkg/otogi"
 
@@ -470,6 +471,56 @@ func TestOpenAIStreamCloseIdempotentAndPostCloseEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamCloseDoesNotBlockWhileRecvWaitsOnNext(t *testing.T) {
+	t.Parallel()
+
+	stub := newBlockingOpenAIResponseStreamStub()
+	stream := newOpenAIStream(stub)
+	recvDone := make(chan error, 1)
+
+	go func() {
+		_, err := stream.Recv(context.Background())
+		recvDone <- err
+	}()
+
+	select {
+	case <-stub.nextStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Recv to enter Next")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close failed: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("close blocked while Next was in progress")
+	}
+
+	select {
+	case <-stub.closeCalled:
+	case <-time.After(time.Second):
+		t.Fatal("expected stream close to be forwarded")
+	}
+
+	close(stub.unblockNext)
+
+	select {
+	case err := <-recvDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Recv after close = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recv did not return after unblocking Next")
+	}
+}
+
 func mustUnmarshalEvent(t *testing.T, raw string) responses.ResponseStreamEventUnion {
 	t.Helper()
 
@@ -532,5 +583,48 @@ func (s *openAIResponseStreamStub) Err() error {
 
 func (s *openAIResponseStreamStub) Close() error {
 	s.closeCount++
+	return nil
+}
+
+type blockingOpenAIResponseStreamStub struct {
+	nextStarted chan struct{}
+	unblockNext chan struct{}
+	closeCalled chan struct{}
+}
+
+func newBlockingOpenAIResponseStreamStub() *blockingOpenAIResponseStreamStub {
+	return &blockingOpenAIResponseStreamStub{
+		nextStarted: make(chan struct{}),
+		unblockNext: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+}
+
+func (s *blockingOpenAIResponseStreamStub) Next() bool {
+	select {
+	case <-s.nextStarted:
+	default:
+		close(s.nextStarted)
+	}
+
+	<-s.unblockNext
+	return false
+}
+
+func (s *blockingOpenAIResponseStreamStub) Current() responses.ResponseStreamEventUnion {
+	return responses.ResponseStreamEventUnion{}
+}
+
+func (s *blockingOpenAIResponseStreamStub) Err() error {
+	return nil
+}
+
+func (s *blockingOpenAIResponseStreamStub) Close() error {
+	select {
+	case <-s.closeCalled:
+	default:
+		close(s.closeCalled)
+	}
+
 	return nil
 }

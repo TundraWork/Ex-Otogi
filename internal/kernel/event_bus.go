@@ -23,6 +23,8 @@ type EventBus struct {
 	onAsyncError          func(context.Context, string, error)
 }
 
+type publishOriginSubscriptionKey struct{}
+
 // NewEventBus creates an asynchronous event bus with bounded queues.
 func NewEventBus(
 	defaultBuffer int,
@@ -299,27 +301,29 @@ func (s *busSubscription) enqueueDropNewest(event *otogi.Event) error {
 
 // enqueueDropOldest evicts one queued event before enqueueing the new event.
 func (s *busSubscription) enqueueDropOldest(event *otogi.Event) error {
-	select {
-	case s.queue <- event:
-		return nil
-	default:
+	attemptLimit := cap(s.queue) + 1
+	if attemptLimit < 1 {
+		attemptLimit = 1
 	}
 
-	select {
-	case <-s.queue:
-	default:
+	for attempt := 0; attempt < attemptLimit; attempt++ {
+		select {
+		case s.queue <- event:
+			return nil
+		case <-s.queue:
+			// Queue was full; evict one oldest element and retry enqueue.
+		}
 	}
 
-	select {
-	case s.queue <- event:
-		return nil
-	default:
-		return fmt.Errorf("enqueue %s: %w", s.spec.Name, otogi.ErrEventDropped)
-	}
+	return fmt.Errorf("enqueue %s: %w", s.spec.Name, otogi.ErrEventDropped)
 }
 
 // enqueueBlock waits for queue capacity or caller context cancellation.
 func (s *busSubscription) enqueueBlock(ctx context.Context, event *otogi.Event) error {
+	if originSubID, ok := publishOriginSubscriptionID(ctx); ok && originSubID == s.id {
+		return fmt.Errorf("enqueue %s: self publish under block backpressure: %w", s.spec.Name, otogi.ErrEventDropped)
+	}
+
 	select {
 	case s.queue <- event:
 		return nil
@@ -374,6 +378,7 @@ func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *
 		handlerCtx = handlerCtxWithTimeout
 		cancel = handlerCancel
 	}
+	handlerCtx = context.WithValue(handlerCtx, publishOriginSubscriptionKey{}, s.id)
 	defer cancel()
 
 	hasDeadline, deadlineText, deadlineRemainingText := describeContextDeadline(handlerCtx)
@@ -396,6 +401,19 @@ func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *
 	return nil
 }
 
+func publishOriginSubscriptionID(ctx context.Context) (int64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+
+	subID, ok := ctx.Value(publishOriginSubscriptionKey{}).(int64)
+	if !ok {
+		return 0, false
+	}
+
+	return subID, true
+}
+
 func describeContextDeadline(ctx context.Context) (bool, string, string) {
 	deadline, hasDeadline := ctx.Deadline()
 	if !hasDeadline {
@@ -410,23 +428,48 @@ func describeContextDeadline(ctx context.Context) (bool, string, string) {
 	return true, deadline.UTC().Format(time.RFC3339Nano), remaining.Round(time.Millisecond).String()
 }
 
-// signalClose marks the subscription closed exactly once and cancels workers.
+// signalClose marks the subscription closed exactly once and rejects new enqueues.
 func (s *busSubscription) signalClose() {
 	s.once.Do(func() {
 		s.closed.Store(true)
-		s.cancel()
 	})
 }
 
 // shutdown waits for worker exit or returns when the supplied context expires.
 func (s *busSubscription) shutdown(ctx context.Context) error {
 	s.signalClose()
+	if err := s.waitForQueueDrain(ctx); err != nil {
+		s.cancel()
+		return fmt.Errorf("shutdown subscription %s: %w", s.spec.Name, err)
+	}
+	s.cancel()
 
 	select {
 	case <-s.done:
 		return nil
 	case <-ctx.Done():
 		return fmt.Errorf("shutdown subscription %s: %w", s.spec.Name, ctx.Err())
+	}
+}
+
+func (s *busSubscription) waitForQueueDrain(ctx context.Context) error {
+	if len(s.queue) == 0 {
+		return nil
+	}
+
+	timer := time.NewTicker(5 * time.Millisecond)
+	defer timer.Stop()
+
+	for {
+		if len(s.queue) == 0 {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait queue drain %s: %w", s.spec.Name, ctx.Err())
+		case <-timer.C:
+		}
 	}
 }
 

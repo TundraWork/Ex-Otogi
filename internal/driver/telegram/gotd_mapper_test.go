@@ -1179,6 +1179,98 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionAfterResolverRetry(t *testing
 	}
 }
 
+func TestDefaultGotdUpdateMapperMapRetriesResolverAfterTransientError(t *testing.T) {
+	t.Parallel()
+
+	reactionResolver := &sequenceMessageReactionResolver{
+		responses: []map[string]int{
+			{"❤️": 1},
+		},
+		errs: []error{
+			errors.New("temporary resolver error"),
+			nil,
+		},
+	}
+	mapper := NewDefaultGotdUpdateMapper(
+		WithMessageReactionResolver(reactionResolver),
+		WithReactionResolveTimeout(2*time.Second),
+	)
+	occurredAt := time.Unix(1_700_000_000, 0).UTC()
+
+	_, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateNewChannelMessage{
+			Message: &tg.Message{
+				ID:      784,
+				PeerID:  &tg.PeerChannel{ChannelID: 500},
+				Date:    1_700_000_000,
+				Message: "test",
+				FromID:  &tg.PeerUser{UserID: 42},
+			},
+		},
+		occurredAt: occurredAt,
+		usersByID: map[int64]*tg.User{
+			42: newTGUser(42, "alice", "Alice", "User", false),
+		},
+		chatsByID: map[int64]gotdChatInfo{
+			500: {
+				title:     "channel",
+				kind:      otogi.ConversationTypeChannel,
+				inputPeer: &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99},
+			},
+		},
+		updateClass: "updateNewChannelMessage",
+	})
+	if err != nil {
+		t.Fatalf("map baseline message failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted baseline message")
+	}
+
+	editMessage := &tg.Message{
+		ID:      784,
+		PeerID:  &tg.PeerChannel{ChannelID: 500},
+		Date:    1_700_000_000,
+		Message: "test",
+		FromID:  &tg.PeerUser{UserID: 42},
+	}
+	editMessage.EditHide = true
+	editMessage.SetEditDate(1_700_000_050)
+	editMessage.SetReactions(tg.MessageReactions{
+		Results: []tg.ReactionCount{},
+	})
+
+	got, accepted, err := mapper.Map(context.Background(), gotdUpdateEnvelope{
+		update: &tg.UpdateEditChannelMessage{
+			Message: editMessage,
+		},
+		occurredAt:  occurredAt.Add(50 * time.Second),
+		updateClass: "updateEditChannelMessage",
+		chatsByID: map[int64]gotdChatInfo{
+			500: {
+				title:     "channel",
+				kind:      otogi.ConversationTypeChannel,
+				inputPeer: &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("map ambiguous edit failed: %v", err)
+	}
+	if !accepted {
+		t.Fatal("expected accepted reaction update after retrying resolver error")
+	}
+	if got.Type != UpdateTypeReactionAdd {
+		t.Fatalf("type = %s, want %s", got.Type, UpdateTypeReactionAdd)
+	}
+	if got.Reaction == nil || got.Reaction.Emoji != "❤️" {
+		t.Fatalf("reaction = %+v, want ❤️", got.Reaction)
+	}
+	if reactionResolver.calls < 2 {
+		t.Fatalf("resolver calls = %d, want >= 2", reactionResolver.calls)
+	}
+}
+
 func TestDefaultGotdUpdateMapperMapResolvesReactionOnNonLikelyUnchangedEdit(t *testing.T) {
 	t.Parallel()
 
@@ -2243,6 +2335,7 @@ func (s *stubMessageReactionResolver) ResolveMessageReactionCounts(
 
 type sequenceMessageReactionResolver struct {
 	responses []map[string]int
+	errs      []error
 	calls     int
 }
 
@@ -2251,13 +2344,16 @@ func (s *sequenceMessageReactionResolver) ResolveMessageReactionCounts(
 	_ tg.InputPeerClass,
 	_ int,
 ) (map[string]int, error) {
+	idx := s.calls
+	s.calls++
+
+	if idx < len(s.errs) && s.errs[idx] != nil {
+		return nil, s.errs[idx]
+	}
 	if len(s.responses) == 0 {
-		s.calls++
 		return nil, nil
 	}
 
-	idx := s.calls
-	s.calls++
 	if idx >= len(s.responses) {
 		idx = len(s.responses) - 1
 	}

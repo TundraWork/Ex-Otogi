@@ -75,6 +75,30 @@ func (m *Module) logDeliveryWarning(
 	)
 }
 
+func (m *Module) warnMarkdownParseFallback(
+	ctx context.Context,
+	target otogi.OutboundTarget,
+	placeholderMessageID string,
+	err error,
+) {
+	if m == nil || m.logger == nil || err == nil {
+		return
+	}
+
+	m.logger.WarnContext(
+		ctx,
+		"llmchat markdown parse fallback to plain text",
+		"conversation_id",
+		target.Conversation.ID,
+		"placeholder_message_id",
+		placeholderMessageID,
+		"deadline_remaining",
+		describeContextDeadlineRemaining(ctx),
+		"error",
+		err,
+	)
+}
+
 func describeOutboundEditError(err error) (
 	operation otogi.OutboundOperation,
 	kind otogi.OutboundErrorKind,

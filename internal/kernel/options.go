@@ -26,6 +26,7 @@ type config struct {
 	logger             *slog.Logger
 	onAsyncError       func(context.Context, string, error)
 	routing            routingConfig
+	bootstrapServices  []bootstrapServiceRegistration
 }
 
 // ModuleRoute configures inbound source filters and default outbound sink for one module.
@@ -140,6 +141,12 @@ func WithModuleRouting(defaultRoute *ModuleRoute, routes map[string]ModuleRoute)
 		for moduleName, route := range routes {
 			cfg.routing.moduleRoutes[moduleName] = *cloneRoute(&route)
 		}
+	}
+}
+
+func withBootstrapServicesForTest(services ...bootstrapServiceRegistration) Option {
+	return func(cfg *config) {
+		cfg.bootstrapServices = append([]bootstrapServiceRegistration(nil), services...)
 	}
 }
 

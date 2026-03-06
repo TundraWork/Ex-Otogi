@@ -215,7 +215,7 @@ func (s *commandDerivingDispatcher) reportAsyncError(ctx context.Context, scope 
 }
 
 func isCommandDerivableEventKind(kind otogi.EventKind) bool {
-	return kind == otogi.EventKindArticleCreated || kind == otogi.EventKindArticleEdited
+	return kind == otogi.EventKindArticleCreated
 }
 
 func commandContextFromEvent(event *otogi.Event) (text string, article otogi.Article, ok bool) {

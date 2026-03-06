@@ -28,8 +28,13 @@ type Kernel struct {
 	running bool
 }
 
-// New creates a new kernel runtime.
-func New(options ...Option) *Kernel {
+type bootstrapServiceRegistration struct {
+	name    string
+	service any
+}
+
+// New creates a new kernel runtime and registers built-in kernel services.
+func New(options ...Option) (*Kernel, error) {
 	cfg := defaultConfig()
 	for _, option := range options {
 		option(&cfg)
@@ -53,19 +58,40 @@ func New(options ...Option) *Kernel {
 		moduleOrder: make([]string, 0),
 		driverOrder: make([]string, 0),
 	}
-	if err := kernelRuntime.services.Register(
-		otogi.ServiceCommandCatalog,
-		&kernelCommandCatalog{kernel: kernelRuntime},
-	); err != nil {
-		cfg.onAsyncError(context.Background(), "register command catalog service", err)
+	if err := kernelRuntime.registerBootstrapServices(); err != nil {
+		return nil, fmt.Errorf("new kernel: %w", err)
 	}
 
-	return kernelRuntime
+	return kernelRuntime, nil
 }
 
 // EventBus exposes the kernel event bus to integration code.
 func (k *Kernel) EventBus() otogi.EventBus {
 	return k.bus
+}
+
+func (k *Kernel) registerBootstrapServices() error {
+	services := k.cfg.bootstrapServices
+	if len(services) == 0 {
+		services = []bootstrapServiceRegistration{
+			{
+				name:    otogi.ServiceCommandCatalog,
+				service: &kernelCommandCatalog{kernel: k},
+			},
+			{
+				name:    otogi.ServiceMarkdownParser,
+				service: newMarkdownParser(),
+			},
+		}
+	}
+
+	for _, registration := range services {
+		if err := k.services.Register(registration.name, registration.service); err != nil {
+			return fmt.Errorf("register bootstrap service %s: %w", registration.name, err)
+		}
+	}
+
+	return nil
 }
 
 // Services exposes the kernel service registry.

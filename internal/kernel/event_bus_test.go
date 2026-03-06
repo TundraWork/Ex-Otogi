@@ -137,6 +137,164 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 	}
 }
 
+func TestEventBusBackpressureBlockSelfPublishDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	asyncErr := make(chan error, 1)
+	bus := NewEventBus(1, 1, time.Second, func(_ context.Context, _ string, err error) {
+		select {
+		case asyncErr <- err:
+		default:
+		}
+	})
+	t.Cleanup(func() {
+		_ = bus.Close(context.Background())
+	})
+
+	firstStarted := make(chan struct{}, 1)
+	allowSelfPublish := make(chan struct{})
+	selfPublishErr := make(chan error, 1)
+	processed := make(chan string, 3)
+
+	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
+		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+	}, otogi.SubscriptionSpec{
+		Name:         "self-block",
+		Buffer:       1,
+		Workers:      1,
+		Backpressure: otogi.BackpressureBlock,
+	}, func(ctx context.Context, event *otogi.Event) error {
+		if event.ID == "e1" {
+			firstStarted <- struct{}{}
+			<-allowSelfPublish
+			selfPublishErr <- bus.Publish(ctx, newTestEvent("e3", otogi.EventKindArticleCreated))
+		}
+
+		processed <- event.ID
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish e1 failed: %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first handler entry")
+	}
+	if err := bus.Publish(context.Background(), newTestEvent("e2", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish e2 failed: %v", err)
+	}
+
+	close(allowSelfPublish)
+
+	select {
+	case err := <-selfPublishErr:
+		if err != nil {
+			t.Fatalf("self publish failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("self publish blocked; expected deadlock protection")
+	}
+
+	got := make([]string, 0, 2)
+	for len(got) < 2 {
+		select {
+		case id := <-processed:
+			got = append(got, id)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("processed events = %v, want [e1 e2]", got)
+		}
+	}
+	if got[0] != "e1" || got[1] != "e2" {
+		t.Fatalf("processed events = %v, want [e1 e2]", got)
+	}
+
+	select {
+	case err := <-asyncErr:
+		if !errors.Is(err, otogi.ErrEventDropped) {
+			t.Fatalf("async error = %v, want ErrEventDropped", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected async drop error for self publish")
+	}
+}
+
+func TestEventBusCloseDrainsBufferedEvents(t *testing.T) {
+	t.Parallel()
+
+	bus := NewEventBus(4, 1, time.Second, nil)
+
+	firstStarted := make(chan struct{}, 1)
+	unblockFirst := make(chan struct{})
+	processed := make(chan string, 3)
+
+	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
+		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+	}, otogi.SubscriptionSpec{
+		Name:    "drain-on-close",
+		Buffer:  4,
+		Workers: 1,
+	}, func(_ context.Context, event *otogi.Event) error {
+		if event.ID == "e1" {
+			firstStarted <- struct{}{}
+			<-unblockFirst
+		}
+		processed <- event.ID
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+
+	if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish e1 failed: %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first handler entry")
+	}
+	if err := bus.Publish(context.Background(), newTestEvent("e2", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish e2 failed: %v", err)
+	}
+	if err := bus.Publish(context.Background(), newTestEvent("e3", otogi.EventKindArticleCreated)); err != nil {
+		t.Fatalf("publish e3 failed: %v", err)
+	}
+
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- bus.Close(context.Background())
+	}()
+
+	close(unblockFirst)
+
+	select {
+	case err := <-closeErr:
+		if err != nil {
+			t.Fatalf("close failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for close")
+	}
+
+	got := make([]string, 0, 3)
+	for len(got) < 3 {
+		select {
+		case id := <-processed:
+			got = append(got, id)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("processed events = %v, want [e1 e2 e3]", got)
+		}
+	}
+	if got[0] != "e1" || got[1] != "e2" || got[2] != "e3" {
+		t.Fatalf("processed events = %v, want [e1 e2 e3]", got)
+	}
+}
+
 // TestEventBusCloseRejectsNewPublish verifies publish rejection after bus closure.
 func TestEventBusCloseRejectsNewPublish(t *testing.T) {
 	t.Parallel()

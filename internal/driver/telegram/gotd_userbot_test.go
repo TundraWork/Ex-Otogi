@@ -147,6 +147,79 @@ func TestGotdUserbotSourceConsumeUsesBatchMapper(t *testing.T) {
 	}
 }
 
+func TestGotdUserbotSourceConsumeWithoutReactionPollerProcessesRawUpdates(t *testing.T) {
+	t.Parallel()
+
+	updates := make(chan any, 1)
+	updates <- "raw-1"
+	close(updates)
+
+	source, err := NewGotdUserbotSource(
+		gotdTestClient{
+			run: func(ctx context.Context, fn func(context.Context) error) error {
+				return fn(ctx)
+			},
+		},
+		gotdTestStream{updates: updates},
+		gotdTestMapper{
+			result: Update{
+				Type: UpdateTypeMessage,
+			},
+			accepted: true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("new source failed: %v", err)
+	}
+
+	var handled int
+	if err := source.Consume(context.Background(), func(_ context.Context, update Update) error {
+		handled++
+		if update.Type != UpdateTypeMessage {
+			t.Fatalf("update type = %s, want %s", update.Type, UpdateTypeMessage)
+		}
+
+		return nil
+	}); err != nil {
+		t.Fatalf("consume failed: %v", err)
+	}
+
+	if handled != 1 {
+		t.Fatalf("handled updates = %d, want 1", handled)
+	}
+}
+
+func TestGotdUserbotSourceConsumeClosesStreamWhenSupported(t *testing.T) {
+	t.Parallel()
+
+	stream := &gotdTestClosableStream{
+		updates: make(chan any),
+	}
+	source, err := NewGotdUserbotSource(
+		gotdTestClient{
+			run: func(ctx context.Context, fn func(context.Context) error) error {
+				cancelCtx, cancel := context.WithCancel(ctx)
+				cancel()
+				return fn(cancelCtx)
+			},
+		},
+		stream,
+		gotdTestMapper{},
+	)
+	if err != nil {
+		t.Fatalf("new source failed: %v", err)
+	}
+
+	if err := source.Consume(context.Background(), func(_ context.Context, _ Update) error {
+		return nil
+	}); err != nil {
+		t.Fatalf("consume failed: %v", err)
+	}
+	if stream.closeCalls != 1 {
+		t.Fatalf("stream close calls = %d, want 1", stream.closeCalls)
+	}
+}
+
 type gotdTestClient struct {
 	run func(ctx context.Context, fn func(context.Context) error) error
 }
@@ -161,6 +234,20 @@ type gotdTestStream struct {
 
 func (s gotdTestStream) Updates(_ context.Context) (<-chan any, error) {
 	return s.updates, nil
+}
+
+type gotdTestClosableStream struct {
+	updates    <-chan any
+	closeCalls int
+}
+
+func (s *gotdTestClosableStream) Updates(_ context.Context) (<-chan any, error) {
+	return s.updates, nil
+}
+
+func (s *gotdTestClosableStream) Close() error {
+	s.closeCalls++
+	return nil
 }
 
 type gotdTestMapper struct {
