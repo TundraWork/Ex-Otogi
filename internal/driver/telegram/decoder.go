@@ -95,7 +95,6 @@ func newBaseEvent(update Update) *otogi.Event {
 	return &otogi.Event{
 		ID:         update.ID,
 		OccurredAt: occurredAt,
-		Platform:   otogi.PlatformTelegram,
 		Source: otogi.EventSource{
 			Platform: otogi.PlatformTelegram,
 		},

@@ -19,6 +19,8 @@ const (
 	OutboundOperationDeleteMessage OutboundOperation = "delete_message"
 	// OutboundOperationSetReaction identifies SetReaction operations.
 	OutboundOperationSetReaction OutboundOperation = "set_reaction"
+	// OutboundOperationRestrictMember identifies RestrictMember operations.
+	OutboundOperationRestrictMember OutboundOperation = "restrict_member"
 )
 
 // OutboundErrorKind describes coarse-grained outbound failure classification.

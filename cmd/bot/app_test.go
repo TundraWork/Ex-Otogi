@@ -19,6 +19,10 @@ import (
 	"ex-otogi/pkg/otogi"
 )
 
+var testSleepSigningKey = []byte("0123456789abcdefghijklmnopqrstuv")
+
+const testSleepSigningKeyBase64 = "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY"
+
 func writeConfigFile(t *testing.T, path string, contents string) {
 	t.Helper()
 
@@ -130,6 +134,9 @@ func TestLoadConfig(t *testing.T) {
 					"sources":[{"platform":"telegram","id":"tg-main"}],
 					"sink":{"platform":"telegram","id":"tg-main"}
 				}
+			},
+			"sleep":{
+				"signing_key":"`+testSleepSigningKeyBase64+`"
 			}
 		}`)
 		t.Setenv(envConfigFile, configPath)
@@ -169,6 +176,9 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.routingDefault.Sink.ID != "tg-main" {
 			t.Fatalf("default sink id = %q, want tg-main", cfg.routingDefault.Sink.ID)
 		}
+		if !bytes.Equal(cfg.sleepConfig.SigningKey, testSleepSigningKey) {
+			t.Fatalf("sleep signing key = %q, want configured test key", cfg.sleepConfig.SigningKey)
+		}
 	})
 
 	t.Run("single-driver mode infers default route", func(t *testing.T) {
@@ -180,7 +190,8 @@ func TestLoadConfig(t *testing.T) {
 					"type":"telegram",
 					"config":{"app_id":123456,"app_hash":"sample_hash"}
 				}
-			]
+			],
+			"sleep":{"signing_key":"`+testSleepSigningKeyBase64+`"}
 		}`)
 		t.Setenv(envConfigFile, configPath)
 
@@ -202,7 +213,8 @@ func TestLoadConfig(t *testing.T) {
 		writeConfigFile(t, configPath, `{
 			"drivers":[
 				{"name":"tg-main","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}
-			]
+			],
+			"sleep":{"signing_key":"`+testSleepSigningKeyBase64+`"}
 		}`)
 
 		currentDir, err := os.Getwd()
@@ -236,38 +248,48 @@ func TestLoadConfig(t *testing.T) {
 		}{
 			{
 				name:       "invalid log level",
-				fileJSON:   `{"log_level":"trace","drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				fileJSON:   `{"log_level":"trace","drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
 				wantErrSub: "parse log_level",
 			},
 			{
 				name:       "invalid lifecycle timeout",
-				fileJSON:   `{"kernel":{"module_lifecycle_timeout":"bad"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				fileJSON:   `{"kernel":{"module_lifecycle_timeout":"bad"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
 				wantErrSub: "parse kernel.module_lifecycle_timeout",
 			},
 			{
 				name:       "invalid handler timeout",
-				fileJSON:   `{"kernel":{"module_handler_timeout":"0s"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				fileJSON:   `{"kernel":{"module_handler_timeout":"0s"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
 				wantErrSub: "parse kernel.module_handler_timeout",
 			},
 			{
-				name:       "legacy hook timeout key rejected",
-				fileJSON:   `{"kernel":{"module_hook_timeout":"7s"},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
-				wantErrSub: "renamed to kernel.module_lifecycle_timeout",
-			},
-			{
 				name:       "missing drivers",
-				fileJSON:   `{}`,
+				fileJSON:   `{"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
 				wantErrSub: "at least one enabled driver",
 			},
 			{
 				name:       "legacy telegram section fails with missing drivers",
-				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash"}}`,
+				fileJSON:   `{"telegram":{"app_id":1,"app_hash":"hash"},"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
 				wantErrSub: "at least one enabled driver",
 			},
 			{
 				name:       "unsupported driver type",
-				fileJSON:   `{"drivers":[{"name":"legacy","type":"discord","config":{"token":"x"}}]}`,
+				fileJSON:   `{"drivers":[{"name":"legacy","type":"discord","config":{"token":"x"}}],"sleep":{"signing_key":"` + testSleepSigningKeyBase64 + `"}}`,
 				wantErrSub: "unsupported type discord",
+			},
+			{
+				name:       "missing sleep signing key",
+				fileJSON:   `{"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				wantErrSub: "parse sleep.signing_key: required",
+			},
+			{
+				name:       "invalid sleep signing key encoding",
+				fileJSON:   `{"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"!!!"}}`,
+				wantErrSub: "parse sleep.signing_key: decode base64url",
+			},
+			{
+				name:       "sleep signing key too short",
+				fileJSON:   `{"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}],"sleep":{"signing_key":"c2hvcnQ"}}`,
+				wantErrSub: "parse sleep.signing_key: must decode to at least 32 bytes",
 			},
 		}
 
@@ -295,7 +317,8 @@ func TestLoadConfig(t *testing.T) {
 			"drivers":[
 				{"name":"tg-main","type":"telegram","config":{"app_id":1,"app_hash":"hash"}},
 				{"name":"tg-alt","type":"telegram","config":{"app_id":2,"app_hash":"hash2"}}
-			]
+			],
+			"sleep":{"signing_key":"`+testSleepSigningKeyBase64+`"}
 		}`)
 		t.Setenv(envConfigFile, configPath)
 
@@ -329,6 +352,9 @@ func TestLoadConfig(t *testing.T) {
 					"config":{"app_id":123456,"app_hash":"sample_hash"}
 				}
 			],
+			"sleep":{
+				"signing_key":"`+testSleepSigningKeyBase64+`"
+			},
 			"llm":{
 				"config_file":"`+llmConfigPath+`"
 			}
@@ -375,6 +401,9 @@ func TestLoadConfig(t *testing.T) {
 					"config":{"app_id":123456,"app_hash":"sample_hash"}
 				}
 			],
+			"sleep":{
+				"signing_key":"`+testSleepSigningKeyBase64+`"
+			},
 			"llm":{
 				"config_file":"`+llmConfigFromFile+`"
 			}
@@ -403,6 +432,9 @@ func TestLoadConfig(t *testing.T) {
 					"config":{"app_id":123456,"app_hash":"sample_hash"}
 				}
 			],
+			"sleep":{
+				"signing_key":"`+testSleepSigningKeyBase64+`"
+			},
 			"llm":{
 				"config_file":"`+missingLLMConfigPath+`"
 			}
@@ -445,6 +477,9 @@ func TestLoadConfig(t *testing.T) {
 					"config":{"app_id":123456,"app_hash":"sample_hash"}
 				}
 			],
+			"sleep":{
+				"signing_key":"`+testSleepSigningKeyBase64+`"
+			},
 			"llm":{
 				"config_file":"`+llmConfigPath+`"
 			}
@@ -469,7 +504,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new kernel failed: %v", err)
 		}
-		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, &sinkDispatcherTestStub{}, appConfig{})
+		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, driverRuntimes{sinkDispatcher: &sinkDispatcherTestStub{}}, appConfig{})
 		if err != nil {
 			t.Fatalf("registerRuntimeServices failed: %v", err)
 		}
@@ -524,7 +559,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 			},
 		}
 
-		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
+		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, driverRuntimes{sinkDispatcher: &sinkDispatcherTestStub{}}, cfg)
 		if err != nil {
 			t.Fatalf("registerRuntimeServices failed: %v", err)
 		}
@@ -572,7 +607,7 @@ func TestRegisterRuntimeServicesLLMRegistry(t *testing.T) {
 			},
 		}
 
-		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, &sinkDispatcherTestStub{}, cfg)
+		err = registerRuntimeServices(context.Background(), kernelRuntime, logger, driverRuntimes{sinkDispatcher: &sinkDispatcherTestStub{}}, cfg)
 		if err == nil {
 			t.Fatal("expected error")
 		}

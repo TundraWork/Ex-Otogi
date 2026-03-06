@@ -194,7 +194,9 @@ func TestOutboundTargetFromEvent(t *testing.T) {
 				ID:         "evt-1",
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypePrivate,
@@ -213,8 +215,10 @@ func TestOutboundTargetFromEvent(t *testing.T) {
 				ID:         "evt-2",
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
-				Article:    &Article{ID: "msg-1", Text: "hello"},
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
+				Article: &Article{ID: "msg-1", Text: "hello"},
 			},
 			wantErr: true,
 		},

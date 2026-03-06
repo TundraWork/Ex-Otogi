@@ -1023,6 +1023,15 @@ func (s *stubOutboundRPC) SetReaction(
 	return nil
 }
 
+func (s *stubOutboundRPC) RestrictMember(
+	_ context.Context,
+	_ tg.InputPeerClass,
+	_ tg.InputPeerClass,
+	_ tg.ChatBannedRights,
+) error {
+	return nil
+}
+
 func typeName(value any) string {
 	return fmt.Sprintf("%T", value)
 }

@@ -489,7 +489,9 @@ func newTestEvent(id string, kind otogi.EventKind) *otogi.Event {
 		ID:         id,
 		Kind:       kind,
 		OccurredAt: time.Now().UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,

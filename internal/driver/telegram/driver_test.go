@@ -61,9 +61,6 @@ func TestDriverHandleUpdatePublishesDecodedEvent(t *testing.T) {
 	if sink.lastEvent.Source.ID != DriverType {
 		t.Fatalf("source id = %s, want %s", sink.lastEvent.Source.ID, DriverType)
 	}
-	if sink.lastEvent.Platform != DriverPlatform {
-		t.Fatalf("platform = %s, want %s", sink.lastEvent.Platform, DriverPlatform)
-	}
 }
 
 type driverDecoderStub struct {

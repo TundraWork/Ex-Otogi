@@ -6,7 +6,7 @@ Apply these rules to any task you judge to be non-trivial — including tasks th
 You are expected to run for very long time by each task: plan first, then implement milestone by milestone. Do not skip the planning phase.
 
 ## 1. Read And Plan Before Acting
-Survey and complete a full planning phase before writing any code or taking any action. The plan must identify all milestones, their sequence, and their success criteria. Plan the milestones *after* you have gathered all necessary details.
+Survey and complete a full planning phase before writing any code or taking any action. The plan must identify all milestones, their sequence, and their success criteria. Plan the milestones **after** you have gathered all necessary details.
 
 ## 2. Milestone Structure
 Break every task into discrete milestones. Each milestone must be:

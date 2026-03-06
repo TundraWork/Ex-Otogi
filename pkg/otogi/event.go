@@ -84,10 +84,6 @@ type Event struct {
 	Kind EventKind
 	// OccurredAt is the source-platform timestamp for the event.
 	OccurredAt time.Time
-	// Platform is the legacy source platform field.
-	//
-	// Deprecated: use Source.Platform.
-	Platform Platform
 	// Source identifies the upstream driver instance that produced this event.
 	Source EventSource
 	// TenantID scopes the event to a tenant/workspace when multi-tenant routing is used.
@@ -595,7 +591,7 @@ func (e *Event) Validate() error {
 	if e.OccurredAt.IsZero() {
 		return fmt.Errorf("%w: missing occurred_at", ErrInvalidEvent)
 	}
-	if e.Source.Platform == "" && e.Platform == "" {
+	if e.Source.Platform == "" {
 		return fmt.Errorf("%w: missing source platform", ErrInvalidEvent)
 	}
 	if e.Conversation.ID == "" {

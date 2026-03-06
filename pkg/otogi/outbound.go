@@ -58,16 +58,12 @@ func OutboundTargetFromEvent(event *Event) (OutboundTarget, error) {
 	if event == nil {
 		return OutboundTarget{}, fmt.Errorf("%w: nil event", ErrInvalidOutboundRequest)
 	}
-	sourcePlatform := event.Source.Platform
-	if sourcePlatform == "" {
-		sourcePlatform = event.Platform
-	}
 	target := OutboundTarget{
 		Conversation: event.Conversation,
 	}
-	if sourcePlatform != "" || event.Source.ID != "" {
+	if event.Source.Platform != "" || event.Source.ID != "" {
 		target.Sink = &EventSink{
-			Platform: sourcePlatform,
+			Platform: event.Source.Platform,
 			ID:       event.Source.ID,
 		}
 	}

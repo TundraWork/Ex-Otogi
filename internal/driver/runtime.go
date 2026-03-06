@@ -29,6 +29,8 @@ type Runtime struct {
 	Driver otogi.Driver
 	// SinkDispatcher adapts outbound operations for this runtime when supported.
 	SinkDispatcher otogi.SinkDispatcher
+	// ModerationDispatcher adapts moderation operations for this runtime when supported.
+	ModerationDispatcher otogi.ModerationDispatcher
 }
 
 // BuilderFunc builds one runtime from one configured driver definition.
@@ -366,4 +368,125 @@ func (d *sinkDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.SinkDispatch
 	}
 
 	return nil, fmt.Errorf("%w: empty sink reference", otogi.ErrOutboundUnsupported)
+}
+
+type moderationRoute struct {
+	ref        otogi.EventSink
+	dispatcher otogi.ModerationDispatcher
+}
+
+type moderationDispatcher struct {
+	byID         map[string]moderationRoute
+	byPlatform   map[otogi.Platform][]string
+	sortedSinkID []string
+}
+
+// NewModerationDispatcher creates a moderation dispatcher from runtime instances.
+func NewModerationDispatcher(runtimes []Runtime) (otogi.ModerationDispatcher, error) {
+	byID := make(map[string]moderationRoute)
+	byPlatform := make(map[otogi.Platform][]string)
+	sortedIDs := make([]string, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		if runtime.ModerationDispatcher == nil {
+			continue
+		}
+		if runtime.Source.ID == "" {
+			return nil, fmt.Errorf("new moderation dispatcher: missing sink id")
+		}
+		if _, exists := byID[runtime.Source.ID]; exists {
+			return nil, fmt.Errorf("new moderation dispatcher: duplicate sink id %s", runtime.Source.ID)
+		}
+
+		ref := otogi.EventSink{
+			Platform: runtime.Source.Platform,
+			ID:       runtime.Source.ID,
+		}
+		byID[ref.ID] = moderationRoute{
+			ref:        ref,
+			dispatcher: runtime.ModerationDispatcher,
+		}
+		byPlatform[ref.Platform] = append(byPlatform[ref.Platform], ref.ID)
+		sortedIDs = append(sortedIDs, ref.ID)
+	}
+	sort.Strings(sortedIDs)
+
+	return &moderationDispatcher{
+		byID:         byID,
+		byPlatform:   byPlatform,
+		sortedSinkID: sortedIDs,
+	}, nil
+}
+
+// RestrictMember routes restrict-member requests to one concrete moderation dispatcher.
+func (d *moderationDispatcher) RestrictMember(
+	ctx context.Context,
+	request otogi.RestrictMemberRequest,
+) error {
+	dispatcher, err := d.resolve(request.Target)
+	if err != nil {
+		return fmt.Errorf("resolve sink for restrict member: %w", err)
+	}
+
+	if err := dispatcher.RestrictMember(ctx, request); err != nil {
+		return fmt.Errorf("route restrict member: %w", err)
+	}
+
+	return nil
+}
+
+func (d *moderationDispatcher) resolve(target otogi.OutboundTarget) (otogi.ModerationDispatcher, error) {
+	if d == nil {
+		return nil, fmt.Errorf("nil moderation dispatcher")
+	}
+	if len(d.byID) == 0 {
+		return nil, fmt.Errorf("%w: no moderation sinks configured", otogi.ErrOutboundUnsupported)
+	}
+
+	if target.Sink != nil {
+		return d.resolveSinkRef(*target.Sink)
+	}
+	if len(d.byID) == 1 {
+		for _, route := range d.byID {
+			return route.dispatcher, nil
+		}
+	}
+
+	return nil, fmt.Errorf("%w: missing target sink for moderation", otogi.ErrOutboundUnsupported)
+}
+
+func (d *moderationDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.ModerationDispatcher, error) {
+	if ref.ID != "" {
+		route, exists := d.byID[ref.ID]
+		if !exists {
+			return nil, fmt.Errorf("%w: moderation sink %s not found", otogi.ErrOutboundUnsupported, ref.ID)
+		}
+		if ref.Platform != "" && route.ref.Platform != ref.Platform {
+			return nil, fmt.Errorf(
+				"%w: moderation sink %s platform mismatch: expected %s got %s",
+				otogi.ErrOutboundUnsupported,
+				ref.ID,
+				ref.Platform,
+				route.ref.Platform,
+			)
+		}
+
+		return route.dispatcher, nil
+	}
+	if ref.Platform != "" {
+		ids := d.byPlatform[ref.Platform]
+		if len(ids) == 0 {
+			return nil, fmt.Errorf("%w: no moderation sink for platform %s", otogi.ErrOutboundUnsupported, ref.Platform)
+		}
+		if len(ids) > 1 {
+			return nil, fmt.Errorf("%w: ambiguous moderation sink for platform %s", otogi.ErrOutboundUnsupported, ref.Platform)
+		}
+		route, exists := d.byID[ids[0]]
+		if !exists {
+			return nil, fmt.Errorf("%w: moderation sink %s not found", otogi.ErrOutboundUnsupported, ids[0])
+		}
+
+		return route.dispatcher, nil
+	}
+
+	return nil, fmt.Errorf("%w: empty moderation sink reference", otogi.ErrOutboundUnsupported)
 }

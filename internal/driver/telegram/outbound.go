@@ -273,6 +273,86 @@ func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReact
 	return nil
 }
 
+// RestrictMember applies permission restrictions to a member in a Telegram channel/supergroup.
+func (d *SinkDispatcher) RestrictMember(
+	ctx context.Context,
+	request otogi.RestrictMemberRequest,
+) error {
+	if err := request.Validate(); err != nil {
+		return fmt.Errorf("restrict member validate: %w", err)
+	}
+
+	peer, err := d.resolvePeer(request.Target)
+	if err != nil {
+		return fmt.Errorf("restrict member resolve peer: %w", err)
+	}
+
+	participant, err := d.peers.ResolveUser(request.MemberID)
+	if err != nil {
+		return fmt.Errorf("restrict member resolve user %s: %w", request.MemberID, err)
+	}
+
+	rights := mapMemberPermissionsToBannedRights(request.Permissions, request.UntilDate)
+
+	rpcCtx, cancel := d.withTimeout(ctx)
+	defer cancel()
+
+	if err := d.telegram.RestrictMember(rpcCtx, peer, participant, rights); err != nil {
+		return fmt.Errorf(
+			"restrict member %s in %s: %w",
+			request.MemberID,
+			request.Target.Conversation.ID,
+			mapTelegramOutboundError(otogi.OutboundOperationRestrictMember, d.cfg.sink, err),
+		)
+	}
+
+	d.logOutbound(
+		ctx,
+		"restrict_member",
+		"conversation", request.Target.Conversation.ID,
+		"conversation_type", request.Target.Conversation.Type,
+		"member_id", request.MemberID,
+		"until_date", request.UntilDate,
+	)
+
+	return nil
+}
+
+// mapMemberPermissionsToBannedRights converts neutral permission flags to Telegram ChatBannedRights.
+//
+// ChatBannedRights uses inverted logic: flags set to true mean the user CANNOT perform
+// the action. This function inverts the neutral MemberPermissions accordingly.
+func mapMemberPermissionsToBannedRights(perms otogi.MemberPermissions, until time.Time) tg.ChatBannedRights {
+	untilDate := 0
+	if !until.IsZero() {
+		untilDate = int(until.Unix())
+	}
+
+	return tg.ChatBannedRights{
+		ViewMessages:    false,
+		SendMessages:    !perms.SendMessages,
+		SendMedia:       !perms.SendMedia,
+		SendStickers:    !perms.SendOther,
+		SendGifs:        !perms.SendOther,
+		SendGames:       !perms.SendOther,
+		SendInline:      !perms.SendOther,
+		SendPolls:       !perms.SendPolls,
+		EmbedLinks:      !perms.EmbedLinks,
+		ChangeInfo:      !perms.ChangeInfo,
+		InviteUsers:     !perms.InviteUsers,
+		PinMessages:     !perms.PinMessages,
+		ManageTopics:    !perms.ManageTopics,
+		SendPhotos:      !perms.SendMedia,
+		SendVideos:      !perms.SendMedia,
+		SendRoundvideos: !perms.SendMedia,
+		SendAudios:      !perms.SendMedia,
+		SendVoices:      !perms.SendMedia,
+		SendDocs:        !perms.SendMedia,
+		SendPlain:       !perms.SendMessages,
+		UntilDate:       untilDate,
+	}
+}
+
 // ListSinks returns the configured Telegram sink identity.
 func (d *SinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
 	if err := ctx.Err(); err != nil {
@@ -624,6 +704,7 @@ type outboundRPC interface {
 	EditText(ctx context.Context, peer tg.InputPeerClass, messageID int, request otogi.EditMessageRequest) error
 	DeleteMessage(ctx context.Context, peer tg.InputPeerClass, messageID int, revoke bool) error
 	SetReaction(ctx context.Context, peer tg.InputPeerClass, messageID int, reactions []tg.ReactionClass) error
+	RestrictMember(ctx context.Context, peer tg.InputPeerClass, participant tg.InputPeerClass, rights tg.ChatBannedRights) error
 }
 
 type gotdOutboundRPC struct {
@@ -746,6 +827,32 @@ func (r gotdOutboundRPC) SetReaction(
 ) error {
 	if _, err := r.sender.To(peer).Reaction(ctx, messageID, reactions...); err != nil {
 		return fmt.Errorf("set reaction: %w", err)
+	}
+
+	return nil
+}
+
+func (r gotdOutboundRPC) RestrictMember(
+	ctx context.Context,
+	peer tg.InputPeerClass,
+	participant tg.InputPeerClass,
+	rights tg.ChatBannedRights,
+) error {
+	channel, ok := peer.(*tg.InputPeerChannel)
+	if !ok {
+		return fmt.Errorf("%w: restrict member requires a channel/supergroup peer", otogi.ErrOutboundUnsupported)
+	}
+
+	_, err := r.raw.ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{
+		Channel: &tg.InputChannel{
+			ChannelID:  channel.ChannelID,
+			AccessHash: channel.AccessHash,
+		},
+		Participant:  participant,
+		BannedRights: rights,
+	})
+	if err != nil {
+		return fmt.Errorf("channels edit banned: %w", err)
 	}
 
 	return nil

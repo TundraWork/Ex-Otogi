@@ -122,10 +122,6 @@ func (d *Driver) handleUpdate(ctx context.Context, update Update, sink otogi.Eve
 	if event.Source.ID == "" {
 		event.Source.ID = d.cfg.name
 	}
-	if event.Platform == "" {
-		event.Platform = event.Source.Platform
-	}
-
 	publishCtx := ctx
 	cancel := func() {}
 	if d.cfg.publishTimeout > 0 {

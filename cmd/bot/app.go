@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"ex-otogi/modules/llmchat"
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/pingpong"
+	"ex-otogi/modules/sleep"
 	"ex-otogi/pkg/llm"
 	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/llm/providers/gemini"
@@ -41,7 +43,7 @@ const (
 	stdlibLogKindContextCanceled  = "context_canceled"
 )
 
-var baseRuntimeModuleNames = []string{"memory", "pingpong", "help"}
+var baseRuntimeModuleNames = []string{"memory", "pingpong", "help", "sleep"}
 
 type appConfig struct {
 	logLevel slog.Level
@@ -56,6 +58,7 @@ type appConfig struct {
 	routingDefault *kernel.ModuleRoute
 	moduleRoutes   map[string]kernel.ModuleRoute
 
+	sleepConfig   sleep.Config
 	llmConfigFile string
 	llmConfig     *llmconfig.Config
 }
@@ -65,6 +68,7 @@ type fileConfig struct {
 	Kernel   fileKernelConfig  `json:"kernel"`
 	Drivers  []fileDriverEntry `json:"drivers"`
 	Routing  fileRoutingConfig `json:"routing"`
+	Sleep    fileSleepConfig   `json:"sleep"`
 	LLM      fileLLMConfig     `json:"llm"`
 }
 
@@ -107,6 +111,10 @@ type fileLLMConfig struct {
 	ConfigFile string `json:"config_file"`
 }
 
+type fileSleepConfig struct {
+	SigningKey string `json:"signing_key"`
+}
+
 func run() error {
 	registry, err := driver.NewBuiltinRegistry()
 	if err != nil {
@@ -125,15 +133,15 @@ func run() error {
 		return fmt.Errorf("build kernel runtime: %w", err)
 	}
 
-	drivers, sinkDispatcher, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
+	runtimes, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
 	if err != nil {
 		return err
 	}
 
-	if err := registerRuntimeDrivers(kernelRuntime, drivers); err != nil {
+	if err := registerRuntimeDrivers(kernelRuntime, runtimes.drivers); err != nil {
 		return err
 	}
-	if err := registerRuntimeServices(context.Background(), kernelRuntime, logger, sinkDispatcher, cfg); err != nil {
+	if err := registerRuntimeServices(context.Background(), kernelRuntime, logger, runtimes, cfg); err != nil {
 		return err
 	}
 	if err := registerRuntimeModules(context.Background(), kernelRuntime, cfg); err != nil {
@@ -277,10 +285,6 @@ func applyConfigFile(cfg *appConfig, path string) error {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return fmt.Errorf("parse config file %s: %w", path, err)
 	}
-	if err := rejectLegacyKernelHookTimeout(data); err != nil {
-		return err
-	}
-
 	if rawLevel := strings.TrimSpace(parsed.LogLevel); rawLevel != "" {
 		level, err := parseLogLevel(rawLevel)
 		if err != nil {
@@ -366,9 +370,33 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		}
 		cfg.moduleRoutes[moduleName] = route
 	}
+	signingKey, err := parseSleepSigningKey(parsed.Sleep.SigningKey)
+	if err != nil {
+		return err
+	}
+	cfg.sleepConfig = sleep.Config{
+		SigningKey: signingKey,
+	}
 	cfg.llmConfigFile = strings.TrimSpace(parsed.LLM.ConfigFile)
 
 	return nil
+}
+
+func parseSleepSigningKey(raw string) ([]byte, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, fmt.Errorf("parse sleep.signing_key: required")
+	}
+
+	signingKey, err := base64.RawURLEncoding.DecodeString(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("parse sleep.signing_key: decode base64url: %w", err)
+	}
+	if len(signingKey) < 32 {
+		return nil, fmt.Errorf("parse sleep.signing_key: must decode to at least 32 bytes")
+	}
+
+	return append([]byte(nil), signingKey...), nil
 }
 
 func parseModuleRoute(raw fileModuleRoute, scope string) (kernel.ModuleRoute, error) {
@@ -542,28 +570,10 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, err
 	return kernelRuntime, nil
 }
 
-func rejectLegacyKernelHookTimeout(data []byte) error {
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(data, &root); err != nil {
-		return fmt.Errorf("parse config for legacy kernel timeout key: %w", err)
-	}
-
-	rawKernel, exists := root["kernel"]
-	if !exists || len(rawKernel) == 0 {
-		return nil
-	}
-
-	var kernelFields map[string]json.RawMessage
-	if err := json.Unmarshal(rawKernel, &kernelFields); err != nil {
-		return nil
-	}
-	if _, hasLegacyKey := kernelFields["module_hook_timeout"]; hasLegacyKey {
-		return fmt.Errorf(
-			"parse kernel.module_hook_timeout: renamed to kernel.module_lifecycle_timeout",
-		)
-	}
-
-	return nil
+type driverRuntimes struct {
+	drivers              []otogi.Driver
+	sinkDispatcher       otogi.SinkDispatcher
+	moderationDispatcher otogi.ModerationDispatcher
 }
 
 func buildDriverRuntime(
@@ -571,14 +581,14 @@ func buildDriverRuntime(
 	logger *slog.Logger,
 	cfg appConfig,
 	registry *driver.Registry,
-) ([]otogi.Driver, otogi.SinkDispatcher, error) {
+) (driverRuntimes, error) {
 	if registry == nil {
-		return nil, nil, fmt.Errorf("build drivers: nil driver registry")
+		return driverRuntimes{}, fmt.Errorf("build drivers: nil driver registry")
 	}
 
 	runtimes, err := registry.BuildEnabled(ctx, cfg.drivers, logger)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build drivers: %w", err)
+		return driverRuntimes{}, fmt.Errorf("build drivers: %w", err)
 	}
 
 	drivers := make([]otogi.Driver, 0, len(runtimes))
@@ -586,19 +596,28 @@ func buildDriverRuntime(
 		drivers = append(drivers, runtime.Driver)
 	}
 
-	dispatcher, err := driver.NewSinkDispatcher(runtimes)
+	sinkDispatcher, err := driver.NewSinkDispatcher(runtimes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("build sink dispatcher: %w", err)
+		return driverRuntimes{}, fmt.Errorf("build sink dispatcher: %w", err)
 	}
 
-	return drivers, dispatcher, nil
+	moderationDispatcher, err := driver.NewModerationDispatcher(runtimes)
+	if err != nil {
+		return driverRuntimes{}, fmt.Errorf("build moderation dispatcher: %w", err)
+	}
+
+	return driverRuntimes{
+		drivers:              drivers,
+		sinkDispatcher:       sinkDispatcher,
+		moderationDispatcher: moderationDispatcher,
+	}, nil
 }
 
 func registerRuntimeServices(
 	ctx context.Context,
 	kernelRuntime *kernel.Kernel,
 	logger *slog.Logger,
-	sinkDispatcher otogi.SinkDispatcher,
+	dr driverRuntimes,
 	cfg appConfig,
 ) error {
 	if ctx == nil {
@@ -608,11 +627,16 @@ func registerRuntimeServices(
 	if err := kernelRuntime.RegisterService(memory.ServiceLogger, logger); err != nil {
 		return fmt.Errorf("register logger service: %w", err)
 	}
-	if sinkDispatcher == nil {
+	if dr.sinkDispatcher == nil {
 		return fmt.Errorf("register sink dispatcher service: nil dispatcher")
 	}
-	if err := kernelRuntime.RegisterService(otogi.ServiceSinkDispatcher, sinkDispatcher); err != nil {
+	if err := kernelRuntime.RegisterService(otogi.ServiceSinkDispatcher, dr.sinkDispatcher); err != nil {
 		return fmt.Errorf("register sink dispatcher service: %w", err)
+	}
+	if dr.moderationDispatcher != nil {
+		if err := kernelRuntime.RegisterService(otogi.ServiceModerationDispatcher, dr.moderationDispatcher); err != nil {
+			return fmt.Errorf("register moderation dispatcher service: %w", err)
+		}
 	}
 	if cfg.llmConfig != nil {
 		providers, err := buildLLMProviders(ctx, *cfg.llmConfig)
@@ -713,6 +737,13 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel, c
 	helpModule := help.New()
 	if err := kernelRuntime.RegisterModule(ctx, helpModule); err != nil {
 		return fmt.Errorf("register help module: %w", err)
+	}
+	sleepModule, err := sleep.New(cfg.sleepConfig)
+	if err != nil {
+		return fmt.Errorf("new sleep module: %w", err)
+	}
+	if err := kernelRuntime.RegisterModule(ctx, sleepModule); err != nil {
+		return fmt.Errorf("register sleep module: %w", err)
 	}
 	if cfg.llmConfig != nil {
 		llmModuleConfig := toLLMChatConfig(*cfg.llmConfig)

@@ -311,7 +311,9 @@ func TestEventValidateArticleEntityContract(t *testing.T) {
 				ID:         "evt-1",
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
@@ -331,7 +333,9 @@ func TestEventValidateArticleEntityContract(t *testing.T) {
 				ID:         "evt-2",
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
@@ -348,7 +352,9 @@ func TestEventValidateArticleEntityContract(t *testing.T) {
 				ID:         "evt-3",
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
@@ -402,7 +408,9 @@ func TestEventValidateMutationSnapshotEntityContract(t *testing.T) {
 				ID:         "evt-10",
 				Kind:       EventKindArticleEdited,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
@@ -431,7 +439,9 @@ func TestEventValidateMutationSnapshotEntityContract(t *testing.T) {
 				ID:         "evt-11",
 				Kind:       EventKindArticleEdited,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,
@@ -455,7 +465,9 @@ func TestEventValidateMutationSnapshotEntityContract(t *testing.T) {
 				ID:         "evt-12",
 				Kind:       EventKindArticleEdited,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID:   "chat-1",
 					Type: ConversationTypeGroup,

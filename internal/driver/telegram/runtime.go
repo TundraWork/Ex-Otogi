@@ -54,7 +54,7 @@ func BuildRuntimeFromConfig(
 	name string,
 	logger *slog.Logger,
 	rawConfig []byte,
-) (otogi.EventSource, otogi.Driver, otogi.SinkDispatcher, error) {
+) (otogi.EventSource, otogi.Driver, *SinkDispatcher, error) {
 	cfg, err := parseRuntimeConfig(rawConfig)
 	if err != nil {
 		return otogi.EventSource{}, nil, nil, fmt.Errorf("parse telegram runtime config: %w", err)

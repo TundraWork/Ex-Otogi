@@ -81,9 +81,6 @@ func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi
 
 	platform := event.Source.Platform
 	if platform == "" {
-		platform = event.Platform
-	}
-	if platform == "" {
 		return nil, fmt.Errorf("memory get reply chain: missing platform")
 	}
 

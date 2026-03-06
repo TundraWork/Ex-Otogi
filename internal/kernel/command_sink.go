@@ -252,14 +252,10 @@ func derivedCommandEvent(
 ) *otogi.Event {
 	kind, suffix := derivedCommandEventKind(prefix)
 	source := sourceEvent.Source
-	if source.Platform == "" {
-		source.Platform = sourceEvent.Platform
-	}
 	commandEvent := &otogi.Event{
 		ID:         sourceEvent.ID + suffix,
 		Kind:       kind,
 		OccurredAt: sourceEvent.OccurredAt,
-		Platform:   source.Platform,
 		Source:     source,
 		TenantID:   sourceEvent.TenantID,
 		Conversation: otogi.Conversation{

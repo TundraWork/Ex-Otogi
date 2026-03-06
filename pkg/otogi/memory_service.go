@@ -164,13 +164,9 @@ func memoryLookupWithID(event *Event, operation string, articleID string) (Memor
 		return MemoryLookup{}, fmt.Errorf("%s %s: missing article id", operation, event.Kind)
 	}
 
-	platform := event.Source.Platform
-	if platform == "" {
-		platform = event.Platform
-	}
 	lookup := MemoryLookup{
 		TenantID:       event.TenantID,
-		Platform:       platform,
+		Platform:       event.Source.Platform,
 		ConversationID: event.Conversation.ID,
 		ArticleID:      articleID,
 	}

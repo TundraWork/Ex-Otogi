@@ -76,7 +76,9 @@ func TestMemoryLookupFromEvent(t *testing.T) {
 				ID:         "evt-1",
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -98,7 +100,9 @@ func TestMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -110,7 +114,9 @@ func TestMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -159,7 +165,9 @@ func TestReplyMemoryLookupFromEvent(t *testing.T) {
 				ID:         "evt-1",
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -181,7 +189,9 @@ func TestReplyMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -193,7 +203,9 @@ func TestReplyMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -237,7 +249,9 @@ func TestMutationMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleEdited,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -261,7 +275,9 @@ func TestMutationMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleEdited,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -273,7 +289,9 @@ func TestMutationMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleEdited,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -317,7 +335,9 @@ func TestReactionMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleReactionAdded,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -341,7 +361,9 @@ func TestReactionMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleReactionAdded,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -353,7 +375,9 @@ func TestReactionMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleReactionAdded,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -397,7 +421,9 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleCreated,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -416,7 +442,9 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleEdited,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -435,7 +463,9 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleRetracted,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -454,7 +484,9 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleReactionAdded,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -473,7 +505,9 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindArticleReactionRemoved,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},
@@ -492,7 +526,9 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 			event: &Event{
 				Kind:       EventKindMemberJoined,
 				OccurredAt: time.Unix(1, 0).UTC(),
-				Platform:   PlatformTelegram,
+				Source: EventSource{
+					Platform: PlatformTelegram,
+				},
 				Conversation: Conversation{
 					ID: "chat-1",
 				},

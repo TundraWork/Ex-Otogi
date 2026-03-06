@@ -114,6 +114,26 @@ func (c *PeerCache) Resolve(conversation otogi.Conversation) (tg.InputPeerClass,
 	return nil, fmt.Errorf("resolve peer: conversation %s/%s not found", conversation.Type, conversation.ID)
 }
 
+// ResolveUser returns an input peer for a user by their platform ID string.
+func (c *PeerCache) ResolveUser(userID string) (tg.InputPeerClass, error) {
+	if c == nil {
+		return nil, fmt.Errorf("resolve user peer: nil cache")
+	}
+	if userID == "" {
+		return nil, fmt.Errorf("resolve user peer: empty user id")
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	key := conversationKey(otogi.ConversationTypePrivate, userID)
+	if peer, ok := c.byConversation[key]; ok {
+		return cloneInputPeer(peer), nil
+	}
+
+	return nil, fmt.Errorf("resolve user peer: user %s not found", userID)
+}
+
 func conversationKey(conversationType otogi.ConversationType, id string) string {
 	return string(conversationType) + ":" + id
 }

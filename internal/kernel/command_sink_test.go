@@ -296,7 +296,9 @@ func newSourceCreatedEvent(id string, messageID string, text string, replyToID s
 		ID:         id,
 		Kind:       otogi.EventKindArticleCreated,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,
@@ -315,7 +317,9 @@ func newSourceEditedEvent(id string, targetArticleID string, text string) *otogi
 		ID:         id,
 		Kind:       otogi.EventKindArticleEdited,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Platform:   otogi.PlatformTelegram,
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+		},
 		Conversation: otogi.Conversation{
 			ID:   "chat-1",
 			Type: otogi.ConversationTypeGroup,

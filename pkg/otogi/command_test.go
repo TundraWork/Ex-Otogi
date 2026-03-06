@@ -111,7 +111,9 @@ func TestBindCommand(t *testing.T) {
 		ID:         "evt-source",
 		Kind:       EventKindArticleCreated,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Platform:   PlatformTelegram,
+		Source: EventSource{
+			Platform: PlatformTelegram,
+		},
 		Conversation: Conversation{
 			ID:   "chat-1",
 			Type: ConversationTypeGroup,
@@ -208,7 +210,9 @@ func TestCommandReceivedEventValidate(t *testing.T) {
 		ID:         "evt-command",
 		Kind:       EventKindCommandReceived,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Platform:   PlatformTelegram,
+		Source: EventSource{
+			Platform: PlatformTelegram,
+		},
 		Conversation: Conversation{
 			ID:   "chat-1",
 			Type: ConversationTypeGroup,
