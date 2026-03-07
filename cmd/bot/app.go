@@ -18,6 +18,7 @@ import (
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/llmchat"
 	"ex-otogi/modules/memory"
+	"ex-otogi/modules/nbnhhsh"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/modules/sleep"
 	"ex-otogi/pkg/otogi"
@@ -39,6 +40,7 @@ const (
 
 var runtimeModules = []func() otogi.Module{
 	func() otogi.Module { return memory.New() },
+	func() otogi.Module { return nbnhhsh.New() },
 	func() otogi.Module { return pingpong.New() },
 	func() otogi.Module { return help.New() },
 	func() otogi.Module { return sleep.New() },

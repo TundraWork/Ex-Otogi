@@ -40,6 +40,10 @@
     }
   },
   "modules": {
+    "nbnhhsh": {
+      "api_url": "https://lab.magiconch.com/api/nbnhhsh/guess",
+      "request_timeout": "2500ms"
+    },
     "sleep": {
       "signing_key": "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY"
     },
