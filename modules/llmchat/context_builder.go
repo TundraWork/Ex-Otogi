@@ -72,9 +72,20 @@ func (m *Module) buildGenerateRequest(
 		return otogi.LLMGenerateRequest{}, fmt.Errorf("build llm request load leading context: %w", err)
 	}
 
+	knownArticleIDs := collectKnownArticleIDs(event, trimmedReplyChain, leadingContext.entries)
+	quotes, err := m.resolveQuotedReplies(
+		ctx, event, knownArticleIDs,
+		trimmedReplyChain, leadingContext.entries,
+		policy.QuoteReplyDepth,
+	)
+	if err != nil {
+		return otogi.LLMGenerateRequest{}, fmt.Errorf("build llm request resolve quoted replies: %w", err)
+	}
+
 	historyCandidates := serializeReplyThreadMessages(
 		trimmedReplyChain[:len(trimmedReplyChain)-1],
 		policy.MaxMessageRunes,
+		quotes,
 	)
 	provisionalCurrent := serializeCurrentMessage(
 		trimmedReplyChain[len(trimmedReplyChain)-1],
@@ -85,6 +96,7 @@ func (m *Module) buildGenerateRequest(
 			leadingContextOmitted:  leadingContext.omittedByAge,
 		},
 		policy.MaxMessageRunes,
+		quotes,
 	)
 
 	remainingBudget := policy.MaxContextRunes - runeCount(provisionalCurrent.content)
@@ -103,6 +115,7 @@ func (m *Module) buildGenerateRequest(
 		remainingBudget,
 		leadingContext.reason,
 		policy.MaxMessageRunes,
+		quotes,
 	)
 
 	status := contextStatus{
@@ -115,11 +128,13 @@ func (m *Module) buildGenerateRequest(
 		trimmedReplyChain[len(trimmedReplyChain)-1],
 		status,
 		policy.MaxMessageRunes,
+		quotes,
 	)
 	leadingMessage := serializeLeadingContextMessage(
 		selectedLeadingContext,
 		leadingContext.reason,
 		policy.MaxMessageRunes,
+		quotes,
 	)
 
 	for totalContextRunes(currentMessage, selectedHistory, leadingMessage) > policy.MaxContextRunes {
@@ -142,6 +157,7 @@ func (m *Module) buildGenerateRequest(
 			trimmedReplyChain[len(trimmedReplyChain)-1],
 			status,
 			policy.MaxMessageRunes,
+			quotes,
 		)
 		if leadingMessage.content == "" && len(selectedHistory) == 0 {
 			break
@@ -302,10 +318,11 @@ func normalizeAnchorTime(event *otogi.Event, fallback time.Time) time.Time {
 func serializeReplyThreadMessages(
 	entries []otogi.ReplyChainEntry,
 	maxMessageRunes int,
+	quotes map[string]quotedReply,
 ) []serializedContextMessage {
 	messages := make([]serializedContextMessage, 0, len(entries))
 	for index, entry := range entries {
-		content := serializeReplyThreadMessage(entry, maxMessageRunes)
+		content := serializeReplyThreadMessage(entry, maxMessageRunes, quotes)
 		if strings.TrimSpace(content) == "" {
 			continue
 		}
@@ -365,6 +382,7 @@ func selectLeadingContextEntries(
 	budget int,
 	reason string,
 	maxMessageRunes int,
+	quotes map[string]quotedReply,
 ) ([]otogi.ConversationContextEntry, int) {
 	if len(entries) == 0 {
 		return nil, 0
@@ -372,14 +390,14 @@ func selectLeadingContextEntries(
 	if budget <= 0 {
 		return nil, len(entries)
 	}
-	full := serializeLeadingContextMessage(entries, reason, maxMessageRunes)
+	full := serializeLeadingContextMessage(entries, reason, maxMessageRunes, quotes)
 	if runeCount(full.content) <= budget {
 		return cloneConversationContextEntries(entries), 0
 	}
 
 	for start := len(entries) - 1; start >= 0; start-- {
 		candidate := entries[start:]
-		message := serializeLeadingContextMessage(candidate, reason, maxMessageRunes)
+		message := serializeLeadingContextMessage(candidate, reason, maxMessageRunes, quotes)
 		if runeCount(message.content) <= budget {
 			return cloneConversationContextEntries(candidate), start
 		}
@@ -388,7 +406,11 @@ func selectLeadingContextEntries(
 	return nil, len(entries)
 }
 
-func serializeReplyThreadMessage(entry otogi.ReplyChainEntry, maxMessageRunes int) string {
+func serializeReplyThreadMessage(
+	entry otogi.ReplyChainEntry,
+	maxMessageRunes int,
+	quotes map[string]quotedReply,
+) string {
 	text := strings.TrimSpace(entry.Article.Text)
 	if text == "" {
 		return ""
@@ -399,6 +421,7 @@ func serializeReplyThreadMessage(entry otogi.ReplyChainEntry, maxMessageRunes in
 	builder.WriteString("<reply_thread_message")
 	writeArticleAttrs(&builder, entry.Article, entry.CreatedAt)
 	builder.WriteString(">\n")
+	writeInlineQuote(&builder, entry.Article.ReplyToArticleID, quotes, maxMessageRunes)
 	builder.WriteString(serializeSpeaker(entry.Actor))
 	builder.WriteString("\n")
 	builder.WriteString(`<content`)
@@ -415,6 +438,7 @@ func serializeLeadingContextMessage(
 	entries []otogi.ConversationContextEntry,
 	reason string,
 	maxMessageRunes int,
+	quotes map[string]quotedReply,
 ) serializedContextMessage {
 	if len(entries) == 0 {
 		return serializedContextMessage{}
@@ -437,6 +461,7 @@ func serializeLeadingContextMessage(
 		builder.WriteString("<message")
 		writeArticleAttrs(&builder, entry.Article, entry.CreatedAt)
 		builder.WriteString(">\n")
+		writeInlineQuote(&builder, entry.Article.ReplyToArticleID, quotes, maxMessageRunes)
 		builder.WriteString(serializeSpeaker(entry.Actor))
 		builder.WriteString("\n")
 		builder.WriteString(`<content`)
@@ -464,6 +489,7 @@ func serializeCurrentMessage(
 	entry otogi.ReplyChainEntry,
 	status contextStatus,
 	maxMessageRunes int,
+	quotes map[string]quotedReply,
 ) serializedContextMessage {
 	trimmed, truncated := trimContextText(entry.Article.Text, maxMessageRunes)
 
@@ -477,6 +503,7 @@ func serializeCurrentMessage(
 	writeIntAttr(&builder, "leading_context_included", status.leadingContextIncluded)
 	writeIntAttr(&builder, "leading_context_omitted", status.leadingContextOmitted)
 	builder.WriteString("/>\n")
+	writeInlineQuote(&builder, entry.Article.ReplyToArticleID, quotes, maxMessageRunes)
 	builder.WriteString(serializeSpeaker(entry.Actor))
 	builder.WriteString("\n")
 	builder.WriteString(`<request`)
@@ -703,4 +730,235 @@ func mergeRequestMetadata(base map[string]string, overrides map[string]string) e
 	}
 
 	return nil
+}
+
+// quotedReply holds resolved content for one inline reply quote. Nested quotes
+// form a singly-linked chain bounded by the configured QuoteReplyDepth.
+type quotedReply struct {
+	// Actor identifies who authored the quoted article.
+	Actor otogi.Actor
+	// Article stores the projected article payload.
+	Article otogi.Article
+	// CreatedAt records when the quoted article was first observed.
+	CreatedAt time.Time
+	// Nested holds the next quoted reply when the quoted article itself
+	// references another article not present in context. Nil when depth is
+	// exhausted or no further reply_to exists.
+	Nested *quotedReply
+}
+
+// resolveQuotedReplies builds a map from article ID to resolved quoted reply
+// for all reply_to references reachable from the context set that are not
+// already present as first-class context entries.
+//
+// The knownArticleIDs set contains article IDs already present in the reply
+// chain, leading context, and current message. It is mutated: resolved quotes
+// are added to prevent duplicate resolution.
+func (m *Module) resolveQuotedReplies(
+	ctx context.Context,
+	event *otogi.Event,
+	knownArticleIDs map[string]struct{},
+	replyChain []otogi.ReplyChainEntry,
+	leadingContext []otogi.ConversationContextEntry,
+	maxDepth int,
+) (map[string]quotedReply, error) {
+	if maxDepth <= 0 || event == nil || m.memory == nil {
+		return nil, nil
+	}
+
+	// Collect all dangling reply_to references from context entries.
+	pendingIDs := make([]string, 0)
+	for _, entry := range replyChain {
+		replyTo := strings.TrimSpace(entry.Article.ReplyToArticleID)
+		if replyTo == "" {
+			continue
+		}
+		if _, known := knownArticleIDs[replyTo]; known {
+			continue
+		}
+		pendingIDs = append(pendingIDs, replyTo)
+	}
+	for _, entry := range leadingContext {
+		replyTo := strings.TrimSpace(entry.Article.ReplyToArticleID)
+		if replyTo == "" {
+			continue
+		}
+		if _, known := knownArticleIDs[replyTo]; known {
+			continue
+		}
+		pendingIDs = append(pendingIDs, replyTo)
+	}
+	if len(pendingIDs) == 0 {
+		return nil, nil
+	}
+
+	quotes := make(map[string]quotedReply)
+	for _, articleID := range pendingIDs {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("resolve quoted replies: %w", err)
+		}
+		if _, already := quotes[articleID]; already {
+			continue
+		}
+		if _, known := knownArticleIDs[articleID]; known {
+			continue
+		}
+
+		resolved, err := m.resolveQuotedReplyChain(ctx, event, knownArticleIDs, quotes, articleID, maxDepth)
+		if err != nil {
+			return nil, fmt.Errorf("resolve quoted replies for %s: %w", articleID, err)
+		}
+		if resolved != nil {
+			quotes[articleID] = *resolved
+		}
+	}
+	if len(quotes) == 0 {
+		return nil, nil
+	}
+
+	return quotes, nil
+}
+
+// resolveQuotedReplyChain resolves one quoted reply and recurses for nested
+// reply_to references up to remainingDepth levels.
+func (m *Module) resolveQuotedReplyChain(
+	ctx context.Context,
+	event *otogi.Event,
+	knownArticleIDs map[string]struct{},
+	quotes map[string]quotedReply,
+	articleID string,
+	remainingDepth int,
+) (*quotedReply, error) {
+	if remainingDepth <= 0 {
+		return nil, nil
+	}
+	if strings.TrimSpace(articleID) == "" {
+		return nil, nil
+	}
+	if _, known := knownArticleIDs[articleID]; known {
+		return nil, nil
+	}
+	if existing, found := quotes[articleID]; found {
+		return &existing, nil
+	}
+
+	lookup := otogi.MemoryLookup{
+		TenantID:       event.TenantID,
+		Platform:       event.Source.Platform,
+		ConversationID: event.Conversation.ID,
+		ArticleID:      articleID,
+	}
+	memory, found, err := m.memory.Get(ctx, lookup)
+	if err != nil {
+		return nil, fmt.Errorf("get memory for %s: %w", articleID, err)
+	}
+	if !found {
+		return nil, nil
+	}
+
+	// Mark resolved to prevent cycles and duplicates.
+	knownArticleIDs[articleID] = struct{}{}
+
+	resolved := &quotedReply{
+		Actor:     memory.Actor,
+		Article:   memory.Article,
+		CreatedAt: memory.CreatedAt,
+	}
+
+	// Recurse for the quoted article's own reply_to.
+	parentID := strings.TrimSpace(memory.Article.ReplyToArticleID)
+	if parentID != "" {
+		if _, known := knownArticleIDs[parentID]; !known {
+			nested, err := m.resolveQuotedReplyChain(ctx, event, knownArticleIDs, quotes, parentID, remainingDepth-1)
+			if err != nil {
+				return nil, fmt.Errorf("resolve nested quote for %s: %w", parentID, err)
+			}
+			if nested != nil {
+				resolved.Nested = nested
+				quotes[parentID] = *nested
+			}
+		}
+	}
+
+	quotes[articleID] = *resolved
+	return resolved, nil
+}
+
+// collectKnownArticleIDs gathers article IDs from the reply chain, leading
+// context, and current event into a set for quoted reply resolution.
+func collectKnownArticleIDs(
+	event *otogi.Event,
+	replyChain []otogi.ReplyChainEntry,
+	leadingContext []otogi.ConversationContextEntry,
+) map[string]struct{} {
+	known := make(map[string]struct{}, len(replyChain)+len(leadingContext)+1)
+	for _, entry := range replyChain {
+		if id := strings.TrimSpace(entry.Article.ID); id != "" {
+			known[id] = struct{}{}
+		}
+	}
+	for _, entry := range leadingContext {
+		if id := strings.TrimSpace(entry.Article.ID); id != "" {
+			known[id] = struct{}{}
+		}
+	}
+	if event != nil && event.Article != nil {
+		if id := strings.TrimSpace(event.Article.ID); id != "" {
+			known[id] = struct{}{}
+		}
+	}
+
+	return known
+}
+
+// writeInlineQuote writes a serialized quoted_reply element into builder when
+// the replyToID has a resolved quote in the map. Does nothing if replyToID is
+// empty or not present in quotes.
+func writeInlineQuote(builder *strings.Builder, replyToID string, quotes map[string]quotedReply, maxMessageRunes int) {
+	replyTo := strings.TrimSpace(replyToID)
+	if replyTo == "" || len(quotes) == 0 {
+		return
+	}
+	quote, found := quotes[replyTo]
+	if !found {
+		return
+	}
+
+	serialized := serializeQuotedReply(quote, maxMessageRunes)
+	if serialized == "" {
+		return
+	}
+	builder.WriteString(serialized)
+	builder.WriteString("\n")
+}
+
+// serializeQuotedReply renders one quoted reply and its nested chain as XML.
+func serializeQuotedReply(quote quotedReply, maxMessageRunes int) string {
+	text := strings.TrimSpace(quote.Article.Text)
+	if text == "" {
+		return ""
+	}
+
+	trimmed, truncated := trimContextText(text, maxMessageRunes)
+	var builder strings.Builder
+	builder.WriteString("<quoted_reply")
+	writeArticleAttrs(&builder, quote.Article, quote.CreatedAt)
+	builder.WriteString(">\n")
+	if quote.Nested != nil {
+		nested := serializeQuotedReply(*quote.Nested, maxMessageRunes)
+		if nested != "" {
+			builder.WriteString(nested)
+			builder.WriteString("\n")
+		}
+	}
+	builder.WriteString(serializeSpeaker(quote.Actor))
+	builder.WriteString("\n")
+	builder.WriteString(`<content`)
+	writeBoolAttr(&builder, "truncated", truncated)
+	builder.WriteString(">")
+	builder.WriteString(escapeStructuredContent(trimmed))
+	builder.WriteString("</content>\n")
+	builder.WriteString("</quoted_reply>")
+
+	return builder.String()
 }

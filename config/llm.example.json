@@ -40,7 +40,8 @@
         "leading_context_messages": 4,
         "leading_context_max_age": "15m",
         "max_context_runes": 12000,
-        "max_message_runes": 1600
+        "max_message_runes": 1600,
+        "quote_reply_depth": 2
       },
       "request_timeout": "90s",
       "max_output_tokens": 512,
@@ -57,7 +58,8 @@
         "leading_context_messages": 4,
         "leading_context_max_age": "15m",
         "max_context_runes": 12000,
-        "max_message_runes": 1600
+        "max_message_runes": 1600,
+        "quote_reply_depth": 2
       },
       "request_timeout": "90s",
       "max_output_tokens": 512,

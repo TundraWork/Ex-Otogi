@@ -39,6 +39,7 @@ const (
 	defaultLeadingContextMaxAge   = 15 * time.Minute
 	defaultMaxContextRunes        = 12000
 	defaultMaxMessageRunes        = 1600
+	defaultQuoteReplyDepth        = 2
 )
 
 // Config is the full runtime LLM configuration model loaded from JSON.
@@ -147,6 +148,10 @@ type ContextPolicy struct {
 	// MaxMessageRunes caps the serialized size of any single article included in
 	// context.
 	MaxMessageRunes int
+	// QuoteReplyDepth controls how many levels of reply_to references are
+	// resolved and inlined as quoted context when the referenced message is not
+	// already present in the conversation context. 0 disables quoting.
+	QuoteReplyDepth int
 }
 
 type fileConfig struct {
@@ -199,6 +204,7 @@ type fileAgentContext struct {
 	LeadingContextMaxAge   string `json:"leading_context_max_age"`
 	MaxContextRunes        *int   `json:"max_context_runes"`
 	MaxMessageRunes        *int   `json:"max_message_runes"`
+	QuoteReplyDepth        *int   `json:"quote_reply_depth"`
 }
 
 type rootRaw struct {
@@ -592,7 +598,9 @@ func validateAgent(agent Agent) error {
 
 func parseContextPolicy(raw *fileAgentContext) (ContextPolicy, error) {
 	if raw == nil {
-		return resolveContextPolicy(ContextPolicy{}), nil
+		resolved := resolveContextPolicy(ContextPolicy{})
+		resolved.QuoteReplyDepth = defaultQuoteReplyDepth
+		return resolved, nil
 	}
 
 	policy := ContextPolicy{}
@@ -614,6 +622,11 @@ func parseContextPolicy(raw *fileAgentContext) (ContextPolicy, error) {
 	}
 	if raw.MaxMessageRunes != nil {
 		policy.MaxMessageRunes = *raw.MaxMessageRunes
+	}
+	if raw.QuoteReplyDepth != nil {
+		policy.QuoteReplyDepth = *raw.QuoteReplyDepth
+	} else {
+		policy.QuoteReplyDepth = defaultQuoteReplyDepth
 	}
 
 	return resolveContextPolicy(policy), nil
@@ -658,6 +671,9 @@ func validateContextPolicy(policy ContextPolicy) error {
 	}
 	if policy.MaxMessageRunes > policy.MaxContextRunes {
 		return fmt.Errorf("max_message_runes must be <= max_context_runes")
+	}
+	if policy.QuoteReplyDepth < 0 {
+		return fmt.Errorf("quote_reply_depth must be >= 0")
 	}
 
 	return nil

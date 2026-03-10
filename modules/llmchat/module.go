@@ -286,6 +286,7 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 				LeadingContextMaxAge:   agent.ContextPolicy.LeadingContextMaxAge,
 				MaxContextRunes:        agent.ContextPolicy.MaxContextRunes,
 				MaxMessageRunes:        agent.ContextPolicy.MaxMessageRunes,
+				QuoteReplyDepth:        agent.ContextPolicy.QuoteReplyDepth,
 			},
 		})
 	}

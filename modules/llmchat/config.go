@@ -17,6 +17,7 @@ const (
 	defaultLeadingContextMaxAge   = 15 * time.Minute
 	defaultMaxContextRunes        = 12000
 	defaultMaxMessageRunes        = 1600
+	defaultQuoteReplyDepth        = 2
 )
 
 // Config configures llmchat module behavior.
@@ -71,6 +72,10 @@ type ContextPolicy struct {
 	// MaxMessageRunes caps the serialized size of any single article included in
 	// context.
 	MaxMessageRunes int
+	// QuoteReplyDepth controls how many levels of reply_to references are
+	// resolved and inlined as quoted context when the referenced message is not
+	// already present in the conversation context. 0 disables quoting.
+	QuoteReplyDepth int
 }
 
 // Validate checks llmchat config coherence.
@@ -179,6 +184,9 @@ func validateContextPolicy(policy ContextPolicy) error {
 	}
 	if policy.MaxMessageRunes > policy.MaxContextRunes {
 		return fmt.Errorf("max_message_runes must be <= max_context_runes")
+	}
+	if policy.QuoteReplyDepth < 0 {
+		return fmt.Errorf("quote_reply_depth must be >= 0")
 	}
 
 	return nil

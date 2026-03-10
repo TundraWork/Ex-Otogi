@@ -464,6 +464,381 @@ func TestBuildGenerateRequestNonReplyUsesRecentConversationContext(t *testing.T)
 	}
 }
 
+func TestBuildGenerateRequestInlinesQuotedReplies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		replyChain       []otogi.ReplyChainEntry
+		leadingContext   []otogi.ConversationContextEntry
+		memories         map[string]otogi.Memory
+		quoteReplyDepth  int
+		event            *otogi.Event
+		wantQuotedReply  []string
+		wantNoQuote      []string
+		wantMessageCount int
+	}{
+		{
+			name: "reply_chain_message_quotes_unknown_parent",
+			replyChain: []otogi.ReplyChainEntry{
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+					Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "reply to m1"},
+					CreatedAt:    time.Unix(90, 0).UTC(),
+				},
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger text"},
+					CreatedAt:    time.Unix(100, 0).UTC(),
+					IsCurrent:    true,
+				},
+			},
+			memories: map[string]otogi.Memory{
+				"m1": {
+					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
+					Article:   otogi.Article{ID: "m1", Text: "original message from eve"},
+					CreatedAt: time.Unix(80, 0).UTC(),
+				},
+			},
+			quoteReplyDepth: 2,
+			event: &otogi.Event{
+				ID:         "evt-1",
+				Kind:       otogi.EventKindArticleCreated,
+				OccurredAt: time.Unix(100, 0).UTC(),
+				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
+				Conversation: otogi.Conversation{
+					ID:   "chat-1",
+					Type: otogi.ConversationTypeGroup,
+				},
+				Actor:   otogi.Actor{ID: "u2", Username: "bob"},
+				Article: &otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "Otogi hello"},
+			},
+			wantQuotedReply:  []string{"<quoted_reply", "original message from eve", `article_id="m1"`},
+			wantMessageCount: 4,
+		},
+		{
+			name: "nested_quote_depth_2",
+			replyChain: []otogi.ReplyChainEntry{
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u3", Username: "carol"},
+					Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger"},
+					CreatedAt:    time.Unix(100, 0).UTC(),
+					IsCurrent:    true,
+				},
+			},
+			leadingContext: []otogi.ConversationContextEntry{
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "bob replies to m2"},
+					CreatedAt:    time.Unix(95, 0).UTC(),
+				},
+			},
+			memories: map[string]otogi.Memory{
+				"m2": {
+					Actor:     otogi.Actor{ID: "u1", Username: "alice"},
+					Article:   otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice replies to m1"},
+					CreatedAt: time.Unix(85, 0).UTC(),
+				},
+				"m1": {
+					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
+					Article:   otogi.Article{ID: "m1", Text: "root from eve"},
+					CreatedAt: time.Unix(80, 0).UTC(),
+				},
+			},
+			quoteReplyDepth: 2,
+			event: &otogi.Event{
+				ID:         "evt-2",
+				Kind:       otogi.EventKindArticleCreated,
+				OccurredAt: time.Unix(100, 0).UTC(),
+				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
+				Conversation: otogi.Conversation{
+					ID:   "chat-1",
+					Type: otogi.ConversationTypeGroup,
+				},
+				Actor:   otogi.Actor{ID: "u3", Username: "carol"},
+				Article: &otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "Otogi hi"},
+			},
+			wantQuotedReply: []string{
+				"alice replies to m1",
+				"root from eve",
+				`article_id="m2"`,
+				`article_id="m1"`,
+			},
+			wantMessageCount: 4,
+		},
+		{
+			name: "depth_0_disables_quoting",
+			replyChain: []otogi.ReplyChainEntry{
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+					Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "reply to m1"},
+					CreatedAt:    time.Unix(90, 0).UTC(),
+				},
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger"},
+					CreatedAt:    time.Unix(100, 0).UTC(),
+					IsCurrent:    true,
+				},
+			},
+			memories: map[string]otogi.Memory{
+				"m1": {
+					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
+					Article:   otogi.Article{ID: "m1", Text: "should not appear"},
+					CreatedAt: time.Unix(80, 0).UTC(),
+				},
+			},
+			quoteReplyDepth: 0,
+			event: &otogi.Event{
+				ID:         "evt-3",
+				Kind:       otogi.EventKindArticleCreated,
+				OccurredAt: time.Unix(100, 0).UTC(),
+				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
+				Conversation: otogi.Conversation{
+					ID:   "chat-1",
+					Type: otogi.ConversationTypeGroup,
+				},
+				Actor:   otogi.Actor{ID: "u2", Username: "bob"},
+				Article: &otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "Otogi hi"},
+			},
+			wantNoQuote:      []string{"<quoted_reply", "should not appear"},
+			wantMessageCount: 4,
+		},
+		{
+			name: "depth_1_limits_nesting",
+			replyChain: []otogi.ReplyChainEntry{
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u3", Username: "carol"},
+					Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger"},
+					CreatedAt:    time.Unix(100, 0).UTC(),
+					IsCurrent:    true,
+				},
+			},
+			leadingContext: []otogi.ConversationContextEntry{
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "bob msg"},
+					CreatedAt:    time.Unix(95, 0).UTC(),
+				},
+			},
+			memories: map[string]otogi.Memory{
+				"m2": {
+					Actor:     otogi.Actor{ID: "u1", Username: "alice"},
+					Article:   otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice msg"},
+					CreatedAt: time.Unix(85, 0).UTC(),
+				},
+				"m1": {
+					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
+					Article:   otogi.Article{ID: "m1", Text: "root from eve depth limited"},
+					CreatedAt: time.Unix(80, 0).UTC(),
+				},
+			},
+			quoteReplyDepth: 1,
+			event: &otogi.Event{
+				ID:         "evt-4",
+				Kind:       otogi.EventKindArticleCreated,
+				OccurredAt: time.Unix(100, 0).UTC(),
+				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
+				Conversation: otogi.Conversation{
+					ID:   "chat-1",
+					Type: otogi.ConversationTypeGroup,
+				},
+				Actor:   otogi.Actor{ID: "u3", Username: "carol"},
+				Article: &otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "Otogi hi"},
+			},
+			wantQuotedReply:  []string{"alice msg", `article_id="m2"`},
+			wantNoQuote:      []string{"root from eve depth limited"},
+			wantMessageCount: 4,
+		},
+		{
+			name: "known_article_not_quoted",
+			replyChain: []otogi.ReplyChainEntry{
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+					Article:      otogi.Article{ID: "m1", Text: "thread root"},
+					CreatedAt:    time.Unix(90, 0).UTC(),
+				},
+				{
+					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+					Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger"},
+					CreatedAt:    time.Unix(100, 0).UTC(),
+					IsCurrent:    true,
+				},
+			},
+			memories: map[string]otogi.Memory{
+				"m1": {
+					Actor:     otogi.Actor{ID: "u1", Username: "alice"},
+					Article:   otogi.Article{ID: "m1", Text: "should not be quoted"},
+					CreatedAt: time.Unix(90, 0).UTC(),
+				},
+			},
+			quoteReplyDepth: 2,
+			event: &otogi.Event{
+				ID:         "evt-5",
+				Kind:       otogi.EventKindArticleCreated,
+				OccurredAt: time.Unix(100, 0).UTC(),
+				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
+				Conversation: otogi.Conversation{
+					ID:   "chat-1",
+					Type: otogi.ConversationTypeGroup,
+				},
+				Actor:   otogi.Actor{ID: "u2", Username: "bob"},
+				Article: &otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "Otogi hello"},
+			},
+			wantNoQuote:      []string{"<quoted_reply"},
+			wantMessageCount: 4,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			module := newTestModule(Config{
+				RequestTimeout: time.Second,
+				Agents: []Agent{
+					{
+						Name:                 "Otogi",
+						Description:          "assistant",
+						Provider:             "p",
+						Model:                "gpt-test",
+						SystemPromptTemplate: "You are {{.AgentName}}",
+						RequestTimeout:       time.Second,
+						ContextPolicy: ContextPolicy{
+							ReplyChainMaxMessages:  12,
+							LeadingContextMessages: 4,
+							LeadingContextMaxAge:   15 * time.Minute,
+							MaxContextRunes:        12000,
+							MaxMessageRunes:        1600,
+							QuoteReplyDepth:        testCase.quoteReplyDepth,
+						},
+					},
+				},
+			})
+			module.memory = &memoryStub{
+				replyChain:     testCase.replyChain,
+				leadingContext: testCase.leadingContext,
+				memories:       testCase.memories,
+			}
+			module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+			req, err := module.buildGenerateRequest(
+				context.Background(),
+				testCase.event,
+				module.cfg.Agents[0],
+				"how are you",
+			)
+			if err != nil {
+				t.Fatalf("buildGenerateRequest failed: %v", err)
+			}
+
+			if testCase.wantMessageCount > 0 && len(req.Messages) != testCase.wantMessageCount {
+				t.Fatalf("messages len = %d, want %d", len(req.Messages), testCase.wantMessageCount)
+			}
+
+			allContent := strings.Join(allMessageContents(req.Messages), "\n")
+			for _, want := range testCase.wantQuotedReply {
+				if !strings.Contains(allContent, want) {
+					t.Fatalf("messages should contain %q, got:\n%s", want, allContent)
+				}
+			}
+			for _, absent := range testCase.wantNoQuote {
+				if strings.Contains(allContent, absent) {
+					t.Fatalf("messages should NOT contain %q, got:\n%s", absent, allContent)
+				}
+			}
+		})
+	}
+}
+
+func TestSerializeQuotedReplyRendersNestedChain(t *testing.T) {
+	t.Parallel()
+
+	quote := quotedReply{
+		Actor:     otogi.Actor{ID: "u1", Username: "alice"},
+		Article:   otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice reply"},
+		CreatedAt: time.Unix(90, 0).UTC(),
+		Nested: &quotedReply{
+			Actor:     otogi.Actor{ID: "u0", Username: "eve"},
+			Article:   otogi.Article{ID: "m1", Text: "eve root"},
+			CreatedAt: time.Unix(80, 0).UTC(),
+		},
+	}
+
+	result := serializeQuotedReply(quote, 1600)
+	if !strings.Contains(result, "<quoted_reply") {
+		t.Fatalf("result = %q, want <quoted_reply envelope", result)
+	}
+	if !strings.Contains(result, `article_id="m2"`) {
+		t.Fatalf("result = %q, want outer article_id", result)
+	}
+	if !strings.Contains(result, `article_id="m1"`) {
+		t.Fatalf("result = %q, want nested article_id", result)
+	}
+	if !strings.Contains(result, "alice reply") {
+		t.Fatalf("result = %q, want outer content", result)
+	}
+	if !strings.Contains(result, "eve root") {
+		t.Fatalf("result = %q, want nested content", result)
+	}
+
+	outerStart := strings.Index(result, `article_id="m2"`)
+	innerStart := strings.Index(result, `article_id="m1"`)
+	if outerStart > innerStart {
+		t.Fatalf("outer quote should come before nested quote in result: %q", result)
+	}
+}
+
+func TestSerializeQuotedReplyEmptyTextReturnsEmpty(t *testing.T) {
+	t.Parallel()
+
+	quote := quotedReply{
+		Actor:   otogi.Actor{ID: "u1", Username: "alice"},
+		Article: otogi.Article{ID: "m1", Text: ""},
+	}
+
+	result := serializeQuotedReply(quote, 1600)
+	if result != "" {
+		t.Fatalf("result = %q, want empty for empty text", result)
+	}
+}
+
+func TestCollectKnownArticleIDs(t *testing.T) {
+	t.Parallel()
+
+	event := &otogi.Event{
+		Article: &otogi.Article{ID: "current"},
+	}
+	replyChain := []otogi.ReplyChainEntry{
+		{Article: otogi.Article{ID: "r1"}},
+		{Article: otogi.Article{ID: "r2"}},
+	}
+	leading := []otogi.ConversationContextEntry{
+		{Article: otogi.Article{ID: "l1"}},
+	}
+
+	known := collectKnownArticleIDs(event, replyChain, leading)
+	for _, id := range []string{"current", "r1", "r2", "l1"} {
+		if _, found := known[id]; !found {
+			t.Fatalf("known set missing %q", id)
+		}
+	}
+	if len(known) != 4 {
+		t.Fatalf("known set size = %d, want 4", len(known))
+	}
+}
+
 func TestRenderSystemPromptTemplateVariablesDoNotOverrideBuiltIns(t *testing.T) {
 	t.Parallel()
 
@@ -1889,12 +2264,17 @@ type memoryStub struct {
 	replyErr                  error
 	leadingContext            []otogi.ConversationContextEntry
 	leadingContextErr         error
+	memories                  map[string]otogi.Memory
 	onGetReplyChain           func()
 	onListConversationContext func()
 }
 
-func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool, error) {
-	return otogi.Memory{}, false, nil
+func (m *memoryStub) Get(_ context.Context, lookup otogi.MemoryLookup) (otogi.Memory, bool, error) {
+	if m.memories == nil {
+		return otogi.Memory{}, false, nil
+	}
+	mem, found := m.memories[lookup.ArticleID]
+	return mem, found, nil
 }
 
 func (*memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
