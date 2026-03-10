@@ -36,10 +36,10 @@ func commandReplyEntities(body string) []otogi.TextEntity {
 
 	return []otogi.TextEntity{
 		{
-			Type:     otogi.TextEntityTypePre,
-			Offset:   0,
-			Length:   utf8.RuneCountInString(body),
-			Language: "json",
+			Type:      otogi.TextEntityTypeBlockquote,
+			Offset:    0,
+			Length:    utf8.RuneCountInString(body),
+			Collapsed: true,
 		},
 	}
 }

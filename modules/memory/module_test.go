@@ -373,8 +373,11 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 				t.Fatalf("entities len = %d, want 1", len(dispatcher.lastRequest.Entities))
 			}
 			entity := dispatcher.lastRequest.Entities[0]
-			if entity.Type != otogi.TextEntityTypePre {
-				t.Fatalf("entity type = %q, want %q", entity.Type, otogi.TextEntityTypePre)
+			if entity.Type != otogi.TextEntityTypeBlockquote {
+				t.Fatalf("entity type = %q, want %q", entity.Type, otogi.TextEntityTypeBlockquote)
+			}
+			if !entity.Collapsed {
+				t.Fatal("entity collapsed = false, want true")
 			}
 			if entity.Offset != 0 {
 				t.Fatalf("entity offset = %d, want 0", entity.Offset)
@@ -385,9 +388,6 @@ func TestModuleIntrospectionCommands(t *testing.T) {
 					entity.Length,
 					utf8.RuneCountInString(dispatcher.lastRequest.Text),
 				)
-			}
-			if entity.Language != "json" {
-				t.Fatalf("entity language = %q, want json", entity.Language)
 			}
 			if testCase.wantText != "" && dispatcher.lastRequest.Text != testCase.wantText {
 				t.Fatalf("text = %q, want %q", dispatcher.lastRequest.Text, testCase.wantText)
