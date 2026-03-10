@@ -6,7 +6,7 @@ repos:
     hooks:
       - id: quality
         name: make quality
-        entry: env QUALITY_DIFF_MODE=staged make quality
+        entry: make quality-pre-commit
         language: system
         pass_filenames: false
         always_run: true

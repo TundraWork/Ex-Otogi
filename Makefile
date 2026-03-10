@@ -29,10 +29,11 @@ ARCHCHECK_PKG ?= ./scripts/quality/archcheck
 COVERAGE_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/coverage_report.sh
 SECURITY_WARN_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/security_warn.sh
 AGENT_GUARD_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/agent_guard.sh
+PRE_COMMIT_QUALITY_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/pre_commit_quality.sh
 TEST_EXCEPTION_FILE ?= $(CURDIR)/config/quality/test_required_exceptions.txt
 
 .PHONY: tools doctor quality quality-core fmt fmt-check lint arch-check \
-	test test-race test-leak coverage-report security-warn agent-guard \
+	test test-race test-leak coverage-report security-warn agent-guard quality-pre-commit \
 	build dev generate hooks-install hooks-run
 
 tools: ## Install pinned local development tooling under .cache/tools/bin
@@ -158,6 +159,9 @@ security-warn: ## Run non-blocking security checks and warnings
 
 agent-guard: ## Enforce LLM-focused changed-code policy checks
 	TEST_EXCEPTION_FILE=$(TEST_EXCEPTION_FILE) QUALITY_DIFF_MODE=$${QUALITY_DIFF_MODE:-working-tree} $(AGENT_GUARD_SCRIPT)
+
+quality-pre-commit: ## Run the canonical quality gate against the staged snapshot for git hooks
+	QUALITY_DIFF_MODE=staged $(PRE_COMMIT_QUALITY_SCRIPT)
 
 hooks-install: ## Install local pre-commit hook
 	@mkdir -p $(PRE_COMMIT_HOME_DIR)
