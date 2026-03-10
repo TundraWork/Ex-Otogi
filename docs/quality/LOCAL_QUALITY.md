@@ -54,4 +54,5 @@
 ## Hook Behavior
 
 - Pre-commit runs one authoritative hook: `make quality`.
+- The hook runs via `make quality-pre-commit`, which temporarily hides unstaged and untracked changes so `make quality` sees the staged snapshot only.
 - The hook uses staged diff mode (`QUALITY_DIFF_MODE=staged`) for changed-code policy checks.
