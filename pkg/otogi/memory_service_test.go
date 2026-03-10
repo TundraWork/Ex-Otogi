@@ -567,10 +567,14 @@ func TestTargetMemoryLookupFromEvent(t *testing.T) {
 func TestReplyChainEntryFields(t *testing.T) {
 	t.Parallel()
 
+	createdAt := time.Unix(10, 0).UTC()
+	updatedAt := time.Unix(20, 0).UTC()
 	entry := ReplyChainEntry{
 		Conversation: Conversation{ID: "chat-1", Type: ConversationTypeGroup},
 		Actor:        Actor{ID: "u-1", Username: "alice"},
 		Article:      Article{ID: "m-1", Text: "hello"},
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
 		IsCurrent:    true,
 	}
 
@@ -582,6 +586,119 @@ func TestReplyChainEntryFields(t *testing.T) {
 	}
 	if entry.Actor.Username != "alice" {
 		t.Fatalf("actor username = %q, want alice", entry.Actor.Username)
+	}
+	if !entry.CreatedAt.Equal(createdAt) {
+		t.Fatalf("created_at = %v, want %v", entry.CreatedAt, createdAt)
+	}
+	if !entry.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("updated_at = %v, want %v", entry.UpdatedAt, updatedAt)
+	}
+}
+
+func TestConversationContextBeforeQueryValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   ConversationContextBeforeQuery
+		wantErr bool
+	}{
+		{
+			name: "valid query",
+			query: ConversationContextBeforeQuery{
+				Platform:        PlatformTelegram,
+				ConversationID:  "chat-1",
+				ThreadID:        "topic-1",
+				AnchorArticleID: "msg-3",
+				BeforeLimit:     3,
+			},
+		},
+		{
+			name: "valid query using anchor time only",
+			query: ConversationContextBeforeQuery{
+				Platform:         PlatformTelegram,
+				ConversationID:   "chat-1",
+				AnchorOccurredAt: time.Unix(10, 0).UTC(),
+				BeforeLimit:      3,
+			},
+		},
+		{
+			name: "missing platform",
+			query: ConversationContextBeforeQuery{
+				ConversationID:  "chat-1",
+				AnchorArticleID: "msg-3",
+				BeforeLimit:     3,
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing conversation id",
+			query: ConversationContextBeforeQuery{
+				Platform:        PlatformTelegram,
+				AnchorArticleID: "msg-3",
+				BeforeLimit:     3,
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing both article id and anchor time",
+			query: ConversationContextBeforeQuery{
+				Platform:       PlatformTelegram,
+				ConversationID: "chat-1",
+				BeforeLimit:    3,
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative before limit",
+			query: ConversationContextBeforeQuery{
+				Platform:        PlatformTelegram,
+				ConversationID:  "chat-1",
+				AnchorArticleID: "msg-3",
+				BeforeLimit:     -1,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := testCase.query.Validate()
+			if testCase.wantErr && err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+func TestConversationContextEntryFields(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Unix(30, 0).UTC()
+	updatedAt := time.Unix(40, 0).UTC()
+	entry := ConversationContextEntry{
+		Conversation: Conversation{ID: "chat-1", Type: ConversationTypeGroup},
+		Actor:        Actor{ID: "u-2", DisplayName: "Bob"},
+		Article:      Article{ID: "m-2", Text: "world"},
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
+	}
+
+	if entry.Article.ID != "m-2" {
+		t.Fatalf("article id = %q, want m-2", entry.Article.ID)
+	}
+	if entry.Actor.DisplayName != "Bob" {
+		t.Fatalf("actor display name = %q, want Bob", entry.Actor.DisplayName)
+	}
+	if !entry.CreatedAt.Equal(createdAt) {
+		t.Fatalf("created_at = %v, want %v", entry.CreatedAt, createdAt)
+	}
+	if !entry.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("updated_at = %v, want %v", entry.UpdatedAt, updatedAt)
 	}
 }
 
@@ -596,6 +713,13 @@ func (memoryServiceContractStub) GetReplied(context.Context, *Event) (Memory, bo
 }
 
 func (memoryServiceContractStub) GetReplyChain(context.Context, *Event) ([]ReplyChainEntry, error) {
+	return nil, nil
+}
+
+func (memoryServiceContractStub) ListConversationContextBefore(
+	context.Context,
+	ConversationContextBeforeQuery,
+) ([]ConversationContextEntry, error) {
 	return nil, nil
 }
 

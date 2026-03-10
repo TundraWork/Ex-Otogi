@@ -96,7 +96,7 @@ func TestMatchTriggeredAgent(t *testing.T) {
 	}
 }
 
-func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
+func TestBuildGenerateRequestStructuresContextAndPreservesRoles(t *testing.T) {
 	module := newTestModule(Config{
 		RequestTimeout: time.Second,
 		Agents: []Agent{
@@ -115,21 +115,44 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 					"gemini.thinking_level":     "medium",
 					"gemini.response_mime_type": "application/json",
 				},
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  6,
+					LeadingContextMessages: 2,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        4000,
+					MaxMessageRunes:        120,
+				},
 			},
 		},
 	})
 
 	module.memory = &memoryStub{
+		leadingContext: []otogi.ConversationContextEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
+				Article:      otogi.Article{ID: "ctx-1", Text: "background before the thread"},
+				CreatedAt:    time.Unix(80, 0).UTC(),
+			},
+		},
 		replyChain: []otogi.ReplyChainEntry{
 			{
 				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
 				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
 				Article:      otogi.Article{ID: "m1", Text: "hello"},
+				CreatedAt:    time.Unix(90, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "bot-1", Username: "otogi", IsBot: true},
+				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "previous bot reply"},
+				CreatedAt:    time.Unix(95, 0).UTC(),
 			},
 			{
 				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
 				Actor:        otogi.Actor{ID: "u2", DisplayName: "Bob"},
-				Article:      otogi.Article{ID: "m2", Text: "trigger text"},
+				Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger text"},
+				CreatedAt:    time.Unix(100, 0).UTC(),
 				IsCurrent:    true,
 			},
 		},
@@ -147,25 +170,58 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
 		Actor:        otogi.Actor{ID: "u2", DisplayName: "Bob"},
 		Article: &otogi.Article{
-			ID:               "m2",
-			ReplyToArticleID: "m1",
+			ID:               "m3",
+			ReplyToArticleID: "m2",
 			Text:             "Otogi hi",
 		},
 	}, module.cfg.Agents[0], "how are you")
 	if err != nil {
 		t.Fatalf("buildGenerateRequest failed: %v", err)
 	}
-	if len(req.Messages) < 3 {
-		t.Fatalf("messages len = %d, want >= 3", len(req.Messages))
+	if len(req.Messages) != 6 {
+		t.Fatalf("messages len = %d, want 6", len(req.Messages))
 	}
 	if req.Messages[0].Role != otogi.LLMMessageRoleSystem {
 		t.Fatalf("system role = %q, want %q", req.Messages[0].Role, otogi.LLMMessageRoleSystem)
 	}
-	if !strings.Contains(req.Messages[1].Content, "alice: hello") {
-		t.Fatalf("message[1] = %q, want alice speaker format", req.Messages[1].Content)
+	if req.Messages[1].Role != otogi.LLMMessageRoleSystem {
+		t.Fatalf("message[1] role = %q, want %q", req.Messages[1].Role, otogi.LLMMessageRoleSystem)
 	}
-	if !strings.Contains(req.Messages[2].Content, "Bob: how are you") {
-		t.Fatalf("message[2] = %q, want current speaker with stripped prompt", req.Messages[2].Content)
+	if !strings.Contains(req.Messages[1].Content, "structured conversation context") {
+		t.Fatalf("message[1] = %q, want context handling instructions", req.Messages[1].Content)
+	}
+	if req.Messages[2].Role != otogi.LLMMessageRoleUser || !strings.Contains(req.Messages[2].Content, "<leading_context") {
+		t.Fatalf("message[2] = %+v, want leading_context user message", req.Messages[2])
+	}
+	if !strings.Contains(req.Messages[2].Content, "background before the thread") {
+		t.Fatalf("message[2] = %q, want leading context body", req.Messages[2].Content)
+	}
+	if req.Messages[3].Role != otogi.LLMMessageRoleUser || !strings.Contains(req.Messages[3].Content, `<reply_thread_message`) {
+		t.Fatalf("message[3] = %+v, want user reply-thread message", req.Messages[3])
+	}
+	if !strings.Contains(req.Messages[3].Content, `article_id="m1"`) {
+		t.Fatalf("message[3] = %q, want root article id", req.Messages[3].Content)
+	}
+	if req.Messages[4].Role != otogi.LLMMessageRoleAssistant {
+		t.Fatalf("message[4] role = %q, want assistant", req.Messages[4].Role)
+	}
+	if !strings.Contains(req.Messages[4].Content, "previous bot reply") {
+		t.Fatalf("message[4] = %q, want previous assistant content", req.Messages[4].Content)
+	}
+	if req.Messages[5].Role != otogi.LLMMessageRoleUser {
+		t.Fatalf("message[5] role = %q, want user", req.Messages[5].Role)
+	}
+	if !strings.Contains(req.Messages[5].Content, "<current_message") {
+		t.Fatalf("message[5] = %q, want current_message envelope", req.Messages[5].Content)
+	}
+	if !strings.Contains(req.Messages[5].Content, "how are you") {
+		t.Fatalf("message[5] = %q, want stripped current prompt", req.Messages[5].Content)
+	}
+	if !strings.Contains(req.Messages[5].Content, `reply_thread_included="2"`) {
+		t.Fatalf("message[5] = %q, want reply_thread_included context status", req.Messages[5].Content)
+	}
+	if !strings.Contains(req.Messages[5].Content, `leading_context_included="1"`) {
+		t.Fatalf("message[5] = %q, want leading_context_included context status", req.Messages[5].Content)
 	}
 	if req.Metadata[metadataKeyAgent] != "Otogi" {
 		t.Fatalf("metadata[%s] = %q, want Otogi", metadataKeyAgent, req.Metadata[metadataKeyAgent])
@@ -200,6 +256,211 @@ func TestBuildGenerateRequestUsesReplyChainAndSpeakerNames(t *testing.T) {
 			"metadata[gemini.response_mime_type] = %q, want application/json",
 			req.Metadata["gemini.response_mime_type"],
 		)
+	}
+}
+
+func TestBuildGenerateRequestAppliesContextBudgets(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  3,
+					LeadingContextMessages: 2,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        420,
+					MaxMessageRunes:        48,
+				},
+			},
+		},
+	})
+
+	module.memory = &memoryStub{
+		leadingContext: []otogi.ConversationContextEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
+				Article:      otogi.Article{ID: "ctx-1", Text: strings.Repeat("leading ", 20)},
+				CreatedAt:    time.Unix(70, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u9", Username: "mallory"},
+				Article:      otogi.Article{ID: "ctx-2", Text: strings.Repeat("more-leading ", 20)},
+				CreatedAt:    time.Unix(80, 0).UTC(),
+			},
+		},
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article:      otogi.Article{ID: "m1", Text: strings.Repeat("root ", 20)},
+				CreatedAt:    time.Unix(90, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: strings.Repeat("middle-one ", 20)},
+				CreatedAt:    time.Unix(95, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u3", Username: "carol"},
+				Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: strings.Repeat("middle-two ", 20)},
+				CreatedAt:    time.Unix(100, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u4", DisplayName: "Dave"},
+				Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger text"},
+				CreatedAt:    time.Unix(105, 0).UTC(),
+				IsCurrent:    true,
+			},
+		},
+	}
+	module.clock = func() time.Time { return time.Unix(105, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-2",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(105, 0).UTC(),
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
+		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+		Actor:        otogi.Actor{ID: "u4", DisplayName: "Dave"},
+		Article: &otogi.Article{
+			ID:               "m4",
+			ReplyToArticleID: "m3",
+			Text:             "Otogi summarize",
+		},
+	}, module.cfg.Agents[0], strings.Repeat("current request ", 12))
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if len(req.Messages) < 3 {
+		t.Fatalf("messages len = %d, want at least 3", len(req.Messages))
+	}
+	last := req.Messages[len(req.Messages)-1].Content
+	if strings.Contains(last, "<leading_context") {
+		t.Fatalf("current message should not embed leading_context, got %q", last)
+	}
+	if !strings.Contains(last, `reply_thread_omitted="`) {
+		t.Fatalf("current message = %q, want omitted reply-thread count", last)
+	}
+	if !strings.Contains(last, `leading_context_omitted="`) {
+		t.Fatalf("current message = %q, want omitted leading-context count", last)
+	}
+	if strings.Contains(strings.Join(allMessageContents(req.Messages), "\n"), "middle-one middle-one") {
+		t.Fatalf("messages should drop over-budget oldest middle content: %+v", req.Messages)
+	}
+	if strings.Contains(strings.Join(allMessageContents(req.Messages), "\n"), "<leading_context") {
+		t.Fatalf("messages should omit leading_context when budget is tight: %+v", req.Messages)
+	}
+	if !strings.Contains(last, "...") {
+		t.Fatalf("current message = %q, want per-message truncation ellipsis", last)
+	}
+}
+
+func TestBuildGenerateRequestNonReplyUsesRecentConversationContext(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  8,
+					LeadingContextMessages: 3,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        4000,
+					MaxMessageRunes:        200,
+				},
+			},
+		},
+	})
+
+	module.memory = &memoryStub{
+		leadingContext: []otogi.ConversationContextEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article:      otogi.Article{ID: "m1", Text: "earlier discussion"},
+				CreatedAt:    time.Unix(90, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+				Article:      otogi.Article{ID: "m2", Text: "latest local context"},
+				CreatedAt:    time.Unix(95, 0).UTC(),
+			},
+		},
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u3", DisplayName: "Carol"},
+				Article:      otogi.Article{ID: "m3", Text: "trigger text"},
+				CreatedAt:    time.Unix(100, 0).UTC(),
+				IsCurrent:    true,
+			},
+		},
+	}
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-3",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source: otogi.EventSource{
+			Platform: otogi.PlatformTelegram,
+			ID:       "tg-main",
+		},
+		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+		Actor:        otogi.Actor{ID: "u3", DisplayName: "Carol"},
+		Article: &otogi.Article{
+			ID:   "m3",
+			Text: "Otogi summarize",
+		},
+	}, module.cfg.Agents[0], "what did we agree on?")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if len(req.Messages) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(req.Messages))
+	}
+	if req.Messages[2].Role != otogi.LLMMessageRoleUser {
+		t.Fatalf("message[2] role = %q, want user", req.Messages[2].Role)
+	}
+	if !strings.Contains(req.Messages[2].Content, `<leading_context reason="messages_before_current_message">`) {
+		t.Fatalf("message[2] = %q, want current-message leading_context", req.Messages[2].Content)
+	}
+	if !strings.Contains(req.Messages[2].Content, "latest local context") {
+		t.Fatalf("message[2] = %q, want recent context body", req.Messages[2].Content)
+	}
+	if strings.Contains(req.Messages[2].Content, "<reply_thread_message") {
+		t.Fatalf("message[2] = %q, should not include reply thread on non-reply trigger", req.Messages[2].Content)
+	}
+	if !strings.Contains(req.Messages[3].Content, `reply_thread_included="0"`) {
+		t.Fatalf("message[3] = %q, want zero reply-thread count", req.Messages[3].Content)
+	}
+	if !strings.Contains(req.Messages[3].Content, `leading_context_included="2"`) {
+		t.Fatalf("message[3] = %q, want leading context count", req.Messages[3].Content)
+	}
+	if !strings.Contains(req.Messages[3].Content, "what did we agree on?") {
+		t.Fatalf("message[3] = %q, want stripped current prompt", req.Messages[3].Content)
 	}
 }
 
@@ -1624,9 +1885,12 @@ func (*sinkDispatcherStub) ListSinksByPlatform(context.Context, otogi.Platform) 
 }
 
 type memoryStub struct {
-	replyChain      []otogi.ReplyChainEntry
-	replyErr        error
-	onGetReplyChain func()
+	replyChain                []otogi.ReplyChainEntry
+	replyErr                  error
+	leadingContext            []otogi.ConversationContextEntry
+	leadingContextErr         error
+	onGetReplyChain           func()
+	onListConversationContext func()
 }
 
 func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool, error) {
@@ -1658,10 +1922,36 @@ func (m *memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.Reply
 	return cloned, nil
 }
 
+func (m *memoryStub) ListConversationContextBefore(
+	context.Context,
+	otogi.ConversationContextBeforeQuery,
+) ([]otogi.ConversationContextEntry, error) {
+	if m.onListConversationContext != nil {
+		m.onListConversationContext()
+	}
+	if m.leadingContextErr != nil {
+		return nil, m.leadingContextErr
+	}
+
+	cloned := make([]otogi.ConversationContextEntry, 0, len(m.leadingContext))
+	for _, entry := range m.leadingContext {
+		cloned = append(cloned, otogi.ConversationContextEntry{
+			Conversation: entry.Conversation,
+			Actor:        entry.Actor,
+			Article:      entry.Article,
+			CreatedAt:    entry.CreatedAt,
+			UpdatedAt:    entry.UpdatedAt,
+		})
+	}
+
+	return cloned, nil
+}
+
 type providerStub struct {
 	stream           otogi.LLMStream
 	streamErr        error
 	onGenerateStream func()
+	lastRequest      otogi.LLMGenerateRequest
 }
 
 type markdownParserStub struct{}
@@ -1720,7 +2010,10 @@ func (s *markdownParserSequenceStub) ParseMarkdown(
 	return result, nil
 }
 
-func (p *providerStub) GenerateStream(context.Context, otogi.LLMGenerateRequest) (otogi.LLMStream, error) {
+func (p *providerStub) GenerateStream(
+	_ context.Context,
+	req otogi.LLMGenerateRequest,
+) (otogi.LLMStream, error) {
 	if p.onGenerateStream != nil {
 		p.onGenerateStream()
 	}
@@ -1731,6 +2024,7 @@ func (p *providerStub) GenerateStream(context.Context, otogi.LLMGenerateRequest)
 		return nil, fmt.Errorf("nil stream")
 	}
 
+	p.lastRequest = req
 	return p.stream, nil
 }
 
@@ -1795,6 +2089,15 @@ func newTestModule(cfg Config) *Module {
 	module := New()
 	module.cfg = cfg
 	return module
+}
+
+func allMessageContents(messages []otogi.LLMMessage) []string {
+	contents := make([]string, 0, len(messages))
+	for _, message := range messages {
+		contents = append(contents, message.Content)
+	}
+
+	return contents
 }
 
 func sequenceClock(times []time.Time) func() time.Time {

@@ -280,6 +280,13 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 			Temperature:          agent.Temperature,
 			RequestTimeout:       agent.RequestTimeout,
 			RequestMetadata:      cloneStringMap(agent.RequestMetadata),
+			ContextPolicy: ContextPolicy{
+				ReplyChainMaxMessages:  agent.ContextPolicy.ReplyChainMaxMessages,
+				LeadingContextMessages: agent.ContextPolicy.LeadingContextMessages,
+				LeadingContextMaxAge:   agent.ContextPolicy.LeadingContextMaxAge,
+				MaxContextRunes:        agent.ContextPolicy.MaxContextRunes,
+				MaxMessageRunes:        agent.ContextPolicy.MaxMessageRunes,
+			},
 		})
 	}
 

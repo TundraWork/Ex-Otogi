@@ -419,6 +419,21 @@ func TestConfigureStdlibLogBridgeKeepsOtherLogsAsError(t *testing.T) {
 	}
 }
 
+func TestConfiguredRuntimeModuleNamesIncludesQuotehelper(t *testing.T) {
+	names := configuredRuntimeModuleNames()
+
+	found := false
+	for _, name := range names {
+		if name == "quotehelper" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("configured runtime modules = %v, want quotehelper", names)
+	}
+}
+
 type sinkDispatcherTestStub struct{}
 
 func (*sinkDispatcherTestStub) SendMessage(context.Context, otogi.SendMessageRequest) (*otogi.OutboundMessage, error) {

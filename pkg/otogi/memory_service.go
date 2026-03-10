@@ -29,6 +29,16 @@ type MemoryService interface {
 	// The returned chain is ordered oldest -> newest and always includes the
 	// current inbound event article as the last entry when event is valid.
 	GetReplyChain(ctx context.Context, event *Event) ([]ReplyChainEntry, error)
+	// ListConversationContextBefore resolves articles immediately preceding one
+	// anchor position within the same conversation scope.
+	//
+	// The returned slice is ordered oldest -> newest. Implementations should use
+	// AnchorArticleID when it can be resolved and fall back to AnchorOccurredAt
+	// otherwise. ExcludeArticleIDs must never appear in the result.
+	ListConversationContextBefore(
+		ctx context.Context,
+		query ConversationContextBeforeQuery,
+	) ([]ConversationContextEntry, error)
 }
 
 // MemoryLookup identifies one memory entry in a conversation scope.
@@ -205,6 +215,68 @@ type ReplyChainEntry struct {
 	Actor Actor
 	// Article stores the projected article payload for this chain entry.
 	Article Article
+	// CreatedAt records when this article was first observed.
+	CreatedAt time.Time
+	// UpdatedAt records when this article projection was last updated.
+	UpdatedAt time.Time
 	// IsCurrent reports whether this entry is the current inbound event article.
 	IsCurrent bool
+}
+
+// ConversationContextBeforeQuery identifies one anchored conversation window
+// lookup that returns earlier articles only.
+type ConversationContextBeforeQuery struct {
+	// TenantID scopes lookup for multi-tenant deployments.
+	TenantID string
+	// Platform identifies which upstream platform produced this memory entry.
+	Platform Platform
+	// ConversationID identifies the conversation containing the anchor.
+	ConversationID string
+	// ThreadID optionally narrows the lookup to one thread/topic within the
+	// conversation.
+	ThreadID string
+	// AnchorArticleID identifies the article before which context should be
+	// returned when that article is already known to memory.
+	AnchorArticleID string
+	// AnchorOccurredAt provides a time anchor used when AnchorArticleID is
+	// unavailable or unresolved.
+	AnchorOccurredAt time.Time
+	// BeforeLimit caps how many earlier articles can be returned.
+	BeforeLimit int
+	// ExcludeArticleIDs lists article ids that must not appear in the returned
+	// context window.
+	ExcludeArticleIDs []string
+}
+
+// Validate checks that mandatory conversation context lookup fields are present.
+func (q ConversationContextBeforeQuery) Validate() error {
+	if q.Platform == "" {
+		return fmt.Errorf("validate conversation context before query: missing platform")
+	}
+	if q.ConversationID == "" {
+		return fmt.Errorf("validate conversation context before query: missing conversation id")
+	}
+	if q.AnchorArticleID == "" && q.AnchorOccurredAt.IsZero() {
+		return fmt.Errorf("validate conversation context before query: missing anchor article id or anchor occurred at")
+	}
+	if q.BeforeLimit < 0 {
+		return fmt.Errorf("validate conversation context before query: before_limit must be >= 0")
+	}
+
+	return nil
+}
+
+// ConversationContextEntry is one immutable article entry returned from one
+// anchored conversation context lookup.
+type ConversationContextEntry struct {
+	// Conversation identifies where this article was sent.
+	Conversation Conversation
+	// Actor identifies who authored this article when known.
+	Actor Actor
+	// Article stores the projected article payload for this context entry.
+	Article Article
+	// CreatedAt records when this article was first observed.
+	CreatedAt time.Time
+	// UpdatedAt records when this article projection was last updated.
+	UpdatedAt time.Time
 }

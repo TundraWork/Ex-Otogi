@@ -729,6 +729,194 @@ func TestModuleGetReplyChain(t *testing.T) {
 	}
 }
 
+func TestModuleListConversationContextBefore(t *testing.T) {
+	tests := []struct {
+		name             string
+		ttl              time.Duration
+		seedEvents       []*otogi.Event
+		query            otogi.ConversationContextBeforeQuery
+		cancelBeforeCall bool
+		wantArticleIDs   []string
+		wantErrSubstring string
+	}{
+		{
+			name: "returns oldest to newest predecessors",
+			ttl:  24 * time.Hour,
+			seedEvents: []*otogi.Event{
+				newCreatedEventAt("msg-1", "one", "", time.Unix(10, 0).UTC()),
+				newCreatedEventAt("msg-2", "two", "", time.Unix(20, 0).UTC()),
+				newCreatedEventAt("msg-3", "three", "", time.Unix(30, 0).UTC()),
+				newCreatedEventAt("msg-4", "four", "", time.Unix(40, 0).UTC()),
+			},
+			query: otogi.ConversationContextBeforeQuery{
+				Platform:        otogi.PlatformTelegram,
+				ConversationID:  "chat-1",
+				AnchorArticleID: "msg-4",
+				BeforeLimit:     2,
+			},
+			wantArticleIDs: []string{"msg-2", "msg-3"},
+		},
+		{
+			name: "respects thread scope",
+			ttl:  24 * time.Hour,
+			seedEvents: []*otogi.Event{
+				threadedCreatedEvent("msg-1", "main", "", "", time.Unix(10, 0).UTC()),
+				threadedCreatedEvent("msg-2", "topic one", "", "topic-1", time.Unix(20, 0).UTC()),
+				threadedCreatedEvent("msg-3", "topic two", "", "topic-2", time.Unix(25, 0).UTC()),
+				threadedCreatedEvent("msg-4", "topic one latest", "", "topic-1", time.Unix(30, 0).UTC()),
+			},
+			query: otogi.ConversationContextBeforeQuery{
+				Platform:        otogi.PlatformTelegram,
+				ConversationID:  "chat-1",
+				ThreadID:        "topic-1",
+				AnchorArticleID: "msg-4",
+				BeforeLimit:     3,
+			},
+			wantArticleIDs: []string{"msg-2"},
+		},
+		{
+			name: "retracted articles are removed from predecessor list",
+			ttl:  24 * time.Hour,
+			seedEvents: []*otogi.Event{
+				newCreatedEventAt("msg-1", "one", "", time.Unix(10, 0).UTC()),
+				newCreatedEventAt("msg-2", "two", "", time.Unix(20, 0).UTC()),
+				newCreatedEventAt("msg-3", "three", "", time.Unix(30, 0).UTC()),
+				newRetractedEvent("msg-2"),
+				newCreatedEventAt("msg-4", "four", "", time.Unix(40, 0).UTC()),
+			},
+			query: otogi.ConversationContextBeforeQuery{
+				Platform:        otogi.PlatformTelegram,
+				ConversationID:  "chat-1",
+				AnchorArticleID: "msg-4",
+				BeforeLimit:     3,
+			},
+			wantArticleIDs: []string{"msg-1", "msg-3"},
+		},
+		{
+			name: "falls back to anchor time when anchor article is not in memory",
+			ttl:  24 * time.Hour,
+			seedEvents: []*otogi.Event{
+				newCreatedEventAt("msg-1", "one", "", time.Unix(10, 0).UTC()),
+				newCreatedEventAt("msg-2", "two", "", time.Unix(20, 0).UTC()),
+				newCreatedEventAt("msg-3", "three", "", time.Unix(30, 0).UTC()),
+			},
+			query: otogi.ConversationContextBeforeQuery{
+				Platform:         otogi.PlatformTelegram,
+				ConversationID:   "chat-1",
+				AnchorArticleID:  "msg-current",
+				AnchorOccurredAt: time.Unix(35, 0).UTC(),
+				BeforeLimit:      2,
+				ExcludeArticleIDs: []string{
+					"msg-current",
+				},
+			},
+			wantArticleIDs: []string{"msg-2", "msg-3"},
+		},
+		{
+			name: "anchor time query respects excluded articles",
+			ttl:  24 * time.Hour,
+			seedEvents: []*otogi.Event{
+				newCreatedEventAt("msg-1", "one", "", time.Unix(10, 0).UTC()),
+				newCreatedEventAt("msg-2", "two", "", time.Unix(20, 0).UTC()),
+				newCreatedEventAt("msg-3", "three", "", time.Unix(30, 0).UTC()),
+			},
+			query: otogi.ConversationContextBeforeQuery{
+				Platform:         otogi.PlatformTelegram,
+				ConversationID:   "chat-1",
+				AnchorOccurredAt: time.Unix(35, 0).UTC(),
+				BeforeLimit:      3,
+				ExcludeArticleIDs: []string{
+					"msg-3",
+				},
+			},
+			wantArticleIDs: []string{"msg-1", "msg-2"},
+		},
+		{
+			name: "expired anchor returns empty result",
+			ttl:  time.Second,
+			seedEvents: []*otogi.Event{
+				newCreatedEventAt("msg-1", "one", "", time.Unix(10, 0).UTC()),
+				newCreatedEventAt("msg-2", "two", "", time.Unix(20, 0).UTC()),
+			},
+			query: otogi.ConversationContextBeforeQuery{
+				Platform:        otogi.PlatformTelegram,
+				ConversationID:  "chat-1",
+				AnchorArticleID: "msg-2",
+				BeforeLimit:     1,
+			},
+			wantArticleIDs: []string{},
+		},
+		{
+			name: "context cancellation is propagated",
+			ttl:  24 * time.Hour,
+			seedEvents: []*otogi.Event{
+				newCreatedEventAt("msg-1", "one", "", time.Unix(10, 0).UTC()),
+			},
+			query: otogi.ConversationContextBeforeQuery{
+				Platform:        otogi.PlatformTelegram,
+				ConversationID:  "chat-1",
+				AnchorArticleID: "msg-1",
+				BeforeLimit:     1,
+			},
+			cancelBeforeCall: true,
+			wantErrSubstring: "context canceled",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			now := time.Unix(200, 0).UTC()
+			module := New(
+				WithTTL(testCase.ttl),
+				withClock(func() time.Time { return now }),
+			)
+
+			for _, seedEvent := range testCase.seedEvents {
+				if err := module.handleEvent(context.Background(), seedEvent); err != nil {
+					t.Fatalf("seed event %s failed: %v", seedEvent.ID, err)
+				}
+			}
+
+			if testCase.ttl == time.Second {
+				now = now.Add(2 * time.Second)
+			}
+
+			ctx := context.Background()
+			if testCase.cancelBeforeCall {
+				canceledCtx, cancel := context.WithCancel(context.Background())
+				cancel()
+				ctx = canceledCtx
+			}
+
+			entries, err := module.ListConversationContextBefore(ctx, testCase.query)
+			if testCase.wantErrSubstring != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), testCase.wantErrSubstring) {
+					t.Fatalf("error = %v, want substring %q", err, testCase.wantErrSubstring)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListConversationContextBefore failed: %v", err)
+			}
+
+			if len(entries) != len(testCase.wantArticleIDs) {
+				t.Fatalf("entries length = %d, want %d", len(entries), len(testCase.wantArticleIDs))
+			}
+			for index, entry := range entries {
+				if entry.Article.ID != testCase.wantArticleIDs[index] {
+					t.Fatalf("entries[%d].Article.ID = %q, want %q", index, entry.Article.ID, testCase.wantArticleIDs[index])
+				}
+			}
+		})
+	}
+}
+
 func TestModuleEventHistoryAndEntityProjectionSeparation(t *testing.T) {
 	t.Parallel()
 
@@ -1324,6 +1512,18 @@ func newCreatedEventAt(messageID string, text string, replyToID string, occurred
 			Text:             text,
 		},
 	}
+}
+
+func threadedCreatedEvent(
+	messageID string,
+	text string,
+	replyToID string,
+	threadID string,
+	occurredAt time.Time,
+) *otogi.Event {
+	event := newCreatedEventAt(messageID, text, replyToID, occurredAt)
+	event.Article.ThreadID = threadID
+	return event
 }
 
 func newEditedEvent(targetMessageID string, text string) *otogi.Event {

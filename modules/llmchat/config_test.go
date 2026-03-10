@@ -113,6 +113,21 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErrSubstring: "reserved key",
 		},
+		{
+			name: "negative leading context messages fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].ContextPolicy.LeadingContextMessages = -1
+			},
+			wantErrSubstring: "leading_context_messages must be >= 0",
+		},
+		{
+			name: "max message runes cannot exceed context budget",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].ContextPolicy.MaxContextRunes = 100
+				cfg.Agents[0].ContextPolicy.MaxMessageRunes = 101
+			},
+			wantErrSubstring: "max_message_runes must be <= max_context_runes",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -156,6 +171,32 @@ func TestCloneConfigDeepCopiesMaps(t *testing.T) {
 	}
 	if original.Agents[0].RequestMetadata["gemini.google_search"] != "true" {
 		t.Fatalf("original request_metadata mutated: %+v", original.Agents[0].RequestMetadata)
+	}
+}
+
+func TestResolveContextPolicyDefaults(t *testing.T) {
+	t.Parallel()
+
+	policy := resolveContextPolicy(ContextPolicy{})
+
+	if policy.ReplyChainMaxMessages != defaultReplyChainMaxMessages {
+		t.Fatalf("reply_chain_max_messages = %d, want %d", policy.ReplyChainMaxMessages, defaultReplyChainMaxMessages)
+	}
+	if policy.LeadingContextMessages != defaultLeadingContextMessages {
+		t.Fatalf(
+			"leading_context_messages = %d, want %d",
+			policy.LeadingContextMessages,
+			defaultLeadingContextMessages,
+		)
+	}
+	if policy.LeadingContextMaxAge != defaultLeadingContextMaxAge {
+		t.Fatalf("leading_context_max_age = %s, want %s", policy.LeadingContextMaxAge, defaultLeadingContextMaxAge)
+	}
+	if policy.MaxContextRunes != defaultMaxContextRunes {
+		t.Fatalf("max_context_runes = %d, want %d", policy.MaxContextRunes, defaultMaxContextRunes)
+	}
+	if policy.MaxMessageRunes != defaultMaxMessageRunes {
+		t.Fatalf("max_message_runes = %d, want %d", policy.MaxMessageRunes, defaultMaxMessageRunes)
 	}
 }
 

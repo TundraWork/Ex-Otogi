@@ -11,6 +11,12 @@ const (
 	metadataKeyAgent          = "agent"
 	metadataKeyProvider       = "provider"
 	metadataKeyConversationID = "conversation_id"
+
+	defaultReplyChainMaxMessages  = 12
+	defaultLeadingContextMessages = 4
+	defaultLeadingContextMaxAge   = 15 * time.Minute
+	defaultMaxContextRunes        = 12000
+	defaultMaxMessageRunes        = 1600
 )
 
 // Config configures llmchat module behavior.
@@ -43,6 +49,28 @@ type Agent struct {
 	RequestTimeout time.Duration
 	// RequestMetadata carries provider-agnostic request metadata overrides.
 	RequestMetadata map[string]string
+	// ContextPolicy controls how llmchat reconstructs and trims conversation
+	// context before sending it to one provider.
+	ContextPolicy ContextPolicy
+}
+
+// ContextPolicy controls how one agent builds structured conversation context.
+type ContextPolicy struct {
+	// ReplyChainMaxMessages caps how many reply-chain entries can participate in
+	// one request, including the current trigger message.
+	ReplyChainMaxMessages int
+	// LeadingContextMessages caps how many messages immediately preceding the
+	// thread root can be included as background context.
+	LeadingContextMessages int
+	// LeadingContextMaxAge bounds how old background messages can be relative to
+	// the thread root.
+	LeadingContextMaxAge time.Duration
+	// MaxContextRunes caps the approximate size of serialized contextual payloads
+	// that llmchat adds before the current message.
+	MaxContextRunes int
+	// MaxMessageRunes caps the serialized size of any single article included in
+	// context.
+	MaxMessageRunes int
 }
 
 // Validate checks llmchat config coherence.
@@ -106,7 +134,54 @@ func validateAgent(agent Agent) error {
 	if _, err := template.New("system-prompt").Option("missingkey=error").Parse(agent.SystemPromptTemplate); err != nil {
 		return fmt.Errorf("invalid system_prompt_template: %w", err)
 	}
+	if err := validateContextPolicy(resolveContextPolicy(agent.ContextPolicy)); err != nil {
+		return fmt.Errorf("context_policy: %w", err)
+	}
 	return validateRequestMetadata(agent.RequestMetadata)
+}
+
+func resolveContextPolicy(policy ContextPolicy) ContextPolicy {
+	resolved := policy
+	if resolved.ReplyChainMaxMessages == 0 {
+		resolved.ReplyChainMaxMessages = defaultReplyChainMaxMessages
+	}
+	if resolved.LeadingContextMessages == 0 {
+		resolved.LeadingContextMessages = defaultLeadingContextMessages
+	}
+	if resolved.LeadingContextMaxAge == 0 {
+		resolved.LeadingContextMaxAge = defaultLeadingContextMaxAge
+	}
+	if resolved.MaxContextRunes == 0 {
+		resolved.MaxContextRunes = defaultMaxContextRunes
+	}
+	if resolved.MaxMessageRunes == 0 {
+		resolved.MaxMessageRunes = defaultMaxMessageRunes
+	}
+
+	return resolved
+}
+
+func validateContextPolicy(policy ContextPolicy) error {
+	if policy.ReplyChainMaxMessages <= 0 {
+		return fmt.Errorf("reply_chain_max_messages must be > 0")
+	}
+	if policy.LeadingContextMessages < 0 {
+		return fmt.Errorf("leading_context_messages must be >= 0")
+	}
+	if policy.LeadingContextMaxAge <= 0 {
+		return fmt.Errorf("leading_context_max_age must be > 0")
+	}
+	if policy.MaxContextRunes <= 0 {
+		return fmt.Errorf("max_context_runes must be > 0")
+	}
+	if policy.MaxMessageRunes <= 0 {
+		return fmt.Errorf("max_message_runes must be > 0")
+	}
+	if policy.MaxMessageRunes > policy.MaxContextRunes {
+		return fmt.Errorf("max_message_runes must be <= max_context_runes")
+	}
+
+	return nil
 }
 
 func validateRequestMetadata(metadata map[string]string) error {
@@ -162,6 +237,7 @@ func cloneConfig(cfg Config) Config {
 				Temperature:          agent.Temperature,
 				RequestTimeout:       agent.RequestTimeout,
 				RequestMetadata:      cloneStringMap(agent.RequestMetadata),
+				ContextPolicy:        resolveContextPolicy(agent.ContextPolicy),
 			})
 		}
 	}

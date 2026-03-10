@@ -35,6 +35,13 @@
       "template_variables": {
         "locale": "en-US"
       },
+      "context": {
+        "reply_chain_max_messages": 12,
+        "leading_context_messages": 4,
+        "leading_context_max_age": "15m",
+        "max_context_runes": 12000,
+        "max_message_runes": 1600
+      },
       "request_timeout": "90s",
       "max_output_tokens": 512,
       "temperature": 0.4
@@ -45,6 +52,13 @@
       "provider": "gemini-main",
       "model": "gemini-2.5-flash",
       "system_prompt_template": "You are {{.AgentName}}. Current UTC time: {{.DateTimeUTC}}.",
+      "context": {
+        "reply_chain_max_messages": 12,
+        "leading_context_messages": 4,
+        "leading_context_max_age": "15m",
+        "max_context_runes": 12000,
+        "max_message_runes": 1600
+      },
       "request_timeout": "90s",
       "max_output_tokens": 512,
       "temperature": 0.4,

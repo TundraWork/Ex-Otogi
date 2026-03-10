@@ -9,6 +9,7 @@ import (
 func (m *Module) upsertEntityLocked(key cacheKey, cached memorySnapshot, now time.Time) {
 	m.upsertKeyLocked(key, now)
 	m.entities[key] = cloneMemorySnapshot(cached)
+	m.upsertConversationArticleLocked(key, cached)
 	m.trimToCapacityLocked()
 }
 
@@ -102,6 +103,7 @@ func (m *Module) deleteLocked(key cacheKey) {
 	delete(m.records, key)
 	delete(m.entities, key)
 	delete(m.events, key)
+	m.removeConversationArticleLocked(key)
 }
 
 func (m *Module) isExpired(record *cacheRecord, now time.Time) bool {

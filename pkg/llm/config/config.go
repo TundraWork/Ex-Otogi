@@ -33,6 +33,12 @@ const (
 
 	geminiResponseMIMEText = "text/plain"
 	geminiResponseMIMEJSON = "application/json"
+
+	defaultReplyChainMaxMessages  = 12
+	defaultLeadingContextMessages = 4
+	defaultLeadingContextMaxAge   = 15 * time.Minute
+	defaultMaxContextRunes        = 12000
+	defaultMaxMessageRunes        = 1600
 )
 
 // Config is the full runtime LLM configuration model loaded from JSON.
@@ -119,6 +125,28 @@ type Agent struct {
 	RequestTimeout time.Duration
 	// RequestMetadata carries provider-agnostic per-agent metadata overrides.
 	RequestMetadata map[string]string
+	// ContextPolicy controls how llmchat reconstructs and trims conversation
+	// context before sending one request.
+	ContextPolicy ContextPolicy
+}
+
+// ContextPolicy controls how one agent builds structured conversation context.
+type ContextPolicy struct {
+	// ReplyChainMaxMessages caps how many reply-chain entries can participate in
+	// one request, including the current trigger message.
+	ReplyChainMaxMessages int
+	// LeadingContextMessages caps how many messages immediately preceding the
+	// thread root can be included as background context.
+	LeadingContextMessages int
+	// LeadingContextMaxAge bounds how old background messages can be relative to
+	// the thread root.
+	LeadingContextMaxAge time.Duration
+	// MaxContextRunes caps the approximate size of serialized contextual payloads
+	// added before the current message.
+	MaxContextRunes int
+	// MaxMessageRunes caps the serialized size of any single article included in
+	// context.
+	MaxMessageRunes int
 }
 
 type fileConfig struct {
@@ -162,6 +190,15 @@ type fileAgent struct {
 	Temperature          float64           `json:"temperature"`
 	RequestTimeout       string            `json:"request_timeout"`
 	RequestMetadata      map[string]string `json:"request_metadata"`
+	Context              *fileAgentContext `json:"context"`
+}
+
+type fileAgentContext struct {
+	ReplyChainMaxMessages  *int   `json:"reply_chain_max_messages"`
+	LeadingContextMessages *int   `json:"leading_context_messages"`
+	LeadingContextMaxAge   string `json:"leading_context_max_age"`
+	MaxContextRunes        *int   `json:"max_context_runes"`
+	MaxMessageRunes        *int   `json:"max_message_runes"`
 }
 
 type rootRaw struct {
@@ -238,6 +275,11 @@ func LoadFile(path string) (Config, error) {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: parse request_timeout: must be > 0", index)
 		}
 
+		contextPolicy, err := parseContextPolicy(rawAgent.Context)
+		if err != nil {
+			return Config{}, fmt.Errorf("load llm config agents[%d]: parse context: %w", index, err)
+		}
+
 		agent := Agent{
 			Name:                 strings.TrimSpace(rawAgent.Name),
 			Description:          strings.TrimSpace(rawAgent.Description),
@@ -249,6 +291,7 @@ func LoadFile(path string) (Config, error) {
 			Temperature:          rawAgent.Temperature,
 			RequestTimeout:       agentRequestTimeout,
 			RequestMetadata:      cloneStringMap(rawAgent.RequestMetadata),
+			ContextPolicy:        contextPolicy,
 		}
 		if err := validateAgent(agent); err != nil {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: %w", index, err)
@@ -541,7 +584,83 @@ func validateAgent(agent Agent) error {
 	if _, err := template.New("system-prompt").Option("missingkey=error").Parse(agent.SystemPromptTemplate); err != nil {
 		return fmt.Errorf("invalid system_prompt_template: %w", err)
 	}
+	if err := validateContextPolicy(resolveContextPolicy(agent.ContextPolicy)); err != nil {
+		return fmt.Errorf("context_policy: %w", err)
+	}
 	return validateRequestMetadata(agent.RequestMetadata)
+}
+
+func parseContextPolicy(raw *fileAgentContext) (ContextPolicy, error) {
+	if raw == nil {
+		return resolveContextPolicy(ContextPolicy{}), nil
+	}
+
+	policy := ContextPolicy{}
+	if raw.ReplyChainMaxMessages != nil {
+		policy.ReplyChainMaxMessages = *raw.ReplyChainMaxMessages
+	}
+	if raw.LeadingContextMessages != nil {
+		policy.LeadingContextMessages = *raw.LeadingContextMessages
+	}
+	if strings.TrimSpace(raw.LeadingContextMaxAge) != "" {
+		duration, err := time.ParseDuration(strings.TrimSpace(raw.LeadingContextMaxAge))
+		if err != nil {
+			return ContextPolicy{}, fmt.Errorf("parse leading_context_max_age: %w", err)
+		}
+		policy.LeadingContextMaxAge = duration
+	}
+	if raw.MaxContextRunes != nil {
+		policy.MaxContextRunes = *raw.MaxContextRunes
+	}
+	if raw.MaxMessageRunes != nil {
+		policy.MaxMessageRunes = *raw.MaxMessageRunes
+	}
+
+	return resolveContextPolicy(policy), nil
+}
+
+func resolveContextPolicy(policy ContextPolicy) ContextPolicy {
+	resolved := policy
+	if resolved.ReplyChainMaxMessages == 0 {
+		resolved.ReplyChainMaxMessages = defaultReplyChainMaxMessages
+	}
+	if resolved.LeadingContextMessages == 0 {
+		resolved.LeadingContextMessages = defaultLeadingContextMessages
+	}
+	if resolved.LeadingContextMaxAge == 0 {
+		resolved.LeadingContextMaxAge = defaultLeadingContextMaxAge
+	}
+	if resolved.MaxContextRunes == 0 {
+		resolved.MaxContextRunes = defaultMaxContextRunes
+	}
+	if resolved.MaxMessageRunes == 0 {
+		resolved.MaxMessageRunes = defaultMaxMessageRunes
+	}
+
+	return resolved
+}
+
+func validateContextPolicy(policy ContextPolicy) error {
+	if policy.ReplyChainMaxMessages <= 0 {
+		return fmt.Errorf("reply_chain_max_messages must be > 0")
+	}
+	if policy.LeadingContextMessages < 0 {
+		return fmt.Errorf("leading_context_messages must be >= 0")
+	}
+	if policy.LeadingContextMaxAge <= 0 {
+		return fmt.Errorf("leading_context_max_age must be > 0")
+	}
+	if policy.MaxContextRunes <= 0 {
+		return fmt.Errorf("max_context_runes must be > 0")
+	}
+	if policy.MaxMessageRunes <= 0 {
+		return fmt.Errorf("max_message_runes must be > 0")
+	}
+	if policy.MaxMessageRunes > policy.MaxContextRunes {
+		return fmt.Errorf("max_message_runes must be <= max_context_runes")
+	}
+
+	return nil
 }
 
 func validateRequestMetadata(metadata map[string]string) error {

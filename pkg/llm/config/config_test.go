@@ -62,7 +62,14 @@ func TestLoadFile(t *testing.T) {
 							"model":"gpt-5-mini",
 							"system_prompt_template":"You are {{.AgentName}}",
 							"request_timeout":"30s",
-							"request_metadata":{"trace_id":"main"}
+							"request_metadata":{"trace_id":"main"},
+							"context":{
+								"reply_chain_max_messages":8,
+								"leading_context_messages":2,
+								"leading_context_max_age":"5m",
+								"max_context_runes":6000,
+								"max_message_runes":1200
+							}
 						},
 						{
 							"name":"OtogiGemini",
@@ -131,6 +138,36 @@ func TestLoadFile(t *testing.T) {
 				if cfg.Agents[0].RequestTimeout != 30*time.Second {
 					t.Fatalf("agent[0] request_timeout = %s, want 30s", cfg.Agents[0].RequestTimeout)
 				}
+				if cfg.Agents[0].ContextPolicy.ReplyChainMaxMessages != 8 {
+					t.Fatalf(
+						"agent[0] reply_chain_max_messages = %d, want 8",
+						cfg.Agents[0].ContextPolicy.ReplyChainMaxMessages,
+					)
+				}
+				if cfg.Agents[0].ContextPolicy.LeadingContextMessages != 2 {
+					t.Fatalf(
+						"agent[0] leading_context_messages = %d, want 2",
+						cfg.Agents[0].ContextPolicy.LeadingContextMessages,
+					)
+				}
+				if cfg.Agents[0].ContextPolicy.LeadingContextMaxAge != 5*time.Minute {
+					t.Fatalf(
+						"agent[0] leading_context_max_age = %s, want 5m",
+						cfg.Agents[0].ContextPolicy.LeadingContextMaxAge,
+					)
+				}
+				if cfg.Agents[0].ContextPolicy.MaxContextRunes != 6000 {
+					t.Fatalf(
+						"agent[0] max_context_runes = %d, want 6000",
+						cfg.Agents[0].ContextPolicy.MaxContextRunes,
+					)
+				}
+				if cfg.Agents[0].ContextPolicy.MaxMessageRunes != 1200 {
+					t.Fatalf(
+						"agent[0] max_message_runes = %d, want 1200",
+						cfg.Agents[0].ContextPolicy.MaxMessageRunes,
+					)
+				}
 				if cfg.Agents[1].RequestTimeout != 20*time.Second {
 					t.Fatalf("agent[1] request_timeout = %s, want 20s", cfg.Agents[1].RequestTimeout)
 				}
@@ -141,6 +178,24 @@ func TestLoadFile(t *testing.T) {
 					)
 				}
 			},
+		},
+		{
+			name: "invalid context max age",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"context":{"leading_context_max_age":"soon"}
+					}
+				]
+			}`,
+			wantErrSubstring: "parse context: parse leading_context_max_age",
 		},
 		{
 			name: "unsupported provider type",

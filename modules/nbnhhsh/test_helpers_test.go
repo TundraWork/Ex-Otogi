@@ -114,6 +114,13 @@ func (*memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.ReplyCh
 	return nil, nil
 }
 
+func (*memoryStub) ListConversationContextBefore(
+	context.Context,
+	otogi.ConversationContextBeforeQuery,
+) ([]otogi.ConversationContextEntry, error) {
+	return nil, nil
+}
+
 type fakeGuessClient struct {
 	lastText string
 	calls    int

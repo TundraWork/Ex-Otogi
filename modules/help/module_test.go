@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"ex-otogi/pkg/otogi"
 )
@@ -146,6 +147,26 @@ func TestModuleHandleCommand(t *testing.T) {
 			}
 			if dispatcher.lastRequest.Target.Sink.ID != "tg-main" {
 				t.Fatalf("target sink id = %q, want tg-main", dispatcher.lastRequest.Target.Sink.ID)
+			}
+			if len(dispatcher.lastRequest.Entities) != 1 {
+				t.Fatalf("entities len = %d, want 1", len(dispatcher.lastRequest.Entities))
+			}
+			entity := dispatcher.lastRequest.Entities[0]
+			if entity.Type != otogi.TextEntityTypeBlockquote {
+				t.Fatalf("entity type = %q, want %q", entity.Type, otogi.TextEntityTypeBlockquote)
+			}
+			if !entity.Collapsed {
+				t.Fatal("entity collapsed = false, want true")
+			}
+			if entity.Offset != 0 {
+				t.Fatalf("entity offset = %d, want 0", entity.Offset)
+			}
+			if entity.Length != utf8.RuneCountInString(dispatcher.lastRequest.Text) {
+				t.Fatalf(
+					"entity length = %d, want %d",
+					entity.Length,
+					utf8.RuneCountInString(dispatcher.lastRequest.Text),
+				)
 			}
 			for _, wantSubstring := range testCase.wantTextContains {
 				if !strings.Contains(dispatcher.lastRequest.Text, wantSubstring) {

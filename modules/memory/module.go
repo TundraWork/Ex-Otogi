@@ -58,12 +58,15 @@ type Module struct {
 	ttl        time.Duration
 	clock      func() time.Time
 
-	mu       sync.Mutex
-	records  map[cacheKey]*cacheRecord
-	entities map[cacheKey]memorySnapshot
-	events   map[cacheKey][]otogi.Event
-	lru      *list.List
-	index    map[cacheKey]*list.Element
+	mu                       sync.Mutex
+	records                  map[cacheKey]*cacheRecord
+	entities                 map[cacheKey]memorySnapshot
+	events                   map[cacheKey][]otogi.Event
+	streams                  map[conversationStreamKey][]conversationStreamEntry
+	articleStreams           map[cacheKey]conversationArticleStream
+	lru                      *list.List
+	index                    map[cacheKey]*list.Element
+	nextConversationSequence uint64
 }
 
 type cacheKey struct {
@@ -75,6 +78,24 @@ type cacheKey struct {
 
 type cacheRecord struct {
 	expiresAt time.Time
+}
+
+type conversationStreamKey struct {
+	tenantID       string
+	platform       otogi.Platform
+	conversationID string
+	threadID       string
+}
+
+type conversationStreamEntry struct {
+	key       cacheKey
+	createdAt time.Time
+	sequence  uint64
+}
+
+type conversationArticleStream struct {
+	streamKey conversationStreamKey
+	sequence  uint64
 }
 
 type memorySnapshot struct {
@@ -90,15 +111,17 @@ type memorySnapshot struct {
 // New creates a memory module with bounded in-memory storage.
 func New(options ...Option) *Module {
 	module := &Module{
-		logger:     slog.Default(),
-		maxEntries: defaultMaxEntries,
-		ttl:        defaultTTL,
-		clock:      time.Now,
-		records:    make(map[cacheKey]*cacheRecord),
-		entities:   make(map[cacheKey]memorySnapshot),
-		events:     make(map[cacheKey][]otogi.Event),
-		lru:        list.New(),
-		index:      make(map[cacheKey]*list.Element),
+		logger:         slog.Default(),
+		maxEntries:     defaultMaxEntries,
+		ttl:            defaultTTL,
+		clock:          time.Now,
+		records:        make(map[cacheKey]*cacheRecord),
+		entities:       make(map[cacheKey]memorySnapshot),
+		events:         make(map[cacheKey][]otogi.Event),
+		streams:        make(map[conversationStreamKey][]conversationStreamEntry),
+		articleStreams: make(map[cacheKey]conversationArticleStream),
+		lru:            list.New(),
+		index:          make(map[cacheKey]*list.Element),
 	}
 	for _, option := range options {
 		option(module)
@@ -213,8 +236,11 @@ func (m *Module) OnShutdown(ctx context.Context) error {
 	m.records = make(map[cacheKey]*cacheRecord)
 	m.entities = make(map[cacheKey]memorySnapshot)
 	m.events = make(map[cacheKey][]otogi.Event)
+	m.streams = make(map[conversationStreamKey][]conversationStreamEntry)
+	m.articleStreams = make(map[cacheKey]conversationArticleStream)
 	m.index = make(map[cacheKey]*list.Element)
 	m.lru.Init()
+	m.nextConversationSequence = 0
 	m.mu.Unlock()
 
 	m.logger.InfoContext(ctx,

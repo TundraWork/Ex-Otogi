@@ -15,11 +15,13 @@ import (
 
 	"ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
+	"ex-otogi/modules/duel"
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/llmchat"
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/nbnhhsh"
 	"ex-otogi/modules/pingpong"
+	"ex-otogi/modules/quotehelper"
 	"ex-otogi/modules/sleep"
 	"ex-otogi/pkg/otogi"
 )
@@ -40,6 +42,8 @@ const (
 
 var runtimeModules = []func() otogi.Module{
 	func() otogi.Module { return memory.New() },
+	func() otogi.Module { return quotehelper.New() },
+	func() otogi.Module { return duel.New() },
 	func() otogi.Module { return nbnhhsh.New() },
 	func() otogi.Module { return pingpong.New() },
 	func() otogi.Module { return help.New() },

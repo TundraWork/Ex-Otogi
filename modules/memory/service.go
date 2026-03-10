@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"ex-otogi/pkg/otogi"
 )
@@ -116,22 +117,155 @@ func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi
 			Conversation: parentSnapshot.Conversation,
 			Actor:        parentSnapshot.Actor,
 			Article:      cloneArticle(parentSnapshot.Article),
+			CreatedAt:    parentSnapshot.CreatedAt,
+			UpdatedAt:    parentSnapshot.UpdatedAt,
 			IsCurrent:    false,
 		})
 		parentID = parentSnapshot.Article.ReplyToArticleID
 	}
 
 	reverseReplyChainEntries(parents)
+	occurredAt := normalizeEventTime(event.OccurredAt, m.now())
 	chain := make([]otogi.ReplyChainEntry, 0, len(parents)+1)
 	chain = append(chain, parents...)
 	chain = append(chain, otogi.ReplyChainEntry{
 		Conversation: event.Conversation,
 		Actor:        event.Actor,
 		Article:      cloneArticle(*event.Article),
+		CreatedAt:    occurredAt,
+		UpdatedAt:    mutationChangedAtOrFallback(event.Mutation, occurredAt),
 		IsCurrent:    true,
 	})
 
 	return chain, nil
+}
+
+// ListConversationContextBefore resolves articles immediately preceding one
+// anchor position within the same conversation scope.
+func (m *Module) ListConversationContextBefore(
+	ctx context.Context,
+	query otogi.ConversationContextBeforeQuery,
+) ([]otogi.ConversationContextEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("memory list conversation context before: %w", err)
+	}
+	if err := query.Validate(); err != nil {
+		return nil, fmt.Errorf("memory list conversation context before: %w", err)
+	}
+	if query.BeforeLimit == 0 {
+		return []otogi.ConversationContextEntry{}, nil
+	}
+
+	now := m.now()
+	excluded := make(map[string]struct{}, len(query.ExcludeArticleIDs)+1)
+	for _, articleID := range query.ExcludeArticleIDs {
+		if articleID == "" {
+			continue
+		}
+		excluded[articleID] = struct{}{}
+	}
+
+	m.mu.Lock()
+	candidateKeys := m.listConversationContextCandidateKeysLocked(now, query, excluded)
+	m.mu.Unlock()
+
+	entries := make([]otogi.ConversationContextEntry, 0, len(candidateKeys))
+	for _, candidateKey := range candidateKeys {
+		snapshot, found, err := m.getSnapshot(ctx, otogi.MemoryLookup{
+			TenantID:       candidateKey.tenantID,
+			Platform:       candidateKey.platform,
+			ConversationID: candidateKey.conversationID,
+			ArticleID:      candidateKey.articleID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf(
+				"memory list conversation context before get snapshot for %s: %w",
+				candidateKey.articleID,
+				err,
+			)
+		}
+		if !found {
+			continue
+		}
+
+		entries = append(entries, otogi.ConversationContextEntry{
+			Conversation: snapshot.Conversation,
+			Actor:        snapshot.Actor,
+			Article:      cloneArticle(snapshot.Article),
+			CreatedAt:    snapshot.CreatedAt,
+			UpdatedAt:    snapshot.UpdatedAt,
+		})
+	}
+	reverseConversationContextEntries(entries)
+
+	return entries, nil
+}
+
+func (m *Module) listConversationContextCandidateKeysLocked(
+	now time.Time,
+	query otogi.ConversationContextBeforeQuery,
+	excluded map[string]struct{},
+) []cacheKey {
+	if query.AnchorArticleID != "" {
+		anchorKey := cacheKey{
+			tenantID:       query.TenantID,
+			platform:       query.Platform,
+			conversationID: query.ConversationID,
+			articleID:      query.AnchorArticleID,
+		}
+		if m.ensureNotExpiredLocked(anchorKey, now) {
+			location, exists := m.articleStreams[anchorKey]
+			if exists && (query.ThreadID == "" || location.streamKey.threadID == query.ThreadID) {
+				streamEntries, exists := m.streams[location.streamKey]
+				if exists {
+					anchorIndex := locateConversationStreamEntry(streamEntries, anchorKey)
+					if anchorIndex >= 0 {
+						candidateKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, anchorIndex))
+						for index := anchorIndex - 1; index >= 0 && len(candidateKeys) < query.BeforeLimit; index-- {
+							candidateKey := streamEntries[index].key
+							if _, skip := excluded[candidateKey.articleID]; skip {
+								continue
+							}
+							candidateKeys = append(candidateKeys, candidateKey)
+						}
+						return candidateKeys
+					}
+				}
+			}
+		}
+	}
+
+	if query.AnchorOccurredAt.IsZero() {
+		return nil
+	}
+
+	streamKey := conversationStreamKey{
+		tenantID:       query.TenantID,
+		platform:       query.Platform,
+		conversationID: query.ConversationID,
+		threadID:       query.ThreadID,
+	}
+	streamEntries, exists := m.streams[streamKey]
+	if !exists {
+		return nil
+	}
+
+	candidateKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, len(streamEntries)))
+	for index := len(streamEntries) - 1; index >= 0 && len(candidateKeys) < query.BeforeLimit; index-- {
+		entry := streamEntries[index]
+		if entry.createdAt.After(query.AnchorOccurredAt.UTC()) {
+			continue
+		}
+		if entry.key.articleID == query.AnchorArticleID {
+			continue
+		}
+		if _, skip := excluded[entry.key.articleID]; skip {
+			continue
+		}
+		candidateKeys = append(candidateKeys, entry.key)
+	}
+
+	return candidateKeys
 }
 
 func (m *Module) getSnapshot(ctx context.Context, lookup otogi.MemoryLookup) (memorySnapshot, bool, error) {
@@ -213,4 +347,12 @@ func reverseReplyChainEntries(entries []otogi.ReplyChainEntry) {
 	for left, right := 0, len(entries)-1; left < right; left, right = left+1, right-1 {
 		entries[left], entries[right] = entries[right], entries[left]
 	}
+}
+
+func minInt(left int, right int) int {
+	if left < right {
+		return left
+	}
+
+	return right
 }

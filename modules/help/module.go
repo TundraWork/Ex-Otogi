@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"ex-otogi/pkg/otogi"
 )
@@ -123,6 +124,7 @@ func (m *Module) handleCommand(ctx context.Context, event *otogi.Event) error {
 	_, err = m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
 		Target:           target,
 		Text:             body,
+		Entities:         helpReplyEntities(body),
 		ReplyToMessageID: event.Article.ID,
 	})
 	if err != nil {
@@ -171,6 +173,21 @@ func renderHelp(commands []otogi.RegisteredCommand) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func helpReplyEntities(body string) []otogi.TextEntity {
+	if body == "" {
+		return nil
+	}
+
+	return []otogi.TextEntity{
+		{
+			Type:      otogi.TextEntityTypeBlockquote,
+			Offset:    0,
+			Length:    utf8.RuneCountInString(body),
+			Collapsed: true,
+		},
+	}
 }
 
 func commandLabel(command otogi.CommandSpec) string {

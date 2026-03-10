@@ -159,6 +159,7 @@ func (m *Module) forgetRetracted(event *otogi.Event) error {
 	m.mu.Lock()
 	m.ensureNotExpiredLocked(key, now)
 	delete(m.entities, key)
+	m.removeConversationArticleLocked(key)
 	m.upsertKeyLocked(key, now)
 	m.trimToCapacityLocked()
 	m.mu.Unlock()
