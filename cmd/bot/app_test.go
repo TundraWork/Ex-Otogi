@@ -356,6 +356,36 @@ func TestRegisterRuntimeServices(t *testing.T) {
 			t.Fatalf("resolve sink dispatcher failed: %v", resolveErr)
 		}
 	})
+
+	t.Run("registers media downloader when available", func(t *testing.T) {
+		kernelRuntime, err := kernel.New()
+		if err != nil {
+			t.Fatalf("new kernel failed: %v", err)
+		}
+
+		err = registerRuntimeServices(kernelRuntime, logger, driverRuntimes{
+			sinkDispatcher:  &sinkDispatcherTestStub{},
+			mediaDownloader: mediaDownloaderTestStub{},
+		})
+		if err != nil {
+			t.Fatalf("registerRuntimeServices failed: %v", err)
+		}
+
+		_, resolveErr := kernelRuntime.Services().Resolve(otogi.ServiceMediaDownloader)
+		if resolveErr != nil {
+			t.Fatalf("resolve media downloader failed: %v", resolveErr)
+		}
+	})
+}
+
+type mediaDownloaderTestStub struct{}
+
+func (mediaDownloaderTestStub) Download(
+	context.Context,
+	otogi.MediaDownloadRequest,
+	io.Writer,
+) (otogi.MediaAttachment, error) {
+	return otogi.MediaAttachment{}, nil
 }
 
 func TestConfigureStdlibLogBridge(t *testing.T) {

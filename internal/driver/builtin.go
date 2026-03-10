@@ -19,7 +19,7 @@ func NewBuiltinRegistry() (*Registry, error) {
 				definition Definition,
 				builderLogger *slog.Logger,
 			) (Runtime, error) {
-				source, runtimeDriver, outbound, err := telegram.BuildRuntimeFromConfig(
+				source, runtimeDriver, mediaDownloader, outbound, err := telegram.BuildRuntimeFromConfig(
 					definition.Name,
 					builderLogger,
 					definition.Config,
@@ -31,6 +31,7 @@ func NewBuiltinRegistry() (*Registry, error) {
 				return Runtime{
 					Source:               source,
 					Driver:               runtimeDriver,
+					MediaDownloader:      mediaDownloader,
 					SinkDispatcher:       outbound,
 					ModerationDispatcher: outbound,
 				}, nil

@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"slices"
 	"testing"
@@ -188,6 +189,94 @@ func TestSinkDispatcherRoutesByID(t *testing.T) {
 	}
 }
 
+func TestMediaDownloaderRoutesBySource(t *testing.T) {
+	t.Parallel()
+
+	primary := &stubMediaDownloader{
+		attachment: otogi.MediaAttachment{ID: "photo-1", Type: otogi.MediaTypePhoto},
+	}
+	secondary := &stubMediaDownloader{
+		attachment: otogi.MediaAttachment{ID: "doc-2", Type: otogi.MediaTypeDocument},
+	}
+	downloader, err := NewMediaDownloader([]Runtime{
+		{
+			Source: otogi.EventSource{
+				Platform: testDriverPlatform,
+				ID:       "main",
+			},
+			MediaDownloader: primary,
+		},
+		{
+			Source: otogi.EventSource{
+				Platform: testDriverPlatform,
+				ID:       "alt",
+			},
+			MediaDownloader: secondary,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new media downloader failed: %v", err)
+	}
+
+	got, err := downloader.Download(context.Background(), otogi.MediaDownloadRequest{
+		Source: otogi.EventSource{
+			Platform: testDriverPlatform,
+			ID:       "main",
+		},
+		Conversation: otogi.Conversation{
+			ID:   "1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		ArticleID:    "55",
+		AttachmentID: "photo-1",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("download failed: %v", err)
+	}
+	if got.ID != "photo-1" {
+		t.Fatalf("attachment id = %q, want photo-1", got.ID)
+	}
+	if primary.downloadCalls != 1 {
+		t.Fatalf("primary calls = %d, want 1", primary.downloadCalls)
+	}
+	if secondary.downloadCalls != 0 {
+		t.Fatalf("secondary calls = %d, want 0", secondary.downloadCalls)
+	}
+}
+
+func TestMediaDownloaderRejectsUnknownSource(t *testing.T) {
+	t.Parallel()
+
+	downloader, err := NewMediaDownloader([]Runtime{
+		{
+			Source: otogi.EventSource{
+				Platform: testDriverPlatform,
+				ID:       "main",
+			},
+			MediaDownloader: &stubMediaDownloader{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new media downloader failed: %v", err)
+	}
+
+	_, err = downloader.Download(context.Background(), otogi.MediaDownloadRequest{
+		Source: otogi.EventSource{
+			Platform: testDriverPlatform,
+			ID:       "missing",
+		},
+		Conversation: otogi.Conversation{
+			ID:   "1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		ArticleID:    "55",
+		AttachmentID: "photo-1",
+	}, io.Discard)
+	if !errors.Is(err, otogi.ErrMediaDownloadUnsupported) {
+		t.Fatalf("download error = %v, want %v", err, otogi.ErrMediaDownloadUnsupported)
+	}
+}
+
 func TestSinkDispatcherAmbiguousPlatform(t *testing.T) {
 	t.Parallel()
 
@@ -317,6 +406,25 @@ type stubSinkDispatcher struct {
 	sendCalls int
 	sendErr   error
 	editErr   error
+}
+
+type stubMediaDownloader struct {
+	downloadCalls int
+	attachment    otogi.MediaAttachment
+	err           error
+}
+
+func (d *stubMediaDownloader) Download(
+	_ context.Context,
+	_ otogi.MediaDownloadRequest,
+	_ io.Writer,
+) (otogi.MediaAttachment, error) {
+	d.downloadCalls++
+	if d.err != nil {
+		return otogi.MediaAttachment{}, d.err
+	}
+
+	return d.attachment, nil
 }
 
 func (d *stubSinkDispatcher) SendMessage(

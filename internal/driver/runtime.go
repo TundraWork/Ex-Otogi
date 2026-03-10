@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 
@@ -27,6 +28,8 @@ type Runtime struct {
 	Source otogi.EventSource
 	// Driver is the inbound runtime implementation registered with kernel.
 	Driver otogi.Driver
+	// MediaDownloader adapts media download operations for this runtime when supported.
+	MediaDownloader otogi.MediaDownloader
 	// SinkDispatcher adapts outbound operations for this runtime when supported.
 	SinkDispatcher otogi.SinkDispatcher
 	// ModerationDispatcher adapts moderation operations for this runtime when supported.
@@ -165,6 +168,101 @@ func (r *Registry) BuildEnabled(
 	}
 
 	return runtimes, nil
+}
+
+type mediaRoute struct {
+	ref        otogi.EventSource
+	downloader otogi.MediaDownloader
+}
+
+type mediaDispatcher struct {
+	byID           map[string]mediaRoute
+	byPlatform     map[otogi.Platform][]string
+	sortedSourceID []string
+}
+
+// NewMediaDownloader creates a media downloader router from runtime instances.
+func NewMediaDownloader(runtimes []Runtime) (otogi.MediaDownloader, error) {
+	byID := make(map[string]mediaRoute)
+	byPlatform := make(map[otogi.Platform][]string)
+	sortedIDs := make([]string, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		if runtime.MediaDownloader == nil {
+			continue
+		}
+		if runtime.Source.ID == "" {
+			return nil, fmt.Errorf("new media downloader: missing source id")
+		}
+		if _, exists := byID[runtime.Source.ID]; exists {
+			return nil, fmt.Errorf("new media downloader: duplicate source id %s", runtime.Source.ID)
+		}
+
+		ref := runtime.Source
+		byID[ref.ID] = mediaRoute{
+			ref:        ref,
+			downloader: runtime.MediaDownloader,
+		}
+		byPlatform[ref.Platform] = append(byPlatform[ref.Platform], ref.ID)
+		sortedIDs = append(sortedIDs, ref.ID)
+	}
+	sort.Strings(sortedIDs)
+
+	return &mediaDispatcher{
+		byID:           byID,
+		byPlatform:     byPlatform,
+		sortedSourceID: sortedIDs,
+	}, nil
+}
+
+// Download routes one media download request to one concrete driver downloader.
+func (d *mediaDispatcher) Download(
+	ctx context.Context,
+	request otogi.MediaDownloadRequest,
+	output io.Writer,
+) (otogi.MediaAttachment, error) {
+	if err := request.Validate(); err != nil {
+		return otogi.MediaAttachment{}, fmt.Errorf("validate media download request: %w", err)
+	}
+	if output == nil {
+		return otogi.MediaAttachment{}, fmt.Errorf("%w: missing output writer", otogi.ErrInvalidMediaDownloadRequest)
+	}
+
+	downloader, err := d.resolve(request.Source)
+	if err != nil {
+		return otogi.MediaAttachment{}, fmt.Errorf("resolve media downloader: %w", err)
+	}
+
+	attachment, err := downloader.Download(ctx, request, output)
+	if err != nil {
+		return otogi.MediaAttachment{}, fmt.Errorf("route media download: %w", err)
+	}
+
+	return attachment, nil
+}
+
+func (d *mediaDispatcher) resolve(source otogi.EventSource) (otogi.MediaDownloader, error) {
+	if d == nil {
+		return nil, fmt.Errorf("nil dispatcher")
+	}
+	if len(d.byID) == 0 {
+		return nil, fmt.Errorf("%w: no media downloaders configured", otogi.ErrMediaDownloadUnsupported)
+	}
+
+	route, exists := d.byID[source.ID]
+	if !exists {
+		return nil, fmt.Errorf("%w: source %s not found", otogi.ErrMediaDownloadUnsupported, source.ID)
+	}
+	if source.Platform != "" && route.ref.Platform != source.Platform {
+		return nil, fmt.Errorf(
+			"%w: source %s platform mismatch: expected %s got %s",
+			otogi.ErrMediaDownloadUnsupported,
+			source.ID,
+			source.Platform,
+			route.ref.Platform,
+		)
+	}
+
+	return route.downloader, nil
 }
 
 type sinkRoute struct {

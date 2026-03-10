@@ -26,27 +26,35 @@ const (
 )
 
 type runtimeConfig struct {
-	AppID          int    `json:"app_id"`
-	AppHash        string `json:"app_hash"`
-	PublishTimeout string `json:"publish_timeout"`
-	UpdateBuffer   int    `json:"update_buffer"`
-	AuthTimeout    string `json:"auth_timeout"`
-	Code           string `json:"code"`
-	Phone          string `json:"phone"`
-	Password       string `json:"password"`
-	SessionFile    string `json:"session_file"`
+	AppID                  int    `json:"app_id"`
+	AppHash                string `json:"app_hash"`
+	PublishTimeout         string `json:"publish_timeout"`
+	UpdateBuffer           int    `json:"update_buffer"`
+	AuthTimeout            string `json:"auth_timeout"`
+	DownloadTimeout        string `json:"download_timeout"`
+	DownloadThreads        int    `json:"download_threads"`
+	DownloadVerify         bool   `json:"download_verify"`
+	AttachmentCacheEntries int    `json:"attachment_cache_entries"`
+	Code                   string `json:"code"`
+	Phone                  string `json:"phone"`
+	Password               string `json:"password"`
+	SessionFile            string `json:"session_file"`
 }
 
 type parsedRuntimeConfig struct {
-	appID          int
-	appHash        string
-	publishTimeout time.Duration
-	updateBuffer   int
-	authTimeout    time.Duration
-	code           string
-	phone          string
-	password       string
-	sessionFile    string
+	appID                  int
+	appHash                string
+	publishTimeout         time.Duration
+	updateBuffer           int
+	authTimeout            time.Duration
+	downloadTimeout        time.Duration
+	downloadThreads        int
+	downloadVerify         bool
+	attachmentCacheEntries int
+	code                   string
+	phone                  string
+	password               string
+	sessionFile            string
 }
 
 // BuildRuntimeFromConfig builds one telegram driver runtime from config payload.
@@ -54,10 +62,10 @@ func BuildRuntimeFromConfig(
 	name string,
 	logger *slog.Logger,
 	rawConfig []byte,
-) (otogi.EventSource, otogi.Driver, *SinkDispatcher, error) {
+) (otogi.EventSource, otogi.Driver, *MediaDownloader, *SinkDispatcher, error) {
 	cfg, err := parseRuntimeConfig(rawConfig)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, fmt.Errorf("parse telegram runtime config: %w", err)
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("parse telegram runtime config: %w", err)
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -65,12 +73,12 @@ func BuildRuntimeFromConfig(
 
 	updateChannel, err := NewGotdUpdateChannel(cfg.updateBuffer)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, fmt.Errorf("new gotd update channel: %w", err)
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd update channel: %w", err)
 	}
 
 	sessionStorage, err := newGotdSessionStorage(cfg.sessionFile)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, fmt.Errorf("new gotd session storage: %w", err)
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd session storage: %w", err)
 	}
 
 	client := gotdtelegram.NewClient(cfg.appID, cfg.appHash, gotdtelegram.Options{
@@ -79,9 +87,10 @@ func BuildRuntimeFromConfig(
 	})
 
 	peers := NewPeerCache()
+	mediaLocators := newMediaLocatorCache(cfg.attachmentCacheEntries)
 	reactionResolver, err := NewGotdMessageReactionResolver(client.API())
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, fmt.Errorf("new gotd message reaction resolver: %w", err)
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd message reaction resolver: %w", err)
 	}
 	source, err := NewGotdUserbotSource(
 		gotdAuthenticatedClient{
@@ -93,12 +102,13 @@ func BuildRuntimeFromConfig(
 		updateChannel,
 		NewDefaultGotdUpdateMapper(
 			WithPeerCache(peers),
+			WithMediaLocatorCache(mediaLocators),
 			WithMessageReactionResolver(reactionResolver),
 			WithMapperLogger(logger),
 		),
 	)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, fmt.Errorf("new gotd userbot source: %w", err)
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd userbot source: %w", err)
 	}
 
 	driver, err := NewDriver(
@@ -111,7 +121,19 @@ func BuildRuntimeFromConfig(
 		}),
 	)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, fmt.Errorf("new telegram driver: %w", err)
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram driver: %w", err)
+	}
+
+	mediaDownloader, err := NewMediaDownloader(
+		client,
+		peers,
+		mediaLocators,
+		WithMediaDownloadTimeout(cfg.downloadTimeout),
+		WithMediaDownloadThreads(cfg.downloadThreads),
+		WithMediaDownloadVerify(cfg.downloadVerify),
+	)
+	if err != nil {
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram media downloader: %w", err)
 	}
 
 	sink, err := NewOutboundDispatcher(
@@ -125,13 +147,13 @@ func BuildRuntimeFromConfig(
 		}),
 	)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, fmt.Errorf("new telegram sink dispatcher: %w", err)
+		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram sink dispatcher: %w", err)
 	}
 
 	return otogi.EventSource{
 		Platform: DriverPlatform,
 		ID:       name,
-	}, driver, sink, nil
+	}, driver, mediaDownloader, sink, nil
 }
 
 func parseRuntimeConfig(raw []byte) (parsedRuntimeConfig, error) {
@@ -145,15 +167,19 @@ func parseRuntimeConfig(raw []byte) (parsedRuntimeConfig, error) {
 	}
 
 	cfg := parsedRuntimeConfig{
-		appID:          parsed.AppID,
-		appHash:        strings.TrimSpace(parsed.AppHash),
-		publishTimeout: defaultRuntimePublishDelay,
-		updateBuffer:   parsed.UpdateBuffer,
-		authTimeout:    defaultRuntimeAuthTimeout,
-		code:           strings.TrimSpace(parsed.Code),
-		phone:          strings.TrimSpace(parsed.Phone),
-		password:       strings.TrimSpace(parsed.Password),
-		sessionFile:    strings.TrimSpace(parsed.SessionFile),
+		appID:                  parsed.AppID,
+		appHash:                strings.TrimSpace(parsed.AppHash),
+		publishTimeout:         defaultRuntimePublishDelay,
+		updateBuffer:           parsed.UpdateBuffer,
+		authTimeout:            defaultRuntimeAuthTimeout,
+		downloadTimeout:        defaultMediaDownloadTimeout,
+		downloadThreads:        defaultMediaDownloadThreads,
+		downloadVerify:         parsed.DownloadVerify,
+		attachmentCacheEntries: defaultMediaLocatorCacheEntries,
+		code:                   strings.TrimSpace(parsed.Code),
+		phone:                  strings.TrimSpace(parsed.Phone),
+		password:               strings.TrimSpace(parsed.Password),
+		sessionFile:            strings.TrimSpace(parsed.SessionFile),
 	}
 
 	if cfg.updateBuffer <= 0 {
@@ -182,6 +208,28 @@ func parseRuntimeConfig(raw []byte) (parsedRuntimeConfig, error) {
 			return parsedRuntimeConfig{}, fmt.Errorf("parse auth_timeout: must be > 0")
 		}
 		cfg.authTimeout = parsedTimeout
+	}
+	if timeout := strings.TrimSpace(parsed.DownloadTimeout); timeout != "" {
+		parsedTimeout, err := time.ParseDuration(timeout)
+		if err != nil {
+			return parsedRuntimeConfig{}, fmt.Errorf("parse download_timeout: %w", err)
+		}
+		if parsedTimeout <= 0 {
+			return parsedRuntimeConfig{}, fmt.Errorf("parse download_timeout: must be > 0")
+		}
+		cfg.downloadTimeout = parsedTimeout
+	}
+	if parsed.DownloadThreads != 0 {
+		if parsed.DownloadThreads <= 0 {
+			return parsedRuntimeConfig{}, fmt.Errorf("parse download_threads: must be > 0")
+		}
+		cfg.downloadThreads = parsed.DownloadThreads
+	}
+	if parsed.AttachmentCacheEntries != 0 {
+		if parsed.AttachmentCacheEntries <= 0 {
+			return parsedRuntimeConfig{}, fmt.Errorf("parse attachment_cache_entries: must be > 0")
+		}
+		cfg.attachmentCacheEntries = parsed.AttachmentCacheEntries
 	}
 
 	if cfg.appID <= 0 {

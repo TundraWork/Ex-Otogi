@@ -30,6 +30,7 @@ const (
 // DefaultGotdUpdateMapper maps gotd updates into adapter DTO updates.
 type DefaultGotdUpdateMapper struct {
 	peerCache              *PeerCache
+	mediaLocatorCache      *mediaLocatorCache
 	reactionCache          *reactionCountCache
 	reactionWatchCache     *reactionWatchCache
 	articleSnapshotCache   *articleSnapshotCache
@@ -46,6 +47,15 @@ func WithPeerCache(cache *PeerCache) GotdUpdateMapperOption {
 	return func(mapper *DefaultGotdUpdateMapper) {
 		if cache != nil {
 			mapper.peerCache = cache
+		}
+	}
+}
+
+// WithMediaLocatorCache records attachment download locators discovered from inbound messages.
+func WithMediaLocatorCache(cache *mediaLocatorCache) GotdUpdateMapperOption {
+	return func(mapper *DefaultGotdUpdateMapper) {
+		if cache != nil {
+			mapper.mediaLocatorCache = cache
 		}
 	}
 }
@@ -364,6 +374,7 @@ func (m DefaultGotdUpdateMapper) mapMessage(
 		occurredAt = envelope.occurredAt
 	}
 	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(message.PeerID, envelope))
+	m.rememberMessageMediaLocators(chat, message, envelope)
 	m.rememberMessageReactionCounts(chat.ID, message)
 	m.rememberArticleSnapshot(chat.ID, message)
 
@@ -538,6 +549,7 @@ func (m DefaultGotdUpdateMapper) mapEditMessageBatch(
 	}
 	occurredAt := resolveMutationOccurredAt(typed, envelope.occurredAt)
 	m.rememberConversationPeer(chat, resolveInputPeerFromPeer(typed.PeerID, envelope))
+	m.rememberMessageMediaLocators(chat, typed, envelope)
 	before := m.loadArticleSnapshot(chat.ID, typed.ID)
 	payload := mapArticlePayload(typed)
 	after := articleSnapshotPayloadFromMessage(typed)

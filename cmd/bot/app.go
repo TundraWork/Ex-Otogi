@@ -541,6 +541,7 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, err
 
 type driverRuntimes struct {
 	drivers              []otogi.Driver
+	mediaDownloader      otogi.MediaDownloader
 	sinkDispatcher       otogi.SinkDispatcher
 	moderationDispatcher otogi.ModerationDispatcher
 }
@@ -565,6 +566,11 @@ func buildDriverRuntime(
 		drivers = append(drivers, runtime.Driver)
 	}
 
+	mediaDownloader, err := driver.NewMediaDownloader(runtimes)
+	if err != nil {
+		return driverRuntimes{}, fmt.Errorf("build media downloader: %w", err)
+	}
+
 	sinkDispatcher, err := driver.NewSinkDispatcher(runtimes)
 	if err != nil {
 		return driverRuntimes{}, fmt.Errorf("build sink dispatcher: %w", err)
@@ -577,6 +583,7 @@ func buildDriverRuntime(
 
 	return driverRuntimes{
 		drivers:              drivers,
+		mediaDownloader:      mediaDownloader,
 		sinkDispatcher:       sinkDispatcher,
 		moderationDispatcher: moderationDispatcher,
 	}, nil
@@ -595,6 +602,11 @@ func registerRuntimeServices(
 	}
 	if err := kernelRuntime.RegisterService(otogi.ServiceSinkDispatcher, dr.sinkDispatcher); err != nil {
 		return fmt.Errorf("register sink dispatcher service: %w", err)
+	}
+	if dr.mediaDownloader != nil {
+		if err := kernelRuntime.RegisterService(otogi.ServiceMediaDownloader, dr.mediaDownloader); err != nil {
+			return fmt.Errorf("register media downloader service: %w", err)
+		}
 	}
 	if dr.moderationDispatcher != nil {
 		if err := kernelRuntime.RegisterService(otogi.ServiceModerationDispatcher, dr.moderationDispatcher); err != nil {
