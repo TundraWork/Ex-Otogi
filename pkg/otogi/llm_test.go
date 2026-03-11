@@ -101,6 +101,47 @@ func TestLLMMessageValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid multimodal message",
+			message: LLMMessage{
+				Role: LLMMessageRoleUser,
+				Parts: []LLMMessagePart{
+					{Type: LLMMessagePartTypeText, Text: "describe this image"},
+					{
+						Type: LLMMessagePartTypeImage,
+						Image: &LLMInputImage{
+							MIMEType: "image/jpeg",
+							Data:     []byte{1, 2, 3},
+							Detail:   LLMInputImageDetailHigh,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "content and parts conflict",
+			message: LLMMessage{
+				Role:    LLMMessageRoleUser,
+				Content: "hello",
+				Parts: []LLMMessagePart{
+					{Type: LLMMessagePartTypeText, Text: "world"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid image part",
+			message: LLMMessage{
+				Role: LLMMessageRoleUser,
+				Parts: []LLMMessagePart{
+					{
+						Type:  LLMMessagePartTypeImage,
+						Image: &LLMInputImage{},
+					},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, testCase := range tests {
@@ -117,6 +158,48 @@ func TestLLMMessageValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLLMMessageContentParts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("content is promoted to one text part", func(t *testing.T) {
+		t.Parallel()
+
+		message := LLMMessage{
+			Role:    LLMMessageRoleUser,
+			Content: "hello",
+		}
+		parts := message.ContentParts()
+		if len(parts) != 1 {
+			t.Fatalf("parts len = %d, want 1", len(parts))
+		}
+		if parts[0].Type != LLMMessagePartTypeText || parts[0].Text != "hello" {
+			t.Fatalf("parts[0] = %+v, want one text part", parts[0])
+		}
+	})
+
+	t.Run("structured parts are cloned", func(t *testing.T) {
+		t.Parallel()
+
+		message := LLMMessage{
+			Role: LLMMessageRoleUser,
+			Parts: []LLMMessagePart{
+				{
+					Type: LLMMessagePartTypeImage,
+					Image: &LLMInputImage{
+						MIMEType: "image/png",
+						Data:     []byte{1, 2, 3},
+					},
+				},
+			},
+		}
+		parts := message.ContentParts()
+		parts[0].Image.Data[0] = 9
+		if message.Parts[0].Image.Data[0] != 1 {
+			t.Fatalf("original image data mutated: %v", message.Parts[0].Image.Data)
+		}
+	})
 }
 
 func TestLLMGenerateRequestValidate(t *testing.T) {

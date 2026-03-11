@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ex-otogi/pkg/otogi"
 )
 
 func writeLLMConfigFile(t *testing.T, body string) string {
@@ -50,7 +52,8 @@ func TestLoadFile(t *testing.T) {
 								"url_context":false,
 								"include_thoughts":false,
 								"thinking_level":"medium",
-								"response_mime_type":"application/json"
+								"response_mime_type":"application/json",
+								"safety_filter_off":true
 							}
 					}
 				},
@@ -69,6 +72,13 @@ func TestLoadFile(t *testing.T) {
 								"leading_context_max_age":"5m",
 								"max_context_runes":6000,
 								"max_message_runes":1200
+							},
+							"image_inputs":{
+								"enabled":true,
+								"max_images":2,
+								"max_image_bytes":1048576,
+								"max_total_bytes":2097152,
+								"detail":"high"
 							}
 						},
 						{
@@ -131,6 +141,13 @@ func TestLoadFile(t *testing.T) {
 						geminiProfile.Gemini.RequestDefaults.ResponseMIMEType,
 					)
 				}
+				if geminiProfile.Gemini.RequestDefaults.SafetyFilterOff == nil ||
+					!*geminiProfile.Gemini.RequestDefaults.SafetyFilterOff {
+					t.Fatalf(
+						"gemini safety_filter_off = %v, want true",
+						geminiProfile.Gemini.RequestDefaults.SafetyFilterOff,
+					)
+				}
 
 				if len(cfg.Agents) != 2 {
 					t.Fatalf("agents len = %d, want 2", len(cfg.Agents))
@@ -166,6 +183,31 @@ func TestLoadFile(t *testing.T) {
 					t.Fatalf(
 						"agent[0] max_message_runes = %d, want 1200",
 						cfg.Agents[0].ContextPolicy.MaxMessageRunes,
+					)
+				}
+				if !cfg.Agents[0].ImageInputs.Enabled {
+					t.Fatal("agent[0] image_inputs.enabled = false, want true")
+				}
+				if cfg.Agents[0].ImageInputs.MaxImages != 2 {
+					t.Fatalf("agent[0] max_images = %d, want 2", cfg.Agents[0].ImageInputs.MaxImages)
+				}
+				if cfg.Agents[0].ImageInputs.MaxImageBytes != 1048576 {
+					t.Fatalf(
+						"agent[0] max_image_bytes = %d, want 1048576",
+						cfg.Agents[0].ImageInputs.MaxImageBytes,
+					)
+				}
+				if cfg.Agents[0].ImageInputs.MaxTotalBytes != 2097152 {
+					t.Fatalf(
+						"agent[0] max_total_bytes = %d, want 2097152",
+						cfg.Agents[0].ImageInputs.MaxTotalBytes,
+					)
+				}
+				if cfg.Agents[0].ImageInputs.Detail != otogi.LLMInputImageDetailHigh {
+					t.Fatalf(
+						"agent[0] detail = %q, want %q",
+						cfg.Agents[0].ImageInputs.Detail,
+						otogi.LLMInputImageDetailHigh,
 					)
 				}
 				if cfg.Agents[1].RequestTimeout != 20*time.Second {
@@ -256,6 +298,42 @@ func TestLoadFile(t *testing.T) {
 				]
 			}`,
 			wantErrSubstring: "unsupported response_mime_type",
+		},
+		{
+			name: "invalid image input detail",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"image_inputs":{"enabled":true,"detail":"ultra"}
+					}
+				]
+			}`,
+			wantErrSubstring: "image_inputs: detail",
+		},
+		{
+			name: "image input fields require enablement",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"image_inputs":{"max_images":1}
+					}
+				]
+			}`,
+			wantErrSubstring: "image_inputs: max_images requires enabled=true",
 		},
 		{
 			name: "conflicting gemini provider thinking options",

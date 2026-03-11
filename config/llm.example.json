@@ -21,7 +21,8 @@
         "url_context": true,
         "include_thoughts": false,
         "thinking_level": "medium",
-        "response_mime_type": "application/json"
+        "response_mime_type": "application/json",
+        "safety_filter_off": false
       }
     }
   },
@@ -43,6 +44,13 @@
         "max_message_runes": 1600,
         "quote_reply_depth": 2
       },
+      "image_inputs": {
+        "enabled": true,
+        "max_images": 3,
+        "max_image_bytes": 10485760,
+        "max_total_bytes": 20971520,
+        "detail": "auto"
+      },
       "request_timeout": "90s",
       "max_output_tokens": 512,
       "temperature": 0.4
@@ -60,6 +68,13 @@
         "max_context_runes": 12000,
         "max_message_runes": 1600,
         "quote_reply_depth": 2
+      },
+      "image_inputs": {
+        "enabled": true,
+        "max_images": 3,
+        "max_image_bytes": 10485760,
+        "max_total_bytes": 20971520,
+        "detail": "auto"
       },
       "request_timeout": "90s",
       "max_output_tokens": 512,

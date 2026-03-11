@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ex-otogi/pkg/otogi"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -128,6 +130,29 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErrSubstring: "max_message_runes must be <= max_context_runes",
 		},
+		{
+			name: "image inputs defaults are valid when enabled",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].ImageInputs.Enabled = true
+			},
+		},
+		{
+			name: "image inputs detail invalid",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].ImageInputs = ImageInputPolicy{
+					Enabled: true,
+					Detail:  otogi.LLMInputImageDetail("extreme"),
+				}
+			},
+			wantErrSubstring: "image_inputs: detail",
+		},
+		{
+			name: "image inputs require enabled",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].ImageInputs.MaxImages = 1
+			},
+			wantErrSubstring: "image_inputs: max_images requires enabled=true",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -197,6 +222,25 @@ func TestResolveContextPolicyDefaults(t *testing.T) {
 	}
 	if policy.MaxMessageRunes != defaultMaxMessageRunes {
 		t.Fatalf("max_message_runes = %d, want %d", policy.MaxMessageRunes, defaultMaxMessageRunes)
+	}
+}
+
+func TestResolveImageInputPolicyDefaults(t *testing.T) {
+	t.Parallel()
+
+	policy := resolveImageInputPolicy(ImageInputPolicy{Enabled: true})
+
+	if policy.MaxImages != defaultImageInputMaxImages {
+		t.Fatalf("max_images = %d, want %d", policy.MaxImages, defaultImageInputMaxImages)
+	}
+	if policy.MaxImageBytes != defaultImageInputMaxBytes {
+		t.Fatalf("max_image_bytes = %d, want %d", policy.MaxImageBytes, defaultImageInputMaxBytes)
+	}
+	if policy.MaxTotalBytes != defaultImageInputMaxTotalBytes {
+		t.Fatalf("max_total_bytes = %d, want %d", policy.MaxTotalBytes, defaultImageInputMaxTotalBytes)
+	}
+	if policy.Detail != otogi.LLMInputImageDetailAuto {
+		t.Fatalf("detail = %q, want %q", policy.Detail, otogi.LLMInputImageDetailAuto)
 	}
 }
 

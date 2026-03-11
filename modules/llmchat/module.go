@@ -32,10 +32,11 @@ type fileModuleConfig struct {
 type Module struct {
 	cfg Config
 
-	dispatcher otogi.SinkDispatcher
-	memory     otogi.MemoryService
-	providers  map[string]otogi.LLMProvider
-	parser     otogi.MarkdownParser
+	dispatcher      otogi.SinkDispatcher
+	memory          otogi.MemoryService
+	providers       map[string]otogi.LLMProvider
+	parser          otogi.MarkdownParser
+	mediaDownloader otogi.MediaDownloader
 
 	providerRegistry otogi.LLMProviderRegistry
 	logger           *slog.Logger
@@ -93,12 +94,6 @@ func (m *Module) Spec() otogi.ModuleSpec {
 
 // OnRegister loads configuration, builds LLM providers, and resolves dependencies.
 func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) error {
-	cfg, registry, err := m.loadConfig(ctx, runtime)
-	if err != nil {
-		return fmt.Errorf("llmchat load config: %w", err)
-	}
-	m.cfg = cfg
-
 	logger, err := otogi.ResolveAs[*slog.Logger](runtime.Services(), serviceLogger)
 	switch {
 	case err == nil:
@@ -107,6 +102,12 @@ func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) er
 	default:
 		return fmt.Errorf("llmchat resolve logger: %w", err)
 	}
+
+	cfg, registry, err := m.loadConfig(ctx, runtime)
+	if err != nil {
+		return fmt.Errorf("llmchat load config: %w", err)
+	}
+	m.cfg = cfg
 
 	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
 		runtime.Services(),
@@ -131,6 +132,17 @@ func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) er
 	if err != nil {
 		return fmt.Errorf("llmchat resolve markdown parser: %w", err)
 	}
+	mediaDownloader, err := otogi.ResolveAs[otogi.MediaDownloader](
+		runtime.Services(),
+		otogi.ServiceMediaDownloader,
+	)
+	switch {
+	case err == nil:
+	case errors.Is(err, otogi.ErrServiceNotFound):
+		mediaDownloader = nil
+	default:
+		return fmt.Errorf("llmchat resolve media downloader: %w", err)
+	}
 
 	resolvedProviders := make(map[string]otogi.LLMProvider)
 	for _, agent := range m.cfg.Agents {
@@ -152,6 +164,7 @@ func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) er
 	m.dispatcher = dispatcher
 	m.memory = memoryService
 	m.parser = markdownParser
+	m.mediaDownloader = mediaDownloader
 	m.providerRegistry = registry
 	m.providers = resolvedProviders
 
@@ -195,7 +208,7 @@ func (m *Module) loadConfig(
 		return Config{}, nil, fmt.Errorf("load llm config file %s: %w", configFile, err)
 	}
 
-	registry, err := buildProviderRegistry(ctx, llmCfg)
+	registry, err := buildProviderRegistry(ctx, llmCfg, m.logger)
 	if err != nil {
 		return Config{}, nil, err
 	}
@@ -212,6 +225,7 @@ func (m *Module) loadConfig(
 func buildProviderRegistry(
 	ctx context.Context,
 	cfg llmconfig.Config,
+	logger *slog.Logger,
 ) (otogi.LLMProviderRegistry, error) {
 	providers := make(map[string]otogi.LLMProvider, len(cfg.Providers))
 	for profileKey, profile := range cfg.Providers {
@@ -237,6 +251,7 @@ func buildProviderRegistry(
 			geminiCfg := gemini.ProviderConfig{
 				APIKey:  profile.APIKey,
 				BaseURL: profile.BaseURL,
+				Logger:  logger,
 			}
 			if profile.Gemini != nil {
 				geminiCfg.APIVersion = profile.Gemini.APIVersion
@@ -246,6 +261,7 @@ func buildProviderRegistry(
 				geminiCfg.IncludeThoughts = cloneOptionalBool(profile.Gemini.RequestDefaults.IncludeThoughts)
 				geminiCfg.ThinkingLevel = profile.Gemini.RequestDefaults.ThinkingLevel
 				geminiCfg.ResponseMIMEType = profile.Gemini.RequestDefaults.ResponseMIMEType
+				geminiCfg.SafetyFilterOff = cloneOptionalBool(profile.Gemini.RequestDefaults.SafetyFilterOff)
 			}
 
 			provider, err := gemini.New(ctx, geminiCfg)
@@ -287,6 +303,13 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 				MaxContextRunes:        agent.ContextPolicy.MaxContextRunes,
 				MaxMessageRunes:        agent.ContextPolicy.MaxMessageRunes,
 				QuoteReplyDepth:        agent.ContextPolicy.QuoteReplyDepth,
+			},
+			ImageInputs: ImageInputPolicy{
+				Enabled:       agent.ImageInputs.Enabled,
+				MaxImages:     agent.ImageInputs.MaxImages,
+				MaxImageBytes: agent.ImageInputs.MaxImageBytes,
+				MaxTotalBytes: agent.ImageInputs.MaxTotalBytes,
+				Detail:        agent.ImageInputs.Detail,
 			},
 		})
 	}

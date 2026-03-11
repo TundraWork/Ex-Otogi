@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 )
@@ -130,7 +132,11 @@ func mapGenerateRequest(req otogi.LLMGenerateRequest) (responses.ResponseNewPara
 		if err != nil {
 			return responses.ResponseNewParams{}, fmt.Errorf("messages[%d] role: %w", index, err)
 		}
-		items = append(items, responses.ResponseInputItemParamOfMessage(message.Content, role))
+		content, err := mapMessageContent(message)
+		if err != nil {
+			return responses.ResponseNewParams{}, fmt.Errorf("messages[%d] content: %w", index, err)
+		}
+		items = append(items, responses.ResponseInputItemParamOfMessage(content, role))
 	}
 
 	params := responses.ResponseNewParams{
@@ -169,6 +175,56 @@ func mapGenerateRequest(req otogi.LLMGenerateRequest) (responses.ResponseNewPara
 	}
 
 	return params, nil
+}
+
+func mapMessageContent(message otogi.LLMMessage) (responses.ResponseInputMessageContentListParam, error) {
+	parts := message.ContentParts()
+	content := make(responses.ResponseInputMessageContentListParam, 0, len(parts))
+	for index, part := range parts {
+		mapped, err := mapMessagePart(part)
+		if err != nil {
+			return nil, fmt.Errorf("parts[%d]: %w", index, err)
+		}
+		content = append(content, mapped)
+	}
+
+	return content, nil
+}
+
+func mapMessagePart(part otogi.LLMMessagePart) (responses.ResponseInputContentUnionParam, error) {
+	switch part.Type {
+	case otogi.LLMMessagePartTypeText:
+		return responses.ResponseInputContentParamOfInputText(part.Text), nil
+	case otogi.LLMMessagePartTypeImage:
+		if part.Image == nil {
+			return responses.ResponseInputContentUnionParam{}, fmt.Errorf("missing image payload")
+		}
+
+		return responses.ResponseInputContentUnionParam{
+			OfInputImage: &responses.ResponseInputImageParam{
+				Detail:   mapInputImageDetail(part.Image.Detail),
+				ImageURL: param.NewOpt(formatInputImageDataURL(*part.Image)),
+			},
+		}, nil
+	default:
+		return responses.ResponseInputContentUnionParam{}, fmt.Errorf("unsupported part type %q", part.Type)
+	}
+}
+
+func mapInputImageDetail(detail otogi.LLMInputImageDetail) responses.ResponseInputImageDetail {
+	switch detail {
+	case otogi.LLMInputImageDetailLow:
+		return responses.ResponseInputImageDetailLow
+	case otogi.LLMInputImageDetailHigh:
+		return responses.ResponseInputImageDetailHigh
+	default:
+		return responses.ResponseInputImageDetailAuto
+	}
+}
+
+func formatInputImageDataURL(image otogi.LLMInputImage) string {
+	return "data:" + strings.TrimSpace(image.MIMEType) + ";base64," +
+		base64.StdEncoding.EncodeToString(image.Data)
 }
 
 type openAIReasoningOptions struct {

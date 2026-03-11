@@ -3,10 +3,14 @@ package gemini
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"ex-otogi/pkg/otogi"
 
@@ -174,7 +178,19 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 		Messages: []otogi.LLMMessage{
 			{Role: otogi.LLMMessageRoleSystem, Content: "sys-1"},
 			{Role: otogi.LLMMessageRoleSystem, Content: "sys-2"},
-			{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+			{
+				Role: otogi.LLMMessageRoleUser,
+				Parts: []otogi.LLMMessagePart{
+					{Type: otogi.LLMMessagePartTypeText, Text: "hello"},
+					{
+						Type: otogi.LLMMessagePartTypeImage,
+						Image: &otogi.LLMInputImage{
+							MIMEType: "image/jpeg",
+							Data:     []byte{1, 2, 3, 4},
+						},
+					},
+				},
+			},
 			{Role: otogi.LLMMessageRoleAssistant, Content: "hi"},
 		},
 		MaxOutputTokens: 256,
@@ -185,6 +201,7 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 			metadataThinkingBudget:  "128",
 			metadataIncludeThoughts: "true",
 			metadataResponseMIME:    responseMIMEJSON,
+			metadataSafetyFilterOff: "true",
 		},
 	}
 
@@ -208,6 +225,24 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 	}
 	if call.contents[0].Role != string(genai.RoleUser) {
 		t.Fatalf("contents[0] role = %q, want user", call.contents[0].Role)
+	}
+	if len(call.contents[0].Parts) != 2 {
+		t.Fatalf("contents[0] parts len = %d, want 2", len(call.contents[0].Parts))
+	}
+	if call.contents[0].Parts[0].Text != "hello" {
+		t.Fatalf("contents[0] parts[0].text = %q, want hello", call.contents[0].Parts[0].Text)
+	}
+	if call.contents[0].Parts[1].InlineData == nil {
+		t.Fatal("expected contents[0] image inline data")
+	}
+	if call.contents[0].Parts[1].InlineData.MIMEType != "image/jpeg" {
+		t.Fatalf(
+			"contents[0] parts[1].mime = %q, want image/jpeg",
+			call.contents[0].Parts[1].InlineData.MIMEType,
+		)
+	}
+	if len(call.contents[0].Parts[1].InlineData.Data) != 4 {
+		t.Fatalf("contents[0] parts[1].data len = %d, want 4", len(call.contents[0].Parts[1].InlineData.Data))
 	}
 	if call.contents[1].Role != string(genai.RoleModel) {
 		t.Fatalf("contents[1] role = %q, want model", call.contents[1].Role)
@@ -248,6 +283,17 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 	if call.config.ResponseMIMEType != responseMIMEJSON {
 		t.Fatalf("response mime = %q, want %q", call.config.ResponseMIMEType, responseMIMEJSON)
 	}
+	if len(call.config.SafetySettings) != 4 {
+		t.Fatalf("safety settings len = %d, want 4", len(call.config.SafetySettings))
+	}
+	for index, setting := range call.config.SafetySettings {
+		if setting == nil {
+			t.Fatalf("safety settings[%d] = nil", index)
+		}
+		if setting.Threshold != genai.HarmBlockThresholdOff {
+			t.Fatalf("safety settings[%d] threshold = %q, want %q", index, setting.Threshold, genai.HarmBlockThresholdOff)
+		}
+	}
 	if call.config.HTTPOptions == nil {
 		t.Fatal("expected request http options")
 	}
@@ -286,6 +332,41 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 	}
 }
 
+func TestGeminiProviderGenerateStreamRejectsSystemImages(t *testing.T) {
+	t.Parallel()
+
+	provider := &Provider{
+		models: &modelsClientStub{
+			stream: emptySeq(),
+		},
+	}
+
+	_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+		Model: "gemini-2.5-flash",
+		Messages: []otogi.LLMMessage{
+			{
+				Role: otogi.LLMMessageRoleSystem,
+				Parts: []otogi.LLMMessagePart{
+					{
+						Type: otogi.LLMMessagePartTypeImage,
+						Image: &otogi.LLMInputImage{
+							MIMEType: "image/png",
+							Data:     []byte{1, 2, 3},
+						},
+					},
+				},
+			},
+			{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "system content") {
+		t.Fatalf("error = %v, want system content error", err)
+	}
+}
+
 func TestGeminiProviderGenerateStreamInvalidMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -309,6 +390,39 @@ func TestGeminiProviderGenerateStreamInvalidMetadata(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), metadataThinkingBudget) {
 		t.Fatalf("error = %v, want metadata key in error", err)
+	}
+}
+
+func TestGeminiProviderGenerateStreamMetadataDisablesSafetyFilterOffDefault(t *testing.T) {
+	t.Parallel()
+
+	client := &modelsClientStub{
+		stream: emptySeq(),
+	}
+	provider := &Provider{
+		models: client,
+		defaults: requestOptions{
+			safetyFilterOff: ptrBool(true),
+		},
+	}
+
+	_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+		Model: "gemini-2.5-flash",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+		},
+		Metadata: map[string]string{
+			metadataSafetyFilterOff: "false",
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("request count = %d, want 1", len(client.calls))
+	}
+	if len(client.calls[0].config.SafetySettings) != 0 {
+		t.Fatalf("safety settings len = %d, want 0", len(client.calls[0].config.SafetySettings))
 	}
 }
 
@@ -469,7 +583,12 @@ func TestGeminiStreamEventsAndLifecycle(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			stream := newGeminiStream(seqFromSteps(testCase.steps), testCase.includeThoughts)
+			stream := newGeminiStream(
+				seqFromSteps(testCase.steps),
+				testCase.includeThoughts,
+				nil,
+				geminiRequestDiagnostics{},
+			)
 
 			ctx := context.Background()
 			if testCase.preCancelContext {
@@ -504,7 +623,7 @@ func TestGeminiStreamMixedPartOrdering(t *testing.T) {
 				{Text: "answer-2"},
 			}),
 		},
-	}), true)
+	}), true, nil, geminiRequestDiagnostics{})
 
 	want := []otogi.LLMGenerateChunk{
 		{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: "thought-1"},
@@ -534,7 +653,7 @@ func TestGeminiStreamMixedPartOrdering(t *testing.T) {
 func TestGeminiStreamCloseIdempotentAndPostCloseEOF(t *testing.T) {
 	t.Parallel()
 
-	stream := newGeminiStream(emptySeq(), false)
+	stream := newGeminiStream(emptySeq(), false, nil, geminiRequestDiagnostics{})
 
 	if err := stream.Close(); err != nil {
 		t.Fatalf("first close failed: %v", err)
@@ -546,6 +665,92 @@ func TestGeminiStreamCloseIdempotentAndPostCloseEOF(t *testing.T) {
 	_, err := stream.Recv(context.Background())
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Recv after close error = %v, want io.EOF", err)
+	}
+}
+
+func TestGeminiStreamLogsReceiveAPIErrorDetails(t *testing.T) {
+	t.Parallel()
+
+	handler := &recordingHandler{}
+	logger := slog.New(handler)
+	stream := newGeminiStream(
+		seqFromSteps([]streamStep{
+			{
+				err: genai.APIError{
+					Code:    429,
+					Message: "quota exceeded",
+					Status:  "RESOURCE_EXHAUSTED",
+					Details: []map[string]any{{"retryDelay": "5s"}},
+				},
+			},
+		}),
+		false,
+		logger,
+		geminiRequestDiagnostics{
+			model:           "gemini-2.5-flash",
+			messageCount:    2,
+			systemMessages:  1,
+			maxOutputTokens: 128,
+			safetyFilterOff: true,
+		},
+	)
+
+	_, err := stream.Recv(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("error = %v, want quota exceeded detail", err)
+	}
+
+	record := handler.lastRecord()
+	if record.msg != "gemini API stream receive failed" {
+		t.Fatalf("log message = %q, want gemini API stream receive failed", record.msg)
+	}
+	if record.attrs["model"] != "gemini-2.5-flash" {
+		t.Fatalf("log model = %q, want gemini-2.5-flash", record.attrs["model"])
+	}
+	if record.attrs["api_code"] != "429" {
+		t.Fatalf("log api_code = %q, want 429", record.attrs["api_code"])
+	}
+	if record.attrs["api_status"] != "RESOURCE_EXHAUSTED" {
+		t.Fatalf("log api_status = %q, want RESOURCE_EXHAUSTED", record.attrs["api_status"])
+	}
+}
+
+func TestGeminiStreamLogsCompletionWithoutOutputText(t *testing.T) {
+	t.Parallel()
+
+	handler := &recordingHandler{}
+	logger := slog.New(handler)
+	stream := newGeminiStream(
+		seqFromSteps([]streamStep{
+			{
+				response: textResponse([]*genai.Part{{Text: "thought-only", Thought: true}}),
+			},
+		}),
+		false,
+		logger,
+		geminiRequestDiagnostics{
+			model:        "gemini-2.5-flash",
+			messageCount: 1,
+		},
+	)
+
+	_, err := stream.Recv(context.Background())
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Recv error = %v, want io.EOF", err)
+	}
+
+	record := handler.lastRecord()
+	if record.msg != "gemini stream completed without output text" {
+		t.Fatalf("log message = %q, want gemini stream completed without output text", record.msg)
+	}
+	if record.level != slog.LevelWarn {
+		t.Fatalf("log level = %v, want warn", record.level)
+	}
+	if record.attrs["candidate_thought_parts"] != "1" {
+		t.Fatalf("candidate_thought_parts = %q, want 1", record.attrs["candidate_thought_parts"])
 	}
 }
 
@@ -618,4 +823,84 @@ func ptrInt(value int) *int {
 
 func ptrInt32(value int32) *int32 {
 	return &value
+}
+
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []capturedRecord
+}
+
+type capturedRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]string
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h *recordingHandler) Handle(_ context.Context, record slog.Record) error {
+	captured := capturedRecord{
+		level: record.Level,
+		msg:   record.Message,
+		attrs: make(map[string]string),
+	}
+	record.Attrs(func(attr slog.Attr) bool {
+		captured.attrs[attr.Key] = formatSlogValue(attr.Value)
+		return true
+	})
+
+	h.mu.Lock()
+	h.records = append(h.records, captured)
+	h.mu.Unlock()
+
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *recordingHandler) WithGroup(string) slog.Handler {
+	return h
+}
+
+func (h *recordingHandler) lastRecord() capturedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.records) == 0 {
+		return capturedRecord{}
+	}
+
+	return h.records[len(h.records)-1]
+}
+
+func formatSlogValue(value slog.Value) string {
+	switch value.Kind() {
+	case slog.KindAny:
+		return fmt.Sprint(value.Any())
+	case slog.KindBool:
+		if value.Bool() {
+			return "true"
+		}
+		return "false"
+	case slog.KindDuration:
+		return value.Duration().String()
+	case slog.KindFloat64:
+		return fmt.Sprint(value.Float64())
+	case slog.KindGroup:
+		return fmt.Sprint(value.Group())
+	case slog.KindInt64:
+		return fmt.Sprint(value.Int64())
+	case slog.KindString:
+		return value.String()
+	case slog.KindTime:
+		return value.Time().Format(time.RFC3339Nano)
+	case slog.KindUint64:
+		return fmt.Sprint(value.Uint64())
+	default:
+		return value.String()
+	}
 }

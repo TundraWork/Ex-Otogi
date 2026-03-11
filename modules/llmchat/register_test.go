@@ -18,10 +18,11 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 
 	llmConfigPath := writeRuntimeLLMConfigFile(t, "45s", "openai-main")
 	services := newRecordingServiceRegistry(map[string]any{
-		serviceLogger:               slog.Default(),
-		otogi.ServiceSinkDispatcher: &sinkDispatcherStub{},
-		otogi.ServiceMemory:         &memoryStub{},
-		otogi.ServiceMarkdownParser: markdownParserStub{},
+		serviceLogger:                slog.Default(),
+		otogi.ServiceSinkDispatcher:  &sinkDispatcherStub{},
+		otogi.ServiceMemory:          &memoryStub{},
+		otogi.ServiceMarkdownParser:  markdownParserStub{},
+		otogi.ServiceMediaDownloader: &mediaDownloaderStub{},
 	})
 
 	var (
@@ -66,6 +67,9 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	}
 	if module.providerRegistry == nil {
 		t.Fatal("expected provider registry to be configured")
+	}
+	if module.mediaDownloader == nil {
+		t.Fatal("expected media downloader to be configured")
 	}
 	if len(module.providers) != 1 {
 		t.Fatalf("providers len = %d, want 1", len(module.providers))
@@ -132,6 +136,9 @@ func TestOnRegisterUsesLLMConfigEnvOverride(t *testing.T) {
 	}
 	if module.providers["openai-env"] == nil {
 		t.Fatal("expected env-configured provider to be resolved")
+	}
+	if module.mediaDownloader != nil {
+		t.Fatal("expected media downloader to remain optional when service is absent")
 	}
 }
 

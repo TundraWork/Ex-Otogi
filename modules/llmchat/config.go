@@ -5,6 +5,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"ex-otogi/pkg/otogi"
 )
 
 const (
@@ -12,12 +14,15 @@ const (
 	metadataKeyProvider       = "provider"
 	metadataKeyConversationID = "conversation_id"
 
-	defaultReplyChainMaxMessages  = 12
-	defaultLeadingContextMessages = 4
-	defaultLeadingContextMaxAge   = 15 * time.Minute
-	defaultMaxContextRunes        = 12000
-	defaultMaxMessageRunes        = 1600
-	defaultQuoteReplyDepth        = 2
+	defaultReplyChainMaxMessages   = 12
+	defaultLeadingContextMessages  = 4
+	defaultLeadingContextMaxAge    = 15 * time.Minute
+	defaultMaxContextRunes         = 12000
+	defaultMaxMessageRunes         = 1600
+	defaultQuoteReplyDepth         = 2
+	defaultImageInputMaxImages     = 3
+	defaultImageInputMaxBytes      = 10 << 20
+	defaultImageInputMaxTotalBytes = 20 << 20
 )
 
 // Config configures llmchat module behavior.
@@ -53,6 +58,14 @@ type Agent struct {
 	// ContextPolicy controls how llmchat reconstructs and trims conversation
 	// context before sending it to one provider.
 	ContextPolicy ContextPolicy
+	// ImageInputs controls whether llmchat downloads current-event images and
+	// includes them as multimodal user input.
+	//
+	// v1 reads images from the live request context only: the current event,
+	// selected reply-thread entries, and selected leading-context entries.
+	// Historical memory-only lookups remain out of scope until memory identity
+	// carries Source.ID.
+	ImageInputs ImageInputPolicy
 }
 
 // ContextPolicy controls how one agent builds structured conversation context.
@@ -76,6 +89,20 @@ type ContextPolicy struct {
 	// resolved and inlined as quoted context when the referenced message is not
 	// already present in the conversation context. 0 disables quoting.
 	QuoteReplyDepth int
+}
+
+// ImageInputPolicy controls how one agent reads current-event image attachments.
+type ImageInputPolicy struct {
+	// Enabled turns on current-event image download and multimodal input.
+	Enabled bool
+	// MaxImages caps how many images from the current event can be attached.
+	MaxImages int
+	// MaxImageBytes caps any one downloaded image size in bytes.
+	MaxImageBytes int64
+	// MaxTotalBytes caps total downloaded image bytes across one request.
+	MaxTotalBytes int64
+	// Detail hints desired provider-side visual fidelity when supported.
+	Detail otogi.LLMInputImageDetail
 }
 
 // Validate checks llmchat config coherence.
@@ -142,6 +169,9 @@ func validateAgent(agent Agent) error {
 	if err := validateContextPolicy(resolveContextPolicy(agent.ContextPolicy)); err != nil {
 		return fmt.Errorf("context_policy: %w", err)
 	}
+	if err := validateImageInputPolicy(resolveImageInputPolicy(agent.ImageInputs)); err != nil {
+		return fmt.Errorf("image_inputs: %w", err)
+	}
 	return validateRequestMetadata(agent.RequestMetadata)
 }
 
@@ -187,6 +217,63 @@ func validateContextPolicy(policy ContextPolicy) error {
 	}
 	if policy.QuoteReplyDepth < 0 {
 		return fmt.Errorf("quote_reply_depth must be >= 0")
+	}
+
+	return nil
+}
+
+func resolveImageInputPolicy(policy ImageInputPolicy) ImageInputPolicy {
+	resolved := policy
+	if !resolved.Enabled {
+		return resolved
+	}
+	if resolved.MaxImages == 0 {
+		resolved.MaxImages = defaultImageInputMaxImages
+	}
+	if resolved.MaxImageBytes == 0 {
+		resolved.MaxImageBytes = defaultImageInputMaxBytes
+	}
+	if resolved.MaxTotalBytes == 0 {
+		resolved.MaxTotalBytes = defaultImageInputMaxTotalBytes
+	}
+	if resolved.Detail == "" {
+		resolved.Detail = otogi.LLMInputImageDetailAuto
+	}
+
+	return resolved
+}
+
+func validateImageInputPolicy(policy ImageInputPolicy) error {
+	if !policy.Enabled {
+		if policy.MaxImages != 0 {
+			return fmt.Errorf("max_images requires enabled=true")
+		}
+		if policy.MaxImageBytes != 0 {
+			return fmt.Errorf("max_image_bytes requires enabled=true")
+		}
+		if policy.MaxTotalBytes != 0 {
+			return fmt.Errorf("max_total_bytes requires enabled=true")
+		}
+		if policy.Detail != "" {
+			return fmt.Errorf("detail requires enabled=true")
+		}
+
+		return nil
+	}
+	if policy.MaxImages <= 0 {
+		return fmt.Errorf("max_images must be > 0")
+	}
+	if policy.MaxImageBytes <= 0 {
+		return fmt.Errorf("max_image_bytes must be > 0")
+	}
+	if policy.MaxTotalBytes <= 0 {
+		return fmt.Errorf("max_total_bytes must be > 0")
+	}
+	if policy.MaxTotalBytes < policy.MaxImageBytes {
+		return fmt.Errorf("max_total_bytes must be >= max_image_bytes")
+	}
+	if err := policy.Detail.Validate(); err != nil {
+		return fmt.Errorf("detail: %w", err)
 	}
 
 	return nil
@@ -246,6 +333,7 @@ func cloneConfig(cfg Config) Config {
 				RequestTimeout:       agent.RequestTimeout,
 				RequestMetadata:      cloneStringMap(agent.RequestMetadata),
 				ContextPolicy:        resolveContextPolicy(agent.ContextPolicy),
+				ImageInputs:          resolveImageInputPolicy(agent.ImageInputs),
 			})
 		}
 	}

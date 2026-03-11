@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"log/slog"
 	"math"
 	"net/url"
 	"strconv"
@@ -25,6 +26,7 @@ const (
 	metadataIncludeThoughts = "gemini.include_thoughts"
 	metadataThinkingLevel   = "gemini.thinking_level"
 	metadataResponseMIME    = "gemini.response_mime_type"
+	metadataSafetyFilterOff = "gemini.safety_filter_off"
 
 	thinkingLevelLow    = "low"
 	thinkingLevelMedium = "medium"
@@ -62,12 +64,19 @@ type ProviderConfig struct {
 	//
 	// Supported values: text/plain, application/json.
 	ResponseMIMEType string
+	// SafetyFilterOff disables all Gemini safety filters when true.
+	SafetyFilterOff *bool
+	// Logger receives provider-level diagnostics for Gemini API failures.
+	//
+	// Nil defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 // Provider is an otogi LLM provider backed by Google Gemini streaming API.
 type Provider struct {
 	models   geminiModelsClient
 	defaults requestOptions
+	logger   *slog.Logger
 }
 
 type geminiModelsClient interface {
@@ -93,6 +102,7 @@ type requestOptions struct {
 	includeThoughts *bool
 	thinkingLevel   genai.ThinkingLevel
 	responseMIME    string
+	safetyFilterOff *bool
 }
 
 // New builds one Gemini API provider instance.
@@ -126,6 +136,7 @@ func New(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
 	return &Provider{
 		models:   client.Models,
 		defaults: normalized.defaults,
+		logger:   resolveLogger(cfg.Logger),
 	}, nil
 }
 
@@ -160,7 +171,12 @@ func (p *Provider) GenerateStream(
 		return nil, fmt.Errorf("gemini generate stream: stream is nil")
 	}
 
-	return newGeminiStream(stream, effective.includeThoughtsEnabled()), nil
+	return newGeminiStream(
+		stream,
+		effective.includeThoughtsEnabled(),
+		p.logger,
+		newGeminiRequestDiagnostics(req, effective),
+	), nil
 }
 
 func mapGenerateRequest(
@@ -179,20 +195,24 @@ func mapGenerateRequest(
 	systemParts := make([]string, 0, len(req.Messages))
 	contents := make([]*genai.Content, 0, len(req.Messages))
 	for index, message := range req.Messages {
+		parts, err := mapMessageParts(message)
+		if err != nil {
+			return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] content: %w", index, err)
+		}
+
 		switch message.Role {
 		case otogi.LLMMessageRoleSystem:
-			systemParts = append(systemParts, message.Content)
+			textParts, err := mapSystemParts(parts)
+			if err != nil {
+				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] system content: %w", index, err)
+			}
+			systemParts = append(systemParts, textParts...)
 		case otogi.LLMMessageRoleUser, otogi.LLMMessageRoleAssistant:
 			role, roleErr := mapMessageRole(message.Role)
 			if roleErr != nil {
 				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] role: %w", index, roleErr)
 			}
-			contents = append(contents, &genai.Content{
-				Role: role,
-				Parts: []*genai.Part{
-					{Text: message.Content},
-				},
-			})
+			contents = append(contents, genai.NewContentFromParts(parts, genai.Role(role)))
 		default:
 			return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] role: unsupported role %q", index, message.Role)
 		}
@@ -248,8 +268,51 @@ func mapGenerateRequest(
 	if effective.responseMIME != "" {
 		config.ResponseMIMEType = effective.responseMIME
 	}
+	if isTrue(effective.safetyFilterOff) {
+		config.SafetySettings = safetySettingsOff()
+	}
 
 	return contents, config, effective, nil
+}
+
+func mapMessageParts(message otogi.LLMMessage) ([]*genai.Part, error) {
+	parts := message.ContentParts()
+	mapped := make([]*genai.Part, 0, len(parts))
+	for index, part := range parts {
+		item, err := mapMessagePart(part)
+		if err != nil {
+			return nil, fmt.Errorf("parts[%d]: %w", index, err)
+		}
+		mapped = append(mapped, item)
+	}
+
+	return mapped, nil
+}
+
+func mapMessagePart(part otogi.LLMMessagePart) (*genai.Part, error) {
+	switch part.Type {
+	case otogi.LLMMessagePartTypeText:
+		return genai.NewPartFromText(part.Text), nil
+	case otogi.LLMMessagePartTypeImage:
+		if part.Image == nil {
+			return nil, fmt.Errorf("missing image payload")
+		}
+		return genai.NewPartFromBytes(part.Image.Data, part.Image.MIMEType), nil
+	default:
+		return nil, fmt.Errorf("unsupported part type %q", part.Type)
+	}
+}
+
+func mapSystemParts(parts []*genai.Part) ([]string, error) {
+	text := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if strings.TrimSpace(part.Text) == "" || part.InlineData != nil || part.FileData != nil {
+			return nil, fmt.Errorf("parts[%d]: system messages must be text-only", index)
+		}
+		text = append(text, part.Text)
+	}
+
+	return text, nil
 }
 
 func mapMessageRole(role otogi.LLMMessageRole) (string, error) {
@@ -307,6 +370,13 @@ func parseMetadataOverrides(metadata map[string]string) (requestOptions, error) 
 			return requestOptions{}, fmt.Errorf("%s: %w", metadataResponseMIME, err)
 		}
 		overrides.responseMIME = mime
+	}
+	if raw, exists := metadata[metadataSafetyFilterOff]; exists {
+		parsed, err := parseMetadataBool(raw)
+		if err != nil {
+			return requestOptions{}, fmt.Errorf("%s: %w", metadataSafetyFilterOff, err)
+		}
+		overrides.safetyFilterOff = &parsed
 	}
 	if err := overrides.validateThinkingSelection(); err != nil {
 		return requestOptions{}, fmt.Errorf("metadata thinking options: %w", err)
@@ -373,6 +443,7 @@ func optionsFromConfig(cfg ProviderConfig) (requestOptions, error) {
 		includeThoughts: cloneBoolPointer(cfg.IncludeThoughts),
 		thinkingLevel:   thinkingLevel,
 		responseMIME:    responseMIME,
+		safetyFilterOff: cloneBoolPointer(cfg.SafetyFilterOff),
 	}
 	if err := options.validateThinkingSelection(); err != nil {
 		return requestOptions{}, fmt.Errorf("thinking options: %w", err)
@@ -389,6 +460,7 @@ func mergeRequestOptions(defaults, overrides requestOptions) requestOptions {
 		includeThoughts: cloneBoolPointer(defaults.includeThoughts),
 		thinkingLevel:   defaults.thinkingLevel,
 		responseMIME:    defaults.responseMIME,
+		safetyFilterOff: cloneBoolPointer(defaults.safetyFilterOff),
 	}
 
 	if overrides.googleSearch != nil {
@@ -408,6 +480,9 @@ func mergeRequestOptions(defaults, overrides requestOptions) requestOptions {
 	}
 	if overrides.responseMIME != "" {
 		merged.responseMIME = overrides.responseMIME
+	}
+	if overrides.safetyFilterOff != nil {
+		merged.safetyFilterOff = cloneBoolPointer(overrides.safetyFilterOff)
 	}
 
 	return merged
@@ -534,6 +609,35 @@ func cloneInt32Pointer(value *int32) *int32 {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func resolveLogger(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+
+	return slog.Default()
+}
+
+func safetySettingsOff() []*genai.SafetySetting {
+	return []*genai.SafetySetting{
+		{
+			Category:  genai.HarmCategoryHarassment,
+			Threshold: genai.HarmBlockThresholdOff,
+		},
+		{
+			Category:  genai.HarmCategoryHateSpeech,
+			Threshold: genai.HarmBlockThresholdOff,
+		},
+		{
+			Category:  genai.HarmCategorySexuallyExplicit,
+			Threshold: genai.HarmBlockThresholdOff,
+		},
+		{
+			Category:  genai.HarmCategoryDangerousContent,
+			Threshold: genai.HarmBlockThresholdOff,
+		},
+	}
 }
 
 var _ otogi.LLMProvider = (*Provider)(nil)

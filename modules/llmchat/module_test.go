@@ -259,6 +259,647 @@ func TestBuildGenerateRequestStructuresContextAndPreservesRoles(t *testing.T) {
 	}
 }
 
+func TestBuildGenerateRequestIncludesCurrentEventImages(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     2,
+					MaxImageBytes: 1 << 20,
+					MaxTotalBytes: 2 << 20,
+					Detail:        otogi.LLMInputImageDetailHigh,
+				},
+			},
+		},
+	})
+
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "trigger text",
+					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, Caption: "diagram"}},
+				},
+				CreatedAt: time.Unix(100, 0).UTC(),
+				IsCurrent: true,
+			},
+		},
+	}
+	module.mediaDownloader = &mediaDownloaderStub{
+		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
+		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg", FileName: "diagram.jpg"},
+	}
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u1", Username: "alice"},
+		Article: &otogi.Article{
+			ID:    "m1",
+			Text:  "Otogi inspect this",
+			Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, Caption: "diagram"}},
+		},
+	}, module.cfg.Agents[0], "inspect this")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	last := req.Messages[len(req.Messages)-1]
+	if last.Content != "" {
+		t.Fatalf("last.Content = %q, want multimodal parts", last.Content)
+	}
+	if len(last.Parts) != 2 {
+		t.Fatalf("last.Parts len = %d, want 2", len(last.Parts))
+	}
+	if last.Parts[0].Type != otogi.LLMMessagePartTypeText {
+		t.Fatalf("last.Parts[0].Type = %q, want text", last.Parts[0].Type)
+	}
+	if !strings.Contains(last.Parts[0].Text, "<current_message") {
+		t.Fatalf("last text part = %q, want current_message envelope", last.Parts[0].Text)
+	}
+	if !strings.Contains(last.Parts[0].Text, "<image_inputs") {
+		t.Fatalf("last text part = %q, want image_inputs summary", last.Parts[0].Text)
+	}
+	if last.Parts[1].Type != otogi.LLMMessagePartTypeImage {
+		t.Fatalf("last.Parts[1].Type = %q, want image", last.Parts[1].Type)
+	}
+	if last.Parts[1].Image == nil {
+		t.Fatal("last image part is nil")
+	}
+	if last.Parts[1].Image.MIMEType != "image/jpeg" {
+		t.Fatalf("image MIMEType = %q, want image/jpeg", last.Parts[1].Image.MIMEType)
+	}
+	if last.Parts[1].Image.Detail != otogi.LLMInputImageDetailHigh {
+		t.Fatalf("image detail = %q, want high", last.Parts[1].Image.Detail)
+	}
+	downloader, ok := module.mediaDownloader.(*mediaDownloaderStub)
+	if !ok {
+		t.Fatalf("module.mediaDownloader type = %T, want *mediaDownloaderStub", module.mediaDownloader)
+	}
+	if downloader.lastRequest.Source.ID != "tg-main" {
+		t.Fatalf("download source id = %q, want tg-main", downloader.lastRequest.Source.ID)
+	}
+	if downloader.lastRequest.ArticleID != "m1" {
+		t.Fatalf("download article id = %q, want m1", downloader.lastRequest.ArticleID)
+	}
+	if downloader.lastRequest.AttachmentID != "photo-1" {
+		t.Fatalf("download attachment id = %q, want photo-1", downloader.lastRequest.AttachmentID)
+	}
+}
+
+func TestBuildGenerateRequestIncludesLeadingContextImageOnlyMessage(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  4,
+					LeadingContextMessages: 2,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        4000,
+					MaxMessageRunes:        200,
+				},
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     2,
+					MaxImageBytes: 1 << 20,
+					MaxTotalBytes: 2 << 20,
+				},
+			},
+		},
+	})
+
+	downloader := &mediaDownloaderStub{
+		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
+		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+	}
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "alice"},
+				Article:      otogi.Article{ID: "m2", Text: "trigger text"},
+				CreatedAt:    time.Unix(100, 0).UTC(),
+				IsCurrent:    true,
+			},
+		},
+		leadingContext: []otogi.ConversationContextEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "",
+					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(95, 0).UTC(),
+			},
+		},
+	}
+	module.mediaDownloader = downloader
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u2", Username: "alice"},
+		Article: &otogi.Article{
+			ID:   "m2",
+			Text: "Otogi，描述一下上面的图片",
+		},
+	}, module.cfg.Agents[0], "描述一下上面的图片")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if len(req.Messages) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(req.Messages))
+	}
+	// Leading context message should be text-only (no Parts).
+	leading := req.Messages[2]
+	if len(leading.Parts) != 0 {
+		t.Fatalf("leading.Parts len = %d, want 0 (text-only)", len(leading.Parts))
+	}
+	if !strings.Contains(leading.Content, `media_only="true"`) {
+		t.Fatalf("leading.Content = %q, want media_only flag", leading.Content)
+	}
+	// All images are attached to the current (last) message.
+	last := req.Messages[3]
+	if len(last.Parts) != 2 {
+		t.Fatalf("last.Parts len = %d, want 2", len(last.Parts))
+	}
+	if !strings.Contains(last.Parts[0].Text, "<current_message") {
+		t.Fatalf("last text part = %q, want current_message envelope", last.Parts[0].Text)
+	}
+	if last.Parts[1].Image == nil || last.Parts[1].Image.MIMEType != "image/jpeg" {
+		t.Fatalf("last image part = %+v, want image/jpeg", last.Parts[1].Image)
+	}
+	if len(downloader.requests) != 1 {
+		t.Fatalf("download requests len = %d, want 1", len(downloader.requests))
+	}
+	if downloader.requests[0].ArticleID != "m1" {
+		t.Fatalf("download article id = %q, want m1", downloader.requests[0].ArticleID)
+	}
+}
+
+func TestBuildGenerateRequestIncludesReplyThreadImageOnlyMessage(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  4,
+					LeadingContextMessages: 0,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        4000,
+					MaxMessageRunes:        200,
+				},
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     2,
+					MaxImageBytes: 1 << 20,
+					MaxTotalBytes: 2 << 20,
+				},
+			},
+		},
+	})
+
+	downloader := &mediaDownloaderStub{
+		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
+		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+	}
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "",
+					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(95, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "alice"},
+				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger text"},
+				CreatedAt:    time.Unix(100, 0).UTC(),
+				IsCurrent:    true,
+			},
+		},
+	}
+	module.mediaDownloader = downloader
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u2", Username: "alice"},
+		Article: &otogi.Article{
+			ID:               "m2",
+			ReplyToArticleID: "m1",
+			Text:             "Otogi，描述一下上面的图片",
+		},
+	}, module.cfg.Agents[0], "描述一下上面的图片")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if len(req.Messages) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(req.Messages))
+	}
+	// Reply thread message should be text-only (no Parts).
+	reply := req.Messages[2]
+	if len(reply.Parts) != 0 {
+		t.Fatalf("reply.Parts len = %d, want 0 (text-only)", len(reply.Parts))
+	}
+	if !strings.Contains(reply.Content, `media_only="true"`) {
+		t.Fatalf("reply.Content = %q, want media_only flag", reply.Content)
+	}
+	// All images are attached to the current (last) message.
+	last := req.Messages[3]
+	if len(last.Parts) != 2 {
+		t.Fatalf("last.Parts len = %d, want 2", len(last.Parts))
+	}
+	if !strings.Contains(last.Parts[0].Text, "<current_message") {
+		t.Fatalf("last text part = %q, want current_message envelope", last.Parts[0].Text)
+	}
+	if last.Parts[1].Image == nil || last.Parts[1].Image.MIMEType != "image/jpeg" {
+		t.Fatalf("last image part = %+v, want image/jpeg", last.Parts[1].Image)
+	}
+	if len(downloader.requests) != 1 {
+		t.Fatalf("download requests len = %d, want 1", len(downloader.requests))
+	}
+	if downloader.requests[0].ArticleID != "m1" {
+		t.Fatalf("download article id = %q, want m1", downloader.requests[0].ArticleID)
+	}
+}
+
+func TestBuildGenerateRequestIncludesBotSentImageOnCurrentMessage(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  4,
+					LeadingContextMessages: 0,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        4000,
+					MaxMessageRunes:        200,
+				},
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     2,
+					MaxImageBytes: 1 << 20,
+					MaxTotalBytes: 2 << 20,
+				},
+			},
+		},
+	})
+
+	downloader := &mediaDownloaderStub{
+		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
+		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+	}
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "bot-1", Username: "thebot", IsBot: true},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "here is the result",
+					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(95, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "alice"},
+				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger text"},
+				CreatedAt:    time.Unix(100, 0).UTC(),
+				IsCurrent:    true,
+			},
+		},
+	}
+	module.mediaDownloader = downloader
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u2", Username: "alice"},
+		Article: &otogi.Article{
+			ID:               "m2",
+			ReplyToArticleID: "m1",
+			Text:             "Otogi describe what you sent",
+		},
+	}, module.cfg.Agents[0], "describe what you sent")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if len(req.Messages) != 4 {
+		t.Fatalf("messages len = %d, want 4", len(req.Messages))
+	}
+	// Bot reply thread message should be assistant role, text-only.
+	botMsg := req.Messages[2]
+	if botMsg.Role != otogi.LLMMessageRoleAssistant {
+		t.Fatalf("bot message role = %q, want assistant", botMsg.Role)
+	}
+	if len(botMsg.Parts) != 0 {
+		t.Fatalf("bot message Parts len = %d, want 0 (text-only)", len(botMsg.Parts))
+	}
+	// Bot-sent image should appear on the current (last) user message.
+	last := req.Messages[3]
+	if len(last.Parts) != 2 {
+		t.Fatalf("last.Parts len = %d, want 2 (text + image)", len(last.Parts))
+	}
+	if last.Parts[1].Image == nil || last.Parts[1].Image.MIMEType != "image/jpeg" {
+		t.Fatalf("last image = %+v, want image/jpeg from bot article", last.Parts[1].Image)
+	}
+	if len(downloader.requests) != 1 {
+		t.Fatalf("download requests len = %d, want 1", len(downloader.requests))
+	}
+	if downloader.requests[0].ArticleID != "m1" {
+		t.Fatalf("download article id = %q, want m1 (bot article)", downloader.requests[0].ArticleID)
+	}
+}
+
+func TestBuildGenerateRequestSkipsImagesWithoutMediaDownloader(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ImageInputs: ImageInputPolicy{
+					Enabled: true,
+				},
+			},
+		},
+	})
+
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "trigger text",
+					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(100, 0).UTC(),
+				IsCurrent: true,
+			},
+		},
+	}
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u1", Username: "alice"},
+		Article: &otogi.Article{
+			ID:    "m1",
+			Text:  "Otogi inspect this",
+			Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+		},
+	}, module.cfg.Agents[0], "inspect this")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	last := req.Messages[len(req.Messages)-1]
+	if len(last.Parts) != 0 {
+		t.Fatalf("last.Parts len = %d, want 0 when media downloader is absent", len(last.Parts))
+	}
+	if !strings.Contains(last.Content, "<current_message") {
+		t.Fatalf("last.Content = %q, want current_message envelope", last.Content)
+	}
+}
+
+func TestBuildGenerateRequestSkipsOversizedImages(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     1,
+					MaxImageBytes: 4,
+					MaxTotalBytes: 4,
+				},
+			},
+		},
+	})
+
+	downloader := &mediaDownloaderStub{
+		data:       []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10},
+		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+	}
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "trigger text",
+					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, SizeBytes: 8}},
+				},
+				CreatedAt: time.Unix(100, 0).UTC(),
+				IsCurrent: true,
+			},
+		},
+	}
+	module.mediaDownloader = downloader
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u1", Username: "alice"},
+		Article: &otogi.Article{
+			ID:    "m1",
+			Text:  "Otogi inspect this",
+			Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, SizeBytes: 8}},
+		},
+	}, module.cfg.Agents[0], "inspect this")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	last := req.Messages[len(req.Messages)-1]
+	if len(last.Parts) != 0 {
+		t.Fatalf("last.Parts len = %d, want 0 for oversized image", len(last.Parts))
+	}
+	if downloader.lastRequest.AttachmentID != "" {
+		t.Fatalf("download attachment id = %q, want no download attempt", downloader.lastRequest.AttachmentID)
+	}
+}
+
+func TestBuildGenerateRequestIncludesImageDocumentAttachments(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     1,
+					MaxImageBytes: 1 << 20,
+					MaxTotalBytes: 1 << 20,
+				},
+			},
+		},
+	})
+
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:   "m1",
+					Text: "trigger text",
+					Media: []otogi.MediaAttachment{{
+						ID:       "doc-1",
+						Type:     otogi.MediaTypeDocument,
+						MIMEType: "image/png",
+						FileName: "chart.png",
+					}},
+				},
+				CreatedAt: time.Unix(100, 0).UTC(),
+				IsCurrent: true,
+			},
+		},
+	}
+	module.mediaDownloader = &mediaDownloaderStub{
+		data: []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a},
+	}
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u1", Username: "alice"},
+		Article: &otogi.Article{
+			ID:   "m1",
+			Text: "Otogi inspect this",
+			Media: []otogi.MediaAttachment{{
+				ID:       "doc-1",
+				Type:     otogi.MediaTypeDocument,
+				MIMEType: "image/png",
+				FileName: "chart.png",
+			}},
+		},
+	}, module.cfg.Agents[0], "inspect this")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	last := req.Messages[len(req.Messages)-1]
+	if len(last.Parts) != 2 {
+		t.Fatalf("last.Parts len = %d, want 2", len(last.Parts))
+	}
+	if last.Parts[1].Image == nil {
+		t.Fatal("last image part is nil")
+	}
+	if last.Parts[1].Image.MIMEType != "image/png" {
+		t.Fatalf("image MIMEType = %q, want image/png", last.Parts[1].Image.MIMEType)
+	}
+}
+
 func TestBuildGenerateRequestAppliesContextBudgets(t *testing.T) {
 	module := newTestModule(Config{
 		RequestTimeout: time.Second,
@@ -2432,6 +3073,37 @@ func (s *streamStub) Close() error {
 	return s.closeErr
 }
 
+type mediaDownloaderStub struct {
+	lastRequest otogi.MediaDownloadRequest
+	requests    []otogi.MediaDownloadRequest
+	attachment  otogi.MediaAttachment
+	err         error
+	writeErr    error
+	data        []byte
+}
+
+func (s *mediaDownloaderStub) Download(
+	_ context.Context,
+	request otogi.MediaDownloadRequest,
+	output io.Writer,
+) (otogi.MediaAttachment, error) {
+	s.lastRequest = request
+	s.requests = append(s.requests, request)
+	if s.err != nil {
+		return otogi.MediaAttachment{}, s.err
+	}
+	if len(s.data) > 0 {
+		if _, err := output.Write(s.data); err != nil {
+			return otogi.MediaAttachment{}, fmt.Errorf("write media downloader stub output: %w", err)
+		}
+	}
+	if s.writeErr != nil {
+		return otogi.MediaAttachment{}, s.writeErr
+	}
+
+	return s.attachment, nil
+}
+
 type moduleRuntimeStub struct {
 	registry otogi.ServiceRegistry
 	configs  otogi.ConfigRegistry
@@ -2474,7 +3146,14 @@ func newTestModule(cfg Config) *Module {
 func allMessageContents(messages []otogi.LLMMessage) []string {
 	contents := make([]string, 0, len(messages))
 	for _, message := range messages {
-		contents = append(contents, message.Content)
+		var builder strings.Builder
+		for _, part := range message.ContentParts() {
+			if part.Type != otogi.LLMMessagePartTypeText {
+				continue
+			}
+			builder.WriteString(part.Text)
+		}
+		contents = append(contents, builder.String())
 	}
 
 	return contents

@@ -11,6 +11,8 @@ import (
 	"text/template"
 	"time"
 	"unicode"
+
+	"ex-otogi/pkg/otogi"
 )
 
 const (
@@ -34,12 +36,15 @@ const (
 	geminiResponseMIMEText = "text/plain"
 	geminiResponseMIMEJSON = "application/json"
 
-	defaultReplyChainMaxMessages  = 12
-	defaultLeadingContextMessages = 4
-	defaultLeadingContextMaxAge   = 15 * time.Minute
-	defaultMaxContextRunes        = 12000
-	defaultMaxMessageRunes        = 1600
-	defaultQuoteReplyDepth        = 2
+	defaultReplyChainMaxMessages   = 12
+	defaultLeadingContextMessages  = 4
+	defaultLeadingContextMaxAge    = 15 * time.Minute
+	defaultMaxContextRunes         = 12000
+	defaultMaxMessageRunes         = 1600
+	defaultQuoteReplyDepth         = 2
+	defaultImageInputMaxImages     = 3
+	defaultImageInputMaxBytes      = 10 << 20
+	defaultImageInputMaxTotalBytes = 20 << 20
 )
 
 // Config is the full runtime LLM configuration model loaded from JSON.
@@ -102,6 +107,8 @@ type GeminiRequestDefaults struct {
 	ThinkingLevel string
 	// ResponseMIMEType sets output MIME type.
 	ResponseMIMEType string
+	// SafetyFilterOff disables Gemini safety filters when true.
+	SafetyFilterOff *bool
 }
 
 // Agent describes one configured llmchat agent.
@@ -129,6 +136,9 @@ type Agent struct {
 	// ContextPolicy controls how llmchat reconstructs and trims conversation
 	// context before sending one request.
 	ContextPolicy ContextPolicy
+	// ImageInputs controls whether llmchat downloads current-event images and
+	// includes them as multimodal user input.
+	ImageInputs ImageInputPolicy
 }
 
 // ContextPolicy controls how one agent builds structured conversation context.
@@ -152,6 +162,20 @@ type ContextPolicy struct {
 	// resolved and inlined as quoted context when the referenced message is not
 	// already present in the conversation context. 0 disables quoting.
 	QuoteReplyDepth int
+}
+
+// ImageInputPolicy controls how one agent reads current-event image attachments.
+type ImageInputPolicy struct {
+	// Enabled turns on current-event image download and multimodal input.
+	Enabled bool
+	// MaxImages caps how many images from the current event can be attached.
+	MaxImages int
+	// MaxImageBytes caps any one downloaded image size in bytes.
+	MaxImageBytes int64
+	// MaxTotalBytes caps total downloaded image bytes across one request.
+	MaxTotalBytes int64
+	// Detail hints desired provider-side visual fidelity when supported.
+	Detail otogi.LLMInputImageDetail
 }
 
 type fileConfig struct {
@@ -182,20 +206,22 @@ type fileGeminiEntry struct {
 	IncludeThoughts  *bool  `json:"include_thoughts"`
 	ThinkingLevel    string `json:"thinking_level"`
 	ResponseMIMEType string `json:"response_mime_type"`
+	SafetyFilterOff  *bool  `json:"safety_filter_off"`
 }
 
 type fileAgent struct {
-	Name                 string            `json:"name"`
-	Description          string            `json:"description"`
-	Provider             string            `json:"provider"`
-	Model                string            `json:"model"`
-	SystemPromptTemplate string            `json:"system_prompt_template"`
-	TemplateVariables    map[string]string `json:"template_variables"`
-	MaxOutputTokens      int               `json:"max_output_tokens"`
-	Temperature          float64           `json:"temperature"`
-	RequestTimeout       string            `json:"request_timeout"`
-	RequestMetadata      map[string]string `json:"request_metadata"`
-	Context              *fileAgentContext `json:"context"`
+	Name                 string                `json:"name"`
+	Description          string                `json:"description"`
+	Provider             string                `json:"provider"`
+	Model                string                `json:"model"`
+	SystemPromptTemplate string                `json:"system_prompt_template"`
+	TemplateVariables    map[string]string     `json:"template_variables"`
+	MaxOutputTokens      int                   `json:"max_output_tokens"`
+	Temperature          float64               `json:"temperature"`
+	RequestTimeout       string                `json:"request_timeout"`
+	RequestMetadata      map[string]string     `json:"request_metadata"`
+	Context              *fileAgentContext     `json:"context"`
+	ImageInputs          *fileAgentImageInputs `json:"image_inputs"`
 }
 
 type fileAgentContext struct {
@@ -205,6 +231,14 @@ type fileAgentContext struct {
 	MaxContextRunes        *int   `json:"max_context_runes"`
 	MaxMessageRunes        *int   `json:"max_message_runes"`
 	QuoteReplyDepth        *int   `json:"quote_reply_depth"`
+}
+
+type fileAgentImageInputs struct {
+	Enabled       bool   `json:"enabled"`
+	MaxImages     *int   `json:"max_images"`
+	MaxImageBytes *int64 `json:"max_image_bytes"`
+	MaxTotalBytes *int64 `json:"max_total_bytes"`
+	Detail        string `json:"detail"`
 }
 
 type rootRaw struct {
@@ -285,6 +319,10 @@ func LoadFile(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: parse context: %w", index, err)
 		}
+		imageInputs, err := parseImageInputPolicy(rawAgent.ImageInputs)
+		if err != nil {
+			return Config{}, fmt.Errorf("load llm config agents[%d]: parse image_inputs: %w", index, err)
+		}
 
 		agent := Agent{
 			Name:                 strings.TrimSpace(rawAgent.Name),
@@ -298,6 +336,7 @@ func LoadFile(path string) (Config, error) {
 			RequestTimeout:       agentRequestTimeout,
 			RequestMetadata:      cloneStringMap(rawAgent.RequestMetadata),
 			ContextPolicy:        contextPolicy,
+			ImageInputs:          imageInputs,
 		}
 		if err := validateAgent(agent); err != nil {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: %w", index, err)
@@ -424,6 +463,7 @@ func parseGeminiOptions(raw *fileGeminiEntry) *GeminiOptions {
 			IncludeThoughts:  cloneBoolPointer(raw.IncludeThoughts),
 			ThinkingLevel:    normalizeGeminiThinkingLevel(raw.ThinkingLevel),
 			ResponseMIMEType: normalizeGeminiResponseMIMEType(raw.ResponseMIMEType),
+			SafetyFilterOff:  cloneBoolPointer(raw.SafetyFilterOff),
 		},
 	}
 }
@@ -593,6 +633,9 @@ func validateAgent(agent Agent) error {
 	if err := validateContextPolicy(resolveContextPolicy(agent.ContextPolicy)); err != nil {
 		return fmt.Errorf("context_policy: %w", err)
 	}
+	if err := validateImageInputPolicy(resolveImageInputPolicy(agent.ImageInputs)); err != nil {
+		return fmt.Errorf("image_inputs: %w", err)
+	}
 	return validateRequestMetadata(agent.RequestMetadata)
 }
 
@@ -653,6 +696,49 @@ func resolveContextPolicy(policy ContextPolicy) ContextPolicy {
 	return resolved
 }
 
+func parseImageInputPolicy(raw *fileAgentImageInputs) (ImageInputPolicy, error) {
+	if raw == nil {
+		return ImageInputPolicy{}, nil
+	}
+
+	policy := ImageInputPolicy{
+		Enabled: raw.Enabled,
+		Detail:  otogi.LLMInputImageDetail(strings.ToLower(strings.TrimSpace(raw.Detail))),
+	}
+	if raw.MaxImages != nil {
+		policy.MaxImages = *raw.MaxImages
+	}
+	if raw.MaxImageBytes != nil {
+		policy.MaxImageBytes = *raw.MaxImageBytes
+	}
+	if raw.MaxTotalBytes != nil {
+		policy.MaxTotalBytes = *raw.MaxTotalBytes
+	}
+
+	return resolveImageInputPolicy(policy), nil
+}
+
+func resolveImageInputPolicy(policy ImageInputPolicy) ImageInputPolicy {
+	resolved := policy
+	if !resolved.Enabled {
+		return resolved
+	}
+	if resolved.MaxImages == 0 {
+		resolved.MaxImages = defaultImageInputMaxImages
+	}
+	if resolved.MaxImageBytes == 0 {
+		resolved.MaxImageBytes = defaultImageInputMaxBytes
+	}
+	if resolved.MaxTotalBytes == 0 {
+		resolved.MaxTotalBytes = defaultImageInputMaxTotalBytes
+	}
+	if resolved.Detail == "" {
+		resolved.Detail = otogi.LLMInputImageDetailAuto
+	}
+
+	return resolved
+}
+
 func validateContextPolicy(policy ContextPolicy) error {
 	if policy.ReplyChainMaxMessages <= 0 {
 		return fmt.Errorf("reply_chain_max_messages must be > 0")
@@ -674,6 +760,42 @@ func validateContextPolicy(policy ContextPolicy) error {
 	}
 	if policy.QuoteReplyDepth < 0 {
 		return fmt.Errorf("quote_reply_depth must be >= 0")
+	}
+
+	return nil
+}
+
+func validateImageInputPolicy(policy ImageInputPolicy) error {
+	if !policy.Enabled {
+		if policy.MaxImages != 0 {
+			return fmt.Errorf("max_images requires enabled=true")
+		}
+		if policy.MaxImageBytes != 0 {
+			return fmt.Errorf("max_image_bytes requires enabled=true")
+		}
+		if policy.MaxTotalBytes != 0 {
+			return fmt.Errorf("max_total_bytes requires enabled=true")
+		}
+		if policy.Detail != "" {
+			return fmt.Errorf("detail requires enabled=true")
+		}
+
+		return nil
+	}
+	if policy.MaxImages <= 0 {
+		return fmt.Errorf("max_images must be > 0")
+	}
+	if policy.MaxImageBytes <= 0 {
+		return fmt.Errorf("max_image_bytes must be > 0")
+	}
+	if policy.MaxTotalBytes <= 0 {
+		return fmt.Errorf("max_total_bytes must be > 0")
+	}
+	if policy.MaxTotalBytes < policy.MaxImageBytes {
+		return fmt.Errorf("max_total_bytes must be >= max_image_bytes")
+	}
+	if err := policy.Detail.Validate(); err != nil {
+		return fmt.Errorf("detail: %w", err)
 	}
 
 	return nil

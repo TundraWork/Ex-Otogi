@@ -64,7 +64,15 @@ type LLMMessage struct {
 	// Role identifies which side of the conversation this message belongs to.
 	Role LLMMessageRole
 	// Content is one plain text message body.
+	//
+	// This legacy shorthand remains supported for text-only callers. When Parts is
+	// non-empty, Content must be empty.
 	Content string
+	// Parts is an optional structured content list for multimodal requests.
+	//
+	// Text-only callers can continue using Content. Multimodal callers should
+	// prefer Parts so providers can preserve input ordering.
+	Parts []LLMMessagePart
 }
 
 // Validate checks one message contract.
@@ -72,11 +80,148 @@ func (m LLMMessage) Validate() error {
 	if err := m.Role.Validate(); err != nil {
 		return fmt.Errorf("validate llm message: %w", err)
 	}
+	if len(m.Parts) > 0 {
+		if strings.TrimSpace(m.Content) != "" {
+			return fmt.Errorf("validate llm message: content and parts are mutually exclusive")
+		}
+		for index, part := range m.Parts {
+			if err := part.Validate(); err != nil {
+				return fmt.Errorf("validate llm message parts[%d]: %w", index, err)
+			}
+		}
+		return nil
+	}
 	if strings.TrimSpace(m.Content) == "" {
 		return fmt.Errorf("validate llm message: missing content")
 	}
 
 	return nil
+}
+
+// ContentParts returns message parts, preserving text-only callers as one text part.
+func (m LLMMessage) ContentParts() []LLMMessagePart {
+	if len(m.Parts) > 0 {
+		parts := make([]LLMMessagePart, 0, len(m.Parts))
+		for _, part := range m.Parts {
+			parts = append(parts, part.clone())
+		}
+		return parts
+	}
+	if strings.TrimSpace(m.Content) == "" {
+		return nil
+	}
+
+	return []LLMMessagePart{{
+		Type: LLMMessagePartTypeText,
+		Text: m.Content,
+	}}
+}
+
+// LLMMessagePartType identifies one structured LLM message content part.
+type LLMMessagePartType string
+
+const (
+	// LLMMessagePartTypeText identifies one text part.
+	LLMMessagePartTypeText LLMMessagePartType = "text"
+	// LLMMessagePartTypeImage identifies one inline image part.
+	LLMMessagePartTypeImage LLMMessagePartType = "image"
+)
+
+// LLMMessagePart is one ordered content part inside an LLM message.
+type LLMMessagePart struct {
+	// Type identifies which content union field is populated.
+	Type LLMMessagePartType
+	// Text carries plain text when Type is text.
+	Text string
+	// Image carries one inline image when Type is image.
+	Image *LLMInputImage
+}
+
+// Validate checks one content part contract.
+func (p LLMMessagePart) Validate() error {
+	switch p.Type {
+	case LLMMessagePartTypeText:
+		if strings.TrimSpace(p.Text) == "" {
+			return fmt.Errorf("validate llm message part: missing text")
+		}
+		if p.Image != nil {
+			return fmt.Errorf("validate llm message part: text part must not include image")
+		}
+	case LLMMessagePartTypeImage:
+		if p.Image == nil {
+			return fmt.Errorf("validate llm message part: missing image")
+		}
+		if strings.TrimSpace(p.Text) != "" {
+			return fmt.Errorf("validate llm message part: image part must not include text")
+		}
+		if err := p.Image.Validate(); err != nil {
+			return fmt.Errorf("validate llm message part image: %w", err)
+		}
+	default:
+		return fmt.Errorf("validate llm message part: unsupported type %q", p.Type)
+	}
+
+	return nil
+}
+
+func (p LLMMessagePart) clone() LLMMessagePart {
+	cloned := p
+	if p.Image != nil {
+		image := *p.Image
+		if len(p.Image.Data) > 0 {
+			image.Data = append([]byte(nil), p.Image.Data...)
+		}
+		cloned.Image = &image
+	}
+
+	return cloned
+}
+
+// LLMInputImage is one inline image payload sent to an LLM provider.
+type LLMInputImage struct {
+	// MIMEType is the image content type.
+	MIMEType string
+	// Data holds the raw image bytes.
+	Data []byte
+	// Detail optionally hints desired provider-side visual fidelity.
+	Detail LLMInputImageDetail
+}
+
+// Validate checks one inline image contract.
+func (i LLMInputImage) Validate() error {
+	if strings.TrimSpace(i.MIMEType) == "" {
+		return fmt.Errorf("validate llm input image: missing mime type")
+	}
+	if len(i.Data) == 0 {
+		return fmt.Errorf("validate llm input image: missing data")
+	}
+	if err := i.Detail.Validate(); err != nil {
+		return fmt.Errorf("validate llm input image: %w", err)
+	}
+
+	return nil
+}
+
+// LLMInputImageDetail hints how much image detail providers should preserve.
+type LLMInputImageDetail string
+
+const (
+	// LLMInputImageDetailAuto leaves image detail selection to the provider.
+	LLMInputImageDetailAuto LLMInputImageDetail = "auto"
+	// LLMInputImageDetailLow requests lower-cost image detail when supported.
+	LLMInputImageDetailLow LLMInputImageDetail = "low"
+	// LLMInputImageDetailHigh requests maximum image detail when supported.
+	LLMInputImageDetailHigh LLMInputImageDetail = "high"
+)
+
+// Validate checks one image detail hint.
+func (d LLMInputImageDetail) Validate() error {
+	switch d {
+	case "", LLMInputImageDetailAuto, LLMInputImageDetailLow, LLMInputImageDetailHigh:
+		return nil
+	default:
+		return fmt.Errorf("validate llm input image detail: unsupported value %q", d)
+	}
 }
 
 // LLMGenerateRequest describes one provider generation call.

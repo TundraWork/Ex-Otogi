@@ -122,7 +122,20 @@ func TestOpenAIProviderGenerateStreamMapsRequest(t *testing.T) {
 		Model: "gpt-5-mini",
 		Messages: []otogi.LLMMessage{
 			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+			{
+				Role: otogi.LLMMessageRoleUser,
+				Parts: []otogi.LLMMessagePart{
+					{Type: otogi.LLMMessagePartTypeText, Text: "hello"},
+					{
+						Type: otogi.LLMMessagePartTypeImage,
+						Image: &otogi.LLMInputImage{
+							MIMEType: "image/png",
+							Data:     []byte{1, 2, 3, 4},
+							Detail:   otogi.LLMInputImageDetailHigh,
+						},
+					},
+				},
+			},
 			{Role: otogi.LLMMessageRoleAssistant, Content: "hi"},
 		},
 		MaxOutputTokens: 512,
@@ -182,6 +195,23 @@ func TestOpenAIProviderGenerateStreamMapsRequest(t *testing.T) {
 		if *role != wantRoles[index] {
 			t.Fatalf("input[%d] role = %q, want %q", index, *role, wantRoles[index])
 		}
+	}
+	contentAny := got.Input.OfInputItemList[1].GetContent().AsAny()
+	content, ok := contentAny.(*responses.ResponseInputMessageContentListParam)
+	if !ok {
+		t.Fatalf("user content type = %T, want *responses.ResponseInputMessageContentListParam", contentAny)
+	}
+	if len(*content) != 2 {
+		t.Fatalf("user content len = %d, want 2", len(*content))
+	}
+	if gotText := (*content)[0].GetText(); gotText == nil || *gotText != "hello" {
+		t.Fatalf("user content[0] text = %v, want hello", gotText)
+	}
+	if gotDetail := (*content)[1].GetDetail(); gotDetail == nil || *gotDetail != "high" {
+		t.Fatalf("user content[1] detail = %v, want high", gotDetail)
+	}
+	if gotURL := (*content)[1].GetImageURL(); gotURL == nil || !strings.HasPrefix(*gotURL, "data:image/png;base64,") {
+		t.Fatalf("user content[1] image_url = %v, want data URL", gotURL)
 	}
 
 	_, recvErr := stream.Recv(context.Background())
