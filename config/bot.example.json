@@ -5,7 +5,11 @@
     "module_handler_timeout": "3s",
     "shutdown_timeout": "10s",
     "subscription_buffer": 256,
-    "subscription_workers": 2
+    "subscription_workers": 2,
+    "chat_allowlist": {
+      "conversation_ids": [],
+      "bypass_commands": ["whoami"]
+    }
   },
   "drivers": [
     {

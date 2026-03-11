@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"ex-otogi/pkg/otogi"
@@ -26,6 +27,7 @@ type config struct {
 	logger             *slog.Logger
 	onAsyncError       func(context.Context, string, error)
 	routing            routingConfig
+	allowlist          ChatAllowlistConfig
 	bootstrapServices  []bootstrapServiceRegistration
 }
 
@@ -140,6 +142,33 @@ func WithModuleRouting(defaultRoute *ModuleRoute, routes map[string]ModuleRoute)
 		cfg.routing.moduleRoutes = make(map[string]ModuleRoute, len(routes))
 		for moduleName, route := range routes {
 			cfg.routing.moduleRoutes[moduleName] = *cloneRoute(&route)
+		}
+	}
+}
+
+// WithChatAllowlist configures conversation-level event filtering.
+//
+// When conversationIDs is non-empty only events from listed conversations
+// receive full processing. bypassCommands lists system command names that
+// are processed even from unlisted conversations.
+func WithChatAllowlist(conversationIDs []string, bypassCommands []string) Option {
+	return func(cfg *config) {
+		allowedSet := make(map[string]struct{}, len(conversationIDs))
+		for _, id := range conversationIDs {
+			if id != "" {
+				allowedSet[id] = struct{}{}
+			}
+		}
+		bypassSet := make(map[string]struct{}, len(bypassCommands))
+		for _, name := range bypassCommands {
+			normalized := strings.ToLower(strings.TrimSpace(name))
+			if normalized != "" {
+				bypassSet[normalized] = struct{}{}
+			}
+		}
+		cfg.allowlist = ChatAllowlistConfig{
+			ConversationIDs: allowedSet,
+			BypassCommands:  bypassSet,
 		}
 	}
 }

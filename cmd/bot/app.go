@@ -23,6 +23,7 @@ import (
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/modules/quotehelper"
 	"ex-otogi/modules/sleep"
+	"ex-otogi/modules/whoami"
 	"ex-otogi/pkg/otogi"
 )
 
@@ -49,6 +50,7 @@ var runtimeModules = []func() otogi.Module{
 	func() otogi.Module { return help.New() },
 	func() otogi.Module { return sleep.New() },
 	func() otogi.Module { return llmchat.New() },
+	func() otogi.Module { return whoami.New() },
 }
 
 type appConfig struct {
@@ -64,6 +66,9 @@ type appConfig struct {
 	routingDefault *kernel.ModuleRoute
 	moduleRoutes   map[string]kernel.ModuleRoute
 
+	allowlistConversationIDs []string
+	allowlistBypassCommands  []string
+
 	moduleConfigs map[string]json.RawMessage
 }
 
@@ -76,11 +81,17 @@ type fileConfig struct {
 }
 
 type fileKernelConfig struct {
-	ModuleLifecycleTimeout string `json:"module_lifecycle_timeout"`
-	ModuleHandlerTimeout   string `json:"module_handler_timeout"`
-	ShutdownTimeout        string `json:"shutdown_timeout"`
-	SubscriptionBuffer     *int   `json:"subscription_buffer"`
-	SubscriptionWorkers    *int   `json:"subscription_workers"`
+	ModuleLifecycleTimeout string                   `json:"module_lifecycle_timeout"`
+	ModuleHandlerTimeout   string                   `json:"module_handler_timeout"`
+	ShutdownTimeout        string                   `json:"shutdown_timeout"`
+	SubscriptionBuffer     *int                     `json:"subscription_buffer"`
+	SubscriptionWorkers    *int                     `json:"subscription_workers"`
+	ChatAllowlist          *fileChatAllowlistConfig `json:"chat_allowlist"`
+}
+
+type fileChatAllowlistConfig struct {
+	ConversationIDs []string `json:"conversation_ids"`
+	BypassCommands  []string `json:"bypass_commands"`
 }
 
 type fileDriverEntry struct {
@@ -325,6 +336,11 @@ func applyConfigFile(cfg *appConfig, path string) error {
 		cfg.subscriptionWorkers = *parsed.Kernel.SubscriptionWorkers
 	}
 
+	if parsed.Kernel.ChatAllowlist != nil {
+		cfg.allowlistConversationIDs = append([]string(nil), parsed.Kernel.ChatAllowlist.ConversationIDs...)
+		cfg.allowlistBypassCommands = append([]string(nil), parsed.Kernel.ChatAllowlist.BypassCommands...)
+	}
+
 	cfg.drivers = make([]driver.Definition, 0, len(parsed.Drivers))
 	for index, entry := range parsed.Drivers {
 		enabled := true
@@ -531,6 +547,7 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, err
 		kernel.WithDefaultSubscriptionBuffer(cfg.subscriptionBuffer),
 		kernel.WithDefaultSubscriptionWorkers(cfg.subscriptionWorkers),
 		kernel.WithModuleRouting(cfg.routingDefault, cfg.moduleRoutes),
+		kernel.WithChatAllowlist(cfg.allowlistConversationIDs, cfg.allowlistBypassCommands),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build kernel runtime: %w", err)

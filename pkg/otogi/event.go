@@ -577,6 +577,14 @@ type ChatMigration struct {
 	Reason string
 }
 
+// QualifiedConversationKey builds a composite key that uniquely identifies one
+// conversation across multiple driver instances. The format is "sourceID/conversationID"
+// and is used in allowlist configuration so the value can be copied directly
+// from driver/source metadata into config.
+func QualifiedConversationKey(sourceID string, conversationID string) string {
+	return sourceID + "/" + conversationID
+}
+
 // Validate checks event envelope and payload coherence.
 func (e *Event) Validate() error {
 	if e == nil {

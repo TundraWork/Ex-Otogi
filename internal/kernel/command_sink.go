@@ -104,7 +104,52 @@ func (k *Kernel) newDriverEventDispatcher() otogi.EventDispatcher {
 		},
 		serviceLookup: k.services,
 		reportAsync:   k.cfg.onAsyncError,
+		allowlist:     k.cfg.allowlist,
 	}
+}
+
+// ChatAllowlistConfig controls conversation-level event filtering.
+//
+// When ConversationIDs is non-empty only events from listed conversations
+// receive full processing. Events from unlisted conversations are silently
+// dropped unless they match a system command listed in BypassCommands.
+// An empty ConversationIDs set disables filtering entirely.
+type ChatAllowlistConfig struct {
+	// ConversationIDs is the set of conversation identifiers permitted for full event processing.
+	ConversationIDs map[string]struct{}
+	// BypassCommands lists normalized system command names that are processed even in unlisted conversations.
+	BypassCommands map[string]struct{}
+}
+
+// IsEnabled reports whether the allowlist restricts any conversations.
+func (c ChatAllowlistConfig) IsEnabled() bool {
+	return len(c.ConversationIDs) > 0
+}
+
+// IsConversationAllowed reports whether a conversation receives full event processing.
+//
+// The check uses a qualified key built from sourceID and conversationID so that
+// allowlist entries are scoped to a specific driver instance.
+func (c ChatAllowlistConfig) IsConversationAllowed(sourceID string, conversationID string) bool {
+	if !c.IsEnabled() {
+		return true
+	}
+
+	key := otogi.QualifiedConversationKey(sourceID, conversationID)
+	_, allowed := c.ConversationIDs[key]
+
+	return allowed
+}
+
+// IsBypassCommand reports whether a system command name bypasses the allowlist.
+func (c ChatAllowlistConfig) IsBypassCommand(name string) bool {
+	if len(c.BypassCommands) == 0 {
+		return false
+	}
+
+	_, bypass := c.BypassCommands[normalizeCommandName(name)]
+
+	return bypass
 }
 
 // commandDerivingDispatcher publishes source events and conditionally derives command events.
@@ -113,9 +158,16 @@ type commandDerivingDispatcher struct {
 	lookupCommand func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool)
 	serviceLookup otogi.ServiceRegistry
 	reportAsync   func(context.Context, string, error)
+	allowlist     ChatAllowlistConfig
 }
 
 // Publish forwards one source event and conditionally derives one command event.
+//
+// When the chat allowlist is enabled, events from unlisted conversations are
+// silently dropped unless the message text matches a registered system command
+// whose name appears in the bypass list. For bypass commands only the derived
+// command event is published — the source event is suppressed so that modules
+// subscribing to article.created do not process non-allowlisted traffic.
 func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *otogi.Event) error {
 	if event == nil {
 		return fmt.Errorf("publish command deriving sink: nil event")
@@ -124,10 +176,65 @@ func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *otogi.Ev
 		return fmt.Errorf("publish command deriving sink: nil base sink")
 	}
 
+	if !s.allowlist.IsConversationAllowed(event.Source.ID, event.Conversation.ID) {
+		return s.publishBypassOnly(ctx, event)
+	}
+
 	if err := s.base.Publish(ctx, event); err != nil {
 		return fmt.Errorf("publish source event %s: %w", event.Kind, err)
 	}
 
+	return s.deriveCommand(ctx, event)
+}
+
+// publishBypassOnly handles events from non-allowlisted conversations.
+// Only bypass-eligible system commands are derived and published; everything
+// else is silently dropped.
+func (s *commandDerivingDispatcher) publishBypassOnly(ctx context.Context, event *otogi.Event) error {
+	if !isCommandDerivableEventKind(event.Kind) {
+		return nil
+	}
+
+	commandText, commandArticle, ok := commandContextFromEvent(event)
+	if !ok {
+		return nil
+	}
+	candidate, matched, parseErr := otogi.ParseCommandCandidate(commandText)
+	if !matched {
+		return nil
+	}
+	if candidate.Prefix != otogi.CommandPrefixSystem {
+		return nil
+	}
+	if !s.allowlist.IsBypassCommand(candidate.Name) {
+		return nil
+	}
+
+	spec, registered := s.lookupCommand(candidate.Prefix, candidate.Name)
+	if !registered {
+		return nil
+	}
+	if parseErr != nil {
+		s.replyCommandError(ctx, event, spec, parseErr)
+		return nil
+	}
+
+	invocation, bindErr := otogi.BindCommand(candidate, spec, event)
+	if bindErr != nil {
+		s.replyCommandError(ctx, event, spec, bindErr)
+		return nil
+	}
+
+	commandEvent := derivedCommandEvent(event, commandArticle, candidate.Prefix, invocation)
+	if err := s.base.Publish(ctx, commandEvent); err != nil {
+		return fmt.Errorf("publish bypass command %s: %w", invocation.Name, err)
+	}
+
+	return nil
+}
+
+// deriveCommand attempts to derive a command event from the source event.
+func (s *commandDerivingDispatcher) deriveCommand(ctx context.Context, event *otogi.Event) error {
 	if !isCommandDerivableEventKind(event.Kind) {
 		return nil
 	}
