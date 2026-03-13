@@ -9,9 +9,13 @@ import (
 	"strings"
 
 	"ex-otogi/pkg/otogi"
+	"golang.org/x/sync/errgroup"
 )
 
-const maxImageInputCaptionRunes = 240
+const (
+	maxImageInputCaptionRunes        = 240
+	maxConcurrentImageInputDownloads = 4
+)
 
 var errImageInputTooLarge = errors.New("llmchat image input exceeds size limit")
 
@@ -24,22 +28,22 @@ type currentImageInput struct {
 	Data         []byte
 }
 
-type imageInputBudget struct {
-	remainingImages int
-	remainingBytes  int64
+type imageInputDownloadJob struct {
+	order      int
+	articleID  string
+	attachment otogi.MediaAttachment
+}
+
+type imageInputDownloadResult struct {
+	job   imageInputDownloadJob
+	input currentImageInput
+	ok    bool
 }
 
 type limitedWriteBuffer struct {
 	limit int64
 	size  int64
 	buf   bytes.Buffer
-}
-
-func newImageInputBudget(policy ImageInputPolicy) *imageInputBudget {
-	return &imageInputBudget{
-		remainingImages: policy.MaxImages,
-		remainingBytes:  policy.MaxTotalBytes,
-	}
 }
 
 func (m *Module) buildMessageWithImageInputs(
@@ -78,102 +82,73 @@ func (m *Module) buildMessageWithImageInputs(
 	}
 }
 
-func (m *Module) collectArticleImageInputs(
+func (m *Module) collectContextImageInputs(
 	ctx context.Context,
 	event *otogi.Event,
-	article otogi.Article,
+	articles []otogi.Article,
 	policy ImageInputPolicy,
-	budget *imageInputBudget,
 ) []currentImageInput {
-	if !policy.Enabled || event == nil || len(article.Media) == 0 || budget == nil {
+	if !policy.Enabled || event == nil || len(articles) == 0 {
 		return nil
 	}
-
-	candidates := filterImageInputCandidates(article.Media)
-	if len(candidates) == 0 {
+	jobs := buildImageInputDownloadJobs(articles)
+	if len(jobs) == 0 {
 		return nil
 	}
 	if m == nil || m.mediaDownloader == nil {
-		m.logImageInputSkip(ctx, event, article.ID, "", "media_downloader_unavailable", nil)
+		for _, article := range articles {
+			if hasImageInputCandidates(article) {
+				m.logImageInputSkip(ctx, event, article.ID, "", "media_downloader_unavailable", nil)
+			}
+		}
 		return nil
 	}
 
-	requestedCount := minInt(len(candidates), budget.remainingImages)
-	results := make([]currentImageInput, 0, requestedCount)
-	for _, attachment := range candidates {
-		if budget.remainingImages <= 0 {
-			m.logImageInputSkip(ctx, event, article.ID, attachment.ID, "max_images_reached", nil)
-			break
-		}
-		if budget.remainingBytes <= 0 {
-			m.logImageInputSkip(ctx, event, article.ID, attachment.ID, "max_total_bytes_reached", nil)
-			break
-		}
+	results := make([]imageInputDownloadResult, len(jobs))
+	workerCount := minInt(maxConcurrentImageInputDownloads, len(jobs))
+	g, downloadCtx := errgroup.WithContext(ctx)
+	semaphore := make(chan struct{}, workerCount)
+	for index, job := range jobs {
+		index := index
+		job := job
+		g.Go(func() error {
+			defer func() {
+				if panicValue := recover(); panicValue != nil {
+					m.logImageInputSkip(
+						downloadCtx,
+						event,
+						job.articleID,
+						job.attachment.ID,
+						"download_worker_panic",
+						fmt.Errorf("%v", panicValue),
+					)
+				}
+			}()
 
-		perImageLimit := minInt64(policy.MaxImageBytes, budget.remainingBytes)
-		if attachment.SizeBytes > 0 && attachment.SizeBytes > perImageLimit {
-			m.logImageInputSkip(
-				ctx,
-				event,
-				article.ID,
-				attachment.ID,
-				fmt.Sprintf("attachment_too_large limit=%d size=%d", perImageLimit, attachment.SizeBytes),
-				nil,
-			)
-			continue
-		}
-		if strings.TrimSpace(attachment.ID) == "" {
-			m.logImageInputSkip(ctx, event, article.ID, "", "missing_attachment_id", nil)
-			continue
-		}
-
-		request := otogi.MediaDownloadRequest{
-			Source:       event.Source,
-			Conversation: event.Conversation,
-			ArticleID:    article.ID,
-			AttachmentID: attachment.ID,
-		}
-		if err := request.Validate(); err != nil {
-			m.logImageInputSkip(ctx, event, article.ID, attachment.ID, "build_media_request_failed", err)
-			continue
-		}
-
-		buffer := limitedWriteBuffer{limit: perImageLimit}
-		downloaded, err := m.mediaDownloader.Download(ctx, request, &buffer)
-		if err != nil {
-			reason := "download_failed"
-			if errors.Is(err, errImageInputTooLarge) {
-				reason = "download_limit_exceeded"
+			select {
+			case semaphore <- struct{}{}:
+			case <-downloadCtx.Done():
+				return nil
 			}
-			m.logImageInputSkip(ctx, event, article.ID, attachment.ID, reason, err)
-			continue
-		}
+			defer func() { <-semaphore }()
 
-		data := buffer.Bytes()
-		if len(data) == 0 {
-			m.logImageInputSkip(ctx, event, article.ID, attachment.ID, "empty_download", nil)
-			continue
-		}
-		mimeType := resolveImageInputMIMEType(attachment, downloaded, data)
-		if !isSupportedImageInputMIMEType(mimeType) {
-			m.logImageInputSkip(ctx, event, article.ID, attachment.ID, "unsupported_image_mime_type", nil)
-			continue
-		}
+			input, ok := m.downloadImageInput(downloadCtx, event, job.articleID, job.attachment, policy)
+			if ok {
+				results[index] = imageInputDownloadResult{
+					job:   job,
+					input: input,
+					ok:    true,
+				}
+			}
 
-		metadata := mergeImageAttachmentMetadata(attachment, downloaded)
-		results = append(results, currentImageInput{
-			ArticleID:    article.ID,
-			AttachmentID: metadata.ID,
-			MIMEType:     mimeType,
-			FileName:     metadata.FileName,
-			Caption:      metadata.Caption,
-			Data:         data,
+			return nil
 		})
-		budget.remainingImages--
-		budget.remainingBytes -= int64(len(data))
+	}
+	if err := g.Wait(); err != nil {
+		m.logImageInputSkip(ctx, event, "", "", "download_collection_interrupted", err)
 	}
 
-	return results
+	return m.selectImageInputsWithinBudget(ctx, event, results, policy)
 }
 
 func filterImageInputCandidates(media []otogi.MediaAttachment) []otogi.MediaAttachment {
@@ -254,6 +229,135 @@ func resolveImageInputMIMEType(
 
 func isSupportedImageInputMIMEType(mimeType string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/")
+}
+
+func buildImageInputDownloadJobs(articles []otogi.Article) []imageInputDownloadJob {
+	jobs := make([]imageInputDownloadJob, 0)
+	seenAttachmentIDs := make(map[string]struct{})
+	for _, article := range articles {
+		candidates := filterImageInputCandidates(article.Media)
+		for _, attachment := range candidates {
+			attachmentID := strings.TrimSpace(attachment.ID)
+			if attachmentID != "" {
+				if _, exists := seenAttachmentIDs[attachmentID]; exists {
+					continue
+				}
+				seenAttachmentIDs[attachmentID] = struct{}{}
+			}
+			jobs = append(jobs, imageInputDownloadJob{
+				order:      len(jobs),
+				articleID:  article.ID,
+				attachment: attachment,
+			})
+		}
+	}
+
+	return jobs
+}
+
+func (m *Module) downloadImageInput(
+	ctx context.Context,
+	event *otogi.Event,
+	articleID string,
+	attachment otogi.MediaAttachment,
+	policy ImageInputPolicy,
+) (currentImageInput, bool) {
+	if attachment.SizeBytes > 0 && attachment.SizeBytes > policy.MaxImageBytes {
+		m.logImageInputSkip(
+			ctx,
+			event,
+			articleID,
+			attachment.ID,
+			fmt.Sprintf("attachment_too_large limit=%d size=%d", policy.MaxImageBytes, attachment.SizeBytes),
+			nil,
+		)
+		return currentImageInput{}, false
+	}
+	if strings.TrimSpace(attachment.ID) == "" {
+		m.logImageInputSkip(ctx, event, articleID, "", "missing_attachment_id", nil)
+		return currentImageInput{}, false
+	}
+
+	request := otogi.MediaDownloadRequest{
+		Source:       event.Source,
+		Conversation: event.Conversation,
+		ArticleID:    articleID,
+		AttachmentID: attachment.ID,
+	}
+	if err := request.Validate(); err != nil {
+		m.logImageInputSkip(ctx, event, articleID, attachment.ID, "build_media_request_failed", err)
+		return currentImageInput{}, false
+	}
+
+	buffer := limitedWriteBuffer{limit: policy.MaxImageBytes}
+	downloaded, err := m.mediaDownloader.Download(ctx, request, &buffer)
+	if err != nil {
+		reason := "download_failed"
+		if errors.Is(err, errImageInputTooLarge) {
+			reason = "download_limit_exceeded"
+		}
+		m.logImageInputSkip(ctx, event, articleID, attachment.ID, reason, err)
+		return currentImageInput{}, false
+	}
+
+	data := buffer.Bytes()
+	if len(data) == 0 {
+		m.logImageInputSkip(ctx, event, articleID, attachment.ID, "empty_download", nil)
+		return currentImageInput{}, false
+	}
+	mimeType := resolveImageInputMIMEType(attachment, downloaded, data)
+	if !isSupportedImageInputMIMEType(mimeType) {
+		m.logImageInputSkip(ctx, event, articleID, attachment.ID, "unsupported_image_mime_type", nil)
+		return currentImageInput{}, false
+	}
+
+	metadata := mergeImageAttachmentMetadata(attachment, downloaded)
+	return currentImageInput{
+		ArticleID:    articleID,
+		AttachmentID: metadata.ID,
+		MIMEType:     mimeType,
+		FileName:     metadata.FileName,
+		Caption:      metadata.Caption,
+		Data:         data,
+	}, true
+}
+
+func (m *Module) selectImageInputsWithinBudget(
+	ctx context.Context,
+	event *otogi.Event,
+	results []imageInputDownloadResult,
+	policy ImageInputPolicy,
+) []currentImageInput {
+	selected := make([]currentImageInput, 0, minInt(policy.MaxImages, len(results)))
+	remainingImages := policy.MaxImages
+	remainingBytes := policy.MaxTotalBytes
+	for _, result := range results {
+		if !result.ok {
+			continue
+		}
+		if remainingImages <= 0 {
+			m.logImageInputSkip(ctx, event, result.input.ArticleID, result.input.AttachmentID, "max_images_reached", nil)
+			continue
+		}
+		size := int64(len(result.input.Data))
+		if size > remainingBytes {
+			m.logImageInputSkip(
+				ctx,
+				event,
+				result.input.ArticleID,
+				result.input.AttachmentID,
+				fmt.Sprintf("max_total_bytes_reached remaining=%d size=%d", remainingBytes, size),
+				nil,
+			)
+			continue
+		}
+
+		selected = append(selected, result.input)
+		remainingImages--
+		remainingBytes -= size
+	}
+
+	return selected
 }
 
 func serializeMessageImageInputs(inputs []currentImageInput) string {
@@ -347,14 +451,6 @@ func (b *limitedWriteBuffer) Bytes() []byte {
 }
 
 func minInt(left int, right int) int {
-	if left < right {
-		return left
-	}
-
-	return right
-}
-
-func minInt64(left int64, right int64) int64 {
 	if left < right {
 		return left
 	}

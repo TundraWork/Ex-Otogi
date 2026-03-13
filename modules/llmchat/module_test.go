@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -575,6 +577,243 @@ func TestBuildGenerateRequestIncludesReplyThreadImageOnlyMessage(t *testing.T) {
 	}
 	if downloader.requests[0].ArticleID != "m1" {
 		t.Fatalf("download article id = %q, want m1", downloader.requests[0].ArticleID)
+	}
+}
+
+func TestBuildGenerateRequestDownloadsImagesConcurrentlyAndPreservesPriorityOrder(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  4,
+					LeadingContextMessages: 2,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        4000,
+					MaxMessageRunes:        200,
+				},
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     3,
+					MaxImageBytes: 1 << 20,
+					MaxTotalBytes: 3 << 20,
+				},
+			},
+		},
+	})
+
+	downloader := &mediaDownloaderStub{
+		data:          []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
+		attachment:    otogi.MediaAttachment{MIMEType: "image/jpeg"},
+		downloadDelay: 20 * time.Millisecond,
+	}
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "root message",
+					Media: []otogi.MediaAttachment{{ID: "photo-reply", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(95, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+				Article: otogi.Article{
+					ID:               "m2",
+					ReplyToArticleID: "m1",
+					Text:             "trigger text",
+					Media:            []otogi.MediaAttachment{{ID: "photo-current", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(100, 0).UTC(),
+				IsCurrent: true,
+			},
+		},
+		leadingContext: []otogi.ConversationContextEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
+				Article: otogi.Article{
+					ID:    "ctx-1",
+					Text:  "earlier context",
+					Media: []otogi.MediaAttachment{{ID: "photo-leading", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(90, 0).UTC(),
+			},
+		},
+	}
+	module.mediaDownloader = downloader
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u2", Username: "bob"},
+		Article: &otogi.Article{
+			ID:               "m2",
+			ReplyToArticleID: "m1",
+			Text:             "Otogi inspect all three",
+			Media: []otogi.MediaAttachment{
+				{ID: "photo-current", Type: otogi.MediaTypePhoto},
+			},
+		},
+	}, module.cfg.Agents[0], "inspect all three")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if got := downloader.maxConcurrent.Load(); got < 2 {
+		t.Fatalf("max concurrent downloads = %d, want at least 2", got)
+	}
+	if len(downloader.requests) != 3 {
+		t.Fatalf("download requests len = %d, want 3", len(downloader.requests))
+	}
+
+	last := req.Messages[len(req.Messages)-1]
+	if len(last.Parts) != 4 {
+		t.Fatalf("last.Parts len = %d, want 4 (text + 3 images)", len(last.Parts))
+	}
+	textPart := last.Parts[0].Text
+	currentPos := strings.Index(textPart, `article_id="m2"`)
+	replyPos := strings.Index(textPart, `article_id="m1"`)
+	leadingPos := strings.Index(textPart, `article_id="ctx-1"`)
+	if currentPos < 0 || replyPos < 0 || leadingPos < 0 {
+		t.Fatalf("text part = %q, want all article ids in image summary", textPart)
+	}
+	if !(currentPos < replyPos && replyPos < leadingPos) {
+		t.Fatalf("text part order = %q, want current then reply then leading", textPart)
+	}
+}
+
+func TestBuildGenerateRequestDeduplicatesImagesAcrossContextSources(t *testing.T) {
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  4,
+					LeadingContextMessages: 2,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        4000,
+					MaxMessageRunes:        200,
+				},
+				ImageInputs: ImageInputPolicy{
+					Enabled:       true,
+					MaxImages:     3,
+					MaxImageBytes: 1 << 20,
+					MaxTotalBytes: 3 << 20,
+				},
+			},
+		},
+	})
+
+	downloader := &mediaDownloaderStub{
+		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
+		attachment: otogi.MediaAttachment{ID: "photo-shared", MIMEType: "image/jpeg"},
+	}
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article: otogi.Article{
+					ID:    "m1",
+					Text:  "reply image",
+					Media: []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(95, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+				Article: otogi.Article{
+					ID:               "m2",
+					ReplyToArticleID: "m1",
+					Text:             "trigger text",
+					Media:            []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(100, 0).UTC(),
+				IsCurrent: true,
+			},
+		},
+		leadingContext: []otogi.ConversationContextEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
+				Article: otogi.Article{
+					ID:    "ctx-1",
+					Text:  "leading image",
+					Media: []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+				},
+				CreatedAt: time.Unix(90, 0).UTC(),
+			},
+		},
+	}
+	module.mediaDownloader = downloader
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+		ID:         "evt-1",
+		Kind:       otogi.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
+		Conversation: otogi.Conversation{
+			ID:   "chat-1",
+			Type: otogi.ConversationTypeGroup,
+		},
+		Actor: otogi.Actor{ID: "u2", Username: "bob"},
+		Article: &otogi.Article{
+			ID:               "m2",
+			ReplyToArticleID: "m1",
+			Text:             "Otogi inspect shared image",
+			Media:            []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+		},
+	}, module.cfg.Agents[0], "inspect shared image")
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if len(downloader.requests) != 1 {
+		t.Fatalf("download requests len = %d, want 1", len(downloader.requests))
+	}
+	if downloader.requests[0].ArticleID != "m2" {
+		t.Fatalf("download article id = %q, want m2", downloader.requests[0].ArticleID)
+	}
+
+	last := req.Messages[len(req.Messages)-1]
+	if len(last.Parts) != 2 {
+		t.Fatalf("last.Parts len = %d, want 2 (text + 1 deduplicated image)", len(last.Parts))
+	}
+	textPart := last.Parts[0].Text
+	if !strings.Contains(textPart, `article_id="m2"`) {
+		t.Fatalf("text part = %q, want current article id in image summary", textPart)
+	}
+	if strings.Contains(textPart, `article_id="m1"`) {
+		t.Fatalf("text part = %q, should not include duplicate reply image", textPart)
+	}
+	if strings.Contains(textPart, `article_id="ctx-1"`) {
+		t.Fatalf("text part = %q, should not include duplicate leading image", textPart)
 	}
 }
 
@@ -1403,6 +1642,136 @@ func TestBuildGenerateRequestInlinesQuotedReplies(t *testing.T) {
 	}
 }
 
+func TestBuildGenerateRequestBatchLoadsDanglingQuotedReplies(t *testing.T) {
+	t.Parallel()
+
+	module := newTestModule(Config{
+		RequestTimeout: time.Second,
+		Agents: []Agent{
+			{
+				Name:                 "Otogi",
+				Description:          "assistant",
+				Provider:             "p",
+				Model:                "gpt-test",
+				SystemPromptTemplate: "You are {{.AgentName}}",
+				RequestTimeout:       time.Second,
+				ContextPolicy: ContextPolicy{
+					ReplyChainMaxMessages:  12,
+					LeadingContextMessages: 4,
+					LeadingContextMaxAge:   15 * time.Minute,
+					MaxContextRunes:        12000,
+					MaxMessageRunes:        1600,
+					QuoteReplyDepth:        2,
+				},
+			},
+		},
+	})
+
+	var (
+		batchCallCount int
+		batchLookups   []otogi.MemoryLookup
+		getLookups     []otogi.MemoryLookup
+	)
+
+	module.memory = &memoryStub{
+		replyChain: []otogi.ReplyChainEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
+				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice replies"},
+				CreatedAt:    time.Unix(90, 0).UTC(),
+			},
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
+				Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m2", Text: "trigger"},
+				CreatedAt:    time.Unix(100, 0).UTC(),
+				IsCurrent:    true,
+			},
+		},
+		leadingContext: []otogi.ConversationContextEntry{
+			{
+				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+				Actor:        otogi.Actor{ID: "u3", Username: "carol"},
+				Article:      otogi.Article{ID: "m5", ReplyToArticleID: "m6", Text: "carol replies"},
+				CreatedAt:    time.Unix(95, 0).UTC(),
+			},
+		},
+		memories: map[string]otogi.Memory{
+			"m1": {
+				Actor:     otogi.Actor{ID: "u0", Username: "eve"},
+				Article:   otogi.Article{ID: "m1", Text: "root one"},
+				CreatedAt: time.Unix(80, 0).UTC(),
+			},
+			"m6": {
+				Actor:     otogi.Actor{ID: "u4", Username: "dan"},
+				Article:   otogi.Article{ID: "m6", Text: "root two"},
+				CreatedAt: time.Unix(85, 0).UTC(),
+			},
+		},
+		onGetBatch: func(lookups []otogi.MemoryLookup) {
+			batchCallCount++
+			batchLookups = append(batchLookups, lookups...)
+		},
+		onGet: func(lookup otogi.MemoryLookup) {
+			getLookups = append(getLookups, lookup)
+		},
+	}
+	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
+
+	req, err := module.buildGenerateRequest(
+		context.Background(),
+		&otogi.Event{
+			ID:         "evt-6",
+			Kind:       otogi.EventKindArticleCreated,
+			OccurredAt: time.Unix(100, 0).UTC(),
+			Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
+			Conversation: otogi.Conversation{
+				ID:   "chat-1",
+				Type: otogi.ConversationTypeGroup,
+			},
+			Actor:   otogi.Actor{ID: "u2", Username: "bob"},
+			Article: &otogi.Article{ID: "m4", ReplyToArticleID: "m2", Text: "Otogi hello"},
+		},
+		module.cfg.Agents[0],
+		"how are you",
+	)
+	if err != nil {
+		t.Fatalf("buildGenerateRequest failed: %v", err)
+	}
+
+	if batchCallCount != 1 {
+		t.Fatalf("GetBatch call count = %d, want 1", batchCallCount)
+	}
+	if len(batchLookups) != 2 {
+		t.Fatalf("GetBatch lookup len = %d, want 2", len(batchLookups))
+	}
+	wantLookups := map[string]struct{}{
+		"m1": {},
+		"m6": {},
+	}
+	for _, lookup := range batchLookups {
+		if _, ok := wantLookups[lookup.ArticleID]; !ok {
+			t.Fatalf("unexpected batch lookup article id %q", lookup.ArticleID)
+		}
+		delete(wantLookups, lookup.ArticleID)
+	}
+	if len(wantLookups) != 0 {
+		t.Fatalf("missing batch lookup article ids: %v", wantLookups)
+	}
+	if len(getLookups) != 0 {
+		t.Fatalf("Get call count = %d, want 0", len(getLookups))
+	}
+
+	allContent := strings.Join(allMessageContents(req.Messages), "\n")
+	if !strings.Contains(allContent, "root one") {
+		t.Fatalf("messages should contain quoted batch reply root one, got:\n%s", allContent)
+	}
+	if !strings.Contains(allContent, "root two") {
+		t.Fatalf("messages should contain quoted batch reply root two, got:\n%s", allContent)
+	}
+}
+
 func TestSerializeQuotedReplyRendersNestedChain(t *testing.T) {
 	t.Parallel()
 
@@ -1721,6 +2090,63 @@ func TestStreamProviderReplyDedupeConsidersEntities(t *testing.T) {
 	}
 	if sink.editRequests[1].Entities[0].Type != otogi.TextEntityTypeItalic {
 		t.Fatalf("second entity type = %q, want %q", sink.editRequests[1].Entities[0].Type, otogi.TextEntityTypeItalic)
+	}
+}
+
+func TestStreamProviderReplySkipsMarkdownParsingWhenPacerDefersEdit(t *testing.T) {
+	module := newTestModule(validModuleConfig())
+
+	module.dispatcher = &sinkDispatcherStub{}
+	parser := &markdownParserSequenceStub{
+		results: []otogi.ParsedText{
+			{Text: "a"},
+			{Text: "ab"},
+		},
+	}
+	module.parser = parser
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+		time.Unix(1, 0).UTC(),
+	})
+
+	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		{Delta: "a"},
+		{Delta: "b"},
+	}}}
+	req := otogi.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []otogi.LLMMessage{
+			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+	if err := module.streamProviderReply(
+		context.Background(),
+		context.Background(),
+		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	if parser.calls != 2 {
+		t.Fatalf("parser calls = %d, want 2 (first paced edit + final edit)", parser.calls)
+	}
+	sink, ok := module.dispatcher.(*sinkDispatcherStub)
+	if !ok {
+		t.Fatalf("dispatcher type = %T, want *sinkDispatcherStub", module.dispatcher)
+	}
+	if len(sink.editRequests) != 2 {
+		t.Fatalf("edit request count = %d, want 2", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "a" {
+		t.Fatalf("first edit text = %q, want a", sink.editRequests[0].Text)
+	}
+	if sink.editRequests[1].Text != "ab" {
+		t.Fatalf("final edit text = %q, want ab", sink.editRequests[1].Text)
 	}
 }
 
@@ -2906,16 +3332,45 @@ type memoryStub struct {
 	leadingContext            []otogi.ConversationContextEntry
 	leadingContextErr         error
 	memories                  map[string]otogi.Memory
+	onGet                     func(otogi.MemoryLookup)
+	onGetBatch                func([]otogi.MemoryLookup)
 	onGetReplyChain           func()
 	onListConversationContext func()
 }
 
 func (m *memoryStub) Get(_ context.Context, lookup otogi.MemoryLookup) (otogi.Memory, bool, error) {
+	if m.onGet != nil {
+		m.onGet(lookup)
+	}
 	if m.memories == nil {
 		return otogi.Memory{}, false, nil
 	}
 	mem, found := m.memories[lookup.ArticleID]
 	return mem, found, nil
+}
+
+func (m *memoryStub) GetBatch(
+	_ context.Context,
+	lookups []otogi.MemoryLookup,
+) (map[otogi.MemoryLookup]otogi.Memory, error) {
+	if m.onGetBatch != nil {
+		cloned := append([]otogi.MemoryLookup(nil), lookups...)
+		m.onGetBatch(cloned)
+	}
+	if m.memories == nil {
+		return nil, nil
+	}
+
+	results := make(map[otogi.MemoryLookup]otogi.Memory)
+	for _, lookup := range lookups {
+		mem, found := m.memories[lookup.ArticleID]
+		if !found {
+			continue
+		}
+		results[lookup] = mem
+	}
+
+	return results, nil
 }
 
 func (*memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
@@ -3074,12 +3529,16 @@ func (s *streamStub) Close() error {
 }
 
 type mediaDownloaderStub struct {
-	lastRequest otogi.MediaDownloadRequest
-	requests    []otogi.MediaDownloadRequest
-	attachment  otogi.MediaAttachment
-	err         error
-	writeErr    error
-	data        []byte
+	mu              sync.Mutex
+	lastRequest     otogi.MediaDownloadRequest
+	requests        []otogi.MediaDownloadRequest
+	attachment      otogi.MediaAttachment
+	err             error
+	writeErr        error
+	data            []byte
+	downloadDelay   time.Duration
+	activeDownloads atomic.Int32
+	maxConcurrent   atomic.Int32
 }
 
 func (s *mediaDownloaderStub) Download(
@@ -3087,21 +3546,44 @@ func (s *mediaDownloaderStub) Download(
 	request otogi.MediaDownloadRequest,
 	output io.Writer,
 ) (otogi.MediaAttachment, error) {
+	active := s.activeDownloads.Add(1)
+	defer s.activeDownloads.Add(-1)
+	for {
+		currentMax := s.maxConcurrent.Load()
+		if active <= currentMax {
+			break
+		}
+		if s.maxConcurrent.CompareAndSwap(currentMax, active) {
+			break
+		}
+	}
+
+	s.mu.Lock()
 	s.lastRequest = request
 	s.requests = append(s.requests, request)
-	if s.err != nil {
+	attachment := s.attachment
+	err := s.err
+	writeErr := s.writeErr
+	data := append([]byte(nil), s.data...)
+	delay := s.downloadDelay
+	s.mu.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	if err != nil {
 		return otogi.MediaAttachment{}, s.err
 	}
-	if len(s.data) > 0 {
-		if _, err := output.Write(s.data); err != nil {
+	if len(data) > 0 {
+		if _, err := output.Write(data); err != nil {
 			return otogi.MediaAttachment{}, fmt.Errorf("write media downloader stub output: %w", err)
 		}
 	}
-	if s.writeErr != nil {
-		return otogi.MediaAttachment{}, s.writeErr
+	if writeErr != nil {
+		return otogi.MediaAttachment{}, writeErr
 	}
 
-	return s.attachment, nil
+	return attachment, nil
 }
 
 type moduleRuntimeStub struct {

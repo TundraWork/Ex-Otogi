@@ -29,6 +29,12 @@ func (m *Module) rememberCreated(event *otogi.Event) error {
 
 	m.mu.Lock()
 	m.ensureNotExpiredLocked(key, now)
+	if m.isDuplicateEventLocked(key, event) {
+		m.mu.Unlock()
+		return nil
+	}
+	m.upsertKeyLocked(key, now)
+	m.appendEventHistoryLocked(key, event)
 	if existing, exists := m.entities[key]; exists {
 		if !existing.CreatedAt.IsZero() {
 			cached.CreatedAt = existing.CreatedAt
@@ -51,7 +57,8 @@ func (m *Module) rememberCreated(event *otogi.Event) error {
 	if cached.UpdatedAt.IsZero() {
 		cached.UpdatedAt = cached.CreatedAt
 	}
-	m.upsertEntityLocked(key, cached, now)
+	m.storeEntityLocked(key, cached)
+	m.trimToCapacityLocked()
 	m.mu.Unlock()
 
 	return nil
@@ -158,30 +165,31 @@ func (m *Module) forgetRetracted(event *otogi.Event) error {
 
 	m.mu.Lock()
 	m.ensureNotExpiredLocked(key, now)
-	delete(m.entities, key)
-	m.removeConversationArticleLocked(key)
-	m.upsertKeyLocked(key, now)
-	m.trimToCapacityLocked()
+	m.deleteLocked(key)
 	m.mu.Unlock()
 
 	return nil
 }
 
-func (m *Module) appendEvent(event *otogi.Event) error {
+func (m *Module) appendEvent(event *otogi.Event) (bool, error) {
 	if event == nil {
-		return fmt.Errorf("append event: nil event")
+		return false, fmt.Errorf("append event: nil event")
 	}
 	lookup, err := otogi.TargetMemoryLookupFromEvent(event)
 	if err != nil {
-		return fmt.Errorf("append event: %w", err)
+		return false, fmt.Errorf("append event: %w", err)
 	}
 
 	now := m.now()
 	key := cacheKeyFromLookup(lookup)
 
 	m.mu.Lock()
+	if m.isDuplicateEventLocked(key, event) {
+		m.mu.Unlock()
+		return false, nil
+	}
 	m.upsertEventLocked(key, event, now)
 	m.mu.Unlock()
 
-	return nil
+	return true, nil
 }

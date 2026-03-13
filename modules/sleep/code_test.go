@@ -30,60 +30,38 @@ func TestCodeManagerValidate(t *testing.T) {
 	if code == "" {
 		t.Fatal("generated code is empty")
 	}
-	if len(code) != 20 {
-		t.Fatalf("code length = %d, want 20", len(code))
+	if len(code) <= 20 {
+		t.Fatalf("code length = %d, want > 20 for embedded wake target", len(code))
 	}
 
 	tests := []struct {
 		name    string
-		scope   codeScope
+		userID  string
 		now     time.Time
 		wantErr bool
+		want    wakeTargetScope
 	}{
 		{
-			name:  "valid with same scope",
-			scope: scope,
-			now:   time.Unix(60*101+59, 0).UTC(),
+			name:   "valid with same user",
+			userID: scope.UserID,
+			now:    time.Unix(60*101+59, 0).UTC(),
+			want:   scope.target(),
 		},
 		{
-			name: "wrong user",
-			scope: codeScope{
-				UserID:           "user-other",
-				ConversationID:   scope.ConversationID,
-				ConversationType: scope.ConversationType,
-				SourcePlatform:   scope.SourcePlatform,
-				SourceID:         scope.SourceID,
-			},
+			name:    "wrong user",
+			userID:  "user-other",
 			now:     time.Unix(60*101+59, 0).UTC(),
 			wantErr: true,
 		},
 		{
-			name: "wrong conversation",
-			scope: codeScope{
-				UserID:           scope.UserID,
-				ConversationID:   "chat-other",
-				ConversationType: scope.ConversationType,
-				SourcePlatform:   scope.SourcePlatform,
-				SourceID:         scope.SourceID,
-			},
-			now:     time.Unix(60*101+59, 0).UTC(),
-			wantErr: true,
-		},
-		{
-			name: "wrong sink",
-			scope: codeScope{
-				UserID:           scope.UserID,
-				ConversationID:   scope.ConversationID,
-				ConversationType: scope.ConversationType,
-				SourcePlatform:   scope.SourcePlatform,
-				SourceID:         "tg-other",
-			},
-			now:     time.Unix(60*101+59, 0).UTC(),
-			wantErr: true,
+			name:   "returns embedded restore target",
+			userID: scope.UserID,
+			now:    time.Unix(60*101+59, 0).UTC(),
+			want:   scope.target(),
 		},
 		{
 			name:    "expired",
-			scope:   scope,
+			userID:  scope.UserID,
 			now:     time.Unix(60*102, 0).UTC(),
 			wantErr: true,
 		},
@@ -94,7 +72,7 @@ func TestCodeManagerValidate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := cm.Validate(code, tc.scope, tc.now)
+			got, err := cm.Validate(code, tc.userID, tc.now)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error for invalid code")
@@ -103,6 +81,9 @@ func TestCodeManagerValidate(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("Validate() error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("Validate() target = %#v, want %#v", got, tc.want)
 			}
 		})
 	}
@@ -133,8 +114,12 @@ func TestCodeManagerValidateAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate() error: %v", err)
 	}
-	if err := validator.Validate(code, scope, time.Unix(60*101+59, 0).UTC()); err != nil {
+	target, err := validator.Validate(code, scope.UserID, time.Unix(60*101+59, 0).UTC())
+	if err != nil {
 		t.Fatalf("Validate() error after restart: %v", err)
+	}
+	if target != scope.target() {
+		t.Fatalf("Validate() target = %#v, want %#v", target, scope.target())
 	}
 }
 
@@ -181,7 +166,7 @@ func TestCodeManagerValidateMalformed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := cm.Validate(tc.code, scope, now); err == nil {
+			if _, err := cm.Validate(tc.code, scope.UserID, now); err == nil {
 				t.Fatal("expected error for malformed code")
 			}
 		})

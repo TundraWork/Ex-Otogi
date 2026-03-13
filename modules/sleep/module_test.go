@@ -85,6 +85,7 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 		wantModerationTargetID   string
 		wantReplyConversationID  string
 		wantReplyMessageContains string
+		wantSendCalls            int64
 	}{
 		{
 			name: "sleep restrict failure",
@@ -97,6 +98,7 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 			wantModerationTargetID:   "chat-42",
 			wantReplyConversationID:  "chat-42",
 			wantReplyMessageContains: "没能开始休息",
+			wantSendCalls:            3,
 		},
 		{
 			name: "wake unrestrict failure",
@@ -117,6 +119,7 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 			wantModerationTargetID:   "chat-42",
 			wantReplyConversationID:  "chat-42",
 			wantReplyMessageContains: "没能恢复你的权限",
+			wantSendCalls:            1,
 		},
 	}
 
@@ -151,8 +154,8 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 					tc.wantModerationTargetID,
 				)
 			}
-			if dispatcher.calls.Load() != 1 {
-				t.Fatalf("send calls = %d, want 1 (error reply)", dispatcher.calls.Load())
+			if dispatcher.calls.Load() != tc.wantSendCalls {
+				t.Fatalf("send calls = %d, want %d", dispatcher.calls.Load(), tc.wantSendCalls)
 			}
 			if dispatcher.lastRequest.Target.Conversation.ID != tc.wantReplyConversationID {
 				t.Fatalf(
@@ -188,11 +191,14 @@ func TestHandleWakeSuccess(t *testing.T) {
 	module.dispatcher = dispatcher
 	module.moderation = moderation
 
-	event := newWakeEvent("")
-	code, err := module.codeManager.Generate(codeScopeFromEvent(event), time.Now().Add(time.Minute))
+	sleepEvent := newSleepEvent("30m")
+	code, err := module.codeManager.Generate(codeScopeFromEvent(sleepEvent), time.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatalf("Generate() error: %v", err)
 	}
+	event := newWakeEvent("")
+	event.Conversation.ID = "dm-7"
+	event.Conversation.Type = otogi.ConversationTypePrivate
 	event.Article.Text = "/wake " + code
 	event.Command.Value = code
 	event.Command.RawInput = "/wake " + code
@@ -203,11 +209,18 @@ func TestHandleWakeSuccess(t *testing.T) {
 	if moderation.calls.Load() != 1 {
 		t.Fatalf("restrict calls = %d, want 1", moderation.calls.Load())
 	}
-	if moderation.lastRequest.Target.Conversation.ID != event.Conversation.ID {
+	if moderation.lastRequest.Target.Conversation.ID != sleepEvent.Conversation.ID {
 		t.Fatalf(
 			"moderation target conversation = %q, want %q",
 			moderation.lastRequest.Target.Conversation.ID,
-			event.Conversation.ID,
+			sleepEvent.Conversation.ID,
+		)
+	}
+	if moderation.lastRequest.Target.Conversation.Type != sleepEvent.Conversation.Type {
+		t.Fatalf(
+			"moderation target conversation type = %q, want %q",
+			moderation.lastRequest.Target.Conversation.Type,
+			sleepEvent.Conversation.Type,
 		)
 	}
 	if !moderation.lastRequest.Permissions.SendMessages {
@@ -216,11 +229,11 @@ func TestHandleWakeSuccess(t *testing.T) {
 	if dispatcher.calls.Load() != 1 {
 		t.Fatalf("send calls = %d, want 1 (wake announcement)", dispatcher.calls.Load())
 	}
-	if dispatcher.lastRequest.Target.Conversation.ID != event.Conversation.ID {
+	if dispatcher.lastRequest.Target.Conversation.ID != sleepEvent.Conversation.ID {
 		t.Fatalf(
 			"announcement conversation = %q, want %q",
 			dispatcher.lastRequest.Target.Conversation.ID,
-			event.Conversation.ID,
+			sleepEvent.Conversation.ID,
 		)
 	}
 }
@@ -247,7 +260,52 @@ func TestHandleWakeInvalidCode(t *testing.T) {
 	}
 }
 
-func TestHandleWakeCodeBoundToConversation(t *testing.T) {
+func TestHandleSleepSendFailureSkipsRestriction(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		sendErrors []error
+	}{
+		{
+			name:       "sleep intro send fails",
+			sendErrors: []error{errors.New("send failed")},
+		},
+		{
+			name:       "wake code send fails",
+			sendErrors: []error{nil, errors.New("send failed")},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			module := mustNew(t)
+			dispatcher := &captureDispatcher{
+				messageID:  "sent-1",
+				sendErrors: tc.sendErrors,
+			}
+			moderation := &captureModerationDispatcher{}
+			module.dispatcher = dispatcher
+			module.moderation = moderation
+
+			err := module.handleSleep(context.Background(), newSleepEvent("30m"))
+			if err == nil {
+				t.Fatal("expected send failure")
+			}
+			if !strings.Contains(err.Error(), "send") {
+				t.Fatalf("error = %v, want send failure", err)
+			}
+			if moderation.calls.Load() != 0 {
+				t.Fatalf("restrict calls = %d, want 0", moderation.calls.Load())
+			}
+		})
+	}
+}
+
+func TestHandleWakeUsesOriginalConversationFromCode(t *testing.T) {
 	t.Parallel()
 
 	module := mustNew(t)
@@ -256,14 +314,15 @@ func TestHandleWakeCodeBoundToConversation(t *testing.T) {
 	module.dispatcher = dispatcher
 	module.moderation = moderation
 
-	originalEvent := newWakeEvent("")
+	originalEvent := newSleepEvent("30m")
 	code, err := module.codeManager.Generate(codeScopeFromEvent(originalEvent), time.Now().Add(time.Minute))
 	if err != nil {
 		t.Fatalf("Generate() error: %v", err)
 	}
 
 	event := newWakeEvent(code)
-	event.Conversation.ID = "chat-99"
+	event.Conversation.ID = "dm-99"
+	event.Conversation.Type = otogi.ConversationTypePrivate
 	event.Article.Text = "/wake " + code
 	event.Command.Value = code
 	event.Command.RawInput = "/wake " + code
@@ -272,17 +331,24 @@ func TestHandleWakeCodeBoundToConversation(t *testing.T) {
 		t.Fatalf("handleWake error: %v", err)
 	}
 
-	if moderation.calls.Load() != 0 {
-		t.Fatalf("restrict calls = %d, want 0", moderation.calls.Load())
+	if moderation.calls.Load() != 1 {
+		t.Fatalf("restrict calls = %d, want 1", moderation.calls.Load())
 	}
 	if dispatcher.calls.Load() != 1 {
-		t.Fatalf("send calls = %d, want 1 (error reply)", dispatcher.calls.Load())
+		t.Fatalf("send calls = %d, want 1 (wake announcement)", dispatcher.calls.Load())
 	}
-	if dispatcher.lastRequest.Target.Conversation.ID != event.Conversation.ID {
+	if moderation.lastRequest.Target.Conversation.ID != originalEvent.Conversation.ID {
 		t.Fatalf(
-			"reply conversation = %q, want %q",
+			"moderation target conversation = %q, want %q",
+			moderation.lastRequest.Target.Conversation.ID,
+			originalEvent.Conversation.ID,
+		)
+	}
+	if dispatcher.lastRequest.Target.Conversation.ID != originalEvent.Conversation.ID {
+		t.Fatalf(
+			"announcement conversation = %q, want %q",
 			dispatcher.lastRequest.Target.Conversation.ID,
-			event.Conversation.ID,
+			originalEvent.Conversation.ID,
 		)
 	}
 }
@@ -445,6 +511,7 @@ type captureDispatcher struct {
 	calls       atomic.Int64
 	messageID   string
 	sendErr     error
+	sendErrors  []error
 	lastRequest otogi.SendMessageRequest
 	allRequests []otogi.SendMessageRequest
 }
@@ -459,6 +526,10 @@ func (d *captureDispatcher) SendMessage(
 	d.allRequests = append(d.allRequests, request)
 	d.mu.Unlock()
 
+	index := int(d.calls.Load()) - 1
+	if index >= 0 && index < len(d.sendErrors) && d.sendErrors[index] != nil {
+		return nil, d.sendErrors[index]
+	}
 	if d.sendErr != nil {
 		return nil, d.sendErr
 	}

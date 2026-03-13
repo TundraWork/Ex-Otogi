@@ -17,29 +17,79 @@ func (m *Module) Get(ctx context.Context, lookup otogi.MemoryLookup) (otogi.Memo
 		return otogi.Memory{}, false, fmt.Errorf("memory get: %w", err)
 	}
 
-	cached, found, err := m.getSnapshot(ctx, lookup)
-	if err != nil {
-		return otogi.Memory{}, false, fmt.Errorf("memory get snapshot: %w", err)
+	now := m.now()
+	key := cacheKeyFromLookup(lookup)
+
+	m.mu.RLock()
+	cached, history, found, expired := m.memoryReadLocked(now, key)
+	m.mu.RUnlock()
+	if expired {
+		m.reconcileReadKeys(now, nil, []cacheKey{key})
+		return otogi.Memory{}, false, nil
 	}
 	if !found {
 		return otogi.Memory{}, false, nil
 	}
+	m.reconcileReadKeys(now, []cacheKey{key}, nil)
 
-	history, _, err := m.getHistory(ctx, lookup)
-	if err != nil {
-		return otogi.Memory{}, false, fmt.Errorf("memory get history: %w", err)
+	return buildMemory(cached, history), true, nil
+}
+
+// GetBatch returns memory for all provided lookup keys that currently exist.
+func (m *Module) GetBatch(
+	ctx context.Context,
+	lookups []otogi.MemoryLookup,
+) (map[otogi.MemoryLookup]otogi.Memory, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("memory get batch: %w", err)
+	}
+	if len(lookups) == 0 {
+		return map[otogi.MemoryLookup]otogi.Memory{}, nil
 	}
 
-	return otogi.Memory{
-		TenantID:     cached.TenantID,
-		Platform:     cached.Platform,
-		Conversation: cached.Conversation,
-		Actor:        cached.Actor,
-		Article:      cloneArticle(cached.Article),
-		History:      history,
-		CreatedAt:    cached.CreatedAt,
-		UpdatedAt:    cached.UpdatedAt,
-	}, true, nil
+	batch := make([]otogi.MemoryLookup, 0, len(lookups))
+	seen := make(map[cacheKey]struct{}, len(lookups))
+	for _, lookup := range lookups {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("memory get batch: %w", err)
+		}
+		if err := lookup.Validate(); err != nil {
+			return nil, fmt.Errorf("memory get batch: %w", err)
+		}
+
+		key := cacheKeyFromLookup(lookup)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		batch = append(batch, lookup)
+	}
+
+	now := m.now()
+	results := make(map[otogi.MemoryLookup]otogi.Memory, len(batch))
+	touchedKeys := make([]cacheKey, 0, len(batch))
+	expiredKeys := make([]cacheKey, 0)
+
+	m.mu.RLock()
+	for _, lookup := range batch {
+		key := cacheKeyFromLookup(lookup)
+		cached, history, found, expired := m.memoryReadLocked(now, key)
+		if expired {
+			expiredKeys = append(expiredKeys, key)
+			continue
+		}
+		if !found {
+			continue
+		}
+
+		results[lookup] = buildMemory(cached, history)
+		touchedKeys = append(touchedKeys, key)
+	}
+	m.mu.RUnlock()
+
+	m.reconcileReadKeys(now, touchedKeys, expiredKeys)
+
+	return results, nil
 }
 
 // GetReplied resolves and returns memory for event.Article.ReplyToArticleID.
@@ -165,24 +215,86 @@ func (m *Module) ListConversationContextBefore(
 		excluded[articleID] = struct{}{}
 	}
 
-	m.mu.Lock()
-	candidateKeys := m.listConversationContextCandidateKeysLocked(now, query, excluded)
-	m.mu.Unlock()
+	m.mu.RLock()
+	entries, touchedKeys, expiredKeys := m.listConversationContextEntriesLocked(now, query, excluded)
+	m.mu.RUnlock()
 
-	entries := make([]otogi.ConversationContextEntry, 0, len(candidateKeys))
-	for _, candidateKey := range candidateKeys {
-		snapshot, found, err := m.getSnapshot(ctx, otogi.MemoryLookup{
-			TenantID:       candidateKey.tenantID,
-			Platform:       candidateKey.platform,
-			ConversationID: candidateKey.conversationID,
-			ArticleID:      candidateKey.articleID,
-		})
-		if err != nil {
-			return nil, fmt.Errorf(
-				"memory list conversation context before get snapshot for %s: %w",
-				candidateKey.articleID,
-				err,
-			)
+	reverseConversationContextEntries(entries)
+	m.reconcileReadKeys(now, touchedKeys, expiredKeys)
+
+	return entries, nil
+}
+
+func (m *Module) listConversationContextEntriesLocked(
+	now time.Time,
+	query otogi.ConversationContextBeforeQuery,
+	excluded map[string]struct{},
+) ([]otogi.ConversationContextEntry, []cacheKey, []cacheKey) {
+	if query.AnchorArticleID != "" {
+		anchorKey := cacheKey{
+			tenantID:       query.TenantID,
+			platform:       query.Platform,
+			conversationID: query.ConversationID,
+			articleID:      query.AnchorArticleID,
+		}
+		if m.isRecordLiveLocked(anchorKey, now) {
+			location, exists := m.articleStreams[anchorKey]
+			if exists && (query.ThreadID == "" || location.streamKey.threadID == query.ThreadID) {
+				streamEntries, exists := m.streams[location.streamKey]
+				if exists {
+					anchorIndex := locateConversationStreamEntry(streamEntries, conversationStreamEntry{
+						key:       anchorKey,
+						createdAt: location.createdAt,
+						sequence:  location.sequence,
+					})
+					if anchorIndex >= 0 {
+						return m.collectConversationContextEntriesLocked(
+							now,
+							streamEntries,
+							anchorIndex-1,
+							query,
+							excluded,
+						)
+					}
+				}
+			}
+		}
+	}
+
+	if query.AnchorOccurredAt.IsZero() {
+		return nil, nil, nil
+	}
+
+	streamKey := conversationStreamKey{
+		tenantID:       query.TenantID,
+		platform:       query.Platform,
+		conversationID: query.ConversationID,
+		threadID:       query.ThreadID,
+	}
+	streamEntries, exists := m.streams[streamKey]
+	if !exists {
+		return nil, nil, nil
+	}
+
+	entries := make([]otogi.ConversationContextEntry, 0, minInt(query.BeforeLimit, len(streamEntries)))
+	touchedKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, len(streamEntries)))
+	expiredKeys := make([]cacheKey, 0)
+	for index := len(streamEntries) - 1; index >= 0 && len(entries) < query.BeforeLimit; index-- {
+		entry := streamEntries[index]
+		if entry.createdAt.After(query.AnchorOccurredAt.UTC()) {
+			continue
+		}
+		if entry.key.articleID == query.AnchorArticleID {
+			continue
+		}
+		if _, skip := excluded[entry.key.articleID]; skip {
+			continue
+		}
+
+		snapshot, found, expired := m.snapshotReadLocked(now, entry.key)
+		if expired {
+			expiredKeys = append(expiredKeys, entry.key)
+			continue
 		}
 		if !found {
 			continue
@@ -195,77 +307,10 @@ func (m *Module) ListConversationContextBefore(
 			CreatedAt:    snapshot.CreatedAt,
 			UpdatedAt:    snapshot.UpdatedAt,
 		})
-	}
-	reverseConversationContextEntries(entries)
-
-	return entries, nil
-}
-
-func (m *Module) listConversationContextCandidateKeysLocked(
-	now time.Time,
-	query otogi.ConversationContextBeforeQuery,
-	excluded map[string]struct{},
-) []cacheKey {
-	if query.AnchorArticleID != "" {
-		anchorKey := cacheKey{
-			tenantID:       query.TenantID,
-			platform:       query.Platform,
-			conversationID: query.ConversationID,
-			articleID:      query.AnchorArticleID,
-		}
-		if m.ensureNotExpiredLocked(anchorKey, now) {
-			location, exists := m.articleStreams[anchorKey]
-			if exists && (query.ThreadID == "" || location.streamKey.threadID == query.ThreadID) {
-				streamEntries, exists := m.streams[location.streamKey]
-				if exists {
-					anchorIndex := locateConversationStreamEntry(streamEntries, anchorKey)
-					if anchorIndex >= 0 {
-						candidateKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, anchorIndex))
-						for index := anchorIndex - 1; index >= 0 && len(candidateKeys) < query.BeforeLimit; index-- {
-							candidateKey := streamEntries[index].key
-							if _, skip := excluded[candidateKey.articleID]; skip {
-								continue
-							}
-							candidateKeys = append(candidateKeys, candidateKey)
-						}
-						return candidateKeys
-					}
-				}
-			}
-		}
+		touchedKeys = append(touchedKeys, entry.key)
 	}
 
-	if query.AnchorOccurredAt.IsZero() {
-		return nil
-	}
-
-	streamKey := conversationStreamKey{
-		tenantID:       query.TenantID,
-		platform:       query.Platform,
-		conversationID: query.ConversationID,
-		threadID:       query.ThreadID,
-	}
-	streamEntries, exists := m.streams[streamKey]
-	if !exists {
-		return nil
-	}
-
-	candidateKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, len(streamEntries)))
-	for index := len(streamEntries) - 1; index >= 0 && len(candidateKeys) < query.BeforeLimit; index-- {
-		entry := streamEntries[index]
-		if entry.createdAt.After(query.AnchorOccurredAt.UTC()) {
-			continue
-		}
-		if entry.key.articleID == query.AnchorArticleID {
-			continue
-		}
-		if _, skip := excluded[entry.key.articleID]; skip {
-			continue
-		}
-		candidateKeys = append(candidateKeys, entry.key)
-	}
-
-	return candidateKeys
+	return entries, touchedKeys, expiredKeys
 }
 
 func (m *Module) getSnapshot(ctx context.Context, lookup otogi.MemoryLookup) (memorySnapshot, bool, error) {
@@ -279,19 +324,17 @@ func (m *Module) getSnapshot(ctx context.Context, lookup otogi.MemoryLookup) (me
 	now := m.now()
 	key := cacheKeyFromLookup(lookup)
 
-	m.mu.Lock()
-	if !m.ensureNotExpiredLocked(key, now) {
-		m.mu.Unlock()
+	m.mu.RLock()
+	cloned, found, expired := m.snapshotReadLocked(now, key)
+	m.mu.RUnlock()
+	if expired {
+		m.reconcileReadKeys(now, nil, []cacheKey{key})
 		return memorySnapshot{}, false, nil
 	}
-	m.touchLocked(key)
-	cached, exists := m.entities[key]
-	if !exists {
-		m.mu.Unlock()
+	if !found {
 		return memorySnapshot{}, false, nil
 	}
-	cloned := cloneMemorySnapshot(cached)
-	m.mu.Unlock()
+	m.reconcileReadKeys(now, []cacheKey{key}, nil)
 
 	return cloned, true, nil
 }
@@ -307,19 +350,17 @@ func (m *Module) getHistory(ctx context.Context, lookup otogi.MemoryLookup) ([]o
 	now := m.now()
 	key := cacheKeyFromLookup(lookup)
 
-	m.mu.Lock()
-	if !m.ensureNotExpiredLocked(key, now) {
-		m.mu.Unlock()
+	m.mu.RLock()
+	cloned, found, expired := m.historyReadLocked(now, key)
+	m.mu.RUnlock()
+	if expired {
+		m.reconcileReadKeys(now, nil, []cacheKey{key})
 		return nil, false, nil
 	}
-	m.touchLocked(key)
-	history, exists := m.events[key]
-	if !exists {
-		m.mu.Unlock()
+	if !found {
 		return nil, false, nil
 	}
-	cloned := cloneEventStream(history)
-	m.mu.Unlock()
+	m.reconcileReadKeys(now, []cacheKey{key}, nil)
 
 	return cloned, true, nil
 }
@@ -355,4 +396,134 @@ func minInt(left int, right int) int {
 	}
 
 	return right
+}
+
+func (m *Module) collectConversationContextEntriesLocked(
+	now time.Time,
+	streamEntries []conversationStreamEntry,
+	startIndex int,
+	query otogi.ConversationContextBeforeQuery,
+	excluded map[string]struct{},
+) ([]otogi.ConversationContextEntry, []cacheKey, []cacheKey) {
+	entries := make([]otogi.ConversationContextEntry, 0, minInt(query.BeforeLimit, len(streamEntries)))
+	touchedKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, len(streamEntries)))
+	expiredKeys := make([]cacheKey, 0)
+	for index := startIndex; index >= 0 && len(entries) < query.BeforeLimit; index-- {
+		candidateKey := streamEntries[index].key
+		if _, skip := excluded[candidateKey.articleID]; skip {
+			continue
+		}
+
+		snapshot, found, expired := m.snapshotReadLocked(now, candidateKey)
+		if expired {
+			expiredKeys = append(expiredKeys, candidateKey)
+			continue
+		}
+		if !found {
+			continue
+		}
+
+		entries = append(entries, otogi.ConversationContextEntry{
+			Conversation: snapshot.Conversation,
+			Actor:        snapshot.Actor,
+			Article:      cloneArticle(snapshot.Article),
+			CreatedAt:    snapshot.CreatedAt,
+			UpdatedAt:    snapshot.UpdatedAt,
+		})
+		touchedKeys = append(touchedKeys, candidateKey)
+	}
+
+	return entries, touchedKeys, expiredKeys
+}
+
+func (m *Module) snapshotReadLocked(now time.Time, key cacheKey) (memorySnapshot, bool, bool) {
+	if !m.isRecordLiveLocked(key, now) {
+		return memorySnapshot{}, false, m.isRecordExpiredLocked(key, now)
+	}
+
+	cached, exists := m.entities[key]
+	if !exists {
+		return memorySnapshot{}, false, false
+	}
+
+	return cloneMemorySnapshot(cached), true, false
+}
+
+func (m *Module) historyReadLocked(now time.Time, key cacheKey) ([]otogi.Event, bool, bool) {
+	if !m.isRecordLiveLocked(key, now) {
+		return nil, false, m.isRecordExpiredLocked(key, now)
+	}
+
+	history, exists := m.events[key]
+	if !exists {
+		return nil, false, false
+	}
+
+	return cloneEventStream(history), true, false
+}
+
+func (m *Module) memoryReadLocked(
+	now time.Time,
+	key cacheKey,
+) (memorySnapshot, []otogi.Event, bool, bool) {
+	snapshot, found, expired := m.snapshotReadLocked(now, key)
+	if expired || !found {
+		return memorySnapshot{}, nil, found, expired
+	}
+
+	history, _, historyExpired := m.historyReadLocked(now, key)
+	if historyExpired {
+		return memorySnapshot{}, nil, false, true
+	}
+
+	return snapshot, history, true, false
+}
+
+func buildMemory(snapshot memorySnapshot, history []otogi.Event) otogi.Memory {
+	return otogi.Memory{
+		TenantID:     snapshot.TenantID,
+		Platform:     snapshot.Platform,
+		Conversation: snapshot.Conversation,
+		Actor:        snapshot.Actor,
+		Article:      cloneArticle(snapshot.Article),
+		History:      history,
+		CreatedAt:    snapshot.CreatedAt,
+		UpdatedAt:    snapshot.UpdatedAt,
+	}
+}
+
+func (m *Module) isRecordLiveLocked(key cacheKey, now time.Time) bool {
+	record, exists := m.records[key]
+	if !exists {
+		return false
+	}
+
+	return !m.isExpired(record, now)
+}
+
+func (m *Module) isRecordExpiredLocked(key cacheKey, now time.Time) bool {
+	record, exists := m.records[key]
+	if !exists {
+		return false
+	}
+
+	return m.isExpired(record, now)
+}
+
+func (m *Module) reconcileReadKeys(now time.Time, touchedKeys []cacheKey, expiredKeys []cacheKey) {
+	if len(touchedKeys) == 0 && len(expiredKeys) == 0 {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, key := range expiredKeys {
+		m.ensureNotExpiredLocked(key, now)
+	}
+	for _, key := range touchedKeys {
+		if m.ensureNotExpiredLocked(key, now) {
+			m.touchLocked(key)
+		}
+	}
 }

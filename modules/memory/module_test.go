@@ -1162,7 +1162,7 @@ func TestModuleReactionProjectionDerivedFromEvents(t *testing.T) {
 	}
 }
 
-func TestModuleRetractedEntityStillPreservesEventHistory(t *testing.T) {
+func TestModuleRetractedEntityDeletesCachedHistory(t *testing.T) {
 	t.Parallel()
 
 	module := New(
@@ -1195,14 +1195,8 @@ func TestModuleRetractedEntityStillPreservesEventHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get events failed: %v", err)
 	}
-	if !found {
-		t.Fatal("expected event history to remain after retraction")
-	}
-	if len(history) != 2 {
-		t.Fatalf("history length = %d, want 2", len(history))
-	}
-	if history[1].Kind != otogi.EventKindArticleRetracted {
-		t.Fatalf("history[1].Kind = %s, want %s", history[1].Kind, otogi.EventKindArticleRetracted)
+	if found {
+		t.Fatalf("history = %+v, want cache miss after retraction", history)
 	}
 }
 
@@ -1401,6 +1395,80 @@ func TestModuleGetEventsReturnsDefensiveCopy(t *testing.T) {
 	}
 	if historyAgain[0].ID != "evt-created-msg-1" {
 		t.Fatalf("event id = %q, want evt-created-msg-1", historyAgain[0].ID)
+	}
+}
+
+func TestModuleIgnoresDuplicateEventRedelivery(t *testing.T) {
+	t.Parallel()
+
+	module := New(
+		WithTTL(24*time.Hour),
+		withClock(func() time.Time { return time.Unix(520, 0).UTC() }),
+	)
+
+	if err := module.handleEvent(context.Background(), newCreatedEvent("msg-1", "hello", "")); err != nil {
+		t.Fatalf("handle created event failed: %v", err)
+	}
+
+	reactionEvent := newReactionEvent("msg-1", "👍", otogi.ReactionActionAdd)
+	if err := module.handleEvent(context.Background(), reactionEvent); err != nil {
+		t.Fatalf("handle reaction event failed: %v", err)
+	}
+	if err := module.handleEvent(context.Background(), reactionEvent); err != nil {
+		t.Fatalf("handle duplicate reaction event failed: %v", err)
+	}
+
+	lookup := otogi.MemoryLookup{
+		Platform:       otogi.PlatformTelegram,
+		ConversationID: "chat-1",
+		ArticleID:      "msg-1",
+	}
+
+	cached, found, err := module.Get(context.Background(), lookup)
+	if err != nil {
+		t.Fatalf("get message failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected message cache hit")
+	}
+	if len(cached.Article.Reactions) != 1 {
+		t.Fatalf("reactions len = %d, want 1", len(cached.Article.Reactions))
+	}
+	if cached.Article.Reactions[0].Count != 1 {
+		t.Fatalf("reaction count = %d, want 1", cached.Article.Reactions[0].Count)
+	}
+
+	history, found, err := module.getHistory(context.Background(), lookup)
+	if err != nil {
+		t.Fatalf("get history failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected history cache hit")
+	}
+	if len(history) != 2 {
+		t.Fatalf("history len = %d, want 2", len(history))
+	}
+	if history[1].ID != reactionEvent.ID {
+		t.Fatalf("history[1].ID = %q, want %q", history[1].ID, reactionEvent.ID)
+	}
+}
+
+func TestTrimForCommandReplyPreservesUTF8Boundaries(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Repeat("你", maxCommandReplyLength+1)
+	trimmed := trimForCommandReply(body)
+
+	if !utf8.ValidString(trimmed) {
+		t.Fatalf("trimmed body is not valid UTF-8: %q", trimmed)
+	}
+	if !strings.HasSuffix(trimmed, "\n...(truncated)") {
+		t.Fatalf("trimmed body = %q, want truncation suffix", trimmed)
+	}
+
+	content := strings.TrimSuffix(trimmed, "\n...(truncated)")
+	if got := utf8.RuneCountInString(content); got != maxCommandReplyLength {
+		t.Fatalf("trimmed rune count = %d, want %d", got, maxCommandReplyLength)
 	}
 }
 
@@ -1633,7 +1701,7 @@ func newReactionEventAt(
 	}
 
 	return &otogi.Event{
-		ID:         "evt-reaction-" + targetMessageID,
+		ID:         "evt-reaction-" + targetMessageID + "-" + string(action) + "-" + emoji,
 		Kind:       kind,
 		OccurredAt: occurredAt,
 		Source: otogi.EventSource{

@@ -14,29 +14,38 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 
 	switch event.Kind {
 	case otogi.EventKindArticleCreated:
-		if err := m.appendEvent(event); err != nil {
-			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
-		}
 		if err := m.rememberCreated(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
 	case otogi.EventKindArticleEdited:
-		if err := m.appendEvent(event); err != nil {
+		appended, err := m.appendEvent(event)
+		if err != nil {
 			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
+		}
+		if !appended {
+			return nil
 		}
 		if err := m.rememberEdit(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
 	case otogi.EventKindArticleRetracted:
-		if err := m.appendEvent(event); err != nil {
+		appended, err := m.appendEvent(event)
+		if err != nil {
 			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
+		}
+		if !appended {
+			return nil
 		}
 		if err := m.forgetRetracted(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
 	case otogi.EventKindArticleReactionAdded, otogi.EventKindArticleReactionRemoved:
-		if err := m.appendEvent(event); err != nil {
+		appended, err := m.appendEvent(event)
+		if err != nil {
 			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
+		}
+		if !appended {
+			return nil
 		}
 		if err := m.rememberReaction(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)

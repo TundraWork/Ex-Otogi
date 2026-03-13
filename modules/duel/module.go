@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -14,11 +15,12 @@ import (
 )
 
 const (
-	moduleName       = "duel"
-	duelCommandName  = "duel"
-	joinCommandName  = "dueljoin"
-	hitCommandName   = "duelhit"
-	standCommandName = "duelstand"
+	moduleName            = "duel"
+	duelCommandName       = "duel"
+	joinCommandName       = "dueljoin"
+	hitCommandName        = "duelhit"
+	standCommandName      = "duelstand"
+	defaultReaperInterval = 5 * time.Second
 )
 
 var standardDeck = []card{
@@ -155,13 +157,16 @@ type duelInput struct {
 
 // Module provides multiplayer blackjack-style duels in group conversations.
 type Module struct {
-	cfg        config
-	dispatcher otogi.SinkDispatcher
-	moderation otogi.ModerationDispatcher
-	memory     otogi.MemoryService
-	now        func() time.Time
-	shuffler   deckShuffler
-	renderer   *renderer
+	cfg            config
+	dispatcher     otogi.SinkDispatcher
+	moderation     otogi.ModerationDispatcher
+	memory         otogi.MemoryService
+	now            func() time.Time
+	shuffler       deckShuffler
+	renderer       *renderer
+	reaperInterval time.Duration
+	reaperCancel   context.CancelFunc
+	reaperWG       sync.WaitGroup
 
 	mu    sync.Mutex
 	games map[conversationKey]*gameState
@@ -292,6 +297,9 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 	if m.renderer == nil {
 		m.renderer = newRenderer(nil)
 	}
+	if m.reaperInterval <= 0 {
+		m.reaperInterval = defaultReaperInterval
+	}
 	if m.games == nil {
 		m.games = make(map[conversationKey]*gameState)
 	}
@@ -300,12 +308,48 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 }
 
 // OnStart starts the module lifecycle.
-func (m *Module) OnStart(_ context.Context) error {
+func (m *Module) OnStart(ctx context.Context) error {
+	if m.reaperCancel != nil {
+		return nil
+	}
+
+	reaperCtx, cancel := context.WithCancel(ctx)
+	m.reaperCancel = cancel
+	m.reaperWG.Add(1)
+	go func() {
+		defer m.reaperWG.Done()
+		defer func() {
+			if panicValue := recover(); panicValue != nil {
+				slog.Default().ErrorContext(reaperCtx, "duel reaper panic", "panic", panicValue)
+			}
+		}()
+
+		ticker := time.NewTicker(m.reaperInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-reaperCtx.Done():
+				return
+			case <-ticker.C:
+				if err := m.sweepExpiredGames(reaperCtx); err != nil {
+					slog.Default().ErrorContext(reaperCtx, "duel reaper sweep failed", "error", err)
+				}
+			}
+		}
+	}()
+
 	return nil
 }
 
 // OnShutdown clears in-memory duel state.
 func (m *Module) OnShutdown(_ context.Context) error {
+	if m.reaperCancel != nil {
+		m.reaperCancel()
+		m.reaperCancel = nil
+	}
+	m.reaperWG.Wait()
+
 	m.mu.Lock()
 	m.games = make(map[conversationKey]*gameState)
 	m.mu.Unlock()
@@ -330,7 +374,7 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := m.expireConversationState(ctx, event); err != nil {
+	if err := m.expireConversationStateLocked(ctx, conversationKeyFromEvent(event)); err != nil {
 		return err
 	}
 	if event.Kind != otogi.EventKindCommandReceived || event.Command == nil {
@@ -620,16 +664,19 @@ func (m *Module) cancelLobby(ctx context.Context, state *gameState, reason strin
 	}))
 }
 
-func (m *Module) expireConversationState(ctx context.Context, event *otogi.Event) error {
-	key := conversationKeyFromEvent(event)
+func (m *Module) expireConversationStateLocked(ctx context.Context, key conversationKey) error {
 	state := m.games[key]
 	if state == nil {
 		return nil
 	}
-	if !state.expired(m.now()) {
+
+	return m.expireStateLocked(ctx, state)
+}
+
+func (m *Module) expireStateLocked(ctx context.Context, state *gameState) error {
+	if state == nil || !state.expired(m.now()) {
 		return nil
 	}
-
 	switch state.phase {
 	case phaseLobby:
 		if state.joinedCount() < 2 {
@@ -641,6 +688,19 @@ func (m *Module) expireConversationState(ctx context.Context, event *otogi.Event
 	default:
 		return nil
 	}
+}
+
+func (m *Module) sweepExpiredGames(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, state := range m.games {
+		if err := m.expireStateLocked(ctx, state); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (m *Module) finishCurrentGame(ctx context.Context, state *gameState, result conclusion) error {
@@ -670,13 +730,40 @@ func (m *Module) finishCurrentGame(ctx context.Context, state *gameState, result
 }
 
 func (m *Module) editBoard(ctx context.Context, state *gameState, text string) error {
+	if strings.TrimSpace(state.boardMessageID) == "" {
+		if err := m.sendReplacementBoard(ctx, state, text); err != nil {
+			return fmt.Errorf("duel send replacement board: %w", err)
+		}
+
+		return nil
+	}
+
 	if err := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
 		Target:    state.target,
 		MessageID: state.boardMessageID,
 		Text:      text,
 	}); err != nil {
-		return fmt.Errorf("duel edit board: %w", err)
+		if resendErr := m.sendReplacementBoard(ctx, state, text); resendErr != nil {
+			return fmt.Errorf(
+				"duel edit board: %w",
+				errors.Join(err, fmt.Errorf("send replacement board: %w", resendErr)),
+			)
+		}
 	}
+
+	return nil
+}
+
+func (m *Module) sendReplacementBoard(ctx context.Context, state *gameState, text string) error {
+	message, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+		Target: state.target,
+		Text:   text,
+	})
+	if err != nil {
+		return fmt.Errorf("send board message: %w", err)
+	}
+
+	state.boardMessageID = message.ID
 
 	return nil
 }

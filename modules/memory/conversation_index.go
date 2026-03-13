@@ -1,6 +1,10 @@
 package memory
 
-import "ex-otogi/pkg/otogi"
+import (
+	"sort"
+
+	"ex-otogi/pkg/otogi"
+)
 
 func conversationStreamKeyFromSnapshot(snapshot memorySnapshot) conversationStreamKey {
 	return conversationStreamKey{
@@ -21,7 +25,7 @@ func (m *Module) upsertConversationArticleLocked(key cacheKey, snapshot memorySn
 	location, exists := m.articleStreams[key]
 	sequence := location.sequence
 	if exists {
-		m.removeConversationArticleFromStreamLocked(location.streamKey, key)
+		m.removeConversationArticleFromStreamLocked(location, key)
 	} else {
 		m.nextConversationSequence++
 		sequence = m.nextConversationSequence
@@ -35,6 +39,7 @@ func (m *Module) upsertConversationArticleLocked(key cacheKey, snapshot memorySn
 	m.streams[streamKey] = insertConversationStreamEntry(m.streams[streamKey], entry)
 	m.articleStreams[key] = conversationArticleStream{
 		streamKey: streamKey,
+		createdAt: createdAt,
 		sequence:  sequence,
 	}
 }
@@ -45,40 +50,43 @@ func (m *Module) removeConversationArticleLocked(key cacheKey) {
 		return
 	}
 
-	m.removeConversationArticleFromStreamLocked(location.streamKey, key)
+	m.removeConversationArticleFromStreamLocked(location, key)
 	delete(m.articleStreams, key)
 }
 
-func (m *Module) removeConversationArticleFromStreamLocked(streamKey conversationStreamKey, key cacheKey) {
-	entries, exists := m.streams[streamKey]
+func (m *Module) removeConversationArticleFromStreamLocked(
+	location conversationArticleStream,
+	key cacheKey,
+) {
+	entries, exists := m.streams[location.streamKey]
 	if !exists {
 		return
 	}
 
-	index := locateConversationStreamEntry(entries, key)
+	index := locateConversationStreamEntry(entries, conversationStreamEntry{
+		key:       key,
+		createdAt: location.createdAt,
+		sequence:  location.sequence,
+	})
 	if index < 0 {
 		return
 	}
 
 	entries = append(entries[:index], entries[index+1:]...)
 	if len(entries) == 0 {
-		delete(m.streams, streamKey)
+		delete(m.streams, location.streamKey)
 		return
 	}
-	m.streams[streamKey] = entries
+	m.streams[location.streamKey] = entries
 }
 
 func insertConversationStreamEntry(
 	entries []conversationStreamEntry,
 	entry conversationStreamEntry,
 ) []conversationStreamEntry {
-	insertAt := len(entries)
-	for index, existing := range entries {
-		if conversationStreamEntryLess(entry, existing) {
-			insertAt = index
-			break
-		}
-	}
+	insertAt := sort.Search(len(entries), func(index int) bool {
+		return !conversationStreamEntryLess(entries[index], entry)
+	})
 
 	entries = append(entries, conversationStreamEntry{})
 	copy(entries[insertAt+1:], entries[insertAt:])
@@ -98,14 +106,24 @@ func conversationStreamEntryLess(left conversationStreamEntry, right conversatio
 	}
 }
 
-func locateConversationStreamEntry(entries []conversationStreamEntry, key cacheKey) int {
-	for index, entry := range entries {
-		if entry.key == key {
-			return index
-		}
+func locateConversationStreamEntry(entries []conversationStreamEntry, target conversationStreamEntry) int {
+	index := sort.Search(len(entries), func(position int) bool {
+		return !conversationStreamEntryLess(entries[position], target)
+	})
+	if index >= len(entries) {
+		return -1
+	}
+	if !conversationStreamEntryEqual(entries[index], target) {
+		return -1
 	}
 
-	return -1
+	return index
+}
+
+func conversationStreamEntryEqual(left conversationStreamEntry, right conversationStreamEntry) bool {
+	return left.key == right.key &&
+		left.sequence == right.sequence &&
+		left.createdAt.Equal(right.createdAt)
 }
 
 func reverseConversationContextEntries(entries []otogi.ConversationContextEntry) {

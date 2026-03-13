@@ -49,23 +49,9 @@ func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
 		return fmt.Errorf("sleep generate wake code: %w", err)
 	}
 
-	if err := m.moderation.RestrictMember(ctx, otogi.RestrictMemberRequest{
-		Target:      target,
-		MemberID:    userID,
-		Permissions: mutedPermissions(),
-		UntilDate:   untilDate,
-	}); err != nil {
-		return m.replyPermissionChangeFailure(
-			ctx,
-			event,
-			"没能开始休息，暂时无法修改你的权限，请稍后再试。",
-			fmt.Errorf("sleep restrict member %s: %w", userID, err),
-		)
-	}
-
 	humanDuration := formatDuration(duration)
 
-	sleepText := fmt.Sprintf("好好休息%s吧～祝好梦哦✨\n要提前回来的话，可以在当前会话发送以下命令：", humanDuration)
+	sleepText := fmt.Sprintf("好好休息%s吧～祝好梦哦✨\n要提前回来的话，可以私聊我发送以下命令：", humanDuration)
 	if _, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
 		Target:           target,
 		Text:             sleepText,
@@ -89,6 +75,20 @@ func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
 		ReplyToMessageID: event.Article.ID,
 	}); err != nil {
 		return fmt.Errorf("sleep send wake code message: %w", err)
+	}
+
+	if err := m.moderation.RestrictMember(ctx, otogi.RestrictMemberRequest{
+		Target:      target,
+		MemberID:    userID,
+		Permissions: mutedPermissions(),
+		UntilDate:   untilDate,
+	}); err != nil {
+		return m.replyPermissionChangeFailure(
+			ctx,
+			event,
+			"没能开始休息，暂时无法修改你的权限，请稍后再试。",
+			fmt.Errorf("sleep restrict member %s: %w", userID, err),
+		)
 	}
 
 	return nil
@@ -115,13 +115,13 @@ func (m *Module) handleWake(ctx context.Context, event *otogi.Event) error {
 		return m.replyError(ctx, event, "unable to identify user")
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	wakeTargetScope, err := m.codeManager.Validate(code, userID, time.Now())
 	if err != nil {
-		return fmt.Errorf("sleep derive wake target: %w", err)
-	}
-
-	if err := m.codeManager.Validate(code, codeScopeFromEvent(event), time.Now()); err != nil {
 		return m.replyError(ctx, event, "唤醒码无效或已过期，请检查后重新发送。")
+	}
+	target, err := outboundTargetFromWakeScope(wakeTargetScope)
+	if err != nil {
+		return fmt.Errorf("sleep derive wake target from code: %w", err)
 	}
 	if target.Conversation.Type == "" {
 		return fmt.Errorf("sleep derive wake target: missing conversation type")
@@ -149,6 +149,26 @@ func (m *Module) handleWake(ctx context.Context, event *otogi.Event) error {
 	}
 
 	return nil
+}
+
+func outboundTargetFromWakeScope(scope wakeTargetScope) (otogi.OutboundTarget, error) {
+	target := otogi.OutboundTarget{
+		Conversation: otogi.Conversation{
+			ID:   scope.ConversationID,
+			Type: scope.ConversationType,
+		},
+	}
+	if scope.SourcePlatform != "" || scope.SourceID != "" {
+		target.Sink = &otogi.EventSink{
+			Platform: scope.SourcePlatform,
+			ID:       scope.SourceID,
+		}
+	}
+	if err := target.Validate(); err != nil {
+		return otogi.OutboundTarget{}, fmt.Errorf("validate wake target: %w", err)
+	}
+
+	return target, nil
 }
 
 func codeScopeFromEvent(event *otogi.Event) codeScope {

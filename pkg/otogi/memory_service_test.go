@@ -708,6 +708,10 @@ func (memoryServiceContractStub) Get(context.Context, MemoryLookup) (Memory, boo
 	return Memory{}, false, nil
 }
 
+func (memoryServiceContractStub) GetBatch(context.Context, []MemoryLookup) (map[MemoryLookup]Memory, error) {
+	return nil, nil
+}
+
 func (memoryServiceContractStub) GetReplied(context.Context, *Event) (Memory, bool, error) {
 	return Memory{}, false, nil
 }

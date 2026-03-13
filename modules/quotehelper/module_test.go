@@ -512,6 +512,10 @@ func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool,
 	return otogi.Memory{}, false, nil
 }
 
+func (*memoryStub) GetBatch(context.Context, []otogi.MemoryLookup) (map[otogi.MemoryLookup]otogi.Memory, error) {
+	return nil, nil
+}
+
 func (m *memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
 	return m.replied, m.repliedFound, m.repliedErr
 }

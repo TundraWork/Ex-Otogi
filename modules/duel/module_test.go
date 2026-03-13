@@ -2,6 +2,7 @@ package duel
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,129 @@ func TestScoreHand(t *testing.T) {
 
 			if got := scoreHand(testCase.hand); got != testCase.want {
 				t.Fatalf("scoreHand() = %d, want %d", got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestPlayerStateTakeUpdatesFinishedState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		hand       []card
+		wantScore  int
+		wantStood  bool
+		wantBusted bool
+		wantCanAct bool
+		wantIcon   string
+	}{
+		{
+			name: "exact twenty one auto stands and keeps checkmark",
+			hand: []card{
+				{rank: 1, label: "♤A"},
+				{rank: 10, label: "♢10"},
+			},
+			wantScore:  21,
+			wantStood:  true,
+			wantBusted: false,
+			wantCanAct: false,
+			wantIcon:   "✅",
+		},
+		{
+			name: "bust remains busted and not stood",
+			hand: []card{
+				{rank: 10, label: "♤10"},
+				{rank: 10, label: "♢10"},
+				{rank: 5, label: "♡5"},
+			},
+			wantScore:  25,
+			wantStood:  false,
+			wantBusted: true,
+			wantCanAct: false,
+			wantIcon:   "💥",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			player := &playerState{}
+			for _, drawn := range testCase.hand {
+				player.take(drawn)
+			}
+
+			if player.Score != testCase.wantScore {
+				t.Fatalf("Score = %d, want %d", player.Score, testCase.wantScore)
+			}
+			if player.Stood != testCase.wantStood {
+				t.Fatalf("Stood = %v, want %v", player.Stood, testCase.wantStood)
+			}
+			if player.Busted != testCase.wantBusted {
+				t.Fatalf("Busted = %v, want %v", player.Busted, testCase.wantBusted)
+			}
+			if player.canAct() != testCase.wantCanAct {
+				t.Fatalf("canAct() = %v, want %v", player.canAct(), testCase.wantCanAct)
+			}
+			if player.statusIcon() != testCase.wantIcon {
+				t.Fatalf("statusIcon() = %q, want %q", player.statusIcon(), testCase.wantIcon)
+			}
+		})
+	}
+}
+
+func TestGameStateAllNonBustedFinishedUsesExplicitFinishedState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		game *gameState
+		want bool
+	}{
+		{
+			name: "exact twenty one counts as finished",
+			game: &gameState{
+				order: []string{"a", "b"},
+				players: map[string]*playerState{
+					"a": {ID: "a", Name: "甲", Score: 21, Stood: true},
+					"b": {ID: "b", Name: "乙", Score: 18, Stood: true},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "active non busted player keeps game running",
+			game: &gameState{
+				order: []string{"a", "b"},
+				players: map[string]*playerState{
+					"a": {ID: "a", Name: "甲", Score: 21, Stood: true},
+					"b": {ID: "b", Name: "乙", Score: 18, Stood: false},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "busted players do not block finish detection",
+			game: &gameState{
+				order: []string{"a", "b"},
+				players: map[string]*playerState{
+					"a": {ID: "a", Name: "甲", Score: 22, Busted: true},
+					"b": {ID: "b", Name: "乙", Score: 19, Stood: true},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := testCase.game.allNonBustedFinished(); got != testCase.want {
+				t.Fatalf("allNonBustedFinished() = %v, want %v", got, testCase.want)
 			}
 		})
 	}
@@ -305,6 +429,159 @@ func TestModuleTimeoutMarksUnfinishedPlayersAsLosers(t *testing.T) {
 	}
 }
 
+func TestModuleOnStartReapsExpiredGamesWithoutNewEvents(t *testing.T) {
+	baseTime := time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC)
+	module, dispatcher, moderation, _ := newTestModule(baseTime, []card{
+		{rank: 10, label: "♧10"},
+	})
+	module.reaperInterval = 5 * time.Millisecond
+
+	host := actor("host", "房主")
+	guest := actor("guest", "玩家")
+
+	runCommands(t, module,
+		commandEvent("m1", host, duelCommandName, "2", nil, ""),
+		commandEvent("m2", guest, joinCommandName, "", nil, ""),
+		commandEvent("m3", guest, hitCommandName, "", nil, ""),
+		commandEvent("m4", guest, standCommandName, "", nil, ""),
+	)
+
+	module.now = func() time.Time {
+		return baseTime.Add(module.cfg.GameTimeout + time.Second)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := module.OnStart(ctx); err != nil {
+		t.Fatalf("OnStart: %v", err)
+	}
+	defer func() {
+		if err := module.OnShutdown(context.Background()); err != nil {
+			t.Fatalf("OnShutdown: %v", err)
+		}
+	}()
+
+	waitUntil(t, time.Second, func() bool {
+		module.mu.Lock()
+		defer module.mu.Unlock()
+		return len(module.games) == 0
+	})
+
+	moderation.mu.Lock()
+	if len(moderation.requests) != 1 {
+		moderation.mu.Unlock()
+		t.Fatalf("moderation requests = %d, want 1", len(moderation.requests))
+	}
+	if moderation.requests[0].MemberID != host.ID {
+		moderation.mu.Unlock()
+		t.Fatalf("timed out member = %q, want %q", moderation.requests[0].MemberID, host.ID)
+	}
+	moderation.mu.Unlock()
+
+	dispatcher.mu.Lock()
+	if len(dispatcher.editRequests) == 0 {
+		dispatcher.mu.Unlock()
+		t.Fatal("want at least one board edit from reaper")
+	}
+	finalBoard := dispatcher.editRequests[len(dispatcher.editRequests)-1].Text
+	dispatcher.mu.Unlock()
+	if !strings.Contains(finalBoard, "超时") {
+		t.Fatalf("final board = %q, want timeout outcome", finalBoard)
+	}
+}
+
+func TestModuleBoardEditFailureResendsBoardAndUpdatesBoardID(t *testing.T) {
+	baseTime := time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC)
+	module, dispatcher, _, _ := newTestModule(baseTime, []card{
+		{rank: 5, label: "♧5"},
+	})
+	dispatcher.editErrors = []error{
+		nil,
+		errors.New("message to edit not found"),
+		nil,
+	}
+
+	host := actor("host", "房主")
+	guest := actor("guest", "玩家")
+
+	runCommands(t, module,
+		commandEvent("m1", host, duelCommandName, "2", nil, ""),
+		commandEvent("m2", guest, joinCommandName, "", nil, ""),
+	)
+
+	state := onlyState(t, module)
+	if state.boardMessageID != "board-1" {
+		t.Fatalf("initial boardMessageID = %q, want board-1", state.boardMessageID)
+	}
+
+	if err := module.handleEvent(context.Background(), commandEvent("m3", host, hitCommandName, "", nil, "")); err != nil {
+		t.Fatalf("host hit after board deletion: %v", err)
+	}
+
+	if len(dispatcher.sendRequests) != 2 {
+		t.Fatalf("send requests = %d, want 2 (initial board + replacement)", len(dispatcher.sendRequests))
+	}
+	if state.boardMessageID != "board-2" {
+		t.Fatalf("replacement boardMessageID = %q, want board-2", state.boardMessageID)
+	}
+	if !strings.Contains(dispatcher.sendRequests[1].Text, "房主") {
+		t.Fatalf("replacement board = %q, want hit note content", dispatcher.sendRequests[1].Text)
+	}
+
+	if err := module.handleEvent(context.Background(), commandEvent("m4", guest, standCommandName, "", nil, "")); err != nil {
+		t.Fatalf("guest stand after replacement board: %v", err)
+	}
+
+	if len(dispatcher.editRequests) != 3 {
+		t.Fatalf("edit requests = %d, want 3", len(dispatcher.editRequests))
+	}
+	if dispatcher.editRequests[2].MessageID != "board-2" {
+		t.Fatalf("next edit MessageID = %q, want board-2", dispatcher.editRequests[2].MessageID)
+	}
+}
+
+func TestModuleConclusionEditFailureResendsBoard(t *testing.T) {
+	baseTime := time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC)
+	module, dispatcher, moderation, _ := newTestModule(baseTime, nil)
+	dispatcher.editErrors = []error{
+		nil,
+		nil,
+		errors.New("message to edit not found"),
+	}
+
+	host := actor("host", "房主")
+	guest := actor("guest", "玩家")
+
+	runCommands(t, module,
+		commandEvent("m1", host, duelCommandName, "2", nil, ""),
+		commandEvent("m2", guest, joinCommandName, "", nil, ""),
+	)
+
+	state := onlyState(t, module)
+	if err := module.handleEvent(context.Background(), commandEvent("m3", host, standCommandName, "", nil, "")); err != nil {
+		t.Fatalf("host stand: %v", err)
+	}
+	if err := module.handleEvent(context.Background(), commandEvent("m4", guest, standCommandName, "", nil, "")); err != nil {
+		t.Fatalf("guest stand with deleted board: %v", err)
+	}
+
+	if len(module.games) != 0 {
+		t.Fatalf("active games = %d, want 0", len(module.games))
+	}
+	if len(dispatcher.sendRequests) != 2 {
+		t.Fatalf("send requests = %d, want 2 (initial board + replacement conclusion)", len(dispatcher.sendRequests))
+	}
+	if state.boardMessageID != "board-2" {
+		t.Fatalf("conclusion boardMessageID = %q, want board-2", state.boardMessageID)
+	}
+	if !strings.Contains(dispatcher.sendRequests[1].Text, "决斗结束。") {
+		t.Fatalf("replacement conclusion board = %q, want conclusion title", dispatcher.sendRequests[1].Text)
+	}
+	if len(moderation.requests) != 0 {
+		t.Fatalf("moderation requests = %d, want 0 for tie conclusion", len(moderation.requests))
+	}
+}
+
 func TestScoreConclusionTieDoesNotMuteAnyone(t *testing.T) {
 	t.Parallel()
 
@@ -346,7 +623,9 @@ func (fixedEmojiPicker) Pick(options []string) string {
 type captureDispatcher struct {
 	mu           sync.Mutex
 	sendRequests []otogi.SendMessageRequest
+	sendErrors   []error
 	editRequests []otogi.EditMessageRequest
+	editErrors   []error
 	nextID       int
 }
 
@@ -357,8 +636,13 @@ func (d *captureDispatcher) SendMessage(
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.nextID++
 	d.sendRequests = append(d.sendRequests, request)
+	index := len(d.sendRequests) - 1
+	if index < len(d.sendErrors) && d.sendErrors[index] != nil {
+		return nil, d.sendErrors[index]
+	}
+
+	d.nextID++
 
 	return &otogi.OutboundMessage{
 		ID:     "board-" + strconv.Itoa(d.nextID),
@@ -371,6 +655,10 @@ func (d *captureDispatcher) EditMessage(_ context.Context, request otogi.EditMes
 	defer d.mu.Unlock()
 
 	d.editRequests = append(d.editRequests, request)
+	index := len(d.editRequests) - 1
+	if index < len(d.editErrors) {
+		return d.editErrors[index]
+	}
 
 	return nil
 }
@@ -416,6 +704,10 @@ type memoryStub struct {
 
 func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool, error) {
 	return otogi.Memory{}, false, nil
+}
+
+func (*memoryStub) GetBatch(context.Context, []otogi.MemoryLookup) (map[otogi.MemoryLookup]otogi.Memory, error) {
+	return nil, nil
 }
 
 func (m *memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
@@ -527,6 +819,20 @@ func articleEvent(messageID string, actor otogi.Actor) *otogi.Event {
 			Text: "hello",
 		},
 	}
+}
+
+func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatal("condition not met before timeout")
 }
 
 func runCommands(t *testing.T, module *Module, events ...*otogi.Event) {

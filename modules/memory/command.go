@@ -137,11 +137,15 @@ func notFoundMessage(kind introspectionCommandKind, explicitLookup bool) string 
 }
 
 func trimForCommandReply(body string) string {
-	if len(body) <= maxCommandReplyLength {
-		return body
+	runes := 0
+	for index := range body {
+		if runes == maxCommandReplyLength {
+			return body[:index] + "\n...(truncated)"
+		}
+		runes++
 	}
 
-	return body[:maxCommandReplyLength] + "\n...(truncated)"
+	return body
 }
 
 func formatRawEntity(cached memorySnapshot) (string, error) {

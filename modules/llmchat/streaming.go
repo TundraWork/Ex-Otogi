@@ -94,16 +94,17 @@ func (m *Module) streamProviderReply(
 		if nextText == "" {
 			nextText = defaultThinkingPlaceholder
 		}
+
+		now := m.now()
+		if !pacer.ShouldAttemptEdit(now) {
+			continue
+		}
+
 		payload, parseErr := m.parseEditPayload(streamCtx, nextText)
 		if parseErr != nil {
 			m.warnMarkdownParseFallback(streamCtx, target, placeholderMessageID, parseErr)
 		}
 		if payload.Equal(lastDeliveredPayload) {
-			continue
-		}
-
-		now := m.now()
-		if !pacer.ShouldAttemptEdit(now) {
 			continue
 		}
 

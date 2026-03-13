@@ -189,7 +189,7 @@ func (s *gameState) allNonBustedFinished() bool {
 		if player == nil || player.Busted {
 			continue
 		}
-		if player.canAct() {
+		if !player.Stood {
 			return false
 		}
 	}
@@ -325,6 +325,9 @@ func (p *playerState) take(card card) {
 	p.hand = append(p.hand, card)
 	p.Score = scoreHand(p.hand)
 	p.Busted = p.Score > 21
+	if p.Score == 21 {
+		p.Stood = true
+	}
 }
 
 func (p *playerState) canAct() bool {
@@ -344,10 +347,10 @@ func (p *playerState) statusIcon() string {
 		return "⏳"
 	case p.Busted:
 		return "💥"
-	case p.Stood:
-		return "🏁"
 	case p.Score == 21:
 		return "✅"
+	case p.Stood:
+		return "🏁"
 	default:
 		return "⏳"
 	}

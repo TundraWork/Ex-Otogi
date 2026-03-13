@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode/utf8"
 
 	"ex-otogi/pkg/otogi"
 )
@@ -179,24 +180,16 @@ func (m *Module) buildGenerateRequest(
 	// pool and attached to the current (last) user message so the LLM sees them
 	// alongside the request. Collection priority: current message first, then
 	// reply thread history (newest→oldest), then leading context (newest→oldest).
-	imageBudget := newImageInputBudget(imagePolicy)
-	allImageInputs := m.collectArticleImageInputs(
-		ctx,
-		event,
-		trimmedReplyChain[len(trimmedReplyChain)-1].Article,
-		imagePolicy,
-		imageBudget,
-	)
+	imageArticles := make([]otogi.Article, 0, 1+len(selectedHistory)+len(selectedLeadingContext))
+	imageArticles = append(imageArticles, trimmedReplyChain[len(trimmedReplyChain)-1].Article)
 	for index := len(selectedHistory) - 1; index >= 0; index-- {
 		entry := trimmedReplyChain[selectedHistory[index].sourceIndex]
-		inputs := m.collectArticleImageInputs(ctx, event, entry.Article, imagePolicy, imageBudget)
-		allImageInputs = append(allImageInputs, inputs...)
+		imageArticles = append(imageArticles, entry.Article)
 	}
 	for index := len(selectedLeadingContext) - 1; index >= 0; index-- {
-		entry := selectedLeadingContext[index]
-		inputs := m.collectArticleImageInputs(ctx, event, entry.Article, imagePolicy, imageBudget)
-		allImageInputs = append(allImageInputs, inputs...)
+		imageArticles = append(imageArticles, selectedLeadingContext[index].Article)
 	}
+	allImageInputs := m.collectContextImageInputs(ctx, event, imageArticles, imagePolicy)
 
 	messages := make([]otogi.LLMMessage, 0, len(selectedHistory)+4)
 	messages = append(messages,
@@ -423,20 +416,43 @@ func selectLeadingContextEntries(
 	if budget <= 0 {
 		return nil, len(entries)
 	}
-	full := serializeLeadingContextMessage(entries, reason, maxMessageRunes, quotes, includeMediaOnly)
-	if runeCount(full.content) <= budget {
-		return cloneConversationContextEntries(entries), 0
+
+	serializedEntries := make([]string, len(entries))
+	entryRunes := make([]int, len(entries))
+	for index, entry := range entries {
+		serializedEntries[index] = serializeLeadingContextEntry(
+			entry,
+			maxMessageRunes,
+			quotes,
+			includeMediaOnly,
+		)
+		entryRunes[index] = runeCount(serializedEntries[index])
 	}
 
-	for start := len(entries) - 1; start >= 0; start-- {
-		candidate := entries[start:]
-		message := serializeLeadingContextMessage(candidate, reason, maxMessageRunes, quotes, includeMediaOnly)
-		if runeCount(message.content) <= budget {
-			return cloneConversationContextEntries(candidate), start
+	envelopeRunes := leadingContextEnvelopeRunes(reason)
+	start := len(entries)
+	used := 0
+	hasContent := false
+	for index := len(entries) - 1; index >= 0; index-- {
+		nextUsed := used + entryRunes[index]
+		nextHasContent := hasContent || entryRunes[index] > 0
+		total := nextUsed
+		if nextHasContent {
+			total += envelopeRunes
 		}
+		if total > budget {
+			break
+		}
+
+		start = index
+		used = nextUsed
+		hasContent = nextHasContent
+	}
+	if start == len(entries) {
+		return nil, len(entries)
 	}
 
-	return nil, len(entries)
+	return cloneConversationContextEntries(entries[start:]), start
 }
 
 func serializeReplyThreadMessage(
@@ -485,45 +501,69 @@ func serializeLeadingContextMessage(
 		reason = "messages_before_current_message"
 	}
 
+	var body strings.Builder
+	for _, entry := range entries {
+		body.WriteString(serializeLeadingContextEntry(entry, maxMessageRunes, quotes, includeMediaOnly))
+	}
+	if body.Len() == 0 {
+		return serializedContextMessage{}
+	}
+
 	var builder strings.Builder
 	builder.WriteString(`<leading_context reason="`)
 	builder.WriteString(html.EscapeString(reason))
 	builder.WriteString(`">` + "\n")
-	for _, entry := range entries {
-		text := strings.TrimSpace(entry.Article.Text)
-		mediaOnly := text == "" && includeMediaOnly && hasImageInputCandidates(entry.Article)
-		if text == "" && !mediaOnly {
-			continue
-		}
-
-		trimmed, truncated := trimContextText(text, maxMessageRunes)
-		builder.WriteString("<message")
-		writeArticleAttrs(&builder, entry.Article, entry.CreatedAt)
-		writeBoolAttr(&builder, "media_only", mediaOnly)
-		builder.WriteString(">\n")
-		writeInlineQuote(&builder, entry.Article.ReplyToArticleID, quotes, maxMessageRunes)
-		builder.WriteString(serializeSpeaker(entry.Actor))
-		builder.WriteString("\n")
-		builder.WriteString(`<content`)
-		writeBoolAttr(&builder, "empty", text == "")
-		writeBoolAttr(&builder, "truncated", truncated)
-		builder.WriteString(">")
-		builder.WriteString(escapeStructuredContent(trimmed))
-		builder.WriteString("</content>\n")
-		builder.WriteString("</message>\n")
-	}
+	builder.WriteString(body.String())
 	builder.WriteString("</leading_context>")
-
-	content := strings.TrimSpace(builder.String())
-	emptyEnvelope := `<leading_context reason="` + html.EscapeString(reason) + `">` + "\n" + `</leading_context>`
-	if content == "" || content == emptyEnvelope {
-		return serializedContextMessage{}
-	}
 
 	return serializedContextMessage{
 		role:    otogi.LLMMessageRoleUser,
-		content: content,
+		content: strings.TrimSpace(builder.String()),
 	}
+}
+
+func serializeLeadingContextEntry(
+	entry otogi.ConversationContextEntry,
+	maxMessageRunes int,
+	quotes map[string]quotedReply,
+	includeMediaOnly bool,
+) string {
+	text := strings.TrimSpace(entry.Article.Text)
+	mediaOnly := text == "" && includeMediaOnly && hasImageInputCandidates(entry.Article)
+	if text == "" && !mediaOnly {
+		return ""
+	}
+
+	trimmed, truncated := trimContextText(text, maxMessageRunes)
+	var builder strings.Builder
+	builder.WriteString("<message")
+	writeArticleAttrs(&builder, entry.Article, entry.CreatedAt)
+	writeBoolAttr(&builder, "media_only", mediaOnly)
+	builder.WriteString(">\n")
+	writeInlineQuote(&builder, entry.Article.ReplyToArticleID, quotes, maxMessageRunes)
+	builder.WriteString(serializeSpeaker(entry.Actor))
+	builder.WriteString("\n")
+	builder.WriteString(`<content`)
+	writeBoolAttr(&builder, "empty", text == "")
+	writeBoolAttr(&builder, "truncated", truncated)
+	builder.WriteString(">")
+	builder.WriteString(escapeStructuredContent(trimmed))
+	builder.WriteString("</content>\n")
+	builder.WriteString("</message>\n")
+
+	return builder.String()
+}
+
+func leadingContextEnvelopeRunes(reason string) int {
+	if strings.TrimSpace(reason) == "" {
+		reason = "messages_before_current_message"
+	}
+
+	return runeCount(
+		`<leading_context reason="` + html.EscapeString(reason) + `">` +
+			"\n" +
+			`</leading_context>`,
+	)
 }
 
 func serializeCurrentMessage(
@@ -652,7 +692,7 @@ func totalMessageRunes(messages []serializedContextMessage) int {
 }
 
 func runeCount(value string) int {
-	return len([]rune(value))
+	return utf8.RuneCountInString(value)
 }
 
 func cloneReplyChainEntries(entries []otogi.ReplyChainEntry) []otogi.ReplyChainEntry {
@@ -807,30 +847,19 @@ func (m *Module) resolveQuotedReplies(
 		return nil, nil
 	}
 
-	// Collect all dangling reply_to references from context entries.
-	pendingIDs := make([]string, 0)
-	for _, entry := range replyChain {
-		replyTo := strings.TrimSpace(entry.Article.ReplyToArticleID)
-		if replyTo == "" {
-			continue
-		}
-		if _, known := knownArticleIDs[replyTo]; known {
-			continue
-		}
-		pendingIDs = append(pendingIDs, replyTo)
-	}
-	for _, entry := range leadingContext {
-		replyTo := strings.TrimSpace(entry.Article.ReplyToArticleID)
-		if replyTo == "" {
-			continue
-		}
-		if _, known := knownArticleIDs[replyTo]; known {
-			continue
-		}
-		pendingIDs = append(pendingIDs, replyTo)
-	}
+	pendingIDs, pendingLookups := collectPendingQuotedReplyLookups(
+		event,
+		knownArticleIDs,
+		replyChain,
+		leadingContext,
+	)
 	if len(pendingIDs) == 0 {
 		return nil, nil
+	}
+
+	prefetched, err := m.loadQuotedReplyBatch(ctx, pendingLookups)
+	if err != nil {
+		return nil, fmt.Errorf("load quoted reply batch: %w", err)
 	}
 
 	quotes := make(map[string]quotedReply)
@@ -845,7 +874,15 @@ func (m *Module) resolveQuotedReplies(
 			continue
 		}
 
-		resolved, err := m.resolveQuotedReplyChain(ctx, event, knownArticleIDs, quotes, articleID, maxDepth)
+		resolved, err := m.resolveQuotedReplyChain(
+			ctx,
+			event,
+			knownArticleIDs,
+			quotes,
+			prefetched,
+			articleID,
+			maxDepth,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("resolve quoted replies for %s: %w", articleID, err)
 		}
@@ -867,6 +904,7 @@ func (m *Module) resolveQuotedReplyChain(
 	event *otogi.Event,
 	knownArticleIDs map[string]struct{},
 	quotes map[string]quotedReply,
+	prefetched map[string]otogi.Memory,
 	articleID string,
 	remainingDepth int,
 ) (*quotedReply, error) {
@@ -883,13 +921,7 @@ func (m *Module) resolveQuotedReplyChain(
 		return &existing, nil
 	}
 
-	lookup := otogi.MemoryLookup{
-		TenantID:       event.TenantID,
-		Platform:       event.Source.Platform,
-		ConversationID: event.Conversation.ID,
-		ArticleID:      articleID,
-	}
-	memory, found, err := m.memory.Get(ctx, lookup)
+	memory, found, err := m.lookupQuotedReplyMemory(ctx, event, prefetched, articleID)
 	if err != nil {
 		return nil, fmt.Errorf("get memory for %s: %w", articleID, err)
 	}
@@ -910,7 +942,15 @@ func (m *Module) resolveQuotedReplyChain(
 	parentID := strings.TrimSpace(memory.Article.ReplyToArticleID)
 	if parentID != "" {
 		if _, known := knownArticleIDs[parentID]; !known {
-			nested, err := m.resolveQuotedReplyChain(ctx, event, knownArticleIDs, quotes, parentID, remainingDepth-1)
+			nested, err := m.resolveQuotedReplyChain(
+				ctx,
+				event,
+				knownArticleIDs,
+				quotes,
+				prefetched,
+				parentID,
+				remainingDepth-1,
+			)
 			if err != nil {
 				return nil, fmt.Errorf("resolve nested quote for %s: %w", parentID, err)
 			}
@@ -923,6 +963,100 @@ func (m *Module) resolveQuotedReplyChain(
 
 	quotes[articleID] = *resolved
 	return resolved, nil
+}
+
+func collectPendingQuotedReplyLookups(
+	event *otogi.Event,
+	knownArticleIDs map[string]struct{},
+	replyChain []otogi.ReplyChainEntry,
+	leadingContext []otogi.ConversationContextEntry,
+) ([]string, []otogi.MemoryLookup) {
+	if event == nil {
+		return nil, nil
+	}
+
+	pendingIDs := make([]string, 0)
+	lookups := make([]otogi.MemoryLookup, 0)
+	seen := make(map[string]struct{})
+
+	appendPending := func(replyTo string) {
+		replyTo = strings.TrimSpace(replyTo)
+		if replyTo == "" {
+			return
+		}
+		if _, known := knownArticleIDs[replyTo]; known {
+			return
+		}
+		if _, exists := seen[replyTo]; exists {
+			return
+		}
+		seen[replyTo] = struct{}{}
+		pendingIDs = append(pendingIDs, replyTo)
+		lookups = append(lookups, otogi.MemoryLookup{
+			TenantID:       event.TenantID,
+			Platform:       event.Source.Platform,
+			ConversationID: event.Conversation.ID,
+			ArticleID:      replyTo,
+		})
+	}
+
+	for _, entry := range replyChain {
+		appendPending(entry.Article.ReplyToArticleID)
+	}
+	for _, entry := range leadingContext {
+		appendPending(entry.Article.ReplyToArticleID)
+	}
+
+	return pendingIDs, lookups
+}
+
+func (m *Module) loadQuotedReplyBatch(
+	ctx context.Context,
+	lookups []otogi.MemoryLookup,
+) (map[string]otogi.Memory, error) {
+	if len(lookups) == 0 {
+		return nil, nil
+	}
+
+	memories, err := m.memory.GetBatch(ctx, lookups)
+	if err != nil {
+		return nil, fmt.Errorf("get batch: %w", err)
+	}
+	if len(memories) == 0 {
+		return nil, nil
+	}
+
+	results := make(map[string]otogi.Memory, len(memories))
+	for lookup, memory := range memories {
+		results[lookup.ArticleID] = memory
+	}
+
+	return results, nil
+}
+
+func (m *Module) lookupQuotedReplyMemory(
+	ctx context.Context,
+	event *otogi.Event,
+	prefetched map[string]otogi.Memory,
+	articleID string,
+) (otogi.Memory, bool, error) {
+	if memory, found := prefetched[articleID]; found {
+		return memory, true, nil
+	}
+
+	lookup := otogi.MemoryLookup{
+		TenantID:       event.TenantID,
+		Platform:       event.Source.Platform,
+		ConversationID: event.Conversation.ID,
+		ArticleID:      articleID,
+	}
+
+	memory, found, err := m.memory.Get(ctx, lookup)
+	if err != nil {
+		return otogi.Memory{}, false, fmt.Errorf("get memory: %w", err)
+	}
+
+	return memory, found, nil
 }
 
 // collectKnownArticleIDs gathers article IDs from the reply chain, leading

@@ -58,7 +58,7 @@ type Module struct {
 	ttl        time.Duration
 	clock      func() time.Time
 
-	mu                       sync.Mutex
+	mu                       sync.RWMutex
 	records                  map[cacheKey]*cacheRecord
 	entities                 map[cacheKey]memorySnapshot
 	events                   map[cacheKey][]otogi.Event
@@ -95,6 +95,7 @@ type conversationStreamEntry struct {
 
 type conversationArticleStream struct {
 	streamKey conversationStreamKey
+	createdAt time.Time
 	sequence  uint64
 }
 

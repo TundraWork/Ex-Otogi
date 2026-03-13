@@ -8,8 +8,7 @@ import (
 
 func (m *Module) upsertEntityLocked(key cacheKey, cached memorySnapshot, now time.Time) {
 	m.upsertKeyLocked(key, now)
-	m.entities[key] = cloneMemorySnapshot(cached)
-	m.upsertConversationArticleLocked(key, cached)
+	m.storeEntityLocked(key, cached)
 	m.trimToCapacityLocked()
 }
 
@@ -17,12 +16,44 @@ func (m *Module) upsertEventLocked(key cacheKey, event *otogi.Event, now time.Ti
 	if event == nil {
 		return
 	}
+	if m.isDuplicateEventLocked(key, event) {
+		return
+	}
+
+	m.upsertKeyLocked(key, now)
+	m.appendEventHistoryLocked(key, event)
+	m.trimToCapacityLocked()
+}
+
+func (m *Module) storeEntityLocked(key cacheKey, cached memorySnapshot) {
+	m.entities[key] = cloneMemorySnapshot(cached)
+	m.upsertConversationArticleLocked(key, cached)
+}
+
+func (m *Module) appendEventHistoryLocked(key cacheKey, event *otogi.Event) {
+	if event == nil {
+		return
+	}
+	if m.isDuplicateEventLocked(key, event) {
+		return
+	}
 
 	cloned := cloneEvent(*event)
 	cloned = m.enrichHistoryEventLocked(key, cloned)
-	m.upsertKeyLocked(key, now)
 	m.events[key] = append(m.events[key], cloned)
-	m.trimToCapacityLocked()
+}
+
+func (m *Module) isDuplicateEventLocked(key cacheKey, event *otogi.Event) bool {
+	if event == nil || event.ID == "" {
+		return false
+	}
+
+	history := m.events[key]
+	if len(history) == 0 {
+		return false
+	}
+
+	return history[len(history)-1].ID == event.ID
 }
 
 func (m *Module) enrichHistoryEventLocked(key cacheKey, event otogi.Event) otogi.Event {

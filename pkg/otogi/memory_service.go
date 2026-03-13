@@ -19,6 +19,11 @@ type MemoryService interface {
 	//
 	// When no entry exists, found is false and err is nil.
 	Get(ctx context.Context, lookup MemoryLookup) (memory Memory, found bool, err error)
+	// GetBatch returns memory for all lookup keys that currently exist.
+	//
+	// Missing entries are omitted from the returned map. Implementations may
+	// coalesce duplicate lookup keys into one storage read.
+	GetBatch(ctx context.Context, lookups []MemoryLookup) (map[MemoryLookup]Memory, error)
 	// GetReplied resolves and returns memory for event.Article.ReplyToArticleID.
 	//
 	// When the event has no reply target or the memory has no entry, found is
