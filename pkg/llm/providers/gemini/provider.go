@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 
 	"google.golang.org/genai"
 )
@@ -143,8 +143,8 @@ func New(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
 // GenerateStream starts one Gemini streaming request.
 func (p *Provider) GenerateStream(
 	ctx context.Context,
-	req otogi.LLMGenerateRequest,
-) (otogi.LLMStream, error) {
+	req ai.LLMGenerateRequest,
+) (ai.LLMStream, error) {
 	if p == nil {
 		return nil, fmt.Errorf("gemini generate stream: nil provider")
 	}
@@ -180,7 +180,7 @@ func (p *Provider) GenerateStream(
 }
 
 func mapGenerateRequest(
-	req otogi.LLMGenerateRequest,
+	req ai.LLMGenerateRequest,
 	defaults requestOptions,
 ) ([]*genai.Content, *genai.GenerateContentConfig, requestOptions, error) {
 	overrides, err := parseMetadataOverrides(req.Metadata)
@@ -201,13 +201,13 @@ func mapGenerateRequest(
 		}
 
 		switch message.Role {
-		case otogi.LLMMessageRoleSystem:
+		case ai.LLMMessageRoleSystem:
 			textParts, err := mapSystemParts(parts)
 			if err != nil {
 				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] system content: %w", index, err)
 			}
 			systemParts = append(systemParts, textParts...)
-		case otogi.LLMMessageRoleUser, otogi.LLMMessageRoleAssistant:
+		case ai.LLMMessageRoleUser, ai.LLMMessageRoleAssistant:
 			role, roleErr := mapMessageRole(message.Role)
 			if roleErr != nil {
 				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] role: %w", index, roleErr)
@@ -275,7 +275,7 @@ func mapGenerateRequest(
 	return contents, config, effective, nil
 }
 
-func mapMessageParts(message otogi.LLMMessage) ([]*genai.Part, error) {
+func mapMessageParts(message ai.LLMMessage) ([]*genai.Part, error) {
 	parts := message.ContentParts()
 	mapped := make([]*genai.Part, 0, len(parts))
 	for index, part := range parts {
@@ -289,11 +289,11 @@ func mapMessageParts(message otogi.LLMMessage) ([]*genai.Part, error) {
 	return mapped, nil
 }
 
-func mapMessagePart(part otogi.LLMMessagePart) (*genai.Part, error) {
+func mapMessagePart(part ai.LLMMessagePart) (*genai.Part, error) {
 	switch part.Type {
-	case otogi.LLMMessagePartTypeText:
+	case ai.LLMMessagePartTypeText:
 		return genai.NewPartFromText(part.Text), nil
-	case otogi.LLMMessagePartTypeImage:
+	case ai.LLMMessagePartTypeImage:
 		if part.Image == nil {
 			return nil, fmt.Errorf("missing image payload")
 		}
@@ -315,11 +315,11 @@ func mapSystemParts(parts []*genai.Part) ([]string, error) {
 	return text, nil
 }
 
-func mapMessageRole(role otogi.LLMMessageRole) (string, error) {
+func mapMessageRole(role ai.LLMMessageRole) (string, error) {
 	switch role {
-	case otogi.LLMMessageRoleUser:
+	case ai.LLMMessageRoleUser:
 		return string(genai.RoleUser), nil
-	case otogi.LLMMessageRoleAssistant:
+	case ai.LLMMessageRoleAssistant:
 		return string(genai.RoleModel), nil
 	default:
 		return "", fmt.Errorf("unsupported role %q", role)
@@ -640,4 +640,4 @@ func safetySettingsOff() []*genai.SafetySetting {
 	}
 }
 
-var _ otogi.LLMProvider = (*Provider)(nil)
+var _ ai.LLMProvider = (*Provider)(nil)

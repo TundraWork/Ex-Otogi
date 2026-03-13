@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
-	wakeCodeDomain            = "otogi.sleep.wake.v2"
+	wakeCodeDomain            = "platform.sleep.wake.v2"
 	wakeCodeVersion      byte = 2
 	wakeCodeTagSize           = 10
 	minSigningKeySize         = 32
@@ -26,15 +26,15 @@ const (
 type codeScope struct {
 	UserID           string
 	ConversationID   string
-	ConversationType otogi.ConversationType
-	SourcePlatform   otogi.Platform
+	ConversationType platform.ConversationType
+	SourcePlatform   platform.Platform
 	SourceID         string
 }
 
 type wakeTargetScope struct {
 	ConversationID   string
-	ConversationType otogi.ConversationType
-	SourcePlatform   otogi.Platform
+	ConversationType platform.ConversationType
+	SourcePlatform   platform.Platform
 	SourceID         string
 }
 
@@ -226,8 +226,8 @@ func decodeWakeCode(decoded []byte) (wakeCodeClaims, []byte, error) {
 		expiryMinute: expiryMinute,
 		target: wakeTargetScope{
 			ConversationID:   conversationID,
-			ConversationType: otogi.ConversationType(conversationType),
-			SourcePlatform:   otogi.Platform(sourcePlatform),
+			ConversationType: platform.ConversationType(conversationType),
+			SourcePlatform:   platform.Platform(sourcePlatform),
 			SourceID:         sourceID,
 		},
 	}, decoded[offset:], nil

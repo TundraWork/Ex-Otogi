@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -44,6 +44,28 @@ func TestConfigValidate(t *testing.T) {
 				})
 			},
 			wantErrSubstring: "duplicate agent name",
+		},
+		{
+			name: "duplicate agent alias is rejected",
+			mutate: func(cfg *Config) {
+				cfg.Agents = append(cfg.Agents, Agent{
+					Name:                 "Gemini",
+					Aliases:              []string{"otogi"},
+					Description:          "secondary",
+					Provider:             "p2",
+					Model:                "m2",
+					SystemPromptTemplate: "You are {{.AgentName}}",
+					RequestTimeout:       500 * time.Millisecond,
+				})
+			},
+			wantErrSubstring: "duplicate agent name",
+		},
+		{
+			name: "empty alias fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].Aliases = []string{" "}
+			},
+			wantErrSubstring: "aliases[0]: empty value",
 		},
 		{
 			name: "agent request timeout cannot exceed global",
@@ -141,7 +163,7 @@ func TestConfigValidate(t *testing.T) {
 			mutate: func(cfg *Config) {
 				cfg.Agents[0].ImageInputs = ImageInputPolicy{
 					Enabled: true,
-					Detail:  otogi.LLMInputImageDetail("extreme"),
+					Detail:  ai.LLMInputImageDetail("extreme"),
 				}
 			},
 			wantErrSubstring: "image_inputs: detail",
@@ -182,15 +204,19 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestCloneConfigDeepCopiesMaps(t *testing.T) {
+func TestCloneConfigDeepCopiesMapsAndAliases(t *testing.T) {
 	t.Parallel()
 
 	original := validModuleConfig()
 	cloned := cloneConfig(original)
 
+	cloned.Agents[0].Aliases[0] = "Assistant"
 	cloned.Agents[0].TemplateVariables["locale"] = "ja-JP"
 	cloned.Agents[0].RequestMetadata["gemini.google_search"] = "false"
 
+	if original.Agents[0].Aliases[0] != "Oto" {
+		t.Fatalf("original aliases mutated: %+v", original.Agents[0].Aliases)
+	}
 	if original.Agents[0].TemplateVariables["locale"] != "en-US" {
 		t.Fatalf("original template_variables mutated: %+v", original.Agents[0].TemplateVariables)
 	}
@@ -239,8 +265,8 @@ func TestResolveImageInputPolicyDefaults(t *testing.T) {
 	if policy.MaxTotalBytes != defaultImageInputMaxTotalBytes {
 		t.Fatalf("max_total_bytes = %d, want %d", policy.MaxTotalBytes, defaultImageInputMaxTotalBytes)
 	}
-	if policy.Detail != otogi.LLMInputImageDetailAuto {
-		t.Fatalf("detail = %q, want %q", policy.Detail, otogi.LLMInputImageDetailAuto)
+	if policy.Detail != ai.LLMInputImageDetailAuto {
+		t.Fatalf("detail = %q, want %q", policy.Detail, ai.LLMInputImageDetailAuto)
 	}
 }
 
@@ -250,6 +276,7 @@ func validModuleConfig() Config {
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",
+				Aliases:              []string{"Oto"},
 				Description:          "primary assistant",
 				Provider:             "provider-main",
 				Model:                "model-main",

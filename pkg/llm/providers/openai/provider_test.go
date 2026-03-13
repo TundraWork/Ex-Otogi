@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -91,7 +91,7 @@ func TestOpenAIProviderGenerateStreamValidation(t *testing.T) {
 		},
 	}
 
-	_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+	_, err := provider.GenerateStream(context.Background(), ai.LLMGenerateRequest{
 		Model: "gpt-5-mini",
 	})
 	if err == nil {
@@ -118,25 +118,25 @@ func TestOpenAIProviderGenerateStreamMapsRequest(t *testing.T) {
 	}
 	provider := &Provider{responses: client}
 
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-5-mini",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
 			{
-				Role: otogi.LLMMessageRoleUser,
-				Parts: []otogi.LLMMessagePart{
-					{Type: otogi.LLMMessagePartTypeText, Text: "hello"},
+				Role: ai.LLMMessageRoleUser,
+				Parts: []ai.LLMMessagePart{
+					{Type: ai.LLMMessagePartTypeText, Text: "hello"},
 					{
-						Type: otogi.LLMMessagePartTypeImage,
-						Image: &otogi.LLMInputImage{
+						Type: ai.LLMMessagePartTypeImage,
+						Image: &ai.LLMInputImage{
 							MIMEType: "image/png",
 							Data:     []byte{1, 2, 3, 4},
-							Detail:   otogi.LLMInputImageDetailHigh,
+							Detail:   ai.LLMInputImageDetailHigh,
 						},
 					},
 				},
 			},
-			{Role: otogi.LLMMessageRoleAssistant, Content: "hi"},
+			{Role: ai.LLMMessageRoleAssistant, Content: "hi"},
 		},
 		MaxOutputTokens: 512,
 		Temperature:     0.35,
@@ -255,10 +255,10 @@ func TestOpenAIProviderGenerateStreamInvalidReasoningMetadata(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+			_, err := provider.GenerateStream(context.Background(), ai.LLMGenerateRequest{
 				Model: "gpt-5-mini",
-				Messages: []otogi.LLMMessage{
-					{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+				Messages: []ai.LLMMessage{
+					{Role: ai.LLMMessageRoleUser, Content: "hello"},
 				},
 				Metadata: testCase.metadata,
 			})
@@ -281,7 +281,7 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 		streamErr        error
 		preCancelContext bool
 		wantDelta        string
-		wantKind         otogi.LLMGenerateChunkKind
+		wantKind         ai.LLMGenerateChunkKind
 		wantErrCheck     func(error) bool
 	}{
 		{
@@ -298,7 +298,7 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 				}`),
 			},
 			wantDelta: "hello",
-			wantKind:  otogi.LLMGenerateChunkKindOutputText,
+			wantKind:  ai.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -316,7 +316,7 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 				}`),
 			},
 			wantDelta: "planning",
-			wantKind:  otogi.LLMGenerateChunkKindThinkingSummary,
+			wantKind:  ai.LLMGenerateChunkKindThinkingSummary,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -343,7 +343,7 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 				}`),
 			},
 			wantDelta: "answer",
-			wantKind:  otogi.LLMGenerateChunkKindOutputText,
+			wantKind:  ai.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -363,7 +363,7 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 				}`),
 			},
 			wantDelta: "ok",
-			wantKind:  otogi.LLMGenerateChunkKindOutputText,
+			wantKind:  ai.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},

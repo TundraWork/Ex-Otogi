@@ -7,11 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
-func newCommandEvent(text string, replyToID string) *otogi.Event {
-	candidate, matched, err := otogi.ParseCommandCandidate(text)
+func newCommandEvent(text string, replyToID string) *platform.Event {
+	candidate, matched, err := platform.ParseCommandCandidate(text)
 	if err != nil {
 		panic(err)
 	}
@@ -19,33 +20,33 @@ func newCommandEvent(text string, replyToID string) *otogi.Event {
 		panic("newCommandEvent expects command text")
 	}
 
-	return &otogi.Event{
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindCommandReceived,
+		Kind:       platform.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-42",
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Actor: otogi.Actor{
+		Actor: platform.Actor{
 			ID:       "user-1",
 			Username: "tester",
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:               "msg-1",
 			Text:             text,
 			ReplyToArticleID: replyToID,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            candidate.Name,
 			Mention:         candidate.Mention,
 			Value:           strings.Join(candidate.Tokens, " "),
 			SourceEventID:   "source-1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        text,
 		},
 	}
@@ -55,73 +56,73 @@ type captureDispatcher struct {
 	sendErr     error
 	messageID   string
 	sendCalls   int
-	lastRequest otogi.SendMessageRequest
+	lastRequest platform.SendMessageRequest
 }
 
 func (d *captureDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.sendCalls++
 	d.lastRequest = request
 	if d.sendErr != nil {
 		return nil, d.sendErr
 	}
 
-	return &otogi.OutboundMessage{
+	return &platform.OutboundMessage{
 		ID: d.messageID,
 	}, nil
 }
 
-func (*captureDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (*captureDispatcher) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (*captureDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (*captureDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (*captureDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 func (*captureDispatcher) ListSinksByPlatform(
 	context.Context,
-	otogi.Platform,
-) ([]otogi.EventSink, error) {
+	platform.Platform,
+) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 type memoryStub struct {
-	replied      otogi.Memory
+	replied      core.Memory
 	repliedFound bool
 	repliedErr   error
 }
 
-func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool, error) {
-	return otogi.Memory{}, false, nil
+func (*memoryStub) Get(context.Context, core.MemoryLookup) (core.Memory, bool, error) {
+	return core.Memory{}, false, nil
 }
 
-func (*memoryStub) GetBatch(context.Context, []otogi.MemoryLookup) (map[otogi.MemoryLookup]otogi.Memory, error) {
+func (*memoryStub) GetBatch(context.Context, []core.MemoryLookup) (map[core.MemoryLookup]core.Memory, error) {
 	return nil, nil
 }
 
-func (m *memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
+func (m *memoryStub) GetReplied(context.Context, *platform.Event) (core.Memory, bool, error) {
 	return m.replied, m.repliedFound, m.repliedErr
 }
 
-func (*memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.ReplyChainEntry, error) {
+func (*memoryStub) GetReplyChain(context.Context, *platform.Event) ([]core.ReplyChainEntry, error) {
 	return nil, nil
 }
 
 func (*memoryStub) ListConversationContextBefore(
 	context.Context,
-	otogi.ConversationContextBeforeQuery,
-) ([]otogi.ConversationContextEntry, error) {
+	core.ConversationContextBeforeQuery,
+) ([]core.ConversationContextEntry, error) {
 	return nil, nil
 }
 
@@ -143,28 +144,28 @@ func (c *fakeGuessClient) Guess(_ context.Context, text string) ([]guessResult, 
 }
 
 type moduleRuntimeStub struct {
-	registry      otogi.ServiceRegistry
-	configs       otogi.ConfigRegistry
+	registry      core.ServiceRegistry
+	configs       core.ConfigRegistry
 	subscribeErr  error
-	lastInterest  otogi.InterestSet
-	lastSpec      otogi.SubscriptionSpec
+	lastInterest  core.InterestSet
+	lastSpec      core.SubscriptionSpec
 	subscribeCall int
 }
 
-func (s *moduleRuntimeStub) Services() otogi.ServiceRegistry {
+func (s *moduleRuntimeStub) Services() core.ServiceRegistry {
 	return s.registry
 }
 
-func (s *moduleRuntimeStub) Config() otogi.ConfigRegistry {
+func (s *moduleRuntimeStub) Config() core.ConfigRegistry {
 	return s.configs
 }
 
 func (s *moduleRuntimeStub) Subscribe(
 	_ context.Context,
-	interest otogi.InterestSet,
-	spec otogi.SubscriptionSpec,
-	_ otogi.EventHandler,
-) (otogi.Subscription, error) {
+	interest core.InterestSet,
+	spec core.SubscriptionSpec,
+	_ core.EventHandler,
+) (core.Subscription, error) {
 	s.subscribeCall++
 	s.lastInterest = interest
 	s.lastSpec = spec
@@ -186,7 +187,7 @@ func (s serviceRegistryStub) Register(string, any) error {
 func (s serviceRegistryStub) Resolve(name string) (any, error) {
 	value, ok := s.values[name]
 	if !ok {
-		return nil, otogi.ErrServiceNotFound
+		return nil, core.ErrServiceNotFound
 	}
 
 	return value, nil
@@ -210,7 +211,7 @@ func (r *configRegistryStub) Register(moduleName string, raw json.RawMessage) er
 		return fmt.Errorf("register module config %s: empty config", moduleName)
 	}
 	if _, exists := r.values[moduleName]; exists {
-		return fmt.Errorf("register module config %s: %w", moduleName, otogi.ErrConfigAlreadyRegistered)
+		return fmt.Errorf("register module config %s: %w", moduleName, core.ErrConfigAlreadyRegistered)
 	}
 
 	r.values[moduleName] = append(json.RawMessage(nil), raw...)
@@ -221,7 +222,7 @@ func (r *configRegistryStub) Register(moduleName string, raw json.RawMessage) er
 func (r *configRegistryStub) Resolve(moduleName string) (json.RawMessage, error) {
 	raw, ok := r.values[moduleName]
 	if !ok {
-		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, otogi.ErrConfigNotFound)
+		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, core.ErrConfigNotFound)
 	}
 
 	return append(json.RawMessage(nil), raw...), nil

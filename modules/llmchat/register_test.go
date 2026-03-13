@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
@@ -18,26 +20,26 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 
 	llmConfigPath := writeRuntimeLLMConfigFile(t, "45s", "openai-main")
 	services := newRecordingServiceRegistry(map[string]any{
-		serviceLogger:                slog.Default(),
-		otogi.ServiceSinkDispatcher:  &sinkDispatcherStub{},
-		otogi.ServiceMemory:          &memoryStub{},
-		otogi.ServiceMarkdownParser:  markdownParserStub{},
-		otogi.ServiceMediaDownloader: &mediaDownloaderStub{},
+		serviceLogger:                   slog.Default(),
+		platform.ServiceSinkDispatcher:  &sinkDispatcherStub{},
+		core.ServiceMemory:              &memoryStub{},
+		platform.ServiceMarkdownParser:  markdownParserStub{},
+		platform.ServiceMediaDownloader: &mediaDownloaderStub{},
 	})
 
 	var (
-		gotInterest otogi.InterestSet
-		gotSpec     otogi.SubscriptionSpec
+		gotInterest core.InterestSet
+		gotSpec     core.SubscriptionSpec
 	)
 	runtime := registrationRuntimeStub{
 		registry: services,
 		configs:  testLLMChatConfigRegistry(t, llmConfigPath),
 		subscribe: func(
 			_ context.Context,
-			interest otogi.InterestSet,
-			spec otogi.SubscriptionSpec,
-			handler otogi.EventHandler,
-		) (otogi.Subscription, error) {
+			interest core.InterestSet,
+			spec core.SubscriptionSpec,
+			handler core.EventHandler,
+		) (core.Subscription, error) {
 			if handler == nil {
 				t.Fatal("expected llmchat handler")
 			}
@@ -55,6 +57,9 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 
 	if module.cfg.RequestTimeout != 45*time.Second {
 		t.Fatalf("request timeout = %s, want 45s", module.cfg.RequestTimeout)
+	}
+	if len(module.cfg.Agents) != 1 || len(module.cfg.Agents[0].Aliases) != 1 || module.cfg.Agents[0].Aliases[0] != "Oto" {
+		t.Fatalf("agent aliases = %+v, want [Oto]", module.cfg.Agents)
 	}
 	if module.dispatcher == nil {
 		t.Fatal("expected sink dispatcher to be configured")
@@ -88,17 +93,17 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	if !gotInterest.RequireArticle {
 		t.Fatal("expected article requirement in llmchat subscription")
 	}
-	if len(gotInterest.Kinds) != 1 || gotInterest.Kinds[0] != otogi.EventKindArticleCreated {
-		t.Fatalf("interest kinds = %v, want [%s]", gotInterest.Kinds, otogi.EventKindArticleCreated)
+	if len(gotInterest.Kinds) != 1 || gotInterest.Kinds[0] != platform.EventKindArticleCreated {
+		t.Fatalf("interest kinds = %v, want [%s]", gotInterest.Kinds, platform.EventKindArticleCreated)
 	}
 
-	resolved, err := services.Resolve(otogi.ServiceLLMProviderRegistry)
+	resolved, err := services.Resolve(ai.ServiceLLMProviderRegistry)
 	if err != nil {
 		t.Fatalf("resolve provider registry failed: %v", err)
 	}
-	registry, ok := resolved.(otogi.LLMProviderRegistry)
+	registry, ok := resolved.(ai.LLMProviderRegistry)
 	if !ok {
-		t.Fatalf("resolved provider registry type = %T, want otogi.LLMProviderRegistry", resolved)
+		t.Fatalf("resolved provider registry type = %T, want ai.LLMProviderRegistry", resolved)
 	}
 	if _, err := registry.Resolve("openai-main"); err != nil {
 		t.Fatalf("resolve openai-main failed: %v", err)
@@ -110,10 +115,10 @@ func TestOnRegisterUsesLLMConfigEnvOverride(t *testing.T) {
 	t.Setenv("OTOGI_LLM_CONFIG_FILE", llmConfigPath)
 
 	services := newRecordingServiceRegistry(map[string]any{
-		serviceLogger:               slog.Default(),
-		otogi.ServiceSinkDispatcher: &sinkDispatcherStub{},
-		otogi.ServiceMemory:         &memoryStub{},
-		otogi.ServiceMarkdownParser: markdownParserStub{},
+		serviceLogger:                  slog.Default(),
+		platform.ServiceSinkDispatcher: &sinkDispatcherStub{},
+		core.ServiceMemory:             &memoryStub{},
+		platform.ServiceMarkdownParser: markdownParserStub{},
 	})
 	runtime := registrationRuntimeStub{
 		registry: services,
@@ -157,6 +162,7 @@ func writeRuntimeLLMConfigFile(t *testing.T, requestTimeout string, providerKey 
 		"agents":[
 			{
 				"name":"Otogi",
+				"aliases":["Oto"],
 				"description":"Assistant",
 				"provider":%q,
 				"model":"gpt-5-mini",
@@ -173,7 +179,7 @@ func writeRuntimeLLMConfigFile(t *testing.T, requestTimeout string, providerKey 
 	return path
 }
 
-func testLLMChatConfigRegistry(t *testing.T, configFile string) otogi.ConfigRegistry {
+func testLLMChatConfigRegistry(t *testing.T, configFile string) core.ConfigRegistry {
 	t.Helper()
 
 	raw, err := json.Marshal(fileModuleConfig{ConfigFile: configFile})
@@ -190,30 +196,30 @@ func testLLMChatConfigRegistry(t *testing.T, configFile string) otogi.ConfigRegi
 }
 
 type registrationRuntimeStub struct {
-	registry  otogi.ServiceRegistry
-	configs   otogi.ConfigRegistry
+	registry  core.ServiceRegistry
+	configs   core.ConfigRegistry
 	subscribe func(
 		ctx context.Context,
-		interest otogi.InterestSet,
-		spec otogi.SubscriptionSpec,
-		handler otogi.EventHandler,
-	) (otogi.Subscription, error)
+		interest core.InterestSet,
+		spec core.SubscriptionSpec,
+		handler core.EventHandler,
+	) (core.Subscription, error)
 }
 
-func (s registrationRuntimeStub) Services() otogi.ServiceRegistry {
+func (s registrationRuntimeStub) Services() core.ServiceRegistry {
 	return s.registry
 }
 
-func (s registrationRuntimeStub) Config() otogi.ConfigRegistry {
+func (s registrationRuntimeStub) Config() core.ConfigRegistry {
 	return s.configs
 }
 
 func (s registrationRuntimeStub) Subscribe(
 	ctx context.Context,
-	interest otogi.InterestSet,
-	spec otogi.SubscriptionSpec,
-	handler otogi.EventHandler,
-) (otogi.Subscription, error) {
+	interest core.InterestSet,
+	spec core.SubscriptionSpec,
+	handler core.EventHandler,
+) (core.Subscription, error) {
 	if s.subscribe != nil {
 		return s.subscribe(ctx, interest, spec, handler)
 	}
@@ -254,7 +260,7 @@ func (r *recordingServiceRegistry) Register(name string, service any) error {
 		return fmt.Errorf("register service %s: nil service", name)
 	}
 	if _, exists := r.values[name]; exists {
-		return fmt.Errorf("register service %s: %w", name, otogi.ErrServiceAlreadyRegistered)
+		return fmt.Errorf("register service %s: %w", name, core.ErrServiceAlreadyRegistered)
 	}
 
 	r.values[name] = service
@@ -265,7 +271,7 @@ func (r *recordingServiceRegistry) Register(name string, service any) error {
 func (r *recordingServiceRegistry) Resolve(name string) (any, error) {
 	service, exists := r.values[name]
 	if !exists {
-		return nil, otogi.ErrServiceNotFound
+		return nil, core.ErrServiceNotFound
 	}
 
 	return service, nil
@@ -289,7 +295,7 @@ func (r *configRegistryStub) Register(moduleName string, raw json.RawMessage) er
 		return fmt.Errorf("register module config %s: empty config", moduleName)
 	}
 	if _, exists := r.configs[moduleName]; exists {
-		return fmt.Errorf("register module config %s: %w", moduleName, otogi.ErrConfigAlreadyRegistered)
+		return fmt.Errorf("register module config %s: %w", moduleName, core.ErrConfigAlreadyRegistered)
 	}
 
 	r.configs[moduleName] = append(json.RawMessage(nil), raw...)
@@ -300,7 +306,7 @@ func (r *configRegistryStub) Register(moduleName string, raw json.RawMessage) er
 func (r *configRegistryStub) Resolve(moduleName string) (json.RawMessage, error) {
 	raw, exists := r.configs[moduleName]
 	if !exists {
-		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, otogi.ErrConfigNotFound)
+		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, core.ErrConfigNotFound)
 	}
 
 	return append(json.RawMessage(nil), raw...), nil

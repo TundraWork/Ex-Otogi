@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestExtractAbbreviations(t *testing.T) {
@@ -55,7 +55,7 @@ func TestUsageMessageHasValidEntities(t *testing.T) {
 	if !strings.Contains(message.Text, "/srh") {
 		t.Fatalf("usage text = %q, missing alias command", message.Text)
 	}
-	if err := otogi.ValidateTextEntities(message.Text, message.Entities); err != nil {
+	if err := platform.ValidateTextEntities(message.Text, message.Entities); err != nil {
 		t.Fatalf("usage entities invalid: %v", err)
 	}
 }
@@ -84,7 +84,7 @@ func TestRenderGuessResultsHasValidEntities(t *testing.T) {
 			t.Fatalf("rendered text = %q, missing %q", message.Text, want)
 		}
 	}
-	if err := otogi.ValidateTextEntities(message.Text, message.Entities); err != nil {
+	if err := platform.ValidateTextEntities(message.Text, message.Entities); err != nil {
 		t.Fatalf("rendered entities invalid: %v", err)
 	}
 }

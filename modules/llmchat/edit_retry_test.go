@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestRetryEditMessageExhaustsAtMaxAttempts(t *testing.T) {
@@ -29,7 +29,7 @@ func TestRetryEditMessageExhaustsAtMaxAttempts(t *testing.T) {
 		return nil
 	}
 
-	err := module.retryEditMessage(context.Background(), otogi.EditMessageRequest{
+	err := module.retryEditMessage(context.Background(), platform.EditMessageRequest{
 		MessageID: "msg-1",
 		Text:      "hello",
 	})
@@ -67,7 +67,7 @@ func TestRetryEditMessageSucceedsWithinMaxAttempts(t *testing.T) {
 		return nil
 	}
 
-	if err := module.retryEditMessage(context.Background(), otogi.EditMessageRequest{
+	if err := module.retryEditMessage(context.Background(), platform.EditMessageRequest{
 		MessageID: "msg-1",
 		Text:      "hello",
 	}); err != nil {

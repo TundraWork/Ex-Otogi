@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 // ConfigRegistry is the default in-memory per-module configuration store.
@@ -34,7 +34,7 @@ func (r *ConfigRegistry) Register(moduleName string, raw json.RawMessage) error 
 	defer r.mu.Unlock()
 
 	if _, exists := r.configs[moduleName]; exists {
-		return fmt.Errorf("register module config %s: %w", moduleName, otogi.ErrConfigAlreadyRegistered)
+		return fmt.Errorf("register module config %s: %w", moduleName, core.ErrConfigAlreadyRegistered)
 	}
 
 	r.configs[moduleName] = append(json.RawMessage(nil), raw...)
@@ -53,7 +53,7 @@ func (r *ConfigRegistry) Resolve(moduleName string) (json.RawMessage, error) {
 
 	raw, exists := r.configs[moduleName]
 	if !exists {
-		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, otogi.ErrConfigNotFound)
+		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, core.ErrConfigNotFound)
 	}
 
 	return append(json.RawMessage(nil), raw...), nil

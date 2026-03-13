@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 func testSigningKey() []byte {
 	return []byte("0123456789abcdefghijklmnopqrstuv")
 }
 
-func testConfigRegistry(t *testing.T) otogi.ConfigRegistry {
+func testConfigRegistry(t *testing.T) core.ConfigRegistry {
 	t.Helper()
 
 	encoded := base64.RawURLEncoding.EncodeToString(testSigningKey())
@@ -48,7 +48,7 @@ func (r *configRegistryStub) Register(moduleName string, raw json.RawMessage) er
 		return fmt.Errorf("register module config %s: empty config", moduleName)
 	}
 	if _, exists := r.configs[moduleName]; exists {
-		return fmt.Errorf("register module config %s: %w", moduleName, otogi.ErrConfigAlreadyRegistered)
+		return fmt.Errorf("register module config %s: %w", moduleName, core.ErrConfigAlreadyRegistered)
 	}
 
 	r.configs[moduleName] = append(json.RawMessage(nil), raw...)
@@ -59,7 +59,7 @@ func (r *configRegistryStub) Register(moduleName string, raw json.RawMessage) er
 func (r *configRegistryStub) Resolve(moduleName string) (json.RawMessage, error) {
 	raw, exists := r.configs[moduleName]
 	if !exists {
-		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, otogi.ErrConfigNotFound)
+		return nil, fmt.Errorf("resolve module config %s: %w", moduleName, core.ErrConfigNotFound)
 	}
 
 	return append(json.RawMessage(nil), raw...), nil

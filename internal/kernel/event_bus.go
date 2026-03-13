@@ -8,7 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // EventBus is the kernel asynchronous pub/sub implementation.
@@ -42,7 +43,7 @@ func NewEventBus(
 }
 
 // Publish dispatches an event to all matching subscribers.
-func (b *EventBus) Publish(ctx context.Context, event *otogi.Event) error {
+func (b *EventBus) Publish(ctx context.Context, event *platform.Event) error {
 	eventKind := eventKindForLog(event)
 
 	if err := event.Validate(); err != nil {
@@ -60,7 +61,7 @@ func (b *EventBus) Publish(ctx context.Context, event *otogi.Event) error {
 			continue
 		}
 		if err := sub.enqueue(ctx, event); err != nil {
-			if errors.Is(err, otogi.ErrEventDropped) || errors.Is(err, otogi.ErrSubscriptionClosed) {
+			if errors.Is(err, core.ErrEventDropped) || errors.Is(err, core.ErrSubscriptionClosed) {
 				b.reportAsyncError(ctx, sub.spec.Name, err)
 				continue
 			}
@@ -78,10 +79,10 @@ func (b *EventBus) Publish(ctx context.Context, event *otogi.Event) error {
 // Subscribe registers a bounded asynchronous consumer.
 func (b *EventBus) Subscribe(
 	ctx context.Context,
-	interest otogi.InterestSet,
-	spec otogi.SubscriptionSpec,
-	handler otogi.EventHandler,
-) (otogi.Subscription, error) {
+	interest core.InterestSet,
+	spec core.SubscriptionSpec,
+	handler core.EventHandler,
+) (core.Subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("subscribe %s: %w", spec.Name, err)
 	}
@@ -153,7 +154,7 @@ func (b *EventBus) snapshotSubscriptions() ([]*busSubscription, error) {
 }
 
 // normalizeSpec applies runtime defaults when callers omit optional fields.
-func (b *EventBus) normalizeSpec(spec otogi.SubscriptionSpec, subID int64) otogi.SubscriptionSpec {
+func (b *EventBus) normalizeSpec(spec core.SubscriptionSpec, subID int64) core.SubscriptionSpec {
 	if spec.Name == "" {
 		spec.Name = fmt.Sprintf("subscription-%d", subID)
 	}
@@ -167,7 +168,7 @@ func (b *EventBus) normalizeSpec(spec otogi.SubscriptionSpec, subID int64) otogi
 		spec.HandlerTimeout = b.defaultHandlerTimeout
 	}
 	if spec.Backpressure == "" {
-		spec.Backpressure = otogi.BackpressureDropNewest
+		spec.Backpressure = core.BackpressureDropNewest
 	}
 
 	return spec
@@ -204,10 +205,10 @@ func (b *EventBus) reportAsyncError(ctx context.Context, scope string, err error
 // Queue closure is driven by context cancellation rather than channel close.
 type busSubscription struct {
 	id       int64
-	interest otogi.InterestSet
-	spec     otogi.SubscriptionSpec
-	handler  otogi.EventHandler
-	queue    chan *otogi.Event
+	interest core.InterestSet
+	spec     core.SubscriptionSpec
+	handler  core.EventHandler
+	queue    chan *platform.Event
 	ctx      context.Context
 	cancel   context.CancelFunc
 	done     chan struct{}
@@ -219,9 +220,9 @@ type busSubscription struct {
 // newBusSubscription creates and starts workers immediately.
 func newBusSubscription(
 	subID int64,
-	interest otogi.InterestSet,
-	spec otogi.SubscriptionSpec,
-	handler otogi.EventHandler,
+	interest core.InterestSet,
+	spec core.SubscriptionSpec,
+	handler core.EventHandler,
 	bus *EventBus,
 ) *busSubscription {
 	subCtx, cancel := context.WithCancel(context.Background())
@@ -230,7 +231,7 @@ func newBusSubscription(
 		interest: cloneInterestSet(interest),
 		spec:     spec,
 		handler:  handler,
-		queue:    make(chan *otogi.Event, spec.Buffer),
+		queue:    make(chan *platform.Event, spec.Buffer),
 		ctx:      subCtx,
 		cancel:   cancel,
 		done:     make(chan struct{}),
@@ -243,16 +244,16 @@ func newBusSubscription(
 }
 
 // cloneInterestSet copies owned slices so caller mutation does not affect matching.
-func cloneInterestSet(interest otogi.InterestSet) otogi.InterestSet {
+func cloneInterestSet(interest core.InterestSet) core.InterestSet {
 	cloned := interest
 	if len(interest.Kinds) > 0 {
-		cloned.Kinds = append([]otogi.EventKind(nil), interest.Kinds...)
+		cloned.Kinds = append([]platform.EventKind(nil), interest.Kinds...)
 	}
 	if len(interest.Sources) > 0 {
-		cloned.Sources = append([]otogi.EventSource(nil), interest.Sources...)
+		cloned.Sources = append([]platform.EventSource(nil), interest.Sources...)
 	}
 	if len(interest.MediaTypes) > 0 {
-		cloned.MediaTypes = append([]otogi.MediaType(nil), interest.MediaTypes...)
+		cloned.MediaTypes = append([]platform.MediaType(nil), interest.MediaTypes...)
 	}
 	if len(interest.CommandNames) > 0 {
 		cloned.CommandNames = append([]string(nil), interest.CommandNames...)
@@ -272,35 +273,35 @@ func (s *busSubscription) Close(ctx context.Context) error {
 }
 
 // enqueue applies the configured backpressure policy for the subscriber queue.
-func (s *busSubscription) enqueue(ctx context.Context, event *otogi.Event) error {
+func (s *busSubscription) enqueue(ctx context.Context, event *platform.Event) error {
 	if s.closed.Load() {
-		return fmt.Errorf("enqueue %s: %w", s.spec.Name, otogi.ErrSubscriptionClosed)
+		return fmt.Errorf("enqueue %s: %w", s.spec.Name, core.ErrSubscriptionClosed)
 	}
 
 	switch s.spec.Backpressure {
-	case otogi.BackpressureDropNewest:
+	case core.BackpressureDropNewest:
 		return s.enqueueDropNewest(event)
-	case otogi.BackpressureDropOldest:
+	case core.BackpressureDropOldest:
 		return s.enqueueDropOldest(event)
-	case otogi.BackpressureBlock:
+	case core.BackpressureBlock:
 		return s.enqueueBlock(ctx, event)
 	default:
-		return fmt.Errorf("enqueue %s: %w", s.spec.Name, otogi.ErrInvalidSubscription)
+		return fmt.Errorf("enqueue %s: %w", s.spec.Name, core.ErrInvalidSubscription)
 	}
 }
 
 // enqueueDropNewest drops the incoming event when the queue is full.
-func (s *busSubscription) enqueueDropNewest(event *otogi.Event) error {
+func (s *busSubscription) enqueueDropNewest(event *platform.Event) error {
 	select {
 	case s.queue <- event:
 		return nil
 	default:
-		return fmt.Errorf("enqueue %s: %w", s.spec.Name, otogi.ErrEventDropped)
+		return fmt.Errorf("enqueue %s: %w", s.spec.Name, core.ErrEventDropped)
 	}
 }
 
 // enqueueDropOldest evicts one queued event before enqueueing the new event.
-func (s *busSubscription) enqueueDropOldest(event *otogi.Event) error {
+func (s *busSubscription) enqueueDropOldest(event *platform.Event) error {
 	attemptLimit := cap(s.queue) + 1
 	if attemptLimit < 1 {
 		attemptLimit = 1
@@ -315,13 +316,13 @@ func (s *busSubscription) enqueueDropOldest(event *otogi.Event) error {
 		}
 	}
 
-	return fmt.Errorf("enqueue %s: %w", s.spec.Name, otogi.ErrEventDropped)
+	return fmt.Errorf("enqueue %s: %w", s.spec.Name, core.ErrEventDropped)
 }
 
 // enqueueBlock waits for queue capacity or caller context cancellation.
-func (s *busSubscription) enqueueBlock(ctx context.Context, event *otogi.Event) error {
+func (s *busSubscription) enqueueBlock(ctx context.Context, event *platform.Event) error {
 	if originSubID, ok := publishOriginSubscriptionID(ctx); ok && originSubID == s.id {
-		return fmt.Errorf("enqueue %s: self publish under block backpressure: %w", s.spec.Name, otogi.ErrEventDropped)
+		return fmt.Errorf("enqueue %s: self publish under block backpressure: %w", s.spec.Name, core.ErrEventDropped)
 	}
 
 	select {
@@ -365,7 +366,7 @@ func (s *busSubscription) runWorker(workerWG *sync.WaitGroup, workerID int) {
 }
 
 // handleEvent executes one handler call with optional timeout and panic recovery.
-func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *otogi.Event) error {
+func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *platform.Event) error {
 	scope := fmt.Sprintf("subscription %s worker %d", s.spec.Name, workerID)
 	if err := event.Validate(); err != nil {
 		return fmt.Errorf("%s handle invalid event: %w", scope, err)
@@ -473,7 +474,7 @@ func (s *busSubscription) waitForQueueDrain(ctx context.Context) error {
 	}
 }
 
-func eventKindForLog(event *otogi.Event) string {
+func eventKindForLog(event *platform.Event) string {
 	if event == nil {
 		return "<nil>"
 	}

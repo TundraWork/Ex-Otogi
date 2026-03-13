@@ -1,4 +1,4 @@
-package otogi
+package core
 
 import (
 	"context"

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 )
@@ -43,7 +43,7 @@ func TestDefaultGotdUpdateMapperCapturesPhotoMediaLocator(t *testing.T) {
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+			100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 		},
 		updateClass: "updateNewMessage",
 	})
@@ -54,14 +54,14 @@ func TestDefaultGotdUpdateMapperCapturesPhotoMediaLocator(t *testing.T) {
 		t.Fatal("expected accepted message")
 	}
 
-	record, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+	record, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "100",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "777",
 		AttachmentID: "987",
@@ -120,7 +120,7 @@ func TestDefaultGotdUpdateMapperCapturesDocumentMediaLocator(t *testing.T) {
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: &tg.InputPeerChannel{ChannelID: 500, AccessHash: 111},
 			},
 		},
@@ -133,14 +133,14 @@ func TestDefaultGotdUpdateMapperCapturesDocumentMediaLocator(t *testing.T) {
 		t.Fatal("expected accepted message")
 	}
 
-	record, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+	record, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "500",
-			Type: otogi.ConversationTypeChannel,
+			Type: platform.ConversationTypeChannel,
 		},
 		ArticleID:    "778",
 		AttachmentID: "4321",
@@ -172,14 +172,14 @@ func TestDefaultGotdUpdateMapperClearsMediaLocatorWhenMediaDisappears(t *testing
 
 	cache := newMediaLocatorCache()
 	cache.RememberMessage(
-		ChatRef{ID: "100", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "100", Type: platform.ConversationTypeGroup},
 		"777",
 		&tg.InputPeerChat{ChatID: 100},
 		[]messageMediaLocator{
 			{
 				attachment: MediaPayload{
 					ID:   "987",
-					Type: otogi.MediaTypePhoto,
+					Type: platform.MediaTypePhoto,
 				},
 				location: &tg.InputPhotoFileLocation{
 					ID:            987,
@@ -193,7 +193,7 @@ func TestDefaultGotdUpdateMapperClearsMediaLocatorWhenMediaDisappears(t *testing
 	mapper := NewDefaultGotdUpdateMapper(WithMediaLocatorCache(cache))
 
 	mapper.rememberMessageMediaLocators(
-		ChatRef{ID: "100", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "100", Type: platform.ConversationTypeGroup},
 		&tg.Message{
 			ID:     777,
 			PeerID: &tg.PeerChat{ChatID: 100},
@@ -201,10 +201,10 @@ func TestDefaultGotdUpdateMapperClearsMediaLocatorWhenMediaDisappears(t *testing
 		gotdUpdateEnvelope{},
 	)
 
-	if _, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Conversation: otogi.Conversation{
+	if _, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Conversation: platform.Conversation{
 			ID:   "100",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "777",
 		AttachmentID: "987",
@@ -217,31 +217,31 @@ func TestMediaLocatorCacheReplacesMessageEntries(t *testing.T) {
 	t.Parallel()
 
 	cache := newMediaLocatorCache()
-	chat := ChatRef{ID: "100", Type: otogi.ConversationTypeGroup}
+	chat := ChatRef{ID: "100", Type: platform.ConversationTypeGroup}
 	peer := &tg.InputPeerChat{ChatID: 100}
 
 	cache.RememberMessage(chat, "55", peer, []messageMediaLocator{
 		{
-			attachment: MediaPayload{ID: "old", Type: otogi.MediaTypeDocument},
+			attachment: MediaPayload{ID: "old", Type: platform.MediaTypeDocument},
 			location:   &tg.InputDocumentFileLocation{ID: 1, AccessHash: 10},
 		},
 	})
 	cache.RememberMessage(chat, "55", peer, []messageMediaLocator{
 		{
-			attachment: MediaPayload{ID: "new", Type: otogi.MediaTypeDocument},
+			attachment: MediaPayload{ID: "new", Type: platform.MediaTypeDocument},
 			location:   &tg.InputDocumentFileLocation{ID: 2, AccessHash: 20},
 		},
 	})
 
-	if _, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Conversation: otogi.Conversation{ID: "100", Type: otogi.ConversationTypeGroup},
+	if _, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Conversation: platform.Conversation{ID: "100", Type: platform.ConversationTypeGroup},
 		ArticleID:    "55",
 		AttachmentID: "old",
 	}); ok {
 		t.Fatal("expected replaced attachment to be evicted")
 	}
-	record, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Conversation: otogi.Conversation{ID: "100", Type: otogi.ConversationTypeGroup},
+	record, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Conversation: platform.Conversation{ID: "100", Type: platform.ConversationTypeGroup},
 		ArticleID:    "55",
 		AttachmentID: "new",
 	})
@@ -261,24 +261,24 @@ func TestMediaLocatorCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	t.Parallel()
 
 	cache := newMediaLocatorCache(2)
-	chat := ChatRef{ID: "100", Type: otogi.ConversationTypeGroup}
+	chat := ChatRef{ID: "100", Type: platform.ConversationTypeGroup}
 	peer := &tg.InputPeerChat{ChatID: 100}
 
 	cache.RememberMessage(chat, "1", peer, []messageMediaLocator{
 		{
-			attachment: MediaPayload{ID: "a", Type: otogi.MediaTypeDocument},
+			attachment: MediaPayload{ID: "a", Type: platform.MediaTypeDocument},
 			location:   &tg.InputDocumentFileLocation{ID: 1, AccessHash: 10},
 		},
 	})
 	cache.RememberMessage(chat, "2", peer, []messageMediaLocator{
 		{
-			attachment: MediaPayload{ID: "b", Type: otogi.MediaTypeDocument},
+			attachment: MediaPayload{ID: "b", Type: platform.MediaTypeDocument},
 			location:   &tg.InputDocumentFileLocation{ID: 2, AccessHash: 20},
 		},
 	})
 
-	if _, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Conversation: otogi.Conversation{ID: "100", Type: otogi.ConversationTypeGroup},
+	if _, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Conversation: platform.Conversation{ID: "100", Type: platform.ConversationTypeGroup},
 		ArticleID:    "1",
 		AttachmentID: "a",
 	}); !ok {
@@ -287,27 +287,27 @@ func TestMediaLocatorCacheEvictsLeastRecentlyUsed(t *testing.T) {
 
 	cache.RememberMessage(chat, "3", peer, []messageMediaLocator{
 		{
-			attachment: MediaPayload{ID: "c", Type: otogi.MediaTypeDocument},
+			attachment: MediaPayload{ID: "c", Type: platform.MediaTypeDocument},
 			location:   &tg.InputDocumentFileLocation{ID: 3, AccessHash: 30},
 		},
 	})
 
-	if _, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Conversation: otogi.Conversation{ID: "100", Type: otogi.ConversationTypeGroup},
+	if _, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Conversation: platform.Conversation{ID: "100", Type: platform.ConversationTypeGroup},
 		ArticleID:    "2",
 		AttachmentID: "b",
 	}); ok {
 		t.Fatal("expected least-recently-used attachment to be evicted")
 	}
-	if _, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Conversation: otogi.Conversation{ID: "100", Type: otogi.ConversationTypeGroup},
+	if _, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Conversation: platform.Conversation{ID: "100", Type: platform.ConversationTypeGroup},
 		ArticleID:    "1",
 		AttachmentID: "a",
 	}); !ok {
 		t.Fatal("expected recently touched attachment to remain cached")
 	}
-	if _, ok := cache.Lookup(otogi.MediaDownloadRequest{
-		Conversation: otogi.Conversation{ID: "100", Type: otogi.ConversationTypeGroup},
+	if _, ok := cache.Lookup(platform.MediaDownloadRequest{
+		Conversation: platform.Conversation{ID: "100", Type: platform.ConversationTypeGroup},
 		ArticleID:    "3",
 		AttachmentID: "c",
 	}); !ok {

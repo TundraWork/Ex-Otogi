@@ -1,9 +1,11 @@
-package otogi
+package core
 
 import (
 	"context"
 	"testing"
 	"time"
+
+	. "ex-otogi/pkg/otogi/platform"
 )
 
 func TestMemoryLookupValidate(t *testing.T) {

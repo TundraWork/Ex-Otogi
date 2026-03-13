@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -21,12 +21,12 @@ var abbreviationPattern = regexp.MustCompile(`[A-Za-z0-9]+`)
 
 type renderedMessage struct {
 	Text     string
-	Entities []otogi.TextEntity
+	Entities []platform.TextEntity
 }
 
 type richTextBuilder struct {
 	text     strings.Builder
-	entities []otogi.TextEntity
+	entities []platform.TextEntity
 	offset   int
 }
 
@@ -39,13 +39,13 @@ func (b *richTextBuilder) Write(text string) {
 	b.offset += utf8.RuneCountInString(text)
 }
 
-func (b *richTextBuilder) WriteEntity(text string, entityType otogi.TextEntityType) {
+func (b *richTextBuilder) WriteEntity(text string, entityType platform.TextEntityType) {
 	if text == "" {
 		return
 	}
 
 	length := utf8.RuneCountInString(text)
-	b.entities = append(b.entities, otogi.TextEntity{
+	b.entities = append(b.entities, platform.TextEntity{
 		Type:   entityType,
 		Offset: b.offset,
 		Length: length,
@@ -58,7 +58,7 @@ func (b *richTextBuilder) Message() renderedMessage {
 		Text: b.text.String(),
 	}
 	if len(b.entities) > 0 {
-		message.Entities = append([]otogi.TextEntity(nil), b.entities...)
+		message.Entities = append([]platform.TextEntity(nil), b.entities...)
 	}
 
 	return message
@@ -67,13 +67,13 @@ func (b *richTextBuilder) Message() renderedMessage {
 func usageMessage() renderedMessage {
 	var builder richTextBuilder
 	builder.Write("用法：\n")
-	builder.WriteEntity("/nbnhhsh <欲翻译的内容>", otogi.TextEntityTypeCode)
+	builder.WriteEntity("/nbnhhsh <欲翻译的内容>", platform.TextEntityTypeCode)
 	builder.Write("\n或使用 ")
-	builder.WriteEntity("/nbnhhsh", otogi.TextEntityTypeCode)
+	builder.WriteEntity("/nbnhhsh", platform.TextEntityTypeCode)
 	builder.Write(" 回复您想翻译的消息。\n注：如果觉得 ")
-	builder.WriteEntity("/nbnhhsh", otogi.TextEntityTypeCode)
+	builder.WriteEntity("/nbnhhsh", platform.TextEntityTypeCode)
 	builder.Write(" 太长，用 ")
-	builder.WriteEntity("/srh", otogi.TextEntityTypeCode)
+	builder.WriteEntity("/srh", platform.TextEntityTypeCode)
 	builder.Write(" 也可以。")
 
 	return builder.Message()
@@ -95,26 +95,26 @@ func renderGuessResults(results []guessResult) renderedMessage {
 		}
 		renderedCount++
 
-		builder.WriteEntity(result.Name, otogi.TextEntityTypeBold)
+		builder.WriteEntity(result.Name, platform.TextEntityTypeBold)
 		builder.Write("\n")
 
 		switch {
 		case len(result.Trans) > 1:
-			builder.WriteEntity("它可能的含义有：", otogi.TextEntityTypeItalic)
+			builder.WriteEntity("它可能的含义有：", platform.TextEntityTypeItalic)
 			builder.Write("\n")
 			builder.Write(strings.Join(result.Trans, " / "))
 		case len(result.Trans) == 1:
-			builder.WriteEntity("它应该是：", otogi.TextEntityTypeItalic)
+			builder.WriteEntity("它应该是：", platform.TextEntityTypeItalic)
 			builder.Write("\n")
 			builder.Write(result.Trans[0])
 		case len(result.Inputting) > 0:
-			builder.WriteEntity("我没听说过它，但我猜它也许是：", otogi.TextEntityTypeItalic)
+			builder.WriteEntity("我没听说过它，但我猜它也许是：", platform.TextEntityTypeItalic)
 			builder.Write("\n")
 			builder.Write(strings.Join(result.Inputting, " / "))
 		default:
 			builder.WriteEntity(
 				"可能不是抽象话，也可能太抽象了，你可以试试 /translate",
-				otogi.TextEntityTypeItalic,
+				platform.TextEntityTypeItalic,
 			)
 		}
 	}

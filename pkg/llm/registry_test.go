@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 )
 
 func TestRegistryResolve(t *testing.T) {
 	t.Parallel()
 
 	provider := &providerStub{}
-	registry, err := NewRegistry(map[string]otogi.LLMProvider{
+	registry, err := NewRegistry(map[string]ai.LLMProvider{
 		"openai-main": provider,
 	})
 	if err != nil {
@@ -69,6 +69,6 @@ func TestRegistryResolve(t *testing.T) {
 
 type providerStub struct{}
 
-func (providerStub) GenerateStream(context.Context, otogi.LLMGenerateRequest) (otogi.LLMStream, error) {
+func (providerStub) GenerateStream(context.Context, ai.LLMGenerateRequest) (ai.LLMStream, error) {
 	return nil, nil
 }

@@ -1,4 +1,4 @@
-package otogi
+package platform
 
 import (
 	"errors"
@@ -43,10 +43,48 @@ func TestOutboundRequestValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "send message valid with tags",
+			check: func() error {
+				return SendMessageRequest{
+					Target: validTarget,
+					Text:   "hello",
+					Tags: map[string]string{
+						"llmchat.agent": "Otogi",
+					},
+				}.Validate()
+			},
+		},
+		{
 			name: "send message missing text",
 			check: func() error {
 				return SendMessageRequest{
 					Target: validTarget,
+				}.Validate()
+			},
+			wantErr: true,
+		},
+		{
+			name: "send message invalid empty tag key",
+			check: func() error {
+				return SendMessageRequest{
+					Target: validTarget,
+					Text:   "hello",
+					Tags: map[string]string{
+						"": "value",
+					},
+				}.Validate()
+			},
+			wantErr: true,
+		},
+		{
+			name: "send message invalid empty tag value",
+			check: func() error {
+				return SendMessageRequest{
+					Target: validTarget,
+					Text:   "hello",
+					Tags: map[string]string{
+						"llmchat.agent": " ",
+					},
 				}.Validate()
 			},
 			wantErr: true,

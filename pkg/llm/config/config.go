@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 )
 
 const (
@@ -113,8 +113,10 @@ type GeminiRequestDefaults struct {
 
 // Agent describes one configured llmchat agent.
 type Agent struct {
-	// Name is the trigger keyword for this agent.
+	// Name is the primary trigger keyword for this agent.
 	Name string
+	// Aliases are additional trigger keywords that route to this agent.
+	Aliases []string
 	// Description is a short operator-facing explanation for this agent.
 	Description string
 	// Provider identifies which provider profile to resolve.
@@ -144,22 +146,22 @@ type Agent struct {
 // ContextPolicy controls how one agent builds structured conversation context.
 type ContextPolicy struct {
 	// ReplyChainMaxMessages caps how many reply-chain entries can participate in
-	// one request, including the current trigger message.
+	// one request, including the current trigger article.
 	ReplyChainMaxMessages int
-	// LeadingContextMessages caps how many messages immediately preceding the
+	// LeadingContextMessages caps how many articles immediately preceding the
 	// thread root can be included as background context.
 	LeadingContextMessages int
-	// LeadingContextMaxAge bounds how old background messages can be relative to
+	// LeadingContextMaxAge bounds how old background articles can be relative to
 	// the thread root.
 	LeadingContextMaxAge time.Duration
 	// MaxContextRunes caps the approximate size of serialized contextual payloads
-	// added before the current message.
+	// added before the current article.
 	MaxContextRunes int
 	// MaxMessageRunes caps the serialized size of any single article included in
 	// context.
 	MaxMessageRunes int
 	// QuoteReplyDepth controls how many levels of reply_to references are
-	// resolved and inlined as quoted context when the referenced message is not
+	// resolved and inlined as quoted context when the referenced article is not
 	// already present in the conversation context. 0 disables quoting.
 	QuoteReplyDepth int
 }
@@ -175,7 +177,7 @@ type ImageInputPolicy struct {
 	// MaxTotalBytes caps total downloaded image bytes across one request.
 	MaxTotalBytes int64
 	// Detail hints desired provider-side visual fidelity when supported.
-	Detail otogi.LLMInputImageDetail
+	Detail ai.LLMInputImageDetail
 }
 
 type fileConfig struct {
@@ -211,6 +213,7 @@ type fileGeminiEntry struct {
 
 type fileAgent struct {
 	Name                 string                `json:"name"`
+	Aliases              []string              `json:"aliases"`
 	Description          string                `json:"description"`
 	Provider             string                `json:"provider"`
 	Model                string                `json:"model"`
@@ -326,6 +329,7 @@ func LoadFile(path string) (Config, error) {
 
 		agent := Agent{
 			Name:                 strings.TrimSpace(rawAgent.Name),
+			Aliases:              normalizeAgentAliases(rawAgent.Aliases),
 			Description:          strings.TrimSpace(rawAgent.Description),
 			Provider:             strings.TrimSpace(rawAgent.Provider),
 			Model:                strings.TrimSpace(rawAgent.Model),
@@ -385,11 +389,13 @@ func (cfg Config) Validate() error {
 			return fmt.Errorf("validate llm config agents[%d]: %w", index, err)
 		}
 
-		normalized := normalizeAgentName(agent.Name)
-		if _, exists := seenNames[normalized]; exists {
-			return fmt.Errorf("validate llm config: duplicate agent name %q", agent.Name)
+		for _, configuredName := range allAgentNames(agent) {
+			normalized := normalizeAgentName(configuredName)
+			if _, exists := seenNames[normalized]; exists {
+				return fmt.Errorf("validate llm config: duplicate agent name %q", configuredName)
+			}
+			seenNames[normalized] = struct{}{}
 		}
-		seenNames[normalized] = struct{}{}
 
 		providerKey := strings.TrimSpace(agent.Provider)
 		providerProfile, exists := cfg.Providers[providerKey]
@@ -606,6 +612,9 @@ func validateAgent(agent Agent) error {
 	if strings.TrimSpace(agent.Name) == "" {
 		return fmt.Errorf("missing name")
 	}
+	if err := validateAgentAliases(agent.Aliases, agent.Name); err != nil {
+		return err
+	}
 	if strings.TrimSpace(agent.Description) == "" {
 		return fmt.Errorf("missing description")
 	}
@@ -703,7 +712,7 @@ func parseImageInputPolicy(raw *fileAgentImageInputs) (ImageInputPolicy, error) 
 
 	policy := ImageInputPolicy{
 		Enabled: raw.Enabled,
-		Detail:  otogi.LLMInputImageDetail(strings.ToLower(strings.TrimSpace(raw.Detail))),
+		Detail:  ai.LLMInputImageDetail(strings.ToLower(strings.TrimSpace(raw.Detail))),
 	}
 	if raw.MaxImages != nil {
 		policy.MaxImages = *raw.MaxImages
@@ -733,7 +742,7 @@ func resolveImageInputPolicy(policy ImageInputPolicy) ImageInputPolicy {
 		resolved.MaxTotalBytes = defaultImageInputMaxTotalBytes
 	}
 	if resolved.Detail == "" {
-		resolved.Detail = otogi.LLMInputImageDetailAuto
+		resolved.Detail = ai.LLMInputImageDetailAuto
 	}
 
 	return resolved
@@ -931,6 +940,46 @@ func isValidAPIVersion(raw string) bool {
 
 func normalizeAgentName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func normalizeAgentAliases(aliases []string) []string {
+	if len(aliases) == 0 {
+		return nil
+	}
+
+	normalized := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		normalized = append(normalized, strings.TrimSpace(alias))
+	}
+
+	return normalized
+}
+
+func validateAgentAliases(aliases []string, primaryName string) error {
+	seen := map[string]struct{}{
+		normalizeAgentName(primaryName): {},
+	}
+	for index, alias := range aliases {
+		if strings.TrimSpace(alias) == "" {
+			return fmt.Errorf("aliases[%d]: empty value", index)
+		}
+
+		normalized := normalizeAgentName(alias)
+		if _, exists := seen[normalized]; exists {
+			return fmt.Errorf("duplicate agent name %q", alias)
+		}
+		seen[normalized] = struct{}{}
+	}
+
+	return nil
+}
+
+func allAgentNames(agent Agent) []string {
+	names := make([]string, 0, 1+len(agent.Aliases))
+	names = append(names, agent.Name)
+	names = append(names, agent.Aliases...)
+
+	return names
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

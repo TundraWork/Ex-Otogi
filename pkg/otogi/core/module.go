@@ -1,32 +1,50 @@
-package otogi
+package core
 
 import (
 	"context"
+
+	"ex-otogi/pkg/otogi/platform"
 )
 
-// EventHandler processes a single neutral event.
-type EventHandler func(ctx context.Context, event *Event) error
+// EventHandler processes one Otogi event selected by subscription filters.
+//
+// Handlers should treat event as immutable input owned by the kernel for the
+// duration of the callback.
+type EventHandler func(ctx context.Context, event *platform.Event) error
 
-// EventDispatcher accepts neutral events for dispatching into the kernel.
+// EventDispatcher accepts normalized Otogi events for dispatching into the
+// kernel.
 type EventDispatcher interface {
-	// Publish submits an event to downstream subscribers.
-	Publish(ctx context.Context, event *Event) error
+	// Publish submits one event to downstream subscribers.
+	//
+	// Drivers should publish only otogi.Event payloads through this boundary and
+	// should not depend on subscriber implementation details.
+	Publish(ctx context.Context, event *platform.Event) error
 }
 
 // ModuleRuntime provides kernel facilities to modules during registration.
+//
+// Modules consume Otogi services through this interface rather than by
+// depending on concrete driver implementations.
 type ModuleRuntime interface {
-	// Services exposes the service registry for dependency registration and resolution.
+	// Services exposes the service registry for dependency registration and
+	// resolution.
 	Services() ServiceRegistry
 	// Config exposes the per-module configuration registry.
 	Config() ConfigRegistry
 	// Subscribe registers an asynchronous event handler owned by the module.
+	//
+	// The kernel is responsible for routing, worker management, and shutdown of
+	// the resulting subscription.
 	Subscribe(ctx context.Context, interest InterestSet, spec SubscriptionSpec, handler EventHandler) (Subscription, error)
 }
 
 // Module is a lifecycle-aware plugin contract.
 //
 // Modules must be deterministic and concurrency-safe because handlers can run
-// on multiple workers.
+// on multiple workers. Modules consume inbound content as otogi.Event values
+// and should produce outbound content only through resolved Otogi services such
+// as SinkDispatcher and MediaDownloader.
 type Module interface {
 	// Name returns a stable module identifier.
 	Name() string
@@ -55,7 +73,7 @@ type ModuleSpec struct {
 	// Handlers declares declarative capability and subscription wiring.
 	Handlers []ModuleHandler
 	// Commands declares command registrations handled by this module.
-	Commands []CommandSpec
+	Commands []platform.CommandSpec
 	// AdditionalCapabilities declares extra interests used by imperative registration.
 	AdditionalCapabilities []Capability
 }
@@ -105,13 +123,13 @@ func cloneCapability(capability Capability) Capability {
 func cloneInterestSet(interest InterestSet) InterestSet {
 	cloned := interest
 	if len(interest.Kinds) > 0 {
-		cloned.Kinds = append([]EventKind(nil), interest.Kinds...)
+		cloned.Kinds = append([]platform.EventKind(nil), interest.Kinds...)
 	}
 	if len(interest.Sources) > 0 {
-		cloned.Sources = append([]EventSource(nil), interest.Sources...)
+		cloned.Sources = append([]platform.EventSource(nil), interest.Sources...)
 	}
 	if len(interest.MediaTypes) > 0 {
-		cloned.MediaTypes = append([]MediaType(nil), interest.MediaTypes...)
+		cloned.MediaTypes = append([]platform.MediaType(nil), interest.MediaTypes...)
 	}
 	if len(interest.CommandNames) > 0 {
 		cloned.CommandNames = append([]string(nil), interest.CommandNames...)
@@ -120,13 +138,16 @@ func cloneInterestSet(interest InterestSet) InterestSet {
 	return cloned
 }
 
-// Driver adapts external platforms into neutral events.
+// Driver adapts one external platform into Otogi Protocol contracts.
 //
-// Drivers own transport/session concerns and must publish only otogi.Event.
+// Drivers own transport/session concerns and must publish only normalized
+// otogi.Event values. Platform SDK payloads, transport clients, and other
+// driver-specific details must not leak across this boundary.
 type Driver interface {
 	// Name returns a stable driver identifier.
 	Name() string
-	// Start starts consuming external updates and publishing neutral events.
+	// Start starts consuming external updates and publishing Otogi events.
+	//
 	// It should return only after context cancellation or fatal error.
 	Start(ctx context.Context, dispatcher EventDispatcher) error
 	// Shutdown stops external resources that are not tied to Start context alone.

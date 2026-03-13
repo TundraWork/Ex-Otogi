@@ -7,7 +7,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -29,14 +30,14 @@ type introspectionCommand struct {
 	articleID string
 }
 
-func commandReplyEntities(body string) []otogi.TextEntity {
+func commandReplyEntities(body string) []platform.TextEntity {
 	if body == "" {
 		return nil
 	}
 
-	return []otogi.TextEntity{
+	return []platform.TextEntity{
 		{
-			Type:      otogi.TextEntityTypeBlockquote,
+			Type:      platform.TextEntityTypeBlockquote,
 			Offset:    0,
 			Length:    utf8.RuneCountInString(body),
 			Collapsed: true,
@@ -44,7 +45,7 @@ func commandReplyEntities(body string) []otogi.TextEntity {
 	}
 }
 
-func parseIntrospectionCommand(commandInvocation *otogi.CommandInvocation) (introspectionCommand, error) {
+func parseIntrospectionCommand(commandInvocation *platform.CommandInvocation) (introspectionCommand, error) {
 	command := introspectionCommand{}
 	if commandInvocation == nil {
 		return command, fmt.Errorf("missing command invocation")
@@ -97,32 +98,32 @@ func parseArticleIDArgument(argument string) (string, error) {
 	return strconv.FormatInt(articleID, 10), nil
 }
 
-func commandLookup(event *otogi.Event, explicitArticleID string) (otogi.MemoryLookup, bool, error) {
+func commandLookup(event *platform.Event, explicitArticleID string) (core.MemoryLookup, bool, error) {
 	if event == nil {
-		return otogi.MemoryLookup{}, false, fmt.Errorf("nil event")
+		return core.MemoryLookup{}, false, fmt.Errorf("nil event")
 	}
 
 	if explicitArticleID != "" {
-		lookup := otogi.MemoryLookup{
+		lookup := core.MemoryLookup{
 			TenantID:       event.TenantID,
 			Platform:       event.Source.Platform,
 			ConversationID: event.Conversation.ID,
 			ArticleID:      explicitArticleID,
 		}
 		if err := lookup.Validate(); err != nil {
-			return otogi.MemoryLookup{}, false, fmt.Errorf("explicit article id lookup: %w", err)
+			return core.MemoryLookup{}, false, fmt.Errorf("explicit article id lookup: %w", err)
 		}
 
 		return lookup, true, nil
 	}
 
 	if event.Article == nil || event.Article.ReplyToArticleID == "" {
-		return otogi.MemoryLookup{}, false, nil
+		return core.MemoryLookup{}, false, nil
 	}
 
-	lookup, err := otogi.ReplyMemoryLookupFromEvent(event)
+	lookup, err := core.ReplyMemoryLookupFromEvent(event)
 	if err != nil {
-		return otogi.MemoryLookup{}, false, fmt.Errorf("reply lookup: %w", err)
+		return core.MemoryLookup{}, false, fmt.Errorf("reply lookup: %w", err)
 	}
 
 	return lookup, true, nil
@@ -157,7 +158,7 @@ func formatRawEntity(cached memorySnapshot) (string, error) {
 	return string(body), nil
 }
 
-func formatHistoryEvents(events []otogi.Event) (string, error) {
+func formatHistoryEvents(events []platform.Event) (string, error) {
 	body, err := json.MarshalIndent(events, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("format history events json: %w", err)

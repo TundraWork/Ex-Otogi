@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/crypto"
 	gotdtelegram "github.com/gotd/td/telegram"
@@ -40,7 +40,7 @@ func WithOutboundLogger(logger *slog.Logger) OutboundOption {
 }
 
 // WithSinkRef configures the sink identity returned by sink-list operations.
-func WithSinkRef(ref otogi.EventSink) OutboundOption {
+func WithSinkRef(ref platform.EventSink) OutboundOption {
 	return func(cfg *outboundConfig) {
 		cfg.sink = ref
 		if cfg.sink.Platform == "" {
@@ -49,7 +49,7 @@ func WithSinkRef(ref otogi.EventSink) OutboundOption {
 	}
 }
 
-// SinkDispatcher adapts neutral outbound operations to Telegram RPC calls.
+// SinkDispatcher adapts Otogi outbound operations to Telegram RPC calls.
 type SinkDispatcher struct {
 	cfg      outboundConfig
 	peers    *PeerCache
@@ -59,7 +59,7 @@ type SinkDispatcher struct {
 type outboundConfig struct {
 	rpcTimeout time.Duration
 	logger     *slog.Logger
-	sink       otogi.EventSink
+	sink       platform.EventSink
 }
 
 // NewOutboundDispatcher creates a Telegram outbound dispatcher using gotd client APIs.
@@ -89,7 +89,7 @@ func newOutboundDispatcherWithRPC(
 
 	cfg := outboundConfig{
 		rpcTimeout: defaultOutboundTimeout,
-		sink: otogi.EventSink{
+		sink: platform.EventSink{
 			Platform: DriverPlatform,
 		},
 	}
@@ -107,8 +107,8 @@ func newOutboundDispatcherWithRPC(
 // SendMessage publishes a text message to a Telegram conversation.
 func (d *SinkDispatcher) SendMessage(
 	ctx context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	if err := request.Validate(); err != nil {
 		return nil, fmt.Errorf("send message validate: %w", err)
 	}
@@ -127,7 +127,7 @@ func (d *SinkDispatcher) SendMessage(
 		return nil, fmt.Errorf(
 			"send message to %s: %w",
 			request.Target.Conversation.ID,
-			mapTelegramOutboundError(otogi.OutboundOperationSendMessage, d.cfg.sink, err),
+			mapTelegramOutboundError(platform.OutboundOperationSendMessage, d.cfg.sink, err),
 		)
 	}
 
@@ -140,14 +140,14 @@ func (d *SinkDispatcher) SendMessage(
 		"reply_to_message_id", request.ReplyToMessageID,
 	)
 
-	return &otogi.OutboundMessage{
+	return &platform.OutboundMessage{
 		ID:     strconv.Itoa(id),
 		Target: request.Target,
 	}, nil
 }
 
 // EditMessage updates text for an existing Telegram message.
-func (d *SinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
+func (d *SinkDispatcher) EditMessage(ctx context.Context, request platform.EditMessageRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("edit message validate: %w", err)
 	}
@@ -170,7 +170,7 @@ func (d *SinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMess
 		return fmt.Errorf(
 			"edit message %s: %w",
 			request.MessageID,
-			mapTelegramOutboundError(otogi.OutboundOperationEditMessage, d.cfg.sink, err),
+			mapTelegramOutboundError(platform.OutboundOperationEditMessage, d.cfg.sink, err),
 		)
 	}
 
@@ -186,7 +186,7 @@ func (d *SinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMess
 }
 
 // DeleteMessage removes an existing Telegram message.
-func (d *SinkDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
+func (d *SinkDispatcher) DeleteMessage(ctx context.Context, request platform.DeleteMessageRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("delete message validate: %w", err)
 	}
@@ -208,7 +208,7 @@ func (d *SinkDispatcher) DeleteMessage(ctx context.Context, request otogi.Delete
 		return fmt.Errorf(
 			"delete message %s: %w",
 			request.MessageID,
-			mapTelegramOutboundError(otogi.OutboundOperationDeleteMessage, d.cfg.sink, err),
+			mapTelegramOutboundError(platform.OutboundOperationDeleteMessage, d.cfg.sink, err),
 		)
 	}
 
@@ -225,7 +225,7 @@ func (d *SinkDispatcher) DeleteMessage(ctx context.Context, request otogi.Delete
 }
 
 // SetReaction applies add/remove reaction behavior on an existing Telegram message.
-func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
+func (d *SinkDispatcher) SetReaction(ctx context.Context, request platform.SetReactionRequest) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("set reaction validate: %w", err)
 	}
@@ -241,7 +241,7 @@ func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReact
 	}
 
 	var reactions []tg.ReactionClass
-	if request.Action == otogi.ReactionActionAdd {
+	if request.Action == platform.ReactionActionAdd {
 		reaction, err := parseReaction(request.Emoji)
 		if err != nil {
 			return fmt.Errorf("set reaction parse emoji %s: %w", request.Emoji, err)
@@ -256,7 +256,7 @@ func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReact
 		return fmt.Errorf(
 			"set reaction on message %s: %w",
 			request.MessageID,
-			mapTelegramOutboundError(otogi.OutboundOperationSetReaction, d.cfg.sink, err),
+			mapTelegramOutboundError(platform.OutboundOperationSetReaction, d.cfg.sink, err),
 		)
 	}
 
@@ -276,7 +276,7 @@ func (d *SinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReact
 // RestrictMember applies permission restrictions to a member in a Telegram channel/supergroup.
 func (d *SinkDispatcher) RestrictMember(
 	ctx context.Context,
-	request otogi.RestrictMemberRequest,
+	request platform.RestrictMemberRequest,
 ) error {
 	if err := request.Validate(); err != nil {
 		return fmt.Errorf("restrict member validate: %w", err)
@@ -302,7 +302,7 @@ func (d *SinkDispatcher) RestrictMember(
 			"restrict member %s in %s: %w",
 			request.MemberID,
 			request.Target.Conversation.ID,
-			mapTelegramOutboundError(otogi.OutboundOperationRestrictMember, d.cfg.sink, err),
+			mapTelegramOutboundError(platform.OutboundOperationRestrictMember, d.cfg.sink, err),
 		)
 	}
 
@@ -318,11 +318,11 @@ func (d *SinkDispatcher) RestrictMember(
 	return nil
 }
 
-// mapMemberPermissionsToBannedRights converts neutral permission flags to Telegram ChatBannedRights.
+// mapMemberPermissionsToBannedRights converts Otogi permission flags to Telegram ChatBannedRights.
 //
 // ChatBannedRights uses inverted logic: flags set to true mean the user CANNOT perform
-// the action. This function inverts the neutral MemberPermissions accordingly.
-func mapMemberPermissionsToBannedRights(perms otogi.MemberPermissions, until time.Time) tg.ChatBannedRights {
+// the action. This function inverts Otogi MemberPermissions accordingly.
+func mapMemberPermissionsToBannedRights(perms platform.MemberPermissions, until time.Time) tg.ChatBannedRights {
 	untilDate := 0
 	if !until.IsZero() {
 		untilDate = int(until.Unix())
@@ -354,27 +354,27 @@ func mapMemberPermissionsToBannedRights(perms otogi.MemberPermissions, until tim
 }
 
 // ListSinks returns the configured Telegram sink identity.
-func (d *SinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
+func (d *SinkDispatcher) ListSinks(ctx context.Context) ([]platform.EventSink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list sinks: %w", err)
 	}
 
-	return []otogi.EventSink{d.cfg.sink}, nil
+	return []platform.EventSink{d.cfg.sink}, nil
 }
 
 // ListSinksByPlatform returns the configured sink when platform matches Telegram.
 func (d *SinkDispatcher) ListSinksByPlatform(
 	ctx context.Context,
-	platform otogi.Platform,
-) ([]otogi.EventSink, error) {
+	targetPlatform platform.Platform,
+) ([]platform.EventSink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list sinks by platform: %w", err)
 	}
-	if platform != d.cfg.sink.Platform {
-		return []otogi.EventSink{}, nil
+	if targetPlatform != d.cfg.sink.Platform {
+		return []platform.EventSink{}, nil
 	}
 
-	return []otogi.EventSink{d.cfg.sink}, nil
+	return []platform.EventSink{d.cfg.sink}, nil
 }
 
 func (d *SinkDispatcher) withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -385,9 +385,9 @@ func (d *SinkDispatcher) withTimeout(ctx context.Context) (context.Context, cont
 	return context.WithTimeout(ctx, d.cfg.rpcTimeout)
 }
 
-func (d *SinkDispatcher) resolvePeer(target otogi.OutboundTarget) (tg.InputPeerClass, error) {
-	if target.Sink != nil && target.Sink.Platform != "" && target.Sink.Platform != otogi.PlatformTelegram {
-		return nil, fmt.Errorf("%w: platform %s", otogi.ErrOutboundUnsupported, target.Sink.Platform)
+func (d *SinkDispatcher) resolvePeer(target platform.OutboundTarget) (tg.InputPeerClass, error) {
+	if target.Sink != nil && target.Sink.Platform != "" && target.Sink.Platform != platform.PlatformTelegram {
+		return nil, fmt.Errorf("%w: platform %s", platform.ErrOutboundUnsupported, target.Sink.Platform)
 	}
 
 	peer, err := d.peers.Resolve(target.Conversation)
@@ -404,15 +404,15 @@ func (d *SinkDispatcher) logOutbound(ctx context.Context, operation string, attr
 	}
 
 	values := make([]any, 0, 2+len(attrs))
-	values = append(values, "operation", operation, "platform", otogi.PlatformTelegram)
+	values = append(values, "operation", operation, "platform", platform.PlatformTelegram)
 	values = append(values, attrs...)
 	d.cfg.logger.InfoContext(ctx, "telegram outbound operation", values...)
 }
 
 func (d *SinkDispatcher) renderReadableSendMessageRequest(
 	ctx context.Context,
-	request otogi.SendMessageRequest,
-) otogi.SendMessageRequest {
+	request platform.SendMessageRequest,
+) platform.SendMessageRequest {
 	rendered, err := renderTelegramReadableText(request.Text, request.Entities)
 	if err != nil {
 		d.logReadableRenderFallback(
@@ -442,8 +442,8 @@ func (d *SinkDispatcher) renderReadableSendMessageRequest(
 
 func (d *SinkDispatcher) renderReadableEditMessageRequest(
 	ctx context.Context,
-	request otogi.EditMessageRequest,
-) otogi.EditMessageRequest {
+	request platform.EditMessageRequest,
+) platform.EditMessageRequest {
 	rendered, err := renderTelegramReadableText(request.Text, request.Entities)
 	if err != nil {
 		d.logReadableRenderFallback(
@@ -474,7 +474,7 @@ func (d *SinkDispatcher) renderReadableEditMessageRequest(
 func (d *SinkDispatcher) logReadableRenderFallback(
 	ctx context.Context,
 	operation string,
-	target otogi.OutboundTarget,
+	target platform.OutboundTarget,
 	messageID string,
 	err error,
 ) {
@@ -486,7 +486,7 @@ func (d *SinkDispatcher) logReadableRenderFallback(
 		ctx,
 		"telegram readability render fallback to original payload",
 		"operation", operation,
-		"platform", otogi.PlatformTelegram,
+		"platform", platform.PlatformTelegram,
 		"conversation", target.Conversation.ID,
 		"conversation_type", target.Conversation.Type,
 		"message_id", messageID,
@@ -497,10 +497,10 @@ func (d *SinkDispatcher) logReadableRenderFallback(
 func parseMessageID(raw string) (int, error) {
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
-		return 0, fmt.Errorf("%w: invalid message id: %w", otogi.ErrInvalidOutboundRequest, err)
+		return 0, fmt.Errorf("%w: invalid message id: %w", platform.ErrInvalidOutboundRequest, err)
 	}
 	if value <= 0 {
-		return 0, fmt.Errorf("%w: invalid message id", otogi.ErrInvalidOutboundRequest)
+		return 0, fmt.Errorf("%w: invalid message id", platform.ErrInvalidOutboundRequest)
 	}
 
 	return value, nil
@@ -509,7 +509,7 @@ func parseMessageID(raw string) (int, error) {
 func parseReaction(emoji string) (tg.ReactionClass, error) {
 	trimmed := strings.TrimSpace(emoji)
 	if trimmed == "" {
-		return nil, fmt.Errorf("%w: empty emoji", otogi.ErrInvalidOutboundRequest)
+		return nil, fmt.Errorf("%w: empty emoji", platform.ErrInvalidOutboundRequest)
 	}
 	if trimmed == "paid" {
 		return &tg.ReactionPaid{}, nil
@@ -517,7 +517,7 @@ func parseReaction(emoji string) (tg.ReactionClass, error) {
 	if documentID, ok := strings.CutPrefix(trimmed, "custom:"); ok {
 		id, err := strconv.ParseInt(documentID, 10, 64)
 		if err != nil || id <= 0 {
-			return nil, fmt.Errorf("%w: invalid custom reaction id", otogi.ErrInvalidOutboundRequest)
+			return nil, fmt.Errorf("%w: invalid custom reaction id", platform.ErrInvalidOutboundRequest)
 		}
 
 		return &tg.ReactionCustomEmoji{DocumentID: id}, nil
@@ -526,7 +526,7 @@ func parseReaction(emoji string) (tg.ReactionClass, error) {
 	return &tg.ReactionEmoji{Emoticon: trimmed}, nil
 }
 
-func mapOutboundTextEntities(text string, entities []otogi.TextEntity) ([]tg.MessageEntityClass, error) {
+func mapOutboundTextEntities(text string, entities []platform.TextEntity) ([]tg.MessageEntityClass, error) {
 	if len(entities) == 0 {
 		return nil, nil
 	}
@@ -563,66 +563,66 @@ func mapOutboundTextEntities(text string, entities []otogi.TextEntity) ([]tg.Mes
 }
 
 func convertOutboundTextEntity(
-	entity otogi.TextEntity,
+	entity platform.TextEntity,
 	offset int,
 	length int,
 ) (tg.MessageEntityClass, error) {
 	switch normalizeEntityType(entity.Type) {
-	case otogi.TextEntityTypeUnknown:
+	case platform.TextEntityTypeUnknown:
 		return &tg.MessageEntityUnknown{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeMention:
+	case platform.TextEntityTypeMention:
 		return &tg.MessageEntityMention{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeHashtag:
+	case platform.TextEntityTypeHashtag:
 		return &tg.MessageEntityHashtag{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeBotCommand:
+	case platform.TextEntityTypeBotCommand:
 		return &tg.MessageEntityBotCommand{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeURL:
+	case platform.TextEntityTypeURL:
 		return &tg.MessageEntityURL{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeEmail:
+	case platform.TextEntityTypeEmail:
 		return &tg.MessageEntityEmail{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeBold:
+	case platform.TextEntityTypeBold:
 		return &tg.MessageEntityBold{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeItalic:
+	case platform.TextEntityTypeItalic:
 		return &tg.MessageEntityItalic{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeCode:
+	case platform.TextEntityTypeCode:
 		return &tg.MessageEntityCode{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypePre:
+	case platform.TextEntityTypePre:
 		return &tg.MessageEntityPre{
 			Offset:   offset,
 			Length:   length,
 			Language: entity.Language,
 		}, nil
-	case otogi.TextEntityTypeTextURL:
+	case platform.TextEntityTypeTextURL:
 		return &tg.MessageEntityTextURL{
 			Offset: offset,
 			Length: length,
 			URL:    entity.URL,
 		}, nil
-	case otogi.TextEntityTypeMentionName:
+	case platform.TextEntityTypeMentionName:
 		return nil, fmt.Errorf(
 			"%w: text entity type %q requires resolved input user and is not supported",
-			otogi.ErrOutboundUnsupported,
+			platform.ErrOutboundUnsupported,
 			entity.Type,
 		)
-	case otogi.TextEntityTypePhone:
+	case platform.TextEntityTypePhone:
 		return &tg.MessageEntityPhone{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeCashtag:
+	case platform.TextEntityTypeCashtag:
 		return &tg.MessageEntityCashtag{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeBankCard:
+	case platform.TextEntityTypeBankCard:
 		return &tg.MessageEntityBankCard{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeUnderline:
+	case platform.TextEntityTypeUnderline:
 		return &tg.MessageEntityUnderline{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeStrike:
+	case platform.TextEntityTypeStrike:
 		return &tg.MessageEntityStrike{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeBlockquote:
+	case platform.TextEntityTypeBlockquote:
 		return &tg.MessageEntityBlockquote{
 			Collapsed: entity.Collapsed,
 			Offset:    offset,
 			Length:    length,
 		}, nil
-	case otogi.TextEntityTypeSpoiler:
+	case platform.TextEntityTypeSpoiler:
 		return &tg.MessageEntitySpoiler{Offset: offset, Length: length}, nil
-	case otogi.TextEntityTypeCustomEmoji:
+	case platform.TextEntityTypeCustomEmoji:
 		documentID, err := parseEntityID(entity.CustomEmojiID)
 		if err != nil {
 			return nil, fmt.Errorf("custom_emoji parse custom_emoji_id: %w", err)
@@ -633,7 +633,7 @@ func convertOutboundTextEntity(
 			DocumentID: documentID,
 		}, nil
 	default:
-		return nil, fmt.Errorf("%w: unsupported text entity type %q", otogi.ErrOutboundUnsupported, entity.Type)
+		return nil, fmt.Errorf("%w: unsupported text entity type %q", platform.ErrOutboundUnsupported, entity.Type)
 	}
 }
 
@@ -659,40 +659,40 @@ func utf16RuneLength(value rune) int {
 func parseEntityID(raw string) (int64, error) {
 	parsed, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("%w: invalid entity id %q", otogi.ErrInvalidOutboundRequest, raw)
+		return 0, fmt.Errorf("%w: invalid entity id %q", platform.ErrInvalidOutboundRequest, raw)
 	}
 
 	return parsed, nil
 }
 
-func normalizeEntityType(value otogi.TextEntityType) otogi.TextEntityType {
+func normalizeEntityType(value platform.TextEntityType) platform.TextEntityType {
 	switch value {
 	case "botcommand":
-		return otogi.TextEntityTypeBotCommand
+		return platform.TextEntityTypeBotCommand
 	case "texturl":
-		return otogi.TextEntityTypeTextURL
+		return platform.TextEntityTypeTextURL
 	case "mentionname":
-		return otogi.TextEntityTypeMentionName
+		return platform.TextEntityTypeMentionName
 	case "bankcard":
-		return otogi.TextEntityTypeBankCard
+		return platform.TextEntityTypeBankCard
 	case "customemoji":
-		return otogi.TextEntityTypeCustomEmoji
+		return platform.TextEntityTypeCustomEmoji
 	default:
 		return value
 	}
 }
 
-func isTelegramUnsupportedMarkdownEntityType(value otogi.TextEntityType) bool {
+func isTelegramUnsupportedMarkdownEntityType(value platform.TextEntityType) bool {
 	switch value {
-	case otogi.TextEntityTypeHeading,
-		otogi.TextEntityTypeList,
-		otogi.TextEntityTypeListItem,
-		otogi.TextEntityTypeTaskItem,
-		otogi.TextEntityTypeThematicBreak,
-		otogi.TextEntityTypeTable,
-		otogi.TextEntityTypeTableRow,
-		otogi.TextEntityTypeTableCell,
-		otogi.TextEntityTypeImage:
+	case platform.TextEntityTypeHeading,
+		platform.TextEntityTypeList,
+		platform.TextEntityTypeListItem,
+		platform.TextEntityTypeTaskItem,
+		platform.TextEntityTypeThematicBreak,
+		platform.TextEntityTypeTable,
+		platform.TextEntityTypeTableRow,
+		platform.TextEntityTypeTableCell,
+		platform.TextEntityTypeImage:
 		return true
 	default:
 		return false
@@ -700,8 +700,8 @@ func isTelegramUnsupportedMarkdownEntityType(value otogi.TextEntityType) bool {
 }
 
 type outboundRPC interface {
-	SendText(ctx context.Context, peer tg.InputPeerClass, request otogi.SendMessageRequest) (int, error)
-	EditText(ctx context.Context, peer tg.InputPeerClass, messageID int, request otogi.EditMessageRequest) error
+	SendText(ctx context.Context, peer tg.InputPeerClass, request platform.SendMessageRequest) (int, error)
+	EditText(ctx context.Context, peer tg.InputPeerClass, messageID int, request platform.EditMessageRequest) error
 	DeleteMessage(ctx context.Context, peer tg.InputPeerClass, messageID int, revoke bool) error
 	SetReaction(ctx context.Context, peer tg.InputPeerClass, messageID int, reactions []tg.ReactionClass) error
 	RestrictMember(ctx context.Context, peer tg.InputPeerClass, participant tg.InputPeerClass, rights tg.ChatBannedRights) error
@@ -726,7 +726,7 @@ func newGotdOutboundRPC(client *gotdtelegram.Client) gotdOutboundRPC {
 func (r gotdOutboundRPC) SendText(
 	ctx context.Context,
 	peer tg.InputPeerClass,
-	request otogi.SendMessageRequest,
+	request platform.SendMessageRequest,
 ) (int, error) {
 	entities, err := mapOutboundTextEntities(request.Text, request.Entities)
 	if err != nil {
@@ -773,7 +773,7 @@ func (r gotdOutboundRPC) EditText(
 	ctx context.Context,
 	peer tg.InputPeerClass,
 	messageID int,
-	request otogi.EditMessageRequest,
+	request platform.EditMessageRequest,
 ) error {
 	entities, err := mapOutboundTextEntities(request.Text, request.Entities)
 	if err != nil {
@@ -809,7 +809,7 @@ func (r gotdOutboundRPC) DeleteMessage(
 	}
 
 	if _, isChannel := peer.(*tg.InputPeerChannel); isChannel {
-		return fmt.Errorf("%w: non-revoke channel delete", otogi.ErrOutboundUnsupported)
+		return fmt.Errorf("%w: non-revoke channel delete", platform.ErrOutboundUnsupported)
 	}
 
 	if _, err := r.sender.Delete().Messages(ctx, messageID); err != nil {
@@ -840,7 +840,7 @@ func (r gotdOutboundRPC) RestrictMember(
 ) error {
 	channel, ok := peer.(*tg.InputPeerChannel)
 	if !ok {
-		return fmt.Errorf("%w: restrict member requires a channel/supergroup peer", otogi.ErrOutboundUnsupported)
+		return fmt.Errorf("%w: restrict member requires a channel/supergroup peer", platform.ErrOutboundUnsupported)
 	}
 
 	_, err := r.raw.ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{

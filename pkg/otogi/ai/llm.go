@@ -1,4 +1,4 @@
-package otogi
+package ai
 
 import (
 	"context"
@@ -21,7 +21,7 @@ type LLMProviderRegistry interface {
 // LLMProvider exposes one stream-first LLM text generation operation.
 //
 // Implementations should keep provider-specific transport details hidden behind
-// this neutral interface.
+// this interface.
 type LLMProvider interface {
 	// GenerateStream starts one streaming generation request.
 	GenerateStream(ctx context.Context, req LLMGenerateRequest) (LLMStream, error)

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 )
@@ -58,7 +58,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					42: messageActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+					100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 				},
 				updateClass: "updateNewMessage",
 			},
@@ -67,7 +67,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 			assert: func(t *testing.T, got Update) {
 				t.Helper()
 				if got.Article == nil {
-					t.Fatal("expected message payload")
+					t.Fatal("expected article payload")
 				}
 				if got.Chat.ID != "100" {
 					t.Fatalf("chat id = %s, want 100", got.Chat.ID)
@@ -76,10 +76,10 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					t.Fatalf("actor id = %s, want 42", got.Actor.ID)
 				}
 				if got.Article.ID != "777" {
-					t.Fatalf("message id = %s, want 777", got.Article.ID)
+					t.Fatalf("article id = %s, want 777", got.Article.ID)
 				}
 				if got.Article.Text != "hello" {
-					t.Fatalf("message text = %s, want hello", got.Article.Text)
+					t.Fatalf("article text = %s, want hello", got.Article.Text)
 				}
 				if len(got.Article.Reactions) != 1 {
 					t.Fatalf("reactions length = %d, want 1", len(got.Article.Reactions))
@@ -111,7 +111,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					42: messageActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+					100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 				},
 				updateClass: "updateEditMessage",
 			},
@@ -120,13 +120,13 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 			assert: func(t *testing.T, got Update) {
 				t.Helper()
 				if got.Article == nil {
-					t.Fatal("expected message payload")
+					t.Fatal("expected article payload")
 				}
 				if got.Article.ID != "888" {
-					t.Fatalf("message id = %s, want 888", got.Article.ID)
+					t.Fatalf("article id = %s, want 888", got.Article.ID)
 				}
 				if got.Article.Text != "updated" {
-					t.Fatalf("message text = %s, want updated", got.Article.Text)
+					t.Fatalf("article text = %s, want updated", got.Article.Text)
 				}
 				if got.Edit == nil {
 					t.Fatal("expected edit payload")
@@ -141,7 +141,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					t.Fatalf("changed_at = %v, want %v", got.Edit.ChangedAt, time.Unix(1_700_000_111, 0).UTC())
 				}
 				if got.Edit.ArticleID != "888" {
-					t.Fatalf("edit message id = %s, want 888", got.Edit.ArticleID)
+					t.Fatalf("edit article id = %s, want 888", got.Edit.ArticleID)
 				}
 				if got.Edit.After == nil {
 					t.Fatal("expected edit after snapshot")
@@ -189,7 +189,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					42: messageActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					500: {title: "channel", kind: otogi.ConversationTypeChannel},
+					500: {title: "channel", kind: platform.ConversationTypeChannel},
 				},
 				updateClass: "updateEditChannelMessage",
 			},
@@ -201,7 +201,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					t.Fatal("expected reaction payload")
 				}
 				if got.Reaction.ArticleID != "889" {
-					t.Fatalf("reaction message id = %s, want 889", got.Reaction.ArticleID)
+					t.Fatalf("reaction article id = %s, want 889", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -247,7 +247,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				},
 				occurredAt: occurredAt,
 				chatsByID: map[int64]gotdChatInfo{
-					500: {title: "channel", kind: otogi.ConversationTypeChannel},
+					500: {title: "channel", kind: platform.ConversationTypeChannel},
 				},
 				updateClass: "updateEditChannelMessage",
 			},
@@ -259,7 +259,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					t.Fatal("expected reaction payload")
 				}
 				if got.Reaction.ArticleID != "890" {
-					t.Fatalf("reaction message id = %s, want 890", got.Reaction.ArticleID)
+					t.Fatalf("reaction article id = %s, want 890", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -301,7 +301,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					99: memberActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					500: {title: "channel", kind: otogi.ConversationTypeChannel},
+					500: {title: "channel", kind: platform.ConversationTypeChannel},
 				},
 				updateClass: "updateEditChannelMessage",
 			},
@@ -313,7 +313,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					t.Fatal("expected reaction payload")
 				}
 				if got.Reaction.ArticleID != "891" {
-					t.Fatalf("reaction message id = %s, want 891", got.Reaction.ArticleID)
+					t.Fatalf("reaction article id = %s, want 891", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -351,7 +351,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 				},
 				occurredAt: occurredAt,
 				chatsByID: map[int64]gotdChatInfo{
-					500: {title: "channel", kind: otogi.ConversationTypeChannel},
+					500: {title: "channel", kind: platform.ConversationTypeChannel},
 				},
 				updateClass: "updateEditChannelMessage",
 			},
@@ -363,7 +363,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					t.Fatal("expected reaction payload")
 				}
 				if got.Reaction.ArticleID != "893" {
-					t.Fatalf("reaction message id = %s, want 893", got.Reaction.ArticleID)
+					t.Fatalf("reaction article id = %s, want 893", got.Reaction.ArticleID)
 				}
 				if got.Reaction.Emoji != "❤️" {
 					t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -404,7 +404,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					99: memberActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+					100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 				},
 				updateClass: "updateEditMessage",
 			},
@@ -436,7 +436,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					99: memberActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+					100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 				},
 				updateClass: "updateChatParticipantAdd",
 			},
@@ -476,8 +476,8 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					42: messageActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
-					500: {title: "supergroup", kind: otogi.ConversationTypeGroup},
+					100: {title: "group-chat", kind: platform.ConversationTypeGroup},
+					500: {title: "supergroup", kind: platform.ConversationTypeGroup},
 				},
 				updateClass: "updateNewMessage",
 			},
@@ -505,7 +505,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					42: messageActor,
 				},
 				chatsByID: map[int64]gotdChatInfo{
-					500: {title: "channel", kind: otogi.ConversationTypeChannel},
+					500: {title: "channel", kind: platform.ConversationTypeChannel},
 				},
 				updateClass: "updateMessageReactions",
 				reaction: &gotdReactionDelta{
@@ -527,7 +527,7 @@ func TestDefaultGotdUpdateMapperMap(t *testing.T) {
 					t.Fatalf("emoji = %s, want 👍", got.Reaction.Emoji)
 				}
 				if got.Reaction.ArticleID != "700" {
-					t.Fatalf("message id = %s, want 700", got.Reaction.ArticleID)
+					t.Fatalf("reaction article id = %s, want 700", got.Reaction.ArticleID)
 				}
 				if got.Chat.ID != "500" {
 					t.Fatalf("chat id = %s, want 500", got.Chat.ID)
@@ -612,7 +612,7 @@ func TestDefaultGotdUpdateMapperMapInfersReactionDeltaFromCountsOnEdit(t *testin
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateNewChannelMessage",
 	})
@@ -653,7 +653,7 @@ func TestDefaultGotdUpdateMapperMapInfersReactionDeltaFromCountsOnEdit(t *testin
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateEditChannelMessage",
 	})
@@ -670,7 +670,7 @@ func TestDefaultGotdUpdateMapperMapInfersReactionDeltaFromCountsOnEdit(t *testin
 		t.Fatal("expected reaction payload")
 	}
 	if got.Reaction.ArticleID != "777" {
-		t.Fatalf("reaction message id = %s, want 777", got.Reaction.ArticleID)
+		t.Fatalf("reaction article id = %s, want 777", got.Reaction.ArticleID)
 	}
 	if got.Reaction.Emoji != "❤️" {
 		t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -701,7 +701,7 @@ func TestDefaultGotdUpdateMapperMapEditCarriesBeforeSnapshotFromCache(t *testing
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+			100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 		},
 		updateClass: "updateNewMessage",
 	})
@@ -730,7 +730,7 @@ func TestDefaultGotdUpdateMapperMapEditCarriesBeforeSnapshotFromCache(t *testing
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+			100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 		},
 		updateClass: "updateEditMessage",
 	})
@@ -785,7 +785,7 @@ func TestDefaultGotdUpdateMapperMapEntityOnlyEditKeepsEditSemantics(t *testing.T
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+			100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 		},
 		updateClass: "updateNewMessage",
 	})
@@ -815,7 +815,7 @@ func TestDefaultGotdUpdateMapperMapEntityOnlyEditKeepsEditSemantics(t *testing.T
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+			100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 		},
 		updateClass: "updateEditMessage",
 	})
@@ -837,14 +837,14 @@ func TestDefaultGotdUpdateMapperMapEntityOnlyEditKeepsEditSemantics(t *testing.T
 	if got.Edit.Before == nil || len(got.Edit.Before.Entities) != 1 {
 		t.Fatalf("before entities = %+v, want 1 entity", got.Edit.Before)
 	}
-	if got.Edit.Before.Entities[0].Type != otogi.TextEntityTypeBold {
-		t.Fatalf("before entity type = %s, want %s", got.Edit.Before.Entities[0].Type, otogi.TextEntityTypeBold)
+	if got.Edit.Before.Entities[0].Type != platform.TextEntityTypeBold {
+		t.Fatalf("before entity type = %s, want %s", got.Edit.Before.Entities[0].Type, platform.TextEntityTypeBold)
 	}
 	if got.Edit.After == nil || len(got.Edit.After.Entities) != 1 {
 		t.Fatalf("after entities = %+v, want 1 entity", got.Edit.After)
 	}
-	if got.Edit.After.Entities[0].Type != otogi.TextEntityTypeItalic {
-		t.Fatalf("after entity type = %s, want %s", got.Edit.After.Entities[0].Type, otogi.TextEntityTypeItalic)
+	if got.Edit.After.Entities[0].Type != platform.TextEntityTypeItalic {
+		t.Fatalf("after entity type = %s, want %s", got.Edit.After.Entities[0].Type, platform.TextEntityTypeItalic)
 	}
 }
 
@@ -898,7 +898,7 @@ func TestDefaultGotdUpdateMapperMapRecordsPeerCache(t *testing.T) {
 		chatsByID: map[int64]gotdChatInfo{
 			100: {
 				title:     "group-chat",
-				kind:      otogi.ConversationTypeGroup,
+				kind:      platform.ConversationTypeGroup,
 				inputPeer: &tg.InputPeerChat{ChatID: 100},
 			},
 		},
@@ -911,9 +911,9 @@ func TestDefaultGotdUpdateMapperMapRecordsPeerCache(t *testing.T) {
 		t.Fatal("expected accepted update")
 	}
 
-	peer, err := cache.Resolve(otogi.Conversation{
+	peer, err := cache.Resolve(platform.Conversation{
 		ID:   "100",
-		Type: otogi.ConversationTypeGroup,
+		Type: platform.ConversationTypeGroup,
 	})
 	if err != nil {
 		t.Fatalf("resolve cached peer failed: %v", err)
@@ -958,7 +958,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionFromAPIOnAmbiguousEdit(t *tes
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -995,7 +995,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionFromAPIOnAmbiguousEdit(t *tes
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -1014,7 +1014,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionFromAPIOnAmbiguousEdit(t *tes
 		t.Fatal("expected reaction payload")
 	}
 	if got.Reaction.ArticleID != "777" {
-		t.Fatalf("reaction message id = %s, want 777", got.Reaction.ArticleID)
+		t.Fatalf("reaction article id = %s, want 777", got.Reaction.ArticleID)
 	}
 	if got.Reaction.Emoji != "❤️" {
 		t.Fatalf("reaction emoji = %s, want ❤️", got.Reaction.Emoji)
@@ -1048,7 +1048,7 @@ func TestDefaultGotdUpdateMapperMapSuppressesAmbiguousReactionEditWithoutSignal(
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateNewChannelMessage",
 	})
@@ -1079,7 +1079,7 @@ func TestDefaultGotdUpdateMapperMapSuppressesAmbiguousReactionEditWithoutSignal(
 		occurredAt:  occurredAt.Add(50 * time.Second),
 		updateClass: "updateEditChannelMessage",
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 	})
 	if err != nil {
@@ -1122,7 +1122,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionAfterResolverRetry(t *testing
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99},
 			},
 		},
@@ -1157,7 +1157,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionAfterResolverRetry(t *testing
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99},
 			},
 		},
@@ -1214,7 +1214,7 @@ func TestDefaultGotdUpdateMapperMapRetriesResolverAfterTransientError(t *testing
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99},
 			},
 		},
@@ -1249,7 +1249,7 @@ func TestDefaultGotdUpdateMapperMapRetriesResolverAfterTransientError(t *testing
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: &tg.InputPeerChannel{ChannelID: 500, AccessHash: 99},
 			},
 		},
@@ -1305,7 +1305,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionOnNonLikelyUnchangedEdit(t *t
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -1338,7 +1338,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionOnNonLikelyUnchangedEdit(t *t
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -1374,7 +1374,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionOnNonLikelyUnchangedEdit(t *t
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -1428,7 +1428,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionSequenceOnAmbiguousEdits(t *t
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -1468,7 +1468,7 @@ func TestDefaultGotdUpdateMapperMapResolvesReactionSequenceOnAmbiguousEdits(t *t
 			chatsByID: map[int64]gotdChatInfo{
 				500: {
 					title:     "channel",
-					kind:      otogi.ConversationTypeChannel,
+					kind:      platform.ConversationTypeChannel,
 					inputPeer: chatInputPeer,
 				},
 			},
@@ -1550,7 +1550,7 @@ func TestDefaultGotdUpdateMapperPollReactionUpdatesBackfillsMissingReactionEdits
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -1587,7 +1587,7 @@ func TestDefaultGotdUpdateMapperPollReactionUpdatesBackfillsMissingReactionEdits
 		chatsByID: map[int64]gotdChatInfo{
 			500: {
 				title:     "channel",
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: chatInputPeer,
 			},
 		},
@@ -1672,7 +1672,7 @@ func TestDefaultGotdUpdateMapperMapPreservesBaselineAcrossAmbiguousLikelyEdit(t 
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateNewChannelMessage",
 	})
@@ -1703,7 +1703,7 @@ func TestDefaultGotdUpdateMapperMapPreservesBaselineAcrossAmbiguousLikelyEdit(t 
 		occurredAt:  occurredAt.Add(50 * time.Second),
 		updateClass: "updateEditChannelMessage",
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 	})
 	if err != nil {
@@ -1742,7 +1742,7 @@ func TestDefaultGotdUpdateMapperMapPreservesBaselineAcrossAmbiguousLikelyEdit(t 
 		occurredAt:  occurredAt.Add(80 * time.Second),
 		updateClass: "updateEditChannelMessage",
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 	})
 	if err != nil {
@@ -1789,7 +1789,7 @@ func TestDefaultGotdUpdateMapperMapBatchFromMessageReactionsRemovesReaction(t *t
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateNewChannelMessage",
 	})
@@ -1810,7 +1810,7 @@ func TestDefaultGotdUpdateMapperMapBatchFromMessageReactionsRemovesReaction(t *t
 		},
 		occurredAt: occurredAt.Add(10 * time.Second),
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateMessageReactions",
 	})
@@ -1868,7 +1868,7 @@ func TestDefaultGotdUpdateMapperMapBatchFromMessageReactionsSplitsAllDeltas(t *t
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateNewChannelMessage",
 	})
@@ -1898,7 +1898,7 @@ func TestDefaultGotdUpdateMapperMapBatchFromMessageReactionsSplitsAllDeltas(t *t
 		},
 		occurredAt: occurredAt.Add(20 * time.Second),
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateMessageReactions",
 	})
@@ -1976,7 +1976,7 @@ func TestDefaultGotdUpdateMapperMapPrefersCountDiffOverHeuristicOnEditedMessage(
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateNewChannelMessage",
 	})
@@ -2023,7 +2023,7 @@ func TestDefaultGotdUpdateMapperMapPrefersCountDiffOverHeuristicOnEditedMessage(
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateEditChannelMessage",
 	})
@@ -2066,7 +2066,7 @@ func TestDefaultGotdUpdateMapperMapBatchFanOutsServiceChatAddUser(t *testing.T) 
 			103: newTGUser(103, "u103", "User", "Three", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			100: {title: "group-chat", kind: otogi.ConversationTypeGroup},
+			100: {title: "group-chat", kind: platform.ConversationTypeGroup},
 		},
 		updateClass: "updateNewMessage",
 	})
@@ -2123,7 +2123,7 @@ func TestDefaultGotdUpdateMapperMapBatchUsesHeuristicWhenNoBaseline(t *testing.T
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateMessageReactions",
 	})
@@ -2176,7 +2176,7 @@ func TestDefaultGotdUpdateMapperMapReturnsFirstFromBatch(t *testing.T) {
 			42: newTGUser(42, "alice", "Alice", "User", false),
 		},
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateNewChannelMessage",
 	}
@@ -2207,7 +2207,7 @@ func TestDefaultGotdUpdateMapperMapReturnsFirstFromBatch(t *testing.T) {
 		},
 		occurredAt: occurredAt.Add(10 * time.Second),
 		chatsByID: map[int64]gotdChatInfo{
-			500: {title: "channel", kind: otogi.ConversationTypeChannel},
+			500: {title: "channel", kind: platform.ConversationTypeChannel},
 		},
 		updateClass: "updateMessageReactions",
 	}

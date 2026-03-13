@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 
 	"github.com/openai/openai-go/v3/responses"
 )
@@ -31,29 +31,29 @@ func newOpenAIStream(stream openAIResponseStream) *openAIStream {
 	return &openAIStream{stream: stream}
 }
 
-func (s *openAIStream) Recv(ctx context.Context) (otogi.LLMGenerateChunk, error) {
+func (s *openAIStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, error) {
 	if ctx == nil {
-		return otogi.LLMGenerateChunk{}, fmt.Errorf("openai stream recv: nil context")
+		return ai.LLMGenerateChunk{}, fmt.Errorf("openai stream recv: nil context")
 	}
 
 	for {
 		if err := ctx.Err(); err != nil {
 			_ = s.Close()
-			return otogi.LLMGenerateChunk{}, fmt.Errorf("openai stream recv context: %w", err)
+			return ai.LLMGenerateChunk{}, fmt.Errorf("openai stream recv context: %w", err)
 		}
 
 		event, err := s.nextEvent(ctx)
 		if err != nil {
-			return otogi.LLMGenerateChunk{}, err
+			return ai.LLMGenerateChunk{}, err
 		}
 
 		chunk, done, mapErr := mapOpenAIStreamEvent(event)
 		if mapErr != nil {
-			return otogi.LLMGenerateChunk{}, mapErr
+			return ai.LLMGenerateChunk{}, mapErr
 		}
 		if done {
 			s.markFinished()
-			return otogi.LLMGenerateChunk{}, io.EOF
+			return ai.LLMGenerateChunk{}, io.EOF
 		}
 		if chunk.Delta == "" {
 			continue
@@ -137,62 +137,62 @@ func (s *openAIStream) markFinished() {
 
 func mapOpenAIStreamEvent(
 	event responses.ResponseStreamEventUnion,
-) (otogi.LLMGenerateChunk, bool, error) {
+) (ai.LLMGenerateChunk, bool, error) {
 	eventType := strings.TrimSpace(event.Type)
 	if eventType == "" {
-		return otogi.LLMGenerateChunk{}, false, fmt.Errorf("openai stream parse event: missing type")
+		return ai.LLMGenerateChunk{}, false, fmt.Errorf("openai stream parse event: missing type")
 	}
 
 	switch eventType {
 	case openAIEventOutputTextDelta:
 		if !event.JSON.Delta.Valid() {
-			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing delta")
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing delta")
 		}
-		return otogi.LLMGenerateChunk{
-			Kind:  otogi.LLMGenerateChunkKindOutputText,
+		return ai.LLMGenerateChunk{
+			Kind:  ai.LLMGenerateChunkKindOutputText,
 			Delta: event.Delta,
 		}, false, nil
 	case openAIEventReasoningSummaryTextDelta:
 		if !event.JSON.Delta.Valid() {
-			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing delta")
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing delta")
 		}
-		return otogi.LLMGenerateChunk{
-			Kind:  otogi.LLMGenerateChunkKindThinkingSummary,
+		return ai.LLMGenerateChunk{
+			Kind:  ai.LLMGenerateChunkKindThinkingSummary,
 			Delta: event.Delta,
 		}, false, nil
 	case openAIEventReasoningTextDelta:
 		// Ignore raw reasoning content. llmchat only surfaces short summaries.
-		return otogi.LLMGenerateChunk{}, false, nil
+		return ai.LLMGenerateChunk{}, false, nil
 	case openAIEventCompleted:
 		if !event.JSON.Response.Valid() {
-			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing response")
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing response")
 		}
-		return otogi.LLMGenerateChunk{}, true, nil
+		return ai.LLMGenerateChunk{}, true, nil
 	case openAIEventFailed:
 		if !event.JSON.Response.Valid() {
-			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing response")
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing response")
 		}
 		status := strings.TrimSpace(string(event.Response.Status))
 		if status == "" {
 			status = "unknown"
 		}
-		return otogi.LLMGenerateChunk{}, false, fmt.Errorf("openai stream response failed: status=%s", status)
+		return ai.LLMGenerateChunk{}, false, fmt.Errorf("openai stream response failed: status=%s", status)
 	case openAIEventError:
 		if !event.JSON.Message.Valid() {
-			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing message")
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing message")
 		}
 		message := strings.TrimSpace(event.Message)
 		if message == "" {
-			return otogi.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "empty message")
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "empty message")
 		}
 		code := strings.TrimSpace(event.Code)
 		if code != "" {
-			return otogi.LLMGenerateChunk{}, false, fmt.Errorf("openai stream error %s: %s", code, message)
+			return ai.LLMGenerateChunk{}, false, fmt.Errorf("openai stream error %s: %s", code, message)
 		}
-		return otogi.LLMGenerateChunk{}, false, fmt.Errorf("openai stream error: %s", message)
+		return ai.LLMGenerateChunk{}, false, fmt.Errorf("openai stream error: %s", message)
 	default:
 		// Keep non-text events forward-compatible.
-		return otogi.LLMGenerateChunk{}, false, nil
+		return ai.LLMGenerateChunk{}, false, nil
 	}
 }
 
@@ -200,4 +200,4 @@ func openAIEventParseError(eventType, reason string) error {
 	return fmt.Errorf("openai stream parse event %s: %s", eventType, reason)
 }
 
-var _ otogi.LLMStream = (*openAIStream)(nil)
+var _ ai.LLMStream = (*openAIStream)(nil)

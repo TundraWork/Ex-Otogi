@@ -5,14 +5,14 @@ import (
 	"strconv"
 	"sync"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 )
 
 // PeerCache stores Telegram input peers discovered from inbound updates.
 //
-// It is used by outbound dispatch to resolve neutral otogi conversation targets
+// It is used by outbound dispatch to resolve Otogi conversation targets
 // back into Telegram input peers.
 type PeerCache struct {
 	mu             sync.RWMutex
@@ -43,7 +43,7 @@ func (c *PeerCache) RememberEnvelope(envelope gotdUpdateEnvelope) {
 		if peer == nil {
 			continue
 		}
-		c.byConversation[conversationKey(otogi.ConversationTypePrivate, strconv.FormatInt(userID, 10))] = cloneInputPeer(peer)
+		c.byConversation[conversationKey(platform.ConversationTypePrivate, strconv.FormatInt(userID, 10))] = cloneInputPeer(peer)
 	}
 
 	for id, chat := range envelope.chatsByID {
@@ -54,10 +54,10 @@ func (c *PeerCache) RememberEnvelope(envelope gotdUpdateEnvelope) {
 		idStr := strconv.FormatInt(id, 10)
 		c.byConversation[conversationKey(chat.kind, idStr)] = cloneInputPeer(chat.inputPeer)
 
-		// Megagroups surface as "group" in neutral events but use channel peers for outbound RPC.
-		if chat.kind == otogi.ConversationTypeGroup {
+		// Megagroups surface as "group" in Otogi events but use channel peers for outbound RPC.
+		if chat.kind == platform.ConversationTypeGroup {
 			if _, isChannel := chat.inputPeer.(*tg.InputPeerChannel); isChannel {
-				c.byConversation[conversationKey(otogi.ConversationTypeChannel, idStr)] = cloneInputPeer(chat.inputPeer)
+				c.byConversation[conversationKey(platform.ConversationTypeChannel, idStr)] = cloneInputPeer(chat.inputPeer)
 			}
 		}
 	}
@@ -73,15 +73,15 @@ func (c *PeerCache) RememberConversation(chat ChatRef, peer tg.InputPeerClass) {
 	defer c.mu.Unlock()
 	c.byConversation[conversationKey(chat.Type, chat.ID)] = cloneInputPeer(peer)
 
-	if chat.Type == otogi.ConversationTypeGroup {
+	if chat.Type == platform.ConversationTypeGroup {
 		if _, isChannel := peer.(*tg.InputPeerChannel); isChannel {
-			c.byConversation[conversationKey(otogi.ConversationTypeChannel, chat.ID)] = cloneInputPeer(peer)
+			c.byConversation[conversationKey(platform.ConversationTypeChannel, chat.ID)] = cloneInputPeer(peer)
 		}
 	}
 }
 
 // Resolve returns an input peer for an outbound target conversation.
-func (c *PeerCache) Resolve(conversation otogi.Conversation) (tg.InputPeerClass, error) {
+func (c *PeerCache) Resolve(conversation platform.Conversation) (tg.InputPeerClass, error) {
 	if c == nil {
 		return nil, fmt.Errorf("resolve peer: nil cache")
 	}
@@ -97,14 +97,14 @@ func (c *PeerCache) Resolve(conversation otogi.Conversation) (tg.InputPeerClass,
 	}
 
 	switch conversation.Type {
-	case otogi.ConversationTypePrivate:
+	case platform.ConversationTypePrivate:
 		// No alternate peer kind exists for private conversations.
-	case otogi.ConversationTypeGroup:
-		if peer, ok := c.byConversation[conversationKey(otogi.ConversationTypeChannel, conversation.ID)]; ok {
+	case platform.ConversationTypeGroup:
+		if peer, ok := c.byConversation[conversationKey(platform.ConversationTypeChannel, conversation.ID)]; ok {
 			return cloneInputPeer(peer), nil
 		}
-	case otogi.ConversationTypeChannel:
-		if peer, ok := c.byConversation[conversationKey(otogi.ConversationTypeGroup, conversation.ID)]; ok {
+	case platform.ConversationTypeChannel:
+		if peer, ok := c.byConversation[conversationKey(platform.ConversationTypeGroup, conversation.ID)]; ok {
 			return cloneInputPeer(peer), nil
 		}
 	default:
@@ -126,7 +126,7 @@ func (c *PeerCache) ResolveUser(userID string) (tg.InputPeerClass, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	key := conversationKey(otogi.ConversationTypePrivate, userID)
+	key := conversationKey(platform.ConversationTypePrivate, userID)
 	if peer, ok := c.byConversation[key]; ok {
 		return cloneInputPeer(peer), nil
 	}
@@ -134,7 +134,7 @@ func (c *PeerCache) ResolveUser(userID string) (tg.InputPeerClass, error) {
 	return nil, fmt.Errorf("resolve user peer: user %s not found", userID)
 }
 
-func conversationKey(conversationType otogi.ConversationType, id string) string {
+func conversationKey(conversationType platform.ConversationType, id string) string {
 	return string(conversationType) + ":" + id
 }
 

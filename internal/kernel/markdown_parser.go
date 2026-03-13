@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/yuin/goldmark"
 	gast "github.com/yuin/goldmark/ast"
@@ -19,7 +19,7 @@ type markdownParser struct {
 	markdown goldmark.Markdown
 }
 
-func newMarkdownParser() otogi.MarkdownParser {
+func newMarkdownParser() platform.MarkdownParser {
 	return &markdownParser{
 		markdown: goldmark.New(
 			goldmark.WithExtensions(extension.GFM),
@@ -27,12 +27,12 @@ func newMarkdownParser() otogi.MarkdownParser {
 	}
 }
 
-func (p *markdownParser) ParseMarkdown(ctx context.Context, markdown string) (parsed otogi.ParsedText, err error) {
+func (p *markdownParser) ParseMarkdown(ctx context.Context, markdown string) (parsed platform.ParsedText, err error) {
 	if ctx == nil {
-		return otogi.ParsedText{}, fmt.Errorf("parse markdown: nil context")
+		return platform.ParsedText{}, fmt.Errorf("parse markdown: nil context")
 	}
 	if err := ctx.Err(); err != nil {
-		return otogi.ParsedText{}, fmt.Errorf("parse markdown context: %w", err)
+		return platform.ParsedText{}, fmt.Errorf("parse markdown context: %w", err)
 	}
 
 	defer func() {
@@ -52,15 +52,15 @@ func (p *markdownParser) ParseMarkdown(ctx context.Context, markdown string) (pa
 		source: []byte(source),
 	}
 	if err := state.renderDocument(ctx, document); err != nil {
-		return otogi.ParsedText{}, fmt.Errorf("parse markdown render: %w", err)
+		return platform.ParsedText{}, fmt.Errorf("parse markdown render: %w", err)
 	}
 
-	parsed = otogi.ParsedText{
+	parsed = platform.ParsedText{
 		Text:     state.text(),
 		Entities: state.entities(),
 	}
-	if err := otogi.ValidateTextEntities(parsed.Text, parsed.Entities); err != nil {
-		return otogi.ParsedText{}, fmt.Errorf("parse markdown validate entities: %w", err)
+	if err := platform.ValidateTextEntities(parsed.Text, parsed.Entities); err != nil {
+		return platform.ParsedText{}, fmt.Errorf("parse markdown validate entities: %w", err)
 	}
 
 	return parsed, nil
@@ -76,7 +76,7 @@ type markdownRenderState struct {
 	source []byte
 
 	buffer         []rune
-	entitiesBuffer []otogi.TextEntity
+	entitiesBuffer []platform.TextEntity
 
 	tableCount int
 }
@@ -85,12 +85,12 @@ func (s *markdownRenderState) text() string {
 	return string(s.buffer)
 }
 
-func (s *markdownRenderState) entities() []otogi.TextEntity {
+func (s *markdownRenderState) entities() []platform.TextEntity {
 	if len(s.entitiesBuffer) == 0 {
 		return nil
 	}
 
-	cloned := make([]otogi.TextEntity, len(s.entitiesBuffer))
+	cloned := make([]platform.TextEntity, len(s.entitiesBuffer))
 	copy(cloned, s.entitiesBuffer)
 	return cloned
 }
@@ -136,7 +136,7 @@ func (s *markdownRenderState) trimTrailingSpaces(minOffset int) {
 	}
 }
 
-func (s *markdownRenderState) addEntity(start int, entity otogi.TextEntity) {
+func (s *markdownRenderState) addEntity(start int, entity platform.TextEntity) {
 	length := s.offset() - start
 	if length <= 0 {
 		return
@@ -187,7 +187,7 @@ func (s *markdownRenderState) renderBlock(ctx context.Context, block gast.Node) 
 	case *gast.ThematicBreak:
 		start := s.offset()
 		s.appendString("---")
-		s.addEntity(start, otogi.TextEntity{Type: otogi.TextEntityTypeThematicBreak})
+		s.addEntity(start, platform.TextEntity{Type: platform.TextEntityTypeThematicBreak})
 		return nil
 	case *gast.FencedCodeBlock:
 		return s.renderFencedCodeBlock(node)
@@ -249,9 +249,9 @@ func (s *markdownRenderState) renderHeading(ctx context.Context, heading *gast.H
 		return err
 	}
 	s.trimTrailingSpaces(start)
-	s.addEntity(start, otogi.TextEntity{
-		Type: otogi.TextEntityTypeHeading,
-		Heading: &otogi.TextEntityHeadingMeta{
+	s.addEntity(start, platform.TextEntity{
+		Type: platform.TextEntityTypeHeading,
+		Heading: &platform.TextEntityHeadingMeta{
 			Level: level,
 		},
 	})
@@ -266,8 +266,8 @@ func (s *markdownRenderState) renderFencedCodeBlock(block *gast.FencedCodeBlock)
 	}
 
 	language := strings.TrimSpace(string(block.Language(s.source)))
-	s.addEntity(start, otogi.TextEntity{
-		Type:     otogi.TextEntityTypePre,
+	s.addEntity(start, platform.TextEntity{
+		Type:     platform.TextEntityTypePre,
 		Language: language,
 	})
 
@@ -280,8 +280,8 @@ func (s *markdownRenderState) renderCodeBlock(block *gast.CodeBlock) error {
 		return err
 	}
 
-	s.addEntity(start, otogi.TextEntity{
-		Type: otogi.TextEntityTypePre,
+	s.addEntity(start, platform.TextEntity{
+		Type: platform.TextEntityTypePre,
 	})
 
 	return nil
@@ -310,8 +310,8 @@ func (s *markdownRenderState) renderBlockquote(ctx context.Context, blockquote *
 	}
 	s.trimTrailingSpaces(start)
 
-	s.addEntity(start, otogi.TextEntity{
-		Type: otogi.TextEntityTypeBlockquote,
+	s.addEntity(start, platform.TextEntity{
+		Type: platform.TextEntityTypeBlockquote,
 	})
 	return nil
 }
@@ -346,9 +346,9 @@ func (s *markdownRenderState) renderList(ctx context.Context, list *gast.List, d
 		}
 	}
 
-	s.addEntity(start, otogi.TextEntity{
-		Type: otogi.TextEntityTypeList,
-		List: &otogi.TextEntityListMeta{
+	s.addEntity(start, platform.TextEntity{
+		Type: platform.TextEntityTypeList,
+		List: &platform.TextEntityListMeta{
 			Depth:   depth,
 			Ordered: list.IsOrdered(),
 		},
@@ -398,9 +398,9 @@ func (s *markdownRenderState) renderListItemLine(
 	}
 	s.trimTrailingSpaces(start)
 
-	entity := otogi.TextEntity{
-		Type: otogi.TextEntityTypeListItem,
-		List: &otogi.TextEntityListMeta{
+	entity := platform.TextEntity{
+		Type: platform.TextEntityTypeListItem,
+		List: &platform.TextEntityListMeta{
 			Depth:      depth,
 			Ordered:    list.IsOrdered(),
 			ItemNumber: itemNumber,
@@ -408,14 +408,14 @@ func (s *markdownRenderState) renderListItemLine(
 	}
 	s.addEntity(start, entity)
 	if hasTask {
-		s.addEntity(start, otogi.TextEntity{
-			Type: otogi.TextEntityTypeTaskItem,
-			List: &otogi.TextEntityListMeta{
+		s.addEntity(start, platform.TextEntity{
+			Type: platform.TextEntityTypeTaskItem,
+			List: &platform.TextEntityListMeta{
 				Depth:      depth,
 				Ordered:    list.IsOrdered(),
 				ItemNumber: itemNumber,
 			},
-			Task: &otogi.TextEntityTaskMeta{
+			Task: &platform.TextEntityTaskMeta{
 				Checked: checked,
 			},
 		})
@@ -482,9 +482,9 @@ func (s *markdownRenderState) renderTable(ctx context.Context, table *extast.Tab
 		}
 	}
 
-	s.addEntity(start, otogi.TextEntity{
-		Type: otogi.TextEntityTypeTable,
-		Table: &otogi.TextEntityTableMeta{
+	s.addEntity(start, platform.TextEntity{
+		Type: platform.TextEntityTypeTable,
+		Table: &platform.TextEntityTableMeta{
 			GroupID: groupID,
 		},
 	})
@@ -520,9 +520,9 @@ func (s *markdownRenderState) renderTableRow(
 		if err := s.renderInlineChildren(ctx, cell); err != nil {
 			return err
 		}
-		s.addEntity(cellStart, otogi.TextEntity{
-			Type: otogi.TextEntityTypeTableCell,
-			Table: &otogi.TextEntityTableMeta{
+		s.addEntity(cellStart, platform.TextEntity{
+			Type: platform.TextEntityTypeTableCell,
+			Table: &platform.TextEntityTableMeta{
 				GroupID:   groupID,
 				Row:       rowIndex,
 				Column:    column,
@@ -534,9 +534,9 @@ func (s *markdownRenderState) renderTableRow(
 		column++
 	}
 
-	s.addEntity(start, otogi.TextEntity{
-		Type: otogi.TextEntityTypeTableRow,
-		Table: &otogi.TextEntityTableMeta{
+	s.addEntity(start, platform.TextEntity{
+		Type: platform.TextEntityTypeTableRow,
+		Table: &platform.TextEntityTableMeta{
 			GroupID: groupID,
 			Row:     rowIndex,
 			Header:  isHeader,
@@ -637,33 +637,33 @@ func (s *markdownRenderState) renderInlineNode(ctx context.Context, node gast.No
 		if err := s.renderInlineChildren(ctx, inline); err != nil {
 			return err
 		}
-		entityType := otogi.TextEntityTypeItalic
+		entityType := platform.TextEntityTypeItalic
 		if inline.Level >= 2 {
-			entityType = otogi.TextEntityTypeBold
+			entityType = platform.TextEntityTypeBold
 		}
-		s.addEntity(start, otogi.TextEntity{Type: entityType})
+		s.addEntity(start, platform.TextEntity{Type: entityType})
 		return nil
 	case *extast.Strikethrough:
 		start := s.offset()
 		if err := s.renderInlineChildren(ctx, inline); err != nil {
 			return err
 		}
-		s.addEntity(start, otogi.TextEntity{Type: otogi.TextEntityTypeStrike})
+		s.addEntity(start, platform.TextEntity{Type: platform.TextEntityTypeStrike})
 		return nil
 	case *gast.CodeSpan:
 		start := s.offset()
 		if err := s.renderInlineChildren(ctx, inline); err != nil {
 			return err
 		}
-		s.addEntity(start, otogi.TextEntity{Type: otogi.TextEntityTypeCode})
+		s.addEntity(start, platform.TextEntity{Type: platform.TextEntityTypeCode})
 		return nil
 	case *gast.Link:
 		start := s.offset()
 		if err := s.renderInlineChildren(ctx, inline); err != nil {
 			return err
 		}
-		s.addEntity(start, otogi.TextEntity{
-			Type: otogi.TextEntityTypeTextURL,
+		s.addEntity(start, platform.TextEntity{
+			Type: platform.TextEntityTypeTextURL,
 			URL:  strings.TrimSpace(string(inline.Destination)),
 		})
 		return nil
@@ -671,11 +671,11 @@ func (s *markdownRenderState) renderInlineNode(ctx context.Context, node gast.No
 		start := s.offset()
 		label := string(inline.Label(s.source))
 		s.appendString(label)
-		entityType := otogi.TextEntityTypeURL
+		entityType := platform.TextEntityTypeURL
 		if inline.AutoLinkType == gast.AutoLinkEmail {
-			entityType = otogi.TextEntityTypeEmail
+			entityType = platform.TextEntityTypeEmail
 		}
-		s.addEntity(start, otogi.TextEntity{Type: entityType})
+		s.addEntity(start, platform.TextEntity{Type: entityType})
 		return nil
 	case *gast.Image:
 		alt := strings.TrimSpace(s.collectInlineText(inline))
@@ -684,9 +684,9 @@ func (s *markdownRenderState) renderInlineNode(ctx context.Context, node gast.No
 
 		start := s.offset()
 		s.appendString(formatMarkdownImage(alt, imageURL, imageTitle))
-		s.addEntity(start, otogi.TextEntity{
-			Type: otogi.TextEntityTypeImage,
-			Image: &otogi.TextEntityImageMeta{
+		s.addEntity(start, platform.TextEntity{
+			Type: platform.TextEntityTypeImage,
+			Image: &platform.TextEntityImageMeta{
 				URL:   imageURL,
 				Title: imageTitle,
 				Alt:   alt,

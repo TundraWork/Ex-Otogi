@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 func TestConfigRegistryRegisterAndResolveCopiesConfig(t *testing.T) {
@@ -57,7 +57,7 @@ func TestConfigRegistryErrors(t *testing.T) {
 
 				return registry.Register("sleep", raw)
 			},
-			wantErr: otogi.ErrConfigAlreadyRegistered,
+			wantErr: core.ErrConfigAlreadyRegistered,
 		},
 		{
 			name: "resolve missing module",
@@ -65,7 +65,7 @@ func TestConfigRegistryErrors(t *testing.T) {
 				_, err := registry.Resolve("missing")
 				return err
 			},
-			wantErr: otogi.ErrConfigNotFound,
+			wantErr: core.ErrConfigNotFound,
 		},
 	}
 

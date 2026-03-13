@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 )
 
 func writeLLMConfigFile(t *testing.T, body string) string {
@@ -60,6 +60,7 @@ func TestLoadFile(t *testing.T) {
 				"agents":[
 						{
 							"name":"Otogi",
+							"aliases":["Oto"],
 							"description":"OpenAI agent",
 							"provider":"openai-main",
 							"model":"gpt-5-mini",
@@ -83,6 +84,7 @@ func TestLoadFile(t *testing.T) {
 						},
 						{
 							"name":"OtogiGemini",
+							"aliases":["OtoGemini"],
 							"description":"Gemini agent",
 							"provider":"gemini-main",
 							"model":"gemini-2.5-flash",
@@ -152,6 +154,9 @@ func TestLoadFile(t *testing.T) {
 				if len(cfg.Agents) != 2 {
 					t.Fatalf("agents len = %d, want 2", len(cfg.Agents))
 				}
+				if len(cfg.Agents[0].Aliases) != 1 || cfg.Agents[0].Aliases[0] != "Oto" {
+					t.Fatalf("agent[0] aliases = %+v, want [Oto]", cfg.Agents[0].Aliases)
+				}
 				if cfg.Agents[0].RequestTimeout != 30*time.Second {
 					t.Fatalf("agent[0] request_timeout = %s, want 30s", cfg.Agents[0].RequestTimeout)
 				}
@@ -203,15 +208,18 @@ func TestLoadFile(t *testing.T) {
 						cfg.Agents[0].ImageInputs.MaxTotalBytes,
 					)
 				}
-				if cfg.Agents[0].ImageInputs.Detail != otogi.LLMInputImageDetailHigh {
+				if cfg.Agents[0].ImageInputs.Detail != ai.LLMInputImageDetailHigh {
 					t.Fatalf(
 						"agent[0] detail = %q, want %q",
 						cfg.Agents[0].ImageInputs.Detail,
-						otogi.LLMInputImageDetailHigh,
+						ai.LLMInputImageDetailHigh,
 					)
 				}
 				if cfg.Agents[1].RequestTimeout != 20*time.Second {
 					t.Fatalf("agent[1] request_timeout = %s, want 20s", cfg.Agents[1].RequestTimeout)
+				}
+				if len(cfg.Agents[1].Aliases) != 1 || cfg.Agents[1].Aliases[0] != "OtoGemini" {
+					t.Fatalf("agent[1] aliases = %+v, want [OtoGemini]", cfg.Agents[1].Aliases)
 				}
 				if cfg.Agents[1].RequestMetadata["gemini.thinking_level"] != "high" {
 					t.Fatalf(
@@ -574,6 +582,31 @@ func TestLoadFile(t *testing.T) {
 					},
 					{
 						"name":"otogi",
+						"description":"d2",
+						"provider":"openai-main",
+						"model":"m2",
+						"system_prompt_template":"ok","request_timeout":"10s"
+					}
+				]
+			}`,
+			wantErrSubstring: "duplicate agent name",
+		},
+		{
+			name: "duplicate agent alias rejected",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"aliases":["Oto"],
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok","request_timeout":"10s"
+					},
+					{
+						"name":"Gemini",
+						"aliases":["oto"],
 						"description":"d2",
 						"provider":"openai-main",
 						"model":"m2",

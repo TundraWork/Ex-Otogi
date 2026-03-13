@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -20,8 +21,8 @@ const (
 
 // Module applies reply-based text transforms.
 type Module struct {
-	dispatcher otogi.SinkDispatcher
-	memory     otogi.MemoryService
+	dispatcher platform.SinkDispatcher
+	memory     core.MemoryService
 	runner     substitutionRunner
 }
 
@@ -36,90 +37,90 @@ func (m *Module) Name() string {
 }
 
 // Spec declares reply transform handlers and public commands.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		Handlers: []otogi.ModuleHandler{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		Handlers: []core.ModuleHandler{
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "quotehelper-you-command-handler",
-					Description: "rewrites first-person pronouns in a replied message for /you",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+					Description: "rewrites first-person pronouns in a replied article for /you",
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 						RequireArticle: true,
 						RequireCommand: true,
 						CommandNames:   []string{youCommandName},
 					},
 					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceMemory,
+						platform.ServiceSinkDispatcher,
+						core.ServiceMemory,
 					},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("quotehelper-you-commands"),
+				Subscription: core.NewDefaultSubscriptionSpec("quotehelper-you-commands"),
 				Handler:      m.handleYouCommand,
 			},
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "quotehelper-we-command-handler",
-					Description: "rewrites replied message pronouns into collective language for /we",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+					Description: "rewrites replied article pronouns into collective language for /we",
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 						RequireArticle: true,
 						RequireCommand: true,
 						CommandNames:   []string{weCommandName},
 					},
 					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceMemory,
+						platform.ServiceSinkDispatcher,
+						core.ServiceMemory,
 					},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("quotehelper-we-commands"),
+				Subscription: core.NewDefaultSubscriptionSpec("quotehelper-we-commands"),
 				Handler:      m.handleWeCommand,
 			},
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "quotehelper-sed-reply-handler",
-					Description: "applies sed-style substitutions to replied message text",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
+					Description: "applies sed-style substitutions to replied article text",
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindArticleCreated},
 						RequireArticle: true,
 					},
 					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceMemory,
+						platform.ServiceSinkDispatcher,
+						core.ServiceMemory,
 					},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("quotehelper-sed-replies"),
+				Subscription: core.NewDefaultSubscriptionSpec("quotehelper-sed-replies"),
 				Handler:      m.handleSubstituteArticle,
 			},
 		},
-		Commands: []otogi.CommandSpec{
+		Commands: []platform.CommandSpec{
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        youCommandName,
-				Description: "rewrite the replied message by swapping you/me pronouns",
+				Description: "rewrite the replied article by swapping you/me pronouns",
 			},
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        weCommandName,
-				Description: "rewrite the replied message into collective language",
+				Description: "rewrite the replied article into collective language",
 			},
 		},
 	}
 }
 
 // OnRegister resolves module dependencies.
-func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error {
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("quotehelper resolve sink dispatcher: %w", err)
 	}
 
-	memoryService, err := otogi.ResolveAs[otogi.MemoryService](
+	memoryService, err := core.ResolveAs[core.MemoryService](
 		runtime.Services(),
-		otogi.ServiceMemory,
+		core.ServiceMemory,
 	)
 	if err != nil {
 		return fmt.Errorf("quotehelper resolve memory service: %w", err)
@@ -144,21 +145,21 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleYouCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleYouCommand(ctx context.Context, event *platform.Event) error {
 	return m.handleReplyCommand(ctx, event, youCommandName, transformForYou)
 }
 
-func (m *Module) handleWeCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleWeCommand(ctx context.Context, event *platform.Event) error {
 	return m.handleReplyCommand(ctx, event, weCommandName, transformForWe)
 }
 
 func (m *Module) handleReplyCommand(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	commandName string,
 	transform func(string) string,
 ) error {
-	if event == nil || event.Kind != otogi.EventKindCommandReceived || event.Command == nil || event.Article == nil {
+	if event == nil || event.Kind != platform.EventKindCommandReceived || event.Command == nil || event.Article == nil {
 		return nil
 	}
 	if event.Command.Name != commandName {
@@ -185,8 +186,8 @@ func (m *Module) handleReplyCommand(
 	return m.reply(ctx, event, transform(replyText))
 }
 
-func (m *Module) handleSubstituteArticle(ctx context.Context, event *otogi.Event) error {
-	if event == nil || event.Kind != otogi.EventKindArticleCreated || event.Article == nil {
+func (m *Module) handleSubstituteArticle(ctx context.Context, event *platform.Event) error {
+	if event == nil || event.Kind != platform.EventKindArticleCreated || event.Article == nil {
 		return nil
 	}
 	if m.dispatcher == nil {
@@ -226,7 +227,7 @@ func (m *Module) handleSubstituteArticle(ctx context.Context, event *otogi.Event
 	return m.reply(ctx, event, result)
 }
 
-func (m *Module) resolveReplyText(ctx context.Context, event *otogi.Event) (string, bool, error) {
+func (m *Module) resolveReplyText(ctx context.Context, event *platform.Event) (string, bool, error) {
 	if event == nil || event.Article == nil {
 		return "", false, nil
 	}
@@ -236,7 +237,7 @@ func (m *Module) resolveReplyText(ctx context.Context, event *otogi.Event) (stri
 
 	replied, found, err := m.memory.GetReplied(ctx, event)
 	if err != nil {
-		return "", false, fmt.Errorf("get replied message: %w", err)
+		return "", false, fmt.Errorf("get replied article: %w", err)
 	}
 	if !found {
 		return "", false, nil
@@ -250,17 +251,17 @@ func (m *Module) resolveReplyText(ctx context.Context, event *otogi.Event) (stri
 	return text, true, nil
 }
 
-func (m *Module) reply(ctx context.Context, event *otogi.Event, text string) error {
+func (m *Module) reply(ctx context.Context, event *platform.Event, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("quotehelper derive outbound target: %w", err)
 	}
 
-	_, err = m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	_, err = m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             text,
 		ReplyToMessageID: event.Article.ID,
@@ -273,6 +274,6 @@ func (m *Module) reply(ctx context.Context, event *otogi.Event, text string) err
 }
 
 var (
-	_ otogi.Module          = (*Module)(nil)
-	_ otogi.ModuleRegistrar = (*Module)(nil)
+	_ core.Module          = (*Module)(nil)
+	_ core.ModuleRegistrar = (*Module)(nil)
 )

@@ -6,7 +6,7 @@ import (
 	"text/template"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 )
 
 const (
@@ -35,8 +35,10 @@ type Config struct {
 
 // Agent describes one configured chat persona and provider binding.
 type Agent struct {
-	// Name is the trigger keyword for this agent.
+	// Name is the primary trigger keyword for this agent.
 	Name string
+	// Aliases are additional trigger keywords that route to this agent.
+	Aliases []string
 	// Description is a short operator-facing explanation for this agent.
 	Description string
 	// Provider identifies which LLM provider profile to resolve.
@@ -71,22 +73,22 @@ type Agent struct {
 // ContextPolicy controls how one agent builds structured conversation context.
 type ContextPolicy struct {
 	// ReplyChainMaxMessages caps how many reply-chain entries can participate in
-	// one request, including the current trigger message.
+	// one request, including the current trigger article.
 	ReplyChainMaxMessages int
-	// LeadingContextMessages caps how many messages immediately preceding the
+	// LeadingContextMessages caps how many articles immediately preceding the
 	// thread root can be included as background context.
 	LeadingContextMessages int
-	// LeadingContextMaxAge bounds how old background messages can be relative to
+	// LeadingContextMaxAge bounds how old background articles can be relative to
 	// the thread root.
 	LeadingContextMaxAge time.Duration
 	// MaxContextRunes caps the approximate size of serialized contextual payloads
-	// that llmchat adds before the current message.
+	// that llmchat adds before the current article.
 	MaxContextRunes int
 	// MaxMessageRunes caps the serialized size of any single article included in
 	// context.
 	MaxMessageRunes int
 	// QuoteReplyDepth controls how many levels of reply_to references are
-	// resolved and inlined as quoted context when the referenced message is not
+	// resolved and inlined as quoted context when the referenced article is not
 	// already present in the conversation context. 0 disables quoting.
 	QuoteReplyDepth int
 }
@@ -102,7 +104,7 @@ type ImageInputPolicy struct {
 	// MaxTotalBytes caps total downloaded image bytes across one request.
 	MaxTotalBytes int64
 	// Detail hints desired provider-side visual fidelity when supported.
-	Detail otogi.LLMInputImageDetail
+	Detail ai.LLMInputImageDetail
 }
 
 // Validate checks llmchat config coherence.
@@ -128,11 +130,13 @@ func (cfg Config) Validate() error {
 			)
 		}
 
-		normalized := normalizeAgentName(agent.Name)
-		if _, exists := seenNames[normalized]; exists {
-			return fmt.Errorf("validate llmchat config: duplicate agent name %q", agent.Name)
+		for _, configuredName := range allAgentNames(agent) {
+			normalized := normalizeAgentName(configuredName)
+			if _, exists := seenNames[normalized]; exists {
+				return fmt.Errorf("validate llmchat config: duplicate agent name %q", configuredName)
+			}
+			seenNames[normalized] = struct{}{}
 		}
-		seenNames[normalized] = struct{}{}
 	}
 
 	return nil
@@ -141,6 +145,9 @@ func (cfg Config) Validate() error {
 func validateAgent(agent Agent) error {
 	if strings.TrimSpace(agent.Name) == "" {
 		return fmt.Errorf("missing name")
+	}
+	if err := validateAgentAliases(agent.Aliases, agent.Name); err != nil {
+		return err
 	}
 	if strings.TrimSpace(agent.Description) == "" {
 		return fmt.Errorf("missing description")
@@ -237,7 +244,7 @@ func resolveImageInputPolicy(policy ImageInputPolicy) ImageInputPolicy {
 		resolved.MaxTotalBytes = defaultImageInputMaxTotalBytes
 	}
 	if resolved.Detail == "" {
-		resolved.Detail = otogi.LLMInputImageDetailAuto
+		resolved.Detail = ai.LLMInputImageDetailAuto
 	}
 
 	return resolved
@@ -323,6 +330,7 @@ func cloneConfig(cfg Config) Config {
 		for _, agent := range cfg.Agents {
 			cloned.Agents = append(cloned.Agents, Agent{
 				Name:                 agent.Name,
+				Aliases:              cloneStringSlice(agent.Aliases),
 				Description:          agent.Description,
 				Provider:             agent.Provider,
 				Model:                agent.Model,
@@ -345,6 +353,33 @@ func normalizeAgentName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+func validateAgentAliases(aliases []string, primaryName string) error {
+	seen := map[string]struct{}{
+		normalizeAgentName(primaryName): {},
+	}
+	for index, alias := range aliases {
+		if strings.TrimSpace(alias) == "" {
+			return fmt.Errorf("aliases[%d]: empty value", index)
+		}
+
+		normalized := normalizeAgentName(alias)
+		if _, exists := seen[normalized]; exists {
+			return fmt.Errorf("duplicate agent name %q", alias)
+		}
+		seen[normalized] = struct{}{}
+	}
+
+	return nil
+}
+
+func allAgentNames(agent Agent) []string {
+	names := make([]string, 0, 1+len(agent.Aliases))
+	names = append(names, agent.Name)
+	names = append(names, agent.Aliases...)
+
+	return names
+}
+
 func cloneStringMap(values map[string]string) map[string]string {
 	if len(values) == 0 {
 		return nil
@@ -354,6 +389,17 @@ func cloneStringMap(values map[string]string) map[string]string {
 	for key, value := range values {
 		cloned[key] = value
 	}
+
+	return cloned
+}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	cloned := make([]string, len(values))
+	copy(cloned, values)
 
 	return cloned
 }

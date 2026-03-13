@@ -6,20 +6,21 @@ import (
 	"fmt"
 	"sync"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // moduleRecord stores module metadata and subscriptions managed by the kernel.
 type moduleRecord struct {
 	name          string
-	module        otogi.Module
-	capabilities  []otogi.Capability
-	subscriptions []otogi.Subscription
+	module        core.Module
+	capabilities  []core.Capability
+	subscriptions []core.Subscription
 	subMu         sync.Mutex
 }
 
 // addSubscription tracks subscriptions so module shutdown can close them deterministically.
-func (m *moduleRecord) addSubscription(subscription otogi.Subscription) {
+func (m *moduleRecord) addSubscription(subscription core.Subscription) {
 	m.subMu.Lock()
 	defer m.subMu.Unlock()
 	m.subscriptions = append(m.subscriptions, subscription)
@@ -29,7 +30,7 @@ func (m *moduleRecord) addSubscription(subscription otogi.Subscription) {
 // It clears the internal slice first to make repeated shutdown paths idempotent.
 func (m *moduleRecord) closeSubscriptions(ctx context.Context) error {
 	m.subMu.Lock()
-	subscriptions := append([]otogi.Subscription(nil), m.subscriptions...)
+	subscriptions := append([]core.Subscription(nil), m.subscriptions...)
 	m.subscriptions = nil
 	m.subMu.Unlock()
 
@@ -43,18 +44,18 @@ func (m *moduleRecord) closeSubscriptions(ctx context.Context) error {
 	return closeErr
 }
 
-// moduleRuntime is the kernel-owned implementation of otogi.ModuleRuntime.
+// moduleRuntime is the kernel-owned implementation of core.ModuleRuntime.
 type moduleRuntime struct {
 	moduleName    string
-	serviceLookup otogi.ServiceRegistry
-	configLookup  otogi.ConfigRegistry
-	bus           otogi.EventBus
+	serviceLookup core.ServiceRegistry
+	configLookup  core.ConfigRegistry
+	bus           core.EventBus
 	record        *moduleRecord
-	defaultSink   *otogi.EventSink
+	defaultSink   *platform.EventSink
 }
 
 // Services returns the kernel service registry visible to the module.
-func (r *moduleRuntime) Services() otogi.ServiceRegistry {
+func (r *moduleRuntime) Services() core.ServiceRegistry {
 	return moduleServiceRegistry{
 		base:        r.serviceLookup,
 		defaultSink: cloneSinkRef(r.defaultSink),
@@ -62,17 +63,17 @@ func (r *moduleRuntime) Services() otogi.ServiceRegistry {
 }
 
 // Config returns the kernel module config registry.
-func (r *moduleRuntime) Config() otogi.ConfigRegistry {
+func (r *moduleRuntime) Config() core.ConfigRegistry {
 	return r.configLookup
 }
 
 // Subscribe registers a module-owned subscription after capability checks.
 func (r *moduleRuntime) Subscribe(
 	ctx context.Context,
-	interest otogi.InterestSet,
-	spec otogi.SubscriptionSpec,
-	handler otogi.EventHandler,
-) (otogi.Subscription, error) {
+	interest core.InterestSet,
+	spec core.SubscriptionSpec,
+	handler core.EventHandler,
+) (core.Subscription, error) {
 	if spec.Name == "" {
 		spec.Name = fmt.Sprintf("%s-subscription", r.moduleName)
 	}
@@ -92,7 +93,7 @@ func (r *moduleRuntime) Subscribe(
 
 // assertSubscriptionAllowed enforces capability negotiation at registration time.
 // A module can only subscribe to interests covered by at least one declared capability.
-func assertSubscriptionAllowed(capabilities []otogi.Capability, subscriptionName string, interest otogi.InterestSet) error {
+func assertSubscriptionAllowed(capabilities []core.Capability, subscriptionName string, interest core.InterestSet) error {
 	if len(capabilities) == 0 {
 		return fmt.Errorf("subscription %s requires at least one declared capability", subscriptionName)
 	}
@@ -107,8 +108,8 @@ func assertSubscriptionAllowed(capabilities []otogi.Capability, subscriptionName
 }
 
 type moduleServiceRegistry struct {
-	base        otogi.ServiceRegistry
-	defaultSink *otogi.EventSink
+	base        core.ServiceRegistry
+	defaultSink *platform.EventSink
 }
 
 func (r moduleServiceRegistry) Register(name string, service any) error {
@@ -124,10 +125,10 @@ func (r moduleServiceRegistry) Resolve(name string) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve service %s: %w", name, err)
 	}
-	if name != otogi.ServiceSinkDispatcher {
+	if name != platform.ServiceSinkDispatcher {
 		return service, nil
 	}
-	dispatcher, ok := service.(otogi.SinkDispatcher)
+	dispatcher, ok := service.(platform.SinkDispatcher)
 	if !ok {
 		return nil, fmt.Errorf("resolve service %s: type assertion failed", name)
 	}
@@ -139,14 +140,14 @@ func (r moduleServiceRegistry) Resolve(name string) (any, error) {
 }
 
 type moduleSinkDispatcher struct {
-	base        otogi.SinkDispatcher
-	defaultSink *otogi.EventSink
+	base        platform.SinkDispatcher
+	defaultSink *platform.EventSink
 }
 
 func (d moduleSinkDispatcher) SendMessage(
 	ctx context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	request.Target = withDefaultSink(request.Target, d.defaultSink)
 	message, err := d.base.SendMessage(ctx, request)
 	if err != nil {
@@ -156,7 +157,7 @@ func (d moduleSinkDispatcher) SendMessage(
 	return message, nil
 }
 
-func (d moduleSinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
+func (d moduleSinkDispatcher) EditMessage(ctx context.Context, request platform.EditMessageRequest) error {
 	request.Target = withDefaultSink(request.Target, d.defaultSink)
 	if err := d.base.EditMessage(ctx, request); err != nil {
 		return fmt.Errorf("edit message with module sink routing: %w", err)
@@ -165,7 +166,7 @@ func (d moduleSinkDispatcher) EditMessage(ctx context.Context, request otogi.Edi
 	return nil
 }
 
-func (d moduleSinkDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
+func (d moduleSinkDispatcher) DeleteMessage(ctx context.Context, request platform.DeleteMessageRequest) error {
 	request.Target = withDefaultSink(request.Target, d.defaultSink)
 	if err := d.base.DeleteMessage(ctx, request); err != nil {
 		return fmt.Errorf("delete message with module sink routing: %w", err)
@@ -174,7 +175,7 @@ func (d moduleSinkDispatcher) DeleteMessage(ctx context.Context, request otogi.D
 	return nil
 }
 
-func (d moduleSinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
+func (d moduleSinkDispatcher) SetReaction(ctx context.Context, request platform.SetReactionRequest) error {
 	request.Target = withDefaultSink(request.Target, d.defaultSink)
 	if err := d.base.SetReaction(ctx, request); err != nil {
 		return fmt.Errorf("set reaction with module sink routing: %w", err)
@@ -183,7 +184,7 @@ func (d moduleSinkDispatcher) SetReaction(ctx context.Context, request otogi.Set
 	return nil
 }
 
-func (d moduleSinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
+func (d moduleSinkDispatcher) ListSinks(ctx context.Context) ([]platform.EventSink, error) {
 	sinks, err := d.base.ListSinks(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list sinks with module sink routing: %w", err)
@@ -194,8 +195,8 @@ func (d moduleSinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink,
 
 func (d moduleSinkDispatcher) ListSinksByPlatform(
 	ctx context.Context,
-	platform otogi.Platform,
-) ([]otogi.EventSink, error) {
+	platform platform.Platform,
+) ([]platform.EventSink, error) {
 	sinks, err := d.base.ListSinksByPlatform(ctx, platform)
 	if err != nil {
 		return nil, fmt.Errorf("list sinks by platform with module sink routing: %w", err)
@@ -204,7 +205,7 @@ func (d moduleSinkDispatcher) ListSinksByPlatform(
 	return sinks, nil
 }
 
-func withDefaultSink(target otogi.OutboundTarget, defaultSink *otogi.EventSink) otogi.OutboundTarget {
+func withDefaultSink(target platform.OutboundTarget, defaultSink *platform.EventSink) platform.OutboundTarget {
 	if target.Sink != nil || defaultSink == nil {
 		return target
 	}
@@ -214,7 +215,7 @@ func withDefaultSink(target otogi.OutboundTarget, defaultSink *otogi.EventSink) 
 	return target
 }
 
-func cloneSinkRef(sink *otogi.EventSink) *otogi.EventSink {
+func cloneSinkRef(sink *platform.EventSink) *platform.EventSink {
 	if sink == nil {
 		return nil
 	}

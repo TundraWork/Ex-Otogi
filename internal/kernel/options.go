@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -34,9 +34,9 @@ type config struct {
 // ModuleRoute configures inbound source filters and default outbound sink for one module.
 type ModuleRoute struct {
 	// Sources restricts inbound delivery to matching event sources.
-	Sources []otogi.EventSource
+	Sources []platform.EventSource
 	// Sink configures the default outbound sink used when request target omits sink.
-	Sink *otogi.EventSink
+	Sink *platform.EventSink
 }
 
 type routingConfig struct {
@@ -185,7 +185,7 @@ func cloneRoute(route *ModuleRoute) *ModuleRoute {
 	}
 	cloned := ModuleRoute{}
 	if len(route.Sources) > 0 {
-		cloned.Sources = append([]otogi.EventSource(nil), route.Sources...)
+		cloned.Sources = append([]platform.EventSource(nil), route.Sources...)
 	}
 	if route.Sink != nil {
 		sink := *route.Sink

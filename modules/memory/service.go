@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // Get returns one memory entry for the provided lookup key.
-func (m *Module) Get(ctx context.Context, lookup otogi.MemoryLookup) (otogi.Memory, bool, error) {
+func (m *Module) Get(ctx context.Context, lookup core.MemoryLookup) (core.Memory, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return otogi.Memory{}, false, fmt.Errorf("memory get: %w", err)
+		return core.Memory{}, false, fmt.Errorf("memory get: %w", err)
 	}
 	if err := lookup.Validate(); err != nil {
-		return otogi.Memory{}, false, fmt.Errorf("memory get: %w", err)
+		return core.Memory{}, false, fmt.Errorf("memory get: %w", err)
 	}
 
 	now := m.now()
@@ -25,10 +26,10 @@ func (m *Module) Get(ctx context.Context, lookup otogi.MemoryLookup) (otogi.Memo
 	m.mu.RUnlock()
 	if expired {
 		m.reconcileReadKeys(now, nil, []cacheKey{key})
-		return otogi.Memory{}, false, nil
+		return core.Memory{}, false, nil
 	}
 	if !found {
-		return otogi.Memory{}, false, nil
+		return core.Memory{}, false, nil
 	}
 	m.reconcileReadKeys(now, []cacheKey{key}, nil)
 
@@ -38,16 +39,16 @@ func (m *Module) Get(ctx context.Context, lookup otogi.MemoryLookup) (otogi.Memo
 // GetBatch returns memory for all provided lookup keys that currently exist.
 func (m *Module) GetBatch(
 	ctx context.Context,
-	lookups []otogi.MemoryLookup,
-) (map[otogi.MemoryLookup]otogi.Memory, error) {
+	lookups []core.MemoryLookup,
+) (map[core.MemoryLookup]core.Memory, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("memory get batch: %w", err)
 	}
 	if len(lookups) == 0 {
-		return map[otogi.MemoryLookup]otogi.Memory{}, nil
+		return map[core.MemoryLookup]core.Memory{}, nil
 	}
 
-	batch := make([]otogi.MemoryLookup, 0, len(lookups))
+	batch := make([]core.MemoryLookup, 0, len(lookups))
 	seen := make(map[cacheKey]struct{}, len(lookups))
 	for _, lookup := range lookups {
 		if err := ctx.Err(); err != nil {
@@ -66,7 +67,7 @@ func (m *Module) GetBatch(
 	}
 
 	now := m.now()
-	results := make(map[otogi.MemoryLookup]otogi.Memory, len(batch))
+	results := make(map[core.MemoryLookup]core.Memory, len(batch))
 	touchedKeys := make([]cacheKey, 0, len(batch))
 	expiredKeys := make([]cacheKey, 0)
 
@@ -93,27 +94,27 @@ func (m *Module) GetBatch(
 }
 
 // GetReplied resolves and returns memory for event.Article.ReplyToArticleID.
-func (m *Module) GetReplied(ctx context.Context, event *otogi.Event) (otogi.Memory, bool, error) {
+func (m *Module) GetReplied(ctx context.Context, event *platform.Event) (core.Memory, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return otogi.Memory{}, false, fmt.Errorf("memory get replied: %w", err)
+		return core.Memory{}, false, fmt.Errorf("memory get replied: %w", err)
 	}
 	if event == nil {
-		return otogi.Memory{}, false, fmt.Errorf("memory get replied: nil event")
+		return core.Memory{}, false, fmt.Errorf("memory get replied: nil event")
 	}
 	if event.Article == nil || event.Article.ReplyToArticleID == "" {
-		return otogi.Memory{}, false, nil
+		return core.Memory{}, false, nil
 	}
 
-	lookup, err := otogi.ReplyMemoryLookupFromEvent(event)
+	lookup, err := core.ReplyMemoryLookupFromEvent(event)
 	if err != nil {
-		return otogi.Memory{}, false, fmt.Errorf("memory get replied: %w", err)
+		return core.Memory{}, false, fmt.Errorf("memory get replied: %w", err)
 	}
 
 	return m.Get(ctx, lookup)
 }
 
 // GetReplyChain resolves one reply chain for the event article.
-func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi.ReplyChainEntry, error) {
+func (m *Module) GetReplyChain(ctx context.Context, event *platform.Event) ([]core.ReplyChainEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("memory get reply chain: %w", err)
 	}
@@ -138,7 +139,7 @@ func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi
 	seen := map[string]struct{}{
 		event.Article.ID: {},
 	}
-	parents := make([]otogi.ReplyChainEntry, 0)
+	parents := make([]core.ReplyChainEntry, 0)
 	parentID := event.Article.ReplyToArticleID
 	for parentID != "" {
 		if err := ctx.Err(); err != nil {
@@ -149,7 +150,7 @@ func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi
 		}
 		seen[parentID] = struct{}{}
 
-		lookup := otogi.MemoryLookup{
+		lookup := core.MemoryLookup{
 			TenantID:       event.TenantID,
 			Platform:       platform,
 			ConversationID: event.Conversation.ID,
@@ -163,7 +164,7 @@ func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi
 			break
 		}
 
-		parents = append(parents, otogi.ReplyChainEntry{
+		parents = append(parents, core.ReplyChainEntry{
 			Conversation: parentSnapshot.Conversation,
 			Actor:        parentSnapshot.Actor,
 			Article:      cloneArticle(parentSnapshot.Article),
@@ -176,9 +177,9 @@ func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi
 
 	reverseReplyChainEntries(parents)
 	occurredAt := normalizeEventTime(event.OccurredAt, m.now())
-	chain := make([]otogi.ReplyChainEntry, 0, len(parents)+1)
+	chain := make([]core.ReplyChainEntry, 0, len(parents)+1)
 	chain = append(chain, parents...)
-	chain = append(chain, otogi.ReplyChainEntry{
+	chain = append(chain, core.ReplyChainEntry{
 		Conversation: event.Conversation,
 		Actor:        event.Actor,
 		Article:      cloneArticle(*event.Article),
@@ -194,8 +195,8 @@ func (m *Module) GetReplyChain(ctx context.Context, event *otogi.Event) ([]otogi
 // anchor position within the same conversation scope.
 func (m *Module) ListConversationContextBefore(
 	ctx context.Context,
-	query otogi.ConversationContextBeforeQuery,
-) ([]otogi.ConversationContextEntry, error) {
+	query core.ConversationContextBeforeQuery,
+) ([]core.ConversationContextEntry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("memory list conversation context before: %w", err)
 	}
@@ -203,7 +204,7 @@ func (m *Module) ListConversationContextBefore(
 		return nil, fmt.Errorf("memory list conversation context before: %w", err)
 	}
 	if query.BeforeLimit == 0 {
-		return []otogi.ConversationContextEntry{}, nil
+		return []core.ConversationContextEntry{}, nil
 	}
 
 	now := m.now()
@@ -227,9 +228,9 @@ func (m *Module) ListConversationContextBefore(
 
 func (m *Module) listConversationContextEntriesLocked(
 	now time.Time,
-	query otogi.ConversationContextBeforeQuery,
+	query core.ConversationContextBeforeQuery,
 	excluded map[string]struct{},
-) ([]otogi.ConversationContextEntry, []cacheKey, []cacheKey) {
+) ([]core.ConversationContextEntry, []cacheKey, []cacheKey) {
 	if query.AnchorArticleID != "" {
 		anchorKey := cacheKey{
 			tenantID:       query.TenantID,
@@ -276,7 +277,7 @@ func (m *Module) listConversationContextEntriesLocked(
 		return nil, nil, nil
 	}
 
-	entries := make([]otogi.ConversationContextEntry, 0, minInt(query.BeforeLimit, len(streamEntries)))
+	entries := make([]core.ConversationContextEntry, 0, minInt(query.BeforeLimit, len(streamEntries)))
 	touchedKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, len(streamEntries)))
 	expiredKeys := make([]cacheKey, 0)
 	for index := len(streamEntries) - 1; index >= 0 && len(entries) < query.BeforeLimit; index-- {
@@ -300,7 +301,7 @@ func (m *Module) listConversationContextEntriesLocked(
 			continue
 		}
 
-		entries = append(entries, otogi.ConversationContextEntry{
+		entries = append(entries, core.ConversationContextEntry{
 			Conversation: snapshot.Conversation,
 			Actor:        snapshot.Actor,
 			Article:      cloneArticle(snapshot.Article),
@@ -313,7 +314,7 @@ func (m *Module) listConversationContextEntriesLocked(
 	return entries, touchedKeys, expiredKeys
 }
 
-func (m *Module) getSnapshot(ctx context.Context, lookup otogi.MemoryLookup) (memorySnapshot, bool, error) {
+func (m *Module) getSnapshot(ctx context.Context, lookup core.MemoryLookup) (memorySnapshot, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return memorySnapshot{}, false, fmt.Errorf("memory get snapshot: %w", err)
 	}
@@ -339,7 +340,7 @@ func (m *Module) getSnapshot(ctx context.Context, lookup otogi.MemoryLookup) (me
 	return cloned, true, nil
 }
 
-func (m *Module) getHistory(ctx context.Context, lookup otogi.MemoryLookup) ([]otogi.Event, bool, error) {
+func (m *Module) getHistory(ctx context.Context, lookup core.MemoryLookup) ([]platform.Event, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, fmt.Errorf("memory get history: %w", err)
 	}
@@ -365,7 +366,7 @@ func (m *Module) getHistory(ctx context.Context, lookup otogi.MemoryLookup) ([]o
 	return cloned, true, nil
 }
 
-func (m *Module) getRepliedHistory(ctx context.Context, event *otogi.Event) ([]otogi.Event, bool, error) {
+func (m *Module) getRepliedHistory(ctx context.Context, event *platform.Event) ([]platform.Event, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, fmt.Errorf("memory get replied history: %w", err)
 	}
@@ -376,7 +377,7 @@ func (m *Module) getRepliedHistory(ctx context.Context, event *otogi.Event) ([]o
 		return nil, false, nil
 	}
 
-	lookup, err := otogi.ReplyMemoryLookupFromEvent(event)
+	lookup, err := core.ReplyMemoryLookupFromEvent(event)
 	if err != nil {
 		return nil, false, fmt.Errorf("memory get replied history: %w", err)
 	}
@@ -384,7 +385,7 @@ func (m *Module) getRepliedHistory(ctx context.Context, event *otogi.Event) ([]o
 	return m.getHistory(ctx, lookup)
 }
 
-func reverseReplyChainEntries(entries []otogi.ReplyChainEntry) {
+func reverseReplyChainEntries(entries []core.ReplyChainEntry) {
 	for left, right := 0, len(entries)-1; left < right; left, right = left+1, right-1 {
 		entries[left], entries[right] = entries[right], entries[left]
 	}
@@ -402,10 +403,10 @@ func (m *Module) collectConversationContextEntriesLocked(
 	now time.Time,
 	streamEntries []conversationStreamEntry,
 	startIndex int,
-	query otogi.ConversationContextBeforeQuery,
+	query core.ConversationContextBeforeQuery,
 	excluded map[string]struct{},
-) ([]otogi.ConversationContextEntry, []cacheKey, []cacheKey) {
-	entries := make([]otogi.ConversationContextEntry, 0, minInt(query.BeforeLimit, len(streamEntries)))
+) ([]core.ConversationContextEntry, []cacheKey, []cacheKey) {
+	entries := make([]core.ConversationContextEntry, 0, minInt(query.BeforeLimit, len(streamEntries)))
 	touchedKeys := make([]cacheKey, 0, minInt(query.BeforeLimit, len(streamEntries)))
 	expiredKeys := make([]cacheKey, 0)
 	for index := startIndex; index >= 0 && len(entries) < query.BeforeLimit; index-- {
@@ -423,7 +424,7 @@ func (m *Module) collectConversationContextEntriesLocked(
 			continue
 		}
 
-		entries = append(entries, otogi.ConversationContextEntry{
+		entries = append(entries, core.ConversationContextEntry{
 			Conversation: snapshot.Conversation,
 			Actor:        snapshot.Actor,
 			Article:      cloneArticle(snapshot.Article),
@@ -449,7 +450,7 @@ func (m *Module) snapshotReadLocked(now time.Time, key cacheKey) (memorySnapshot
 	return cloneMemorySnapshot(cached), true, false
 }
 
-func (m *Module) historyReadLocked(now time.Time, key cacheKey) ([]otogi.Event, bool, bool) {
+func (m *Module) historyReadLocked(now time.Time, key cacheKey) ([]platform.Event, bool, bool) {
 	if !m.isRecordLiveLocked(key, now) {
 		return nil, false, m.isRecordExpiredLocked(key, now)
 	}
@@ -465,7 +466,7 @@ func (m *Module) historyReadLocked(now time.Time, key cacheKey) ([]otogi.Event, 
 func (m *Module) memoryReadLocked(
 	now time.Time,
 	key cacheKey,
-) (memorySnapshot, []otogi.Event, bool, bool) {
+) (memorySnapshot, []platform.Event, bool, bool) {
 	snapshot, found, expired := m.snapshotReadLocked(now, key)
 	if expired || !found {
 		return memorySnapshot{}, nil, found, expired
@@ -479,8 +480,8 @@ func (m *Module) memoryReadLocked(
 	return snapshot, history, true, false
 }
 
-func buildMemory(snapshot memorySnapshot, history []otogi.Event) otogi.Memory {
-	return otogi.Memory{
+func buildMemory(snapshot memorySnapshot, history []platform.Event) core.Memory {
+	return core.Memory{
 		TenantID:     snapshot.TenantID,
 		Platform:     snapshot.Platform,
 		Conversation: snapshot.Conversation,

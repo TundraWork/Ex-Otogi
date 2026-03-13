@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -61,7 +61,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			var registry otogi.ConfigRegistry
+			var registry core.ConfigRegistry
 			if testCase.configValue != nil {
 				configs := newConfigRegistryStub()
 				mustRegisterConfig(t, configs, testCase.configValue)

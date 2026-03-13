@@ -4,13 +4,14 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestSelectLeadingContextEntries(t *testing.T) {
 	t.Parallel()
 
-	entries := []otogi.ConversationContextEntry{
+	entries := []core.ConversationContextEntry{
 		newLeadingContextEntry("ctx-1", "first context"),
 		newLeadingContextEntry("ctx-2", "second context"),
 		newLeadingContextEntry("ctx-3", "third context"),
@@ -84,11 +85,11 @@ func TestRuneCountCountsUTF8RunesWithoutAllocationSensitiveSliceLogic(t *testing
 	}
 }
 
-func newLeadingContextEntry(articleID string, text string) otogi.ConversationContextEntry {
-	return otogi.ConversationContextEntry{
-		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-		Actor:        otogi.Actor{ID: "user-1", Username: "alice"},
-		Article:      otogi.Article{ID: articleID, Text: text},
+func newLeadingContextEntry(articleID string, text string) core.ConversationContextEntry {
+	return core.ConversationContextEntry{
+		Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+		Actor:        platform.Actor{ID: "user-1", Username: "alice"},
+		Article:      platform.Article{ID: articleID, Text: text},
 		CreatedAt:    time.Unix(100, 0).UTC(),
 	}
 }

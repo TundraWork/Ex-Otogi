@@ -1,9 +1,11 @@
-package otogi
+package core
 
 import (
 	"context"
 	"fmt"
 	"time"
+
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // ServiceMemory is the canonical service registry key for memory lookups.
@@ -13,13 +15,16 @@ const ServiceMemory = "otogi.memory"
 // captured event history.
 //
 // Implementations must be concurrency-safe because handlers can resolve memory
-// entries from multiple workers at the same time.
+// entries from multiple workers at the same time. Memory is the standard way
+// modules consume prior normalized content without depending on
+// transport-specific history APIs.
 type MemoryService interface {
-	// Get returns memory for one lookup key.
+	// Get returns one current projected memory entry for one lookup key.
 	//
 	// When no entry exists, found is false and err is nil.
 	Get(ctx context.Context, lookup MemoryLookup) (memory Memory, found bool, err error)
-	// GetBatch returns memory for all lookup keys that currently exist.
+	// GetBatch returns current projected memory for all lookup keys that
+	// currently exist.
 	//
 	// Missing entries are omitted from the returned map. Implementations may
 	// coalesce duplicate lookup keys into one storage read.
@@ -28,12 +33,12 @@ type MemoryService interface {
 	//
 	// When the event has no reply target or the memory has no entry, found is
 	// false and err is nil.
-	GetReplied(ctx context.Context, event *Event) (memory Memory, found bool, err error)
+	GetReplied(ctx context.Context, event *platform.Event) (memory Memory, found bool, err error)
 	// GetReplyChain resolves one reply chain for the event article.
 	//
 	// The returned chain is ordered oldest -> newest and always includes the
 	// current inbound event article as the last entry when event is valid.
-	GetReplyChain(ctx context.Context, event *Event) ([]ReplyChainEntry, error)
+	GetReplyChain(ctx context.Context, event *platform.Event) ([]ReplyChainEntry, error)
 	// ListConversationContextBefore resolves articles immediately preceding one
 	// anchor position within the same conversation scope.
 	//
@@ -51,7 +56,7 @@ type MemoryLookup struct {
 	// TenantID scopes lookup for multi-tenant deployments.
 	TenantID string
 	// Platform identifies which upstream platform produced this memory entry.
-	Platform Platform
+	Platform platform.Platform
 	// ConversationID identifies the conversation containing the article.
 	ConversationID string
 	// ArticleID identifies the tracked article.
@@ -74,7 +79,7 @@ func (l MemoryLookup) Validate() error {
 }
 
 // MemoryLookupFromEvent creates a lookup key for the event's primary article payload.
-func MemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
+func MemoryLookupFromEvent(event *platform.Event) (MemoryLookup, error) {
 	if event == nil {
 		return MemoryLookup{}, fmt.Errorf("memory lookup from event: nil event")
 	}
@@ -94,7 +99,7 @@ func MemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
 }
 
 // ReplyMemoryLookupFromEvent creates a lookup key for event.Article.ReplyToArticleID.
-func ReplyMemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
+func ReplyMemoryLookupFromEvent(event *platform.Event) (MemoryLookup, error) {
 	if event == nil {
 		return MemoryLookup{}, fmt.Errorf("reply memory lookup from event: nil event")
 	}
@@ -114,7 +119,7 @@ func ReplyMemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
 }
 
 // MutationMemoryLookupFromEvent creates a lookup key for mutation target article.
-func MutationMemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
+func MutationMemoryLookupFromEvent(event *platform.Event) (MemoryLookup, error) {
 	if event == nil {
 		return MemoryLookup{}, fmt.Errorf("mutation memory lookup from event: nil event")
 	}
@@ -134,7 +139,7 @@ func MutationMemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
 }
 
 // ReactionMemoryLookupFromEvent creates a lookup key for reaction target article.
-func ReactionMemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
+func ReactionMemoryLookupFromEvent(event *platform.Event) (MemoryLookup, error) {
 	if event == nil {
 		return MemoryLookup{}, fmt.Errorf("reaction memory lookup from event: nil event")
 	}
@@ -154,24 +159,24 @@ func ReactionMemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
 }
 
 // TargetMemoryLookupFromEvent creates a lookup key for the event's target article by kind.
-func TargetMemoryLookupFromEvent(event *Event) (MemoryLookup, error) {
+func TargetMemoryLookupFromEvent(event *platform.Event) (MemoryLookup, error) {
 	if event == nil {
 		return MemoryLookup{}, fmt.Errorf("target memory lookup from event: nil event")
 	}
 
 	switch event.Kind {
-	case EventKindArticleCreated:
+	case platform.EventKindArticleCreated:
 		return MemoryLookupFromEvent(event)
-	case EventKindArticleEdited, EventKindArticleRetracted:
+	case platform.EventKindArticleEdited, platform.EventKindArticleRetracted:
 		return MutationMemoryLookupFromEvent(event)
-	case EventKindArticleReactionAdded, EventKindArticleReactionRemoved:
+	case platform.EventKindArticleReactionAdded, platform.EventKindArticleReactionRemoved:
 		return ReactionMemoryLookupFromEvent(event)
 	default:
 		return MemoryLookup{}, fmt.Errorf("target memory lookup from event: unsupported kind %s", event.Kind)
 	}
 }
 
-func memoryLookupWithID(event *Event, operation string, articleID string) (MemoryLookup, error) {
+func memoryLookupWithID(event *platform.Event, operation string, articleID string) (MemoryLookup, error) {
 	if event == nil {
 		return MemoryLookup{}, fmt.Errorf("%s: nil event", operation)
 	}
@@ -192,20 +197,22 @@ func memoryLookupWithID(event *Event, operation string, articleID string) (Memor
 	return lookup, nil
 }
 
-// Memory is an immutable memory entry for one article key at the current projection state.
+// Memory is an immutable memory entry for one article key at the current
+// projection state.
 type Memory struct {
 	// TenantID scopes this memory entry for multi-tenant deployments.
 	TenantID string
 	// Platform identifies the source platform.
-	Platform Platform
+	Platform platform.Platform
 	// Conversation identifies where the article was sent.
-	Conversation Conversation
+	Conversation platform.Conversation
 	// Actor identifies who authored the article when known.
-	Actor Actor
-	// Article stores the current projected article payload.
-	Article Article
+	Actor platform.Actor
+	// Article stores the current projected article payload, including framework
+	// tags when they were available to the projection pipeline.
+	Article platform.Article
 	// History stores the projected article event history in append order.
-	History []Event
+	History []platform.Event
 	// CreatedAt records when this article was first observed.
 	CreatedAt time.Time
 	// UpdatedAt records when this memory entry was last updated.
@@ -215,11 +222,11 @@ type Memory struct {
 // ReplyChainEntry is one immutable entry in a resolved reply chain.
 type ReplyChainEntry struct {
 	// Conversation identifies where this article was sent.
-	Conversation Conversation
+	Conversation platform.Conversation
 	// Actor identifies who authored this article when known.
-	Actor Actor
+	Actor platform.Actor
 	// Article stores the projected article payload for this chain entry.
-	Article Article
+	Article platform.Article
 	// CreatedAt records when this article was first observed.
 	CreatedAt time.Time
 	// UpdatedAt records when this article projection was last updated.
@@ -234,7 +241,7 @@ type ConversationContextBeforeQuery struct {
 	// TenantID scopes lookup for multi-tenant deployments.
 	TenantID string
 	// Platform identifies which upstream platform produced this memory entry.
-	Platform Platform
+	Platform platform.Platform
 	// ConversationID identifies the conversation containing the anchor.
 	ConversationID string
 	// ThreadID optionally narrows the lookup to one thread/topic within the
@@ -275,11 +282,11 @@ func (q ConversationContextBeforeQuery) Validate() error {
 // anchored conversation context lookup.
 type ConversationContextEntry struct {
 	// Conversation identifies where this article was sent.
-	Conversation Conversation
+	Conversation platform.Conversation
 	// Actor identifies who authored this article when known.
-	Actor Actor
+	Actor platform.Actor
 	// Article stores the projected article payload for this context entry.
-	Article Article
+	Article platform.Article
 	// CreatedAt records when this article was first observed.
 	CreatedAt time.Time
 	// UpdatedAt records when this article projection was last updated.

@@ -4,33 +4,33 @@ import (
 	"errors"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tgerr"
 )
 
 func mapTelegramOutboundError(
-	operation otogi.OutboundOperation,
-	sink otogi.EventSink,
+	operation platform.OutboundOperation,
+	sink platform.EventSink,
 	err error,
 ) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, otogi.ErrInvalidOutboundRequest) {
+	if errors.Is(err, platform.ErrInvalidOutboundRequest) {
 		return err
 	}
 
-	outboundErr := &otogi.OutboundError{
+	outboundErr := &platform.OutboundError{
 		Operation: operation,
-		Kind:      otogi.OutboundErrorKindUnknown,
+		Kind:      platform.OutboundErrorKindUnknown,
 		Platform:  sink.Platform,
 		SinkID:    sink.ID,
 		Cause:     err,
 	}
 
 	if retryAfter, ok := tgerr.AsFloodWait(err); ok {
-		outboundErr.Kind = otogi.OutboundErrorKindRateLimited
+		outboundErr.Kind = platform.OutboundErrorKindRateLimited
 		outboundErr.RetryAfter = retryAfter
 		if rpcErr, hasRPC := tgerr.As(err); hasRPC {
 			outboundErr.Code = rpcErr.Code
@@ -52,27 +52,27 @@ func mapTelegramOutboundError(
 	return outboundErr
 }
 
-func classifyTelegramRPCError(rpcErr *tgerr.Error) otogi.OutboundErrorKind {
+func classifyTelegramRPCError(rpcErr *tgerr.Error) platform.OutboundErrorKind {
 	if rpcErr == nil {
-		return otogi.OutboundErrorKindUnknown
+		return platform.OutboundErrorKindUnknown
 	}
 
 	errorType := strings.ToUpper(strings.TrimSpace(rpcErr.Type))
 	if rpcErr.Code == 420 || rpcErr.Code == 429 || strings.Contains(errorType, "FLOOD") {
-		return otogi.OutboundErrorKindRateLimited
+		return platform.OutboundErrorKindRateLimited
 	}
 
 	switch rpcErr.Code {
 	case 303:
-		return otogi.OutboundErrorKindTemporary
+		return platform.OutboundErrorKindTemporary
 	case 400, 401, 403, 404, 405, 406:
-		return otogi.OutboundErrorKindPermanent
+		return platform.OutboundErrorKindPermanent
 	case 500, 501, 502, 503, 504:
-		return otogi.OutboundErrorKindTemporary
+		return platform.OutboundErrorKindTemporary
 	}
 	if rpcErr.Code >= 500 {
-		return otogi.OutboundErrorKindTemporary
+		return platform.OutboundErrorKindTemporary
 	}
 
-	return otogi.OutboundErrorKindUnknown
+	return platform.OutboundErrorKindUnknown
 }

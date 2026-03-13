@@ -1,4 +1,4 @@
-package otogi
+package platform
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// EventKind identifies a neutral domain event type.
+// EventKind identifies an Otogi Protocol event type.
 type EventKind string
 
 const (
@@ -42,11 +42,16 @@ const (
 	PlatformTelegram Platform = "telegram"
 )
 
-// EventSource identifies which driver instance produced one inbound event.
+// EventSource identifies which configured driver instance produced one inbound
+// event.
 type EventSource struct {
 	// Platform identifies the upstream chat platform.
 	Platform Platform
 	// ID identifies one concrete configured driver instance.
+	//
+	// Source identity should remain stable across inbound and outbound routing so
+	// standard runtime features such as media routing and tag projection can
+	// correlate traffic for the same driver instance.
 	ID string
 }
 
@@ -72,11 +77,14 @@ const (
 	ConversationTypeChannel ConversationType = "channel"
 )
 
-// Event is the neutral protocol envelope that all drivers publish and modules consume.
+// Event is the Otogi Protocol envelope that all drivers publish and modules
+// consume.
 //
 // Event fields are intentionally composable: Article, Mutation, Reaction, and
-// StateChange are optional payload branches selected by Kind to avoid platform-specific
-// leakage.
+// StateChange are optional payload branches selected by Kind to avoid
+// platform-specific leakage. Drivers should populate only the payload branches
+// implied by Kind and should normalize source-platform data into these
+// structures before publishing.
 type Event struct {
 	// ID is a stable identifier for this event instance.
 	ID string
@@ -102,11 +110,12 @@ type Event struct {
 	Command *CommandInvocation
 	// StateChange carries membership, role, and migration transitions.
 	StateChange *StateChange
-	// Metadata stores optional driver-provided key/value context.
+	// Metadata stores optional driver-provided key/value context that does not
+	// fit into the protocol schema.
 	Metadata map[string]string
 }
 
-// Conversation identifies the neutral destination where an event occurred.
+// Conversation identifies the standardized destination where an event occurred.
 type Conversation struct {
 	// ID is the stable conversation identifier on the source platform.
 	ID string
@@ -128,7 +137,10 @@ type Actor struct {
 	IsBot bool
 }
 
-// Article holds neutral article content including rich media.
+// Article holds standardized article content including rich media.
+//
+// Modules should treat Article as the canonical inbound content model and
+// should avoid depending on transport-specific message payloads.
 type Article struct {
 	// ID is the article identifier on the source platform.
 	ID string
@@ -142,6 +154,12 @@ type Article struct {
 	Entities []TextEntity
 	// Media contains normalized attachments associated with the article.
 	Media []MediaAttachment
+	// Tags stores optional framework-level tags attached to this article.
+	//
+	// Tags are framework metadata, not end-user-visible content. They may be
+	// copied from accepted outbound tags by standard runtime infrastructure, but
+	// modules must tolerate them being absent.
+	Tags map[string]string
 	// Reactions contains the projected reaction summary derived from reaction events.
 	Reactions []ArticleReaction
 }
@@ -507,7 +525,7 @@ const (
 	ReactionActionRemove ReactionAction = "remove"
 )
 
-// Reaction holds neutral reaction/emoji metadata.
+// Reaction holds standardized reaction metadata.
 type Reaction struct {
 	// ArticleID identifies the article receiving the reaction mutation.
 	ArticleID string
@@ -622,6 +640,9 @@ func validatePayloadByKind(e *Event) error {
 		if err := ValidateTextEntities(e.Article.Text, e.Article.Entities); err != nil {
 			return newInvalidEventDetailError("article.created invalid entities", err)
 		}
+		if err := ValidateFrameworkTags(e.Article.Tags); err != nil {
+			return newInvalidEventDetailError("article.created invalid tags", err)
+		}
 	case EventKindArticleEdited, EventKindArticleRetracted:
 		if e.Mutation == nil {
 			return fmt.Errorf("%w: article mutation event requires mutation payload", ErrInvalidEvent)
@@ -654,6 +675,9 @@ func validatePayloadByKind(e *Event) error {
 		}
 		if err := ValidateTextEntities(e.Article.Text, e.Article.Entities); err != nil {
 			return newInvalidEventDetailError("command event invalid article entities", err)
+		}
+		if err := ValidateFrameworkTags(e.Article.Tags); err != nil {
+			return newInvalidEventDetailError("command event invalid article tags", err)
 		}
 	case EventKindMemberJoined, EventKindMemberLeft, EventKindRoleUpdated, EventKindChatMigrated:
 		if e.StateChange == nil {
@@ -706,4 +730,25 @@ func validateMutationSnapshotEntities(mutation *ArticleMutation) error {
 	}
 
 	return nil
+}
+
+// articleMedia returns the canonical media payload for filtering purposes.
+// For mutation events it prefers the post-mutation snapshot.
+func (e *Event) articleMedia() []MediaAttachment {
+	if e == nil {
+		return nil
+	}
+	if e.Article != nil {
+		return e.Article.Media
+	}
+	if e.Mutation != nil && e.Mutation.After != nil {
+		return e.Mutation.After.Media
+	}
+
+	return nil
+}
+
+// ArticleMedia returns the media payload that best represents this event.
+func (e *Event) ArticleMedia() []MediaAttachment {
+	return e.articleMedia()
 }

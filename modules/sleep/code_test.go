@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestCodeManagerValidate(t *testing.T) {
@@ -18,8 +18,8 @@ func TestCodeManagerValidate(t *testing.T) {
 	scope := codeScope{
 		UserID:           "user-456",
 		ConversationID:   "chat-123",
-		ConversationType: otogi.ConversationTypeGroup,
-		SourcePlatform:   otogi.PlatformTelegram,
+		ConversationType: platform.ConversationTypeGroup,
+		SourcePlatform:   platform.PlatformTelegram,
 		SourceID:         "tg-main",
 	}
 	untilDate := time.Unix(60*100+30, 0).UTC()
@@ -95,8 +95,8 @@ func TestCodeManagerValidateAcrossRestart(t *testing.T) {
 	scope := codeScope{
 		UserID:           "user-456",
 		ConversationID:   "chat-123",
-		ConversationType: otogi.ConversationTypeGroup,
-		SourcePlatform:   otogi.PlatformTelegram,
+		ConversationType: platform.ConversationTypeGroup,
+		SourcePlatform:   platform.PlatformTelegram,
 		SourceID:         "tg-main",
 	}
 	untilDate := time.Unix(60*100+30, 0).UTC()
@@ -155,8 +155,8 @@ func TestCodeManagerValidateMalformed(t *testing.T) {
 	scope := codeScope{
 		UserID:           "user-1",
 		ConversationID:   "chat-123",
-		ConversationType: otogi.ConversationTypeGroup,
-		SourcePlatform:   otogi.PlatformTelegram,
+		ConversationType: platform.ConversationTypeGroup,
+		SourcePlatform:   platform.PlatformTelegram,
 		SourceID:         "tg-main",
 	}
 	now := time.Unix(60*100, 0).UTC()

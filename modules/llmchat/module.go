@@ -9,11 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"ex-otogi/pkg/otogi/ai"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
+
 	"ex-otogi/pkg/llm"
 	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/llm/providers/gemini"
 	"ex-otogi/pkg/llm/providers/openai"
-	"ex-otogi/pkg/otogi"
 )
 
 const llmchatHandlerTimeoutGrace = 5 * time.Second
@@ -32,13 +35,13 @@ type fileModuleConfig struct {
 type Module struct {
 	cfg Config
 
-	dispatcher      otogi.SinkDispatcher
-	memory          otogi.MemoryService
-	providers       map[string]otogi.LLMProvider
-	parser          otogi.MarkdownParser
-	mediaDownloader otogi.MediaDownloader
+	dispatcher      platform.SinkDispatcher
+	memory          core.MemoryService
+	providers       map[string]ai.LLMProvider
+	parser          platform.MarkdownParser
+	mediaDownloader platform.MediaDownloader
 
-	providerRegistry otogi.LLMProviderRegistry
+	providerRegistry ai.LLMProviderRegistry
 	logger           *slog.Logger
 	clock            func() time.Time
 	sleep            func(context.Context, time.Duration) error
@@ -51,7 +54,7 @@ type Option func(*Module)
 // the ConfigRegistry during OnRegister.
 func New(options ...Option) *Module {
 	module := &Module{
-		providers: make(map[string]otogi.LLMProvider),
+		providers: make(map[string]ai.LLMProvider),
 		logger:    slog.Default(),
 		clock:     time.Now,
 		sleep:     sleepWithContext,
@@ -72,20 +75,20 @@ func (m *Module) Name() string {
 //
 // Handler subscription is registered imperatively in OnRegister after config
 // is loaded, so the handler timeout can incorporate the configured request timeout.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		AdditionalCapabilities: []otogi.Capability{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		AdditionalCapabilities: []core.Capability{
 			{
 				Name:        "llm-chat-trigger",
 				Description: "handles keyword-triggered llm chat from article events",
-				Interest: otogi.InterestSet{
-					Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
+				Interest: core.InterestSet{
+					Kinds:          []platform.EventKind{platform.EventKindArticleCreated},
 					RequireArticle: true,
 				},
 				RequiredServices: []string{
-					otogi.ServiceSinkDispatcher,
-					otogi.ServiceMemory,
-					otogi.ServiceMarkdownParser,
+					platform.ServiceSinkDispatcher,
+					core.ServiceMemory,
+					platform.ServiceMarkdownParser,
 				},
 			},
 		},
@@ -93,12 +96,12 @@ func (m *Module) Spec() otogi.ModuleSpec {
 }
 
 // OnRegister loads configuration, builds LLM providers, and resolves dependencies.
-func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) error {
-	logger, err := otogi.ResolveAs[*slog.Logger](runtime.Services(), serviceLogger)
+func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) error {
+	logger, err := core.ResolveAs[*slog.Logger](runtime.Services(), serviceLogger)
 	switch {
 	case err == nil:
 		m.logger = logger
-	case errors.Is(err, otogi.ErrServiceNotFound):
+	case errors.Is(err, core.ErrServiceNotFound):
 	default:
 		return fmt.Errorf("llmchat resolve logger: %w", err)
 	}
@@ -109,42 +112,42 @@ func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) er
 	}
 	m.cfg = cfg
 
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("llmchat resolve sink dispatcher: %w", err)
 	}
 
-	memoryService, err := otogi.ResolveAs[otogi.MemoryService](
+	memoryService, err := core.ResolveAs[core.MemoryService](
 		runtime.Services(),
-		otogi.ServiceMemory,
+		core.ServiceMemory,
 	)
 	if err != nil {
 		return fmt.Errorf("llmchat resolve memory service: %w", err)
 	}
 
-	markdownParser, err := otogi.ResolveAs[otogi.MarkdownParser](
+	markdownParser, err := core.ResolveAs[platform.MarkdownParser](
 		runtime.Services(),
-		otogi.ServiceMarkdownParser,
+		platform.ServiceMarkdownParser,
 	)
 	if err != nil {
 		return fmt.Errorf("llmchat resolve markdown parser: %w", err)
 	}
-	mediaDownloader, err := otogi.ResolveAs[otogi.MediaDownloader](
+	mediaDownloader, err := core.ResolveAs[platform.MediaDownloader](
 		runtime.Services(),
-		otogi.ServiceMediaDownloader,
+		platform.ServiceMediaDownloader,
 	)
 	switch {
 	case err == nil:
-	case errors.Is(err, otogi.ErrServiceNotFound):
+	case errors.Is(err, core.ErrServiceNotFound):
 		mediaDownloader = nil
 	default:
 		return fmt.Errorf("llmchat resolve media downloader: %w", err)
 	}
 
-	resolvedProviders := make(map[string]otogi.LLMProvider)
+	resolvedProviders := make(map[string]ai.LLMProvider)
 	for _, agent := range m.cfg.Agents {
 		providerName := strings.TrimSpace(agent.Provider)
 		if providerName == "" {
@@ -169,16 +172,16 @@ func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) er
 	m.providers = resolvedProviders
 
 	handlerTimeout := m.cfg.RequestTimeout + llmchatHandlerTimeoutGrace
-	if _, err := runtime.Subscribe(ctx, otogi.InterestSet{
-		Kinds:          []otogi.EventKind{otogi.EventKindArticleCreated},
+	if _, err := runtime.Subscribe(ctx, core.InterestSet{
+		Kinds:          []platform.EventKind{platform.EventKindArticleCreated},
 		RequireArticle: true,
-	}, otogi.SubscriptionSpec{
+	}, core.SubscriptionSpec{
 		Name:           "llmchat-articles",
 		HandlerTimeout: handlerTimeout,
 	}, m.handleArticle); err != nil {
 		return fmt.Errorf("llmchat subscribe: %w", err)
 	}
-	if err := runtime.Services().Register(otogi.ServiceLLMProviderRegistry, registry); err != nil {
+	if err := runtime.Services().Register(ai.ServiceLLMProviderRegistry, registry); err != nil {
 		return fmt.Errorf("llmchat register provider registry service: %w", err)
 	}
 
@@ -188,9 +191,9 @@ func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) er
 // loadConfig reads the module config from the registry and loads the LLM config file.
 func (m *Module) loadConfig(
 	ctx context.Context,
-	runtime otogi.ModuleRuntime,
-) (Config, otogi.LLMProviderRegistry, error) {
-	moduleCfg, err := otogi.ParseModuleConfig[fileModuleConfig](runtime.Config(), "llmchat")
+	runtime core.ModuleRuntime,
+) (Config, ai.LLMProviderRegistry, error) {
+	moduleCfg, err := core.ParseModuleConfig[fileModuleConfig](runtime.Config(), "llmchat")
 	if err != nil {
 		return Config{}, nil, fmt.Errorf("parse module config: %w", err)
 	}
@@ -226,8 +229,8 @@ func buildProviderRegistry(
 	ctx context.Context,
 	cfg llmconfig.Config,
 	logger *slog.Logger,
-) (otogi.LLMProviderRegistry, error) {
-	providers := make(map[string]otogi.LLMProvider, len(cfg.Providers))
+) (ai.LLMProviderRegistry, error) {
+	providers := make(map[string]ai.LLMProvider, len(cfg.Providers))
 	for profileKey, profile := range cfg.Providers {
 		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
 		switch providerType {
@@ -287,6 +290,7 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 	for _, agent := range cfg.Agents {
 		agents = append(agents, Agent{
 			Name:                 agent.Name,
+			Aliases:              cloneStringSlice(agent.Aliases),
 			Description:          agent.Description,
 			Provider:             agent.Provider,
 			Model:                agent.Model,
@@ -346,11 +350,11 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleArticle(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Article == nil {
 		return nil
 	}
-	if event.Kind != otogi.EventKindArticleCreated {
+	if event.Kind != platform.EventKindArticleCreated {
 		return nil
 	}
 	if event.Actor.IsBot {
@@ -366,7 +370,10 @@ func (m *Module) handleArticle(ctx context.Context, event *otogi.Event) error {
 		return fmt.Errorf("llmchat handle article: memory service not configured")
 	}
 
-	agent, prompt, matched := m.matchTriggeredAgent(event.Article.Text)
+	agent, prompt, matched, err := m.resolveTriggeredAgent(ctx, event)
+	if err != nil {
+		return fmt.Errorf("llmchat resolve triggered agent: %w", err)
+	}
 	if !matched {
 		return nil
 	}
@@ -376,14 +383,15 @@ func (m *Module) handleArticle(ctx context.Context, event *otogi.Event) error {
 		return fmt.Errorf("llmchat handle article: provider %s for agent %s is not available", agent.Provider, agent.Name)
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("llmchat derive outbound target for agent %s: %w", agent.Name, err)
 	}
 
-	placeholder, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	placeholder, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             defaultThinkingPlaceholder,
+		Tags:             llmchatArticleTags(agent),
 		ReplyToMessageID: event.Article.ID,
 	})
 	if err != nil {
@@ -450,7 +458,7 @@ func validateHandlerDeadlineBudget(ctx context.Context, requestTimeout time.Dura
 
 func (m *Module) finalizePlaceholderFailure(
 	ctx context.Context,
-	target otogi.OutboundTarget,
+	target platform.OutboundTarget,
 	placeholderMessageID string,
 	handlerErr error,
 ) error {
@@ -464,7 +472,7 @@ func (m *Module) finalizePlaceholderFailure(
 		return handlerErr
 	}
 
-	editErr := m.retryEditMessage(ctx, otogi.EditMessageRequest{
+	editErr := m.retryEditMessage(ctx, platform.EditMessageRequest{
 		Target:    target,
 		MessageID: placeholderMessageID,
 		Text:      placeholderFailureMessage,
@@ -485,16 +493,19 @@ func (m *Module) finalizePlaceholderFailure(
 func (m *Module) matchTriggeredAgent(text string) (agent Agent, prompt string, matched bool) {
 	longest := -1
 	for _, candidate := range m.cfg.Agents {
-		candidatePrompt, ok := matchAgentTrigger(text, candidate.Name)
-		if !ok {
-			continue
-		}
-		candidateLen := len([]rune(strings.TrimSpace(candidate.Name)))
-		if candidateLen > longest {
-			agent = candidate
-			prompt = candidatePrompt
-			longest = candidateLen
-			matched = true
+		for _, candidateName := range allAgentNames(candidate) {
+			candidatePrompt, ok := matchAgentTrigger(text, candidateName)
+			if !ok {
+				continue
+			}
+
+			candidateLen := len([]rune(strings.TrimSpace(candidateName)))
+			if candidateLen > longest {
+				agent = candidate
+				prompt = candidatePrompt
+				longest = candidateLen
+				matched = true
+			}
 		}
 	}
 
@@ -510,6 +521,6 @@ func (m *Module) now() time.Time {
 }
 
 var (
-	_ otogi.Module          = (*Module)(nil)
-	_ otogi.ModuleRegistrar = (*Module)(nil)
+	_ core.Module          = (*Module)(nil)
+	_ core.ModuleRegistrar = (*Module)(nil)
 )

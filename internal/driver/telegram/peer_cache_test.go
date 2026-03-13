@@ -3,7 +3,7 @@ package telegram
 import (
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 )
@@ -21,15 +21,15 @@ func TestPeerCacheRememberEnvelopeAndResolve(t *testing.T) {
 		},
 		chatsByID: map[int64]gotdChatInfo{
 			10: {
-				kind:      otogi.ConversationTypeGroup,
+				kind:      platform.ConversationTypeGroup,
 				inputPeer: &tg.InputPeerChat{ChatID: 10},
 			},
 			20: {
-				kind:      otogi.ConversationTypeGroup,
+				kind:      platform.ConversationTypeGroup,
 				inputPeer: &tg.InputPeerChannel{ChannelID: 20, AccessHash: 2020},
 			},
 			30: {
-				kind:      otogi.ConversationTypeChannel,
+				kind:      platform.ConversationTypeChannel,
 				inputPeer: &tg.InputPeerChannel{ChannelID: 30, AccessHash: 3030},
 			},
 		},
@@ -37,55 +37,55 @@ func TestPeerCacheRememberEnvelopeAndResolve(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		conversation otogi.Conversation
+		conversation platform.Conversation
 		wantType     string
 		wantErr      bool
 	}{
 		{
 			name: "resolve private user",
-			conversation: otogi.Conversation{
+			conversation: platform.Conversation{
 				ID:   "7",
-				Type: otogi.ConversationTypePrivate,
+				Type: platform.ConversationTypePrivate,
 			},
 			wantType: "*tg.InputPeerUser",
 		},
 		{
 			name: "resolve group chat",
-			conversation: otogi.Conversation{
+			conversation: platform.Conversation{
 				ID:   "10",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 			wantType: "*tg.InputPeerChat",
 		},
 		{
 			name: "resolve megagroup channel as group",
-			conversation: otogi.Conversation{
+			conversation: platform.Conversation{
 				ID:   "20",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 			wantType: "*tg.InputPeerChannel",
 		},
 		{
 			name: "resolve group fallback from channel key",
-			conversation: otogi.Conversation{
+			conversation: platform.Conversation{
 				ID:   "20",
-				Type: otogi.ConversationTypeChannel,
+				Type: platform.ConversationTypeChannel,
 			},
 			wantType: "*tg.InputPeerChannel",
 		},
 		{
 			name: "resolve channel",
-			conversation: otogi.Conversation{
+			conversation: platform.Conversation{
 				ID:   "30",
-				Type: otogi.ConversationTypeChannel,
+				Type: platform.ConversationTypeChannel,
 			},
 			wantType: "*tg.InputPeerChannel",
 		},
 		{
 			name: "unknown conversation",
-			conversation: otogi.Conversation{
+			conversation: platform.Conversation{
 				ID:   "999",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 			wantErr: true,
 		},
@@ -118,13 +118,13 @@ func TestPeerCacheRememberConversation(t *testing.T) {
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "55", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "55", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChannel{ChannelID: 55, AccessHash: 555},
 	)
 
-	groupPeer, err := cache.Resolve(otogi.Conversation{
+	groupPeer, err := cache.Resolve(platform.Conversation{
 		ID:   "55",
-		Type: otogi.ConversationTypeGroup,
+		Type: platform.ConversationTypeGroup,
 	})
 	if err != nil {
 		t.Fatalf("resolve group peer failed: %v", err)
@@ -133,9 +133,9 @@ func TestPeerCacheRememberConversation(t *testing.T) {
 		t.Fatalf("group peer type = %s, want *tg.InputPeerChannel", got)
 	}
 
-	channelPeer, err := cache.Resolve(otogi.Conversation{
+	channelPeer, err := cache.Resolve(platform.Conversation{
 		ID:   "55",
-		Type: otogi.ConversationTypeChannel,
+		Type: platform.ConversationTypeChannel,
 	})
 	if err != nil {
 		t.Fatalf("resolve channel peer fallback failed: %v", err)

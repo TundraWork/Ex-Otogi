@@ -11,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/session"
 	gotdtelegram "github.com/gotd/td/telegram"
@@ -62,10 +63,10 @@ func BuildRuntimeFromConfig(
 	name string,
 	logger *slog.Logger,
 	rawConfig []byte,
-) (otogi.EventSource, otogi.Driver, *MediaDownloader, *SinkDispatcher, error) {
+) (platform.EventSource, core.Driver, *MediaDownloader, *SinkDispatcher, error) {
 	cfg, err := parseRuntimeConfig(rawConfig)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("parse telegram runtime config: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("parse telegram runtime config: %w", err)
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -73,12 +74,12 @@ func BuildRuntimeFromConfig(
 
 	updateChannel, err := NewGotdUpdateChannel(cfg.updateBuffer)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd update channel: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd update channel: %w", err)
 	}
 
 	sessionStorage, err := newGotdSessionStorage(cfg.sessionFile)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd session storage: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd session storage: %w", err)
 	}
 
 	client := gotdtelegram.NewClient(cfg.appID, cfg.appHash, gotdtelegram.Options{
@@ -90,7 +91,7 @@ func BuildRuntimeFromConfig(
 	mediaLocators := newMediaLocatorCache(cfg.attachmentCacheEntries)
 	reactionResolver, err := NewGotdMessageReactionResolver(client.API())
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd message reaction resolver: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd message reaction resolver: %w", err)
 	}
 	source, err := NewGotdUserbotSource(
 		gotdAuthenticatedClient{
@@ -108,7 +109,7 @@ func BuildRuntimeFromConfig(
 		),
 	)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd userbot source: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd userbot source: %w", err)
 	}
 
 	driver, err := NewDriver(
@@ -121,7 +122,7 @@ func BuildRuntimeFromConfig(
 		}),
 	)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram driver: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram driver: %w", err)
 	}
 
 	mediaDownloader, err := NewMediaDownloader(
@@ -133,7 +134,7 @@ func BuildRuntimeFromConfig(
 		WithMediaDownloadVerify(cfg.downloadVerify),
 	)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram media downloader: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram media downloader: %w", err)
 	}
 
 	sink, err := NewOutboundDispatcher(
@@ -141,16 +142,16 @@ func BuildRuntimeFromConfig(
 		peers,
 		WithOutboundTimeout(cfg.publishTimeout),
 		WithOutboundLogger(logger),
-		WithSinkRef(otogi.EventSink{
+		WithSinkRef(platform.EventSink{
 			Platform: DriverPlatform,
 			ID:       name,
 		}),
 	)
 	if err != nil {
-		return otogi.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram sink dispatcher: %w", err)
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new telegram sink dispatcher: %w", err)
 	}
 
-	return otogi.EventSource{
+	return platform.EventSource{
 		Platform: DriverPlatform,
 		ID:       name,
 	}, driver, mediaDownloader, sink, nil

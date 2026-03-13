@@ -1,10 +1,14 @@
-package otogi
+package core
 
 import (
 	"fmt"
 )
 
 // ServiceRegistry provides runtime dependency injection to modules and drivers.
+//
+// Stable service names in pkg/otogi define the standard cross-package contract;
+// modules should resolve dependencies by those names instead of depending on
+// concrete driver or kernel types.
 type ServiceRegistry interface {
 	// Register binds a singleton service value to a stable name.
 	Register(name string, service any) error

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 )
 
 // Registry resolves configured LLM providers by stable profile key.
@@ -12,16 +12,16 @@ import (
 // The provider map is copied on construction and remains immutable afterward,
 // so Resolve is concurrency-safe for parallel module workers.
 type Registry struct {
-	providers map[string]otogi.LLMProvider
+	providers map[string]ai.LLMProvider
 }
 
 // NewRegistry constructs one immutable LLM provider registry.
-func NewRegistry(providers map[string]otogi.LLMProvider) (*Registry, error) {
+func NewRegistry(providers map[string]ai.LLMProvider) (*Registry, error) {
 	if len(providers) == 0 {
 		return nil, fmt.Errorf("new llm provider registry: empty providers")
 	}
 
-	cloned := make(map[string]otogi.LLMProvider, len(providers))
+	cloned := make(map[string]ai.LLMProvider, len(providers))
 	for key, provider := range providers {
 		trimmedKey := strings.TrimSpace(key)
 		if trimmedKey == "" {
@@ -40,7 +40,7 @@ func NewRegistry(providers map[string]otogi.LLMProvider) (*Registry, error) {
 }
 
 // Resolve returns one configured provider by key.
-func (r *Registry) Resolve(provider string) (otogi.LLMProvider, error) {
+func (r *Registry) Resolve(provider string) (ai.LLMProvider, error) {
 	if r == nil {
 		return nil, fmt.Errorf("resolve llm provider: nil registry")
 	}
@@ -58,4 +58,4 @@ func (r *Registry) Resolve(provider string) (otogi.LLMProvider, error) {
 	return resolved, nil
 }
 
-var _ otogi.LLMProviderRegistry = (*Registry)(nil)
+var _ ai.LLMProviderRegistry = (*Registry)(nil)

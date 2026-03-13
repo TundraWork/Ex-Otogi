@@ -7,14 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestModuleHandleCommand(t *testing.T) {
 	tests := []struct {
 		name             string
-		event            *otogi.Event
-		replied          otogi.Memory
+		event            *platform.Event
+		replied          core.Memory
 		repliedFound     bool
 		repliedErr       error
 		clientResults    []guessResult
@@ -55,8 +56,8 @@ func TestModuleHandleCommand(t *testing.T) {
 			name:         "reply query uses memory text",
 			event:        newCommandEvent("/nbnhhsh", "msg-0"),
 			repliedFound: true,
-			replied: otogi.Memory{
-				Article: otogi.Article{Text: "xswl"},
+			replied: core.Memory{
+				Article: platform.Article{Text: "xswl"},
 			},
 			clientResults:   []guessResult{{Name: "xswl", Trans: []string{"笑死我了"}}},
 			wantClientText:  "xswl",
@@ -81,8 +82,8 @@ func TestModuleHandleCommand(t *testing.T) {
 			name:         "reply without text shows unsupported message",
 			event:        newCommandEvent("/nbnhhsh", "msg-0"),
 			repliedFound: true,
-			replied: otogi.Memory{
-				Article: otogi.Article{Text: "   "},
+			replied: core.Memory{
+				Article: platform.Article{Text: "   "},
 			},
 			wantReplyText:   replyNoTextMessage,
 			wantClientCalls: 0,
@@ -206,7 +207,7 @@ func TestModuleHandleCommand(t *testing.T) {
 					t.Fatalf("reply text = %q, missing substring %q", dispatcher.lastRequest.Text, want)
 				}
 			}
-			if err := otogi.ValidateTextEntities(
+			if err := platform.ValidateTextEntities(
 				dispatcher.lastRequest.Text,
 				dispatcher.lastRequest.Entities,
 			); err != nil {
@@ -230,8 +231,8 @@ func TestModuleOnRegister(t *testing.T) {
 	runtime := &moduleRuntimeStub{
 		registry: serviceRegistryStub{
 			values: map[string]any{
-				otogi.ServiceSinkDispatcher: dispatcher,
-				otogi.ServiceMemory:         memory,
+				platform.ServiceSinkDispatcher: dispatcher,
+				core.ServiceMemory:             memory,
 			},
 		},
 		configs: configs,
@@ -278,22 +279,22 @@ func TestModuleOnRegisterErrors(t *testing.T) {
 		{
 			name: "missing dispatcher fails",
 			services: map[string]any{
-				otogi.ServiceMemory: &memoryStub{},
+				core.ServiceMemory: &memoryStub{},
 			},
 			wantErrSubstring: "resolve sink dispatcher",
 		},
 		{
 			name: "missing memory fails",
 			services: map[string]any{
-				otogi.ServiceSinkDispatcher: &captureDispatcher{},
+				platform.ServiceSinkDispatcher: &captureDispatcher{},
 			},
 			wantErrSubstring: "resolve memory service",
 		},
 		{
 			name: "invalid config fails",
 			services: map[string]any{
-				otogi.ServiceSinkDispatcher: &captureDispatcher{},
-				otogi.ServiceMemory:         &memoryStub{},
+				platform.ServiceSinkDispatcher: &captureDispatcher{},
+				core.ServiceMemory:             &memoryStub{},
 			},
 			configValue: map[string]string{
 				"request_timeout": "bad",
@@ -303,8 +304,8 @@ func TestModuleOnRegisterErrors(t *testing.T) {
 		{
 			name: "subscribe failure is wrapped",
 			services: map[string]any{
-				otogi.ServiceSinkDispatcher: &captureDispatcher{},
-				otogi.ServiceMemory:         &memoryStub{},
+				platform.ServiceSinkDispatcher: &captureDispatcher{},
+				core.ServiceMemory:             &memoryStub{},
 			},
 			subscribeErr:     errors.New("subscribe failed"),
 			wantErrSubstring: "nbnhhsh subscribe",
@@ -316,7 +317,7 @@ func TestModuleOnRegisterErrors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			var configs otogi.ConfigRegistry
+			var configs core.ConfigRegistry
 			if testCase.configValue != nil {
 				registry := newConfigRegistryStub()
 				mustRegisterConfig(t, registry, testCase.configValue)

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestDriverHandleUpdateSkipsNilDecodedEvent(t *testing.T) {
@@ -29,16 +29,16 @@ func TestDriverHandleUpdatePublishesDecodedEvent(t *testing.T) {
 	t.Parallel()
 
 	driver, err := NewDriver(NoopSource{}, driverDecoderStub{
-		event: &otogi.Event{
+		event: &platform.Event{
 			ID:         "event-1",
-			Kind:       otogi.EventKindArticleCreated,
+			Kind:       platform.EventKindArticleCreated,
 			OccurredAt: time.Unix(1_700_000_000, 0).UTC(),
-			Conversation: otogi.Conversation{
+			Conversation: platform.Conversation{
 				ID:   "chat-1",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
-			Actor:   otogi.Actor{ID: "user-1"},
-			Article: &otogi.Article{ID: "article-1", Text: "hello"},
+			Actor:   platform.Actor{ID: "user-1"},
+			Article: &platform.Article{ID: "article-1", Text: "hello"},
 		},
 	})
 	if err != nil {
@@ -64,11 +64,11 @@ func TestDriverHandleUpdatePublishesDecodedEvent(t *testing.T) {
 }
 
 type driverDecoderStub struct {
-	event *otogi.Event
+	event *platform.Event
 	err   error
 }
 
-func (d driverDecoderStub) Decode(_ context.Context, _ Update) (*otogi.Event, error) {
+func (d driverDecoderStub) Decode(_ context.Context, _ Update) (*platform.Event, error) {
 	if d.err != nil {
 		return nil, d.err
 	}
@@ -78,10 +78,10 @@ func (d driverDecoderStub) Decode(_ context.Context, _ Update) (*otogi.Event, er
 
 type driverSinkSpy struct {
 	publishCalls int
-	lastEvent    *otogi.Event
+	lastEvent    *platform.Event
 }
 
-func (s *driverSinkSpy) Publish(_ context.Context, event *otogi.Event) error {
+func (s *driverSinkSpy) Publish(_ context.Context, event *platform.Event) error {
 	s.publishCalls++
 	s.lastEvent = event
 

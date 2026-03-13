@@ -1,6 +1,6 @@
 package memory
 
-import "ex-otogi/pkg/otogi"
+import "ex-otogi/pkg/otogi/platform"
 
 func cloneMemorySnapshot(cached memorySnapshot) memorySnapshot {
 	cloned := cached
@@ -9,7 +9,7 @@ func cloneMemorySnapshot(cached memorySnapshot) memorySnapshot {
 	return cloned
 }
 
-func cloneEvent(event otogi.Event) otogi.Event {
+func cloneEvent(event platform.Event) platform.Event {
 	cloned := event
 	if event.Article != nil {
 		article := cloneArticle(*event.Article)
@@ -35,12 +35,12 @@ func cloneEvent(event otogi.Event) otogi.Event {
 	return cloned
 }
 
-func cloneEventStream(events []otogi.Event) []otogi.Event {
+func cloneEventStream(events []platform.Event) []platform.Event {
 	if len(events) == 0 {
 		return nil
 	}
 
-	cloned := make([]otogi.Event, len(events))
+	cloned := make([]platform.Event, len(events))
 	for idx, event := range events {
 		cloned[idx] = cloneEvent(event)
 	}
@@ -48,7 +48,7 @@ func cloneEventStream(events []otogi.Event) []otogi.Event {
 	return cloned
 }
 
-func cloneMutation(mutation *otogi.ArticleMutation) *otogi.ArticleMutation {
+func cloneMutation(mutation *platform.ArticleMutation) *platform.ArticleMutation {
 	if mutation == nil {
 		return nil
 	}
@@ -69,10 +69,10 @@ func cloneMutation(mutation *otogi.ArticleMutation) *otogi.ArticleMutation {
 	return &cloned
 }
 
-func cloneArticleSnapshot(snapshot otogi.ArticleSnapshot) otogi.ArticleSnapshot {
+func cloneArticleSnapshot(snapshot platform.ArticleSnapshot) platform.ArticleSnapshot {
 	cloned := snapshot
 	if len(snapshot.Entities) > 0 {
-		cloned.Entities = append([]otogi.TextEntity(nil), snapshot.Entities...)
+		cloned.Entities = append([]platform.TextEntity(nil), snapshot.Entities...)
 	} else {
 		cloned.Entities = nil
 	}
@@ -85,7 +85,7 @@ func cloneArticleSnapshot(snapshot otogi.ArticleSnapshot) otogi.ArticleSnapshot 
 	return cloned
 }
 
-func cloneStateChange(state *otogi.StateChange) *otogi.StateChange {
+func cloneStateChange(state *platform.StateChange) *platform.StateChange {
 	if state == nil {
 		return nil
 	}
@@ -110,10 +110,10 @@ func cloneStateChange(state *otogi.StateChange) *otogi.StateChange {
 	return &cloned
 }
 
-func cloneArticle(article otogi.Article) otogi.Article {
+func cloneArticle(article platform.Article) platform.Article {
 	cloned := article
 	if len(article.Entities) > 0 {
-		cloned.Entities = append([]otogi.TextEntity(nil), article.Entities...)
+		cloned.Entities = append([]platform.TextEntity(nil), article.Entities...)
 	} else {
 		cloned.Entities = nil
 	}
@@ -121,6 +121,14 @@ func cloneArticle(article otogi.Article) otogi.Article {
 		cloned.Media = cloneMediaAttachments(article.Media)
 	} else {
 		cloned.Media = nil
+	}
+	if len(article.Tags) > 0 {
+		cloned.Tags = make(map[string]string, len(article.Tags))
+		for key, value := range article.Tags {
+			cloned.Tags[key] = value
+		}
+	} else {
+		cloned.Tags = nil
 	}
 	if len(article.Reactions) > 0 {
 		cloned.Reactions = cloneArticleReactions(article.Reactions)
@@ -131,18 +139,18 @@ func cloneArticle(article otogi.Article) otogi.Article {
 	return cloned
 }
 
-func cloneArticleReactions(reactions []otogi.ArticleReaction) []otogi.ArticleReaction {
+func cloneArticleReactions(reactions []platform.ArticleReaction) []platform.ArticleReaction {
 	if len(reactions) == 0 {
 		return nil
 	}
 
-	cloned := make([]otogi.ArticleReaction, len(reactions))
+	cloned := make([]platform.ArticleReaction, len(reactions))
 	copy(cloned, reactions)
 
 	return cloned
 }
 
-func applyReactionToArticle(article *otogi.Article, reaction otogi.Reaction) {
+func applyReactionToArticle(article *platform.Article, reaction platform.Reaction) {
 	if article == nil {
 		return
 	}
@@ -159,16 +167,16 @@ func applyReactionToArticle(article *otogi.Article, reaction otogi.Reaction) {
 	}
 
 	switch reaction.Action {
-	case otogi.ReactionActionAdd:
+	case platform.ReactionActionAdd:
 		if index >= 0 {
 			article.Reactions[index].Count++
 			return
 		}
-		article.Reactions = append(article.Reactions, otogi.ArticleReaction{
+		article.Reactions = append(article.Reactions, platform.ArticleReaction{
 			Emoji: reaction.Emoji,
 			Count: 1,
 		})
-	case otogi.ReactionActionRemove:
+	case platform.ReactionActionRemove:
 		if index < 0 {
 			return
 		}
@@ -181,7 +189,7 @@ func applyReactionToArticle(article *otogi.Article, reaction otogi.Reaction) {
 	}
 }
 
-func applyReactionHistoryToArticle(article *otogi.Article, history []otogi.Event, articleID string) {
+func applyReactionHistoryToArticle(article *platform.Article, history []platform.Event, articleID string) {
 	if article == nil || len(history) == 0 {
 		return
 	}
@@ -190,7 +198,7 @@ func applyReactionHistoryToArticle(article *otogi.Article, history []otogi.Event
 		if event.Reaction == nil {
 			continue
 		}
-		if event.Kind != otogi.EventKindArticleReactionAdded && event.Kind != otogi.EventKindArticleReactionRemoved {
+		if event.Kind != platform.EventKindArticleReactionAdded && event.Kind != platform.EventKindArticleReactionRemoved {
 			continue
 		}
 		if articleID != "" && event.Reaction.ArticleID != "" && event.Reaction.ArticleID != articleID {
@@ -200,12 +208,12 @@ func applyReactionHistoryToArticle(article *otogi.Article, history []otogi.Event
 	}
 }
 
-func cloneMediaAttachments(media []otogi.MediaAttachment) []otogi.MediaAttachment {
+func cloneMediaAttachments(media []platform.MediaAttachment) []platform.MediaAttachment {
 	if len(media) == 0 {
 		return nil
 	}
 
-	cloned := make([]otogi.MediaAttachment, len(media))
+	cloned := make([]platform.MediaAttachment, len(media))
 	for idx, attachment := range media {
 		attachmentClone := attachment
 		if attachment.Preview != nil {

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 
 	"google.golang.org/genai"
 )
@@ -140,7 +140,7 @@ func TestGeminiProviderGenerateStreamValidation(t *testing.T) {
 		},
 	}
 
-	_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+	_, err := provider.GenerateStream(context.Background(), ai.LLMGenerateRequest{
 		Model: "gemini-2.5-flash",
 	})
 	if err == nil {
@@ -173,25 +173,25 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 		},
 	}
 
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gemini-2.5-flash",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys-1"},
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys-2"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys-1"},
+			{Role: ai.LLMMessageRoleSystem, Content: "sys-2"},
 			{
-				Role: otogi.LLMMessageRoleUser,
-				Parts: []otogi.LLMMessagePart{
-					{Type: otogi.LLMMessagePartTypeText, Text: "hello"},
+				Role: ai.LLMMessageRoleUser,
+				Parts: []ai.LLMMessagePart{
+					{Type: ai.LLMMessagePartTypeText, Text: "hello"},
 					{
-						Type: otogi.LLMMessagePartTypeImage,
-						Image: &otogi.LLMInputImage{
+						Type: ai.LLMMessagePartTypeImage,
+						Image: &ai.LLMInputImage{
 							MIMEType: "image/jpeg",
 							Data:     []byte{1, 2, 3, 4},
 						},
 					},
 				},
 			},
-			{Role: otogi.LLMMessageRoleAssistant, Content: "hi"},
+			{Role: ai.LLMMessageRoleAssistant, Content: "hi"},
 		},
 		MaxOutputTokens: 256,
 		Temperature:     0.2,
@@ -311,8 +311,8 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 	if chunk.Delta != "thought" {
 		t.Fatalf("chunk delta = %q, want thought", chunk.Delta)
 	}
-	if chunk.Kind != otogi.LLMGenerateChunkKindThinkingSummary {
-		t.Fatalf("chunk kind = %q, want %q", chunk.Kind, otogi.LLMGenerateChunkKindThinkingSummary)
+	if chunk.Kind != ai.LLMGenerateChunkKindThinkingSummary {
+		t.Fatalf("chunk kind = %q, want %q", chunk.Kind, ai.LLMGenerateChunkKindThinkingSummary)
 	}
 
 	chunk, recvErr = stream.Recv(context.Background())
@@ -322,8 +322,8 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 	if chunk.Delta != "answer" {
 		t.Fatalf("chunk delta = %q, want answer", chunk.Delta)
 	}
-	if chunk.Kind != otogi.LLMGenerateChunkKindOutputText {
-		t.Fatalf("chunk kind = %q, want %q", chunk.Kind, otogi.LLMGenerateChunkKindOutputText)
+	if chunk.Kind != ai.LLMGenerateChunkKindOutputText {
+		t.Fatalf("chunk kind = %q, want %q", chunk.Kind, ai.LLMGenerateChunkKindOutputText)
 	}
 
 	_, recvErr = stream.Recv(context.Background())
@@ -341,22 +341,22 @@ func TestGeminiProviderGenerateStreamRejectsSystemImages(t *testing.T) {
 		},
 	}
 
-	_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+	_, err := provider.GenerateStream(context.Background(), ai.LLMGenerateRequest{
 		Model: "gemini-2.5-flash",
-		Messages: []otogi.LLMMessage{
+		Messages: []ai.LLMMessage{
 			{
-				Role: otogi.LLMMessageRoleSystem,
-				Parts: []otogi.LLMMessagePart{
+				Role: ai.LLMMessageRoleSystem,
+				Parts: []ai.LLMMessagePart{
 					{
-						Type: otogi.LLMMessagePartTypeImage,
-						Image: &otogi.LLMInputImage{
+						Type: ai.LLMMessagePartTypeImage,
+						Image: &ai.LLMInputImage{
 							MIMEType: "image/png",
 							Data:     []byte{1, 2, 3},
 						},
 					},
 				},
 			},
-			{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+			{Role: ai.LLMMessageRoleUser, Content: "hello"},
 		},
 	})
 	if err == nil {
@@ -376,10 +376,10 @@ func TestGeminiProviderGenerateStreamInvalidMetadata(t *testing.T) {
 		},
 	}
 
-	_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+	_, err := provider.GenerateStream(context.Background(), ai.LLMGenerateRequest{
 		Model: "gemini-2.5-flash",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleUser, Content: "hello"},
 		},
 		Metadata: map[string]string{
 			metadataThinkingBudget: "-1",
@@ -406,10 +406,10 @@ func TestGeminiProviderGenerateStreamMetadataDisablesSafetyFilterOffDefault(t *t
 		},
 	}
 
-	_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+	_, err := provider.GenerateStream(context.Background(), ai.LLMGenerateRequest{
 		Model: "gemini-2.5-flash",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleUser, Content: "hello"},
 		},
 		Metadata: map[string]string{
 			metadataSafetyFilterOff: "false",
@@ -464,10 +464,10 @@ func TestGeminiProviderGenerateStreamConflictingThinkingOptions(t *testing.T) {
 				models:   &modelsClientStub{stream: emptySeq()},
 				defaults: testCase.defaults,
 			}
-			_, err := provider.GenerateStream(context.Background(), otogi.LLMGenerateRequest{
+			_, err := provider.GenerateStream(context.Background(), ai.LLMGenerateRequest{
 				Model: "gemini-2.5-flash",
-				Messages: []otogi.LLMMessage{
-					{Role: otogi.LLMMessageRoleUser, Content: "hello"},
+				Messages: []ai.LLMMessage{
+					{Role: ai.LLMMessageRoleUser, Content: "hello"},
 				},
 				Metadata: testCase.metadata,
 			})
@@ -490,7 +490,7 @@ func TestGeminiStreamEventsAndLifecycle(t *testing.T) {
 		includeThoughts  bool
 		preCancelContext bool
 		wantDelta        string
-		wantKind         otogi.LLMGenerateChunkKind
+		wantKind         ai.LLMGenerateChunkKind
 		wantErrCheck     func(error) bool
 	}{
 		{
@@ -499,7 +499,7 @@ func TestGeminiStreamEventsAndLifecycle(t *testing.T) {
 				{response: textResponse([]*genai.Part{{Text: "hello"}})},
 			},
 			wantDelta: "hello",
-			wantKind:  otogi.LLMGenerateChunkKindOutputText,
+			wantKind:  ai.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -511,7 +511,7 @@ func TestGeminiStreamEventsAndLifecycle(t *testing.T) {
 				{response: textResponse([]*genai.Part{{Text: "ok"}})},
 			},
 			wantDelta: "ok",
-			wantKind:  otogi.LLMGenerateChunkKindOutputText,
+			wantKind:  ai.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -522,7 +522,7 @@ func TestGeminiStreamEventsAndLifecycle(t *testing.T) {
 				{response: textResponse([]*genai.Part{{Text: "hidden", Thought: true}, {Text: "shown"}})},
 			},
 			wantDelta: "shown",
-			wantKind:  otogi.LLMGenerateChunkKindOutputText,
+			wantKind:  ai.LLMGenerateChunkKindOutputText,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -534,7 +534,7 @@ func TestGeminiStreamEventsAndLifecycle(t *testing.T) {
 			},
 			includeThoughts: true,
 			wantDelta:       "hidden",
-			wantKind:        otogi.LLMGenerateChunkKindThinkingSummary,
+			wantKind:        ai.LLMGenerateChunkKindThinkingSummary,
 			wantErrCheck: func(err error) bool {
 				return err == nil
 			},
@@ -625,11 +625,11 @@ func TestGeminiStreamMixedPartOrdering(t *testing.T) {
 		},
 	}), true, nil, geminiRequestDiagnostics{})
 
-	want := []otogi.LLMGenerateChunk{
-		{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: "thought-1"},
-		{Kind: otogi.LLMGenerateChunkKindOutputText, Delta: "answer-1"},
-		{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: "thought-2"},
-		{Kind: otogi.LLMGenerateChunkKindOutputText, Delta: "answer-2"},
+	want := []ai.LLMGenerateChunk{
+		{Kind: ai.LLMGenerateChunkKindThinkingSummary, Delta: "thought-1"},
+		{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "answer-1"},
+		{Kind: ai.LLMGenerateChunkKindThinkingSummary, Delta: "thought-2"},
+		{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "answer-2"},
 	}
 	for index, expected := range want {
 		chunk, err := stream.Recv(context.Background())

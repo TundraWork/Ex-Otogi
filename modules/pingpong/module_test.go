@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestModuleHandleCommand(t *testing.T) {
 	tests := []struct {
 		name         string
-		event        *otogi.Event
+		event        *platform.Event
 		sendErr      error
 		wantErr      bool
 		wantSentPong bool
@@ -109,7 +110,7 @@ func TestModuleOnRegister(t *testing.T) {
 	runtime := moduleRuntimeStub{
 		registry: serviceRegistryStub{
 			values: map[string]any{
-				otogi.ServiceSinkDispatcher: dispatcher,
+				platform.ServiceSinkDispatcher: dispatcher,
 			},
 		},
 	}
@@ -133,8 +134,8 @@ func TestModuleSpecUsesCommandCapability(t *testing.T) {
 	if len(spec.Commands) != 1 {
 		t.Fatalf("command count = %d, want 1", len(spec.Commands))
 	}
-	if spec.Commands[0].Prefix != otogi.CommandPrefixOrdinary {
-		t.Fatalf("command prefix = %q, want %q", spec.Commands[0].Prefix, otogi.CommandPrefixOrdinary)
+	if spec.Commands[0].Prefix != platform.CommandPrefixOrdinary {
+		t.Fatalf("command prefix = %q, want %q", spec.Commands[0].Prefix, platform.CommandPrefixOrdinary)
 	}
 	if spec.Commands[0].Name != pingCommandName {
 		t.Fatalf("command name = %q, want %q", spec.Commands[0].Name, pingCommandName)
@@ -147,8 +148,8 @@ func TestModuleSpecUsesCommandCapability(t *testing.T) {
 	if !handler.Capability.Interest.RequireCommand {
 		t.Fatal("expected RequireCommand to be true")
 	}
-	if len(handler.Capability.Interest.Kinds) != 1 || handler.Capability.Interest.Kinds[0] != otogi.EventKindCommandReceived {
-		t.Fatalf("kinds = %v, want [%s]", handler.Capability.Interest.Kinds, otogi.EventKindCommandReceived)
+	if len(handler.Capability.Interest.Kinds) != 1 || handler.Capability.Interest.Kinds[0] != platform.EventKindCommandReceived {
+		t.Fatalf("kinds = %v, want [%s]", handler.Capability.Interest.Kinds, platform.EventKindCommandReceived)
 	}
 	if len(handler.Capability.Interest.CommandNames) != 1 || handler.Capability.Interest.CommandNames[0] != pingCommandName {
 		t.Fatalf("command names = %v, want [%s]", handler.Capability.Interest.CommandNames, pingCommandName)
@@ -161,68 +162,68 @@ func TestModuleSpecUsesCommandCapability(t *testing.T) {
 	for _, serviceName := range handler.Capability.RequiredServices {
 		required[serviceName] = true
 	}
-	if !required[otogi.ServiceSinkDispatcher] {
-		t.Fatalf("required services missing %s", otogi.ServiceSinkDispatcher)
+	if !required[platform.ServiceSinkDispatcher] {
+		t.Fatalf("required services missing %s", platform.ServiceSinkDispatcher)
 	}
 	if len(required) != 1 {
 		t.Fatalf("required service count = %d, want 1", len(required))
 	}
 }
 
-func newCommandEvent(text string) *otogi.Event {
-	candidate, matched, err := otogi.ParseCommandCandidate(text)
+func newCommandEvent(text string) *platform.Event {
+	candidate, matched, err := platform.ParseCommandCandidate(text)
 	if err != nil {
 		panic(err)
 	}
 	if !matched {
 		panic("newCommandEvent expects command text")
 	}
-	commandKind := otogi.EventKindCommandReceived
-	if candidate.Prefix == otogi.CommandPrefixSystem {
-		commandKind = otogi.EventKindSystemCommandReceived
+	commandKind := platform.EventKindCommandReceived
+	if candidate.Prefix == platform.CommandPrefixSystem {
+		commandKind = platform.EventKindSystemCommandReceived
 	}
 
-	return &otogi.Event{
+	return &platform.Event{
 		ID:         "event-1",
 		Kind:       commandKind,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "42",
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:   "msg-1",
 			Text: text,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            candidate.Name,
 			Mention:         candidate.Mention,
 			Value:           strings.Join(candidate.Tokens, " "),
 			SourceEventID:   "source-event-1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        text,
 		},
 	}
 }
 
-func newMissingCommandPayloadEvent() *otogi.Event {
-	return &otogi.Event{
+func newMissingCommandPayloadEvent() *platform.Event {
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindCommandReceived,
+		Kind:       platform.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "42",
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:   "msg-1",
 			Text: "/ping",
 		},
@@ -233,66 +234,66 @@ type captureDispatcher struct {
 	calls       atomic.Int64
 	messageID   string
 	sendErr     error
-	lastRequest otogi.SendMessageRequest
+	lastRequest platform.SendMessageRequest
 }
 
 func (d *captureDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.calls.Add(1)
 	d.lastRequest = request
 	if d.sendErr != nil {
 		return nil, d.sendErr
 	}
 
-	return &otogi.OutboundMessage{
+	return &platform.OutboundMessage{
 		ID: d.messageID,
 	}, nil
 }
 
-func (d *captureDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (d *captureDispatcher) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (d *captureDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (d *captureDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (d *captureDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 func (d *captureDispatcher) ListSinksByPlatform(
 	context.Context,
-	otogi.Platform,
-) ([]otogi.EventSink, error) {
+	platform.Platform,
+) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 type moduleRuntimeStub struct {
-	registry otogi.ServiceRegistry
-	configs  otogi.ConfigRegistry
+	registry core.ServiceRegistry
+	configs  core.ConfigRegistry
 }
 
-func (s moduleRuntimeStub) Services() otogi.ServiceRegistry {
+func (s moduleRuntimeStub) Services() core.ServiceRegistry {
 	return s.registry
 }
 
-func (s moduleRuntimeStub) Config() otogi.ConfigRegistry {
+func (s moduleRuntimeStub) Config() core.ConfigRegistry {
 	return s.configs
 }
 
 func (moduleRuntimeStub) Subscribe(
 	context.Context,
-	otogi.InterestSet,
-	otogi.SubscriptionSpec,
-	otogi.EventHandler,
-) (otogi.Subscription, error) {
+	core.InterestSet,
+	core.SubscriptionSpec,
+	core.EventHandler,
+) (core.Subscription, error) {
 	return nil, nil
 }
 
@@ -307,7 +308,7 @@ func (s serviceRegistryStub) Register(string, any) error {
 func (s serviceRegistryStub) Resolve(name string) (any, error) {
 	value, ok := s.values[name]
 	if !ok {
-		return nil, otogi.ErrServiceNotFound
+		return nil, core.ErrServiceNotFound
 	}
 
 	return value, nil

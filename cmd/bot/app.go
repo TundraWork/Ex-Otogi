@@ -24,7 +24,8 @@ import (
 	"ex-otogi/modules/quotehelper"
 	"ex-otogi/modules/sleep"
 	"ex-otogi/modules/whoami"
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -41,16 +42,16 @@ const (
 	stdlibLogKindContextCanceled  = "context_canceled"
 )
 
-var runtimeModules = []func() otogi.Module{
-	func() otogi.Module { return memory.New() },
-	func() otogi.Module { return quotehelper.New() },
-	func() otogi.Module { return duel.New() },
-	func() otogi.Module { return nbnhhsh.New() },
-	func() otogi.Module { return pingpong.New() },
-	func() otogi.Module { return help.New() },
-	func() otogi.Module { return sleep.New() },
-	func() otogi.Module { return llmchat.New() },
-	func() otogi.Module { return whoami.New() },
+var runtimeModules = []func() core.Module{
+	func() core.Module { return memory.New() },
+	func() core.Module { return quotehelper.New() },
+	func() core.Module { return duel.New() },
+	func() core.Module { return nbnhhsh.New() },
+	func() core.Module { return pingpong.New() },
+	func() core.Module { return help.New() },
+	func() core.Module { return sleep.New() },
+	func() core.Module { return llmchat.New() },
+	func() core.Module { return whoami.New() },
 }
 
 type appConfig struct {
@@ -392,10 +393,10 @@ func parseModuleRoute(raw fileModuleRoute, scope string) (kernel.ModuleRoute, er
 		return kernel.ModuleRoute{}, fmt.Errorf("%s.sink is required", scope)
 	}
 
-	sources := make([]otogi.EventSource, 0, len(raw.Sources))
+	sources := make([]platform.EventSource, 0, len(raw.Sources))
 	for index, sourceRef := range raw.Sources {
-		source := otogi.EventSource{
-			Platform: otogi.Platform(strings.TrimSpace(sourceRef.Platform)),
+		source := platform.EventSource{
+			Platform: platform.Platform(strings.TrimSpace(sourceRef.Platform)),
 			ID:       strings.TrimSpace(sourceRef.ID),
 		}
 		if source.Platform == "" && source.ID == "" {
@@ -404,8 +405,8 @@ func parseModuleRoute(raw fileModuleRoute, scope string) (kernel.ModuleRoute, er
 		sources = append(sources, source)
 	}
 
-	sink := otogi.EventSink{
-		Platform: otogi.Platform(strings.TrimSpace(raw.Sink.Platform)),
+	sink := platform.EventSink{
+		Platform: platform.Platform(strings.TrimSpace(raw.Sink.Platform)),
 		ID:       strings.TrimSpace(raw.Sink.ID),
 	}
 	if sink.Platform == "" && sink.ID == "" {
@@ -472,13 +473,13 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 
 	if len(enabledDrivers) == 1 && cfg.routingDefault == nil {
 		sole := enabledDrivers[0]
-		platform, err := registry.PlatformForType(sole.Type)
+		driverPlatform, err := registry.PlatformForType(sole.Type)
 		if err != nil {
 			return fmt.Errorf("derive default route from driver %s: %w", sole.Name, err)
 		}
 		cfg.routingDefault = &kernel.ModuleRoute{
-			Sources: []otogi.EventSource{{Platform: platform, ID: sole.Name}},
-			Sink:    &otogi.EventSink{Platform: platform, ID: sole.Name},
+			Sources: []platform.EventSource{{Platform: driverPlatform, ID: sole.Name}},
+			Sink:    &platform.EventSink{Platform: driverPlatform, ID: sole.Name},
 		}
 	}
 
@@ -557,10 +558,10 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, err
 }
 
 type driverRuntimes struct {
-	drivers              []otogi.Driver
-	mediaDownloader      otogi.MediaDownloader
-	sinkDispatcher       otogi.SinkDispatcher
-	moderationDispatcher otogi.ModerationDispatcher
+	drivers              []core.Driver
+	mediaDownloader      platform.MediaDownloader
+	sinkDispatcher       platform.SinkDispatcher
+	moderationDispatcher platform.ModerationDispatcher
 }
 
 func buildDriverRuntime(
@@ -578,7 +579,7 @@ func buildDriverRuntime(
 		return driverRuntimes{}, fmt.Errorf("build drivers: %w", err)
 	}
 
-	drivers := make([]otogi.Driver, 0, len(runtimes))
+	drivers := make([]core.Driver, 0, len(runtimes))
 	for _, runtime := range runtimes {
 		drivers = append(drivers, runtime.Driver)
 	}
@@ -617,16 +618,16 @@ func registerRuntimeServices(
 	if dr.sinkDispatcher == nil {
 		return fmt.Errorf("register sink dispatcher service: nil dispatcher")
 	}
-	if err := kernelRuntime.RegisterService(otogi.ServiceSinkDispatcher, dr.sinkDispatcher); err != nil {
+	if err := kernelRuntime.RegisterService(platform.ServiceSinkDispatcher, dr.sinkDispatcher); err != nil {
 		return fmt.Errorf("register sink dispatcher service: %w", err)
 	}
 	if dr.mediaDownloader != nil {
-		if err := kernelRuntime.RegisterService(otogi.ServiceMediaDownloader, dr.mediaDownloader); err != nil {
+		if err := kernelRuntime.RegisterService(platform.ServiceMediaDownloader, dr.mediaDownloader); err != nil {
 			return fmt.Errorf("register media downloader service: %w", err)
 		}
 	}
 	if dr.moderationDispatcher != nil {
-		if err := kernelRuntime.RegisterService(otogi.ServiceModerationDispatcher, dr.moderationDispatcher); err != nil {
+		if err := kernelRuntime.RegisterService(platform.ServiceModerationDispatcher, dr.moderationDispatcher); err != nil {
 			return fmt.Errorf("register moderation dispatcher service: %w", err)
 		}
 	}
@@ -655,7 +656,7 @@ func registerRuntimeModules(ctx context.Context, kernelRuntime *kernel.Kernel) e
 	return nil
 }
 
-func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, drivers []otogi.Driver) error {
+func registerRuntimeDrivers(kernelRuntime *kernel.Kernel, drivers []core.Driver) error {
 	for _, runtimeDriver := range drivers {
 		if err := kernelRuntime.RegisterDriver(runtimeDriver); err != nil {
 			return fmt.Errorf("register driver %s: %w", runtimeDriver.Name(), err)

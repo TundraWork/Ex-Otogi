@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
+	"ex-otogi/pkg/otogi/platform"
+
 	"golang.org/x/sync/errgroup"
 )
 
@@ -31,7 +33,7 @@ type currentImageInput struct {
 type imageInputDownloadJob struct {
 	order      int
 	articleID  string
-	attachment otogi.MediaAttachment
+	attachment platform.MediaAttachment
 }
 
 type imageInputDownloadResult struct {
@@ -47,36 +49,36 @@ type limitedWriteBuffer struct {
 }
 
 func (m *Module) buildMessageWithImageInputs(
-	role otogi.LLMMessageRole,
+	role ai.LLMMessageRole,
 	text string,
-	detail otogi.LLMInputImageDetail,
+	detail ai.LLMInputImageDetail,
 	imageInputs []currentImageInput,
-) otogi.LLMMessage {
+) ai.LLMMessage {
 	if strings.TrimSpace(text) == "" {
-		return otogi.LLMMessage{Role: role, Content: text}
+		return ai.LLMMessage{Role: role, Content: text}
 	}
-	if role != otogi.LLMMessageRoleUser || len(imageInputs) == 0 {
-		return otogi.LLMMessage{Role: role, Content: text}
+	if role != ai.LLMMessageRoleUser || len(imageInputs) == 0 {
+		return ai.LLMMessage{Role: role, Content: text}
 	}
 
-	parts := make([]otogi.LLMMessagePart, 0, len(imageInputs)+1)
-	parts = append(parts, otogi.LLMMessagePart{
-		Type: otogi.LLMMessagePartTypeText,
+	parts := make([]ai.LLMMessagePart, 0, len(imageInputs)+1)
+	parts = append(parts, ai.LLMMessagePart{
+		Type: ai.LLMMessagePartTypeText,
 		Text: text + "\n" + serializeMessageImageInputs(imageInputs),
 	})
 	for _, input := range imageInputs {
-		image := otogi.LLMInputImage{
+		image := ai.LLMInputImage{
 			MIMEType: input.MIMEType,
 			Data:     append([]byte(nil), input.Data...),
 			Detail:   detail,
 		}
-		parts = append(parts, otogi.LLMMessagePart{
-			Type:  otogi.LLMMessagePartTypeImage,
+		parts = append(parts, ai.LLMMessagePart{
+			Type:  ai.LLMMessagePartTypeImage,
 			Image: &image,
 		})
 	}
 
-	return otogi.LLMMessage{
+	return ai.LLMMessage{
 		Role:  role,
 		Parts: parts,
 	}
@@ -84,8 +86,8 @@ func (m *Module) buildMessageWithImageInputs(
 
 func (m *Module) collectContextImageInputs(
 	ctx context.Context,
-	event *otogi.Event,
-	articles []otogi.Article,
+	event *platform.Event,
+	articles []platform.Article,
 	policy ImageInputPolicy,
 ) []currentImageInput {
 	if !policy.Enabled || event == nil || len(articles) == 0 {
@@ -151,12 +153,12 @@ func (m *Module) collectContextImageInputs(
 	return m.selectImageInputsWithinBudget(ctx, event, results, policy)
 }
 
-func filterImageInputCandidates(media []otogi.MediaAttachment) []otogi.MediaAttachment {
+func filterImageInputCandidates(media []platform.MediaAttachment) []platform.MediaAttachment {
 	if len(media) == 0 {
 		return nil
 	}
 
-	candidates := make([]otogi.MediaAttachment, 0, len(media))
+	candidates := make([]platform.MediaAttachment, 0, len(media))
 	for _, attachment := range media {
 		if isImageInputCandidate(attachment) {
 			candidates = append(candidates, attachment)
@@ -166,15 +168,15 @@ func filterImageInputCandidates(media []otogi.MediaAttachment) []otogi.MediaAtta
 	return candidates
 }
 
-func hasImageInputCandidates(article otogi.Article) bool {
+func hasImageInputCandidates(article platform.Article) bool {
 	return len(filterImageInputCandidates(article.Media)) > 0
 }
 
-func isImageInputCandidate(attachment otogi.MediaAttachment) bool {
+func isImageInputCandidate(attachment platform.MediaAttachment) bool {
 	switch attachment.Type {
-	case otogi.MediaTypePhoto:
+	case platform.MediaTypePhoto:
 		return true
-	case otogi.MediaTypeDocument:
+	case platform.MediaTypeDocument:
 		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(attachment.MIMEType)), "image/")
 	default:
 		return false
@@ -182,9 +184,9 @@ func isImageInputCandidate(attachment otogi.MediaAttachment) bool {
 }
 
 func mergeImageAttachmentMetadata(
-	original otogi.MediaAttachment,
-	downloaded otogi.MediaAttachment,
-) otogi.MediaAttachment {
+	original platform.MediaAttachment,
+	downloaded platform.MediaAttachment,
+) platform.MediaAttachment {
 	merged := original
 	if strings.TrimSpace(merged.ID) == "" {
 		merged.ID = strings.TrimSpace(downloaded.ID)
@@ -206,8 +208,8 @@ func mergeImageAttachmentMetadata(
 }
 
 func resolveImageInputMIMEType(
-	original otogi.MediaAttachment,
-	downloaded otogi.MediaAttachment,
+	original platform.MediaAttachment,
+	downloaded platform.MediaAttachment,
 	data []byte,
 ) string {
 	for _, candidate := range []string{
@@ -231,7 +233,7 @@ func isSupportedImageInputMIMEType(mimeType string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/")
 }
 
-func buildImageInputDownloadJobs(articles []otogi.Article) []imageInputDownloadJob {
+func buildImageInputDownloadJobs(articles []platform.Article) []imageInputDownloadJob {
 	jobs := make([]imageInputDownloadJob, 0)
 	seenAttachmentIDs := make(map[string]struct{})
 	for _, article := range articles {
@@ -257,9 +259,9 @@ func buildImageInputDownloadJobs(articles []otogi.Article) []imageInputDownloadJ
 
 func (m *Module) downloadImageInput(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	articleID string,
-	attachment otogi.MediaAttachment,
+	attachment platform.MediaAttachment,
 	policy ImageInputPolicy,
 ) (currentImageInput, bool) {
 	if attachment.SizeBytes > 0 && attachment.SizeBytes > policy.MaxImageBytes {
@@ -278,7 +280,7 @@ func (m *Module) downloadImageInput(
 		return currentImageInput{}, false
 	}
 
-	request := otogi.MediaDownloadRequest{
+	request := platform.MediaDownloadRequest{
 		Source:       event.Source,
 		Conversation: event.Conversation,
 		ArticleID:    articleID,
@@ -324,7 +326,7 @@ func (m *Module) downloadImageInput(
 
 func (m *Module) selectImageInputsWithinBudget(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	results []imageInputDownloadResult,
 	policy ImageInputPolicy,
 ) []currentImageInput {
@@ -390,7 +392,7 @@ func serializeMessageImageInputs(inputs []currentImageInput) string {
 
 func (m *Module) logImageInputSkip(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	articleID string,
 	attachmentID string,
 	reason string,

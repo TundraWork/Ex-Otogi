@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestRenderTelegramReadableTextHeadingThematicAndSpacing(t *testing.T) {
@@ -12,22 +12,22 @@ func TestRenderTelegramReadableTextHeadingThematicAndSpacing(t *testing.T) {
 
 	text := "# 😀bold\n\n\n---\n"
 	thematicOffset := runeIndex(text, "---")
-	rendered, err := renderTelegramReadableText(text, []otogi.TextEntity{
+	rendered, err := renderTelegramReadableText(text, []platform.TextEntity{
 		{
-			Type:   otogi.TextEntityTypeHeading,
+			Type:   platform.TextEntityTypeHeading,
 			Offset: 0,
 			Length: runeLen("# 😀bold"),
-			Heading: &otogi.TextEntityHeadingMeta{
+			Heading: &platform.TextEntityHeadingMeta{
 				Level: 1,
 			},
 		},
 		{
-			Type:   otogi.TextEntityTypeBold,
+			Type:   platform.TextEntityTypeBold,
 			Offset: runeLen("# "),
 			Length: runeLen("😀bold"),
 		},
 		{
-			Type:   otogi.TextEntityTypeThematicBreak,
+			Type:   platform.TextEntityTypeThematicBreak,
 			Offset: thematicOffset,
 			Length: runeLen("---"),
 		},
@@ -41,7 +41,7 @@ func TestRenderTelegramReadableTextHeadingThematicAndSpacing(t *testing.T) {
 		t.Fatalf("rendered text = %q, want %q", rendered.renderedText, wantText)
 	}
 
-	bold, ok := findEntityByType(rendered.renderedEntities, otogi.TextEntityTypeBold)
+	bold, ok := findEntityByType(rendered.renderedEntities, platform.TextEntityTypeBold)
 	if !ok {
 		t.Fatal("bold entity not found")
 	}
@@ -58,37 +58,37 @@ func TestRenderTelegramReadableTextTableCleanupAndRemap(t *testing.T) {
 	row2Offset := runeIndex(text, "| x | y |")
 	boldOffset := runeIndex(text, "x")
 
-	rendered, err := renderTelegramReadableText(text, []otogi.TextEntity{
+	rendered, err := renderTelegramReadableText(text, []platform.TextEntity{
 		{
-			Type:   otogi.TextEntityTypeTable,
+			Type:   platform.TextEntityTypeTable,
 			Offset: 0,
 			Length: runeLen(text),
-			Table: &otogi.TextEntityTableMeta{
+			Table: &platform.TextEntityTableMeta{
 				GroupID: "table:1",
 			},
 		},
 		{
-			Type:   otogi.TextEntityTypeTableRow,
+			Type:   platform.TextEntityTypeTableRow,
 			Offset: row0Offset,
 			Length: runeLen("| h1 | h2 |"),
-			Table: &otogi.TextEntityTableMeta{
+			Table: &platform.TextEntityTableMeta{
 				GroupID: "table:1",
 				Row:     0,
 				Header:  true,
 			},
 		},
 		{
-			Type:   otogi.TextEntityTypeTableRow,
+			Type:   platform.TextEntityTypeTableRow,
 			Offset: row2Offset,
 			Length: runeLen("| x | y |"),
-			Table: &otogi.TextEntityTableMeta{
+			Table: &platform.TextEntityTableMeta{
 				GroupID: "table:1",
 				Row:     1,
 				Header:  false,
 			},
 		},
 		{
-			Type:   otogi.TextEntityTypeBold,
+			Type:   platform.TextEntityTypeBold,
 			Offset: boldOffset,
 			Length: runeLen("x"),
 		},
@@ -102,7 +102,7 @@ func TestRenderTelegramReadableTextTableCleanupAndRemap(t *testing.T) {
 		t.Fatalf("rendered text = %q, want %q", rendered.renderedText, wantText)
 	}
 
-	bold, ok := findEntityByType(rendered.renderedEntities, otogi.TextEntityTypeBold)
+	bold, ok := findEntityByType(rendered.renderedEntities, platform.TextEntityTypeBold)
 	if !ok {
 		t.Fatal("bold entity not found")
 	}
@@ -121,12 +121,12 @@ func TestRenderTelegramReadableTextImageRewrite(t *testing.T) {
 	t.Parallel()
 
 	text := "![logo](https://img \"brand\")"
-	rendered, err := renderTelegramReadableText(text, []otogi.TextEntity{
+	rendered, err := renderTelegramReadableText(text, []platform.TextEntity{
 		{
-			Type:   otogi.TextEntityTypeImage,
+			Type:   platform.TextEntityTypeImage,
 			Offset: 0,
 			Length: runeLen(text),
-			Image: &otogi.TextEntityImageMeta{
+			Image: &platform.TextEntityImageMeta{
 				URL:   "https://img",
 				Title: "brand",
 				Alt:   "logo",
@@ -162,17 +162,17 @@ func TestRenderTelegramReadableTextMultibyteOffsetRemap(t *testing.T) {
 	t.Parallel()
 
 	text := "# 😀x"
-	rendered, err := renderTelegramReadableText(text, []otogi.TextEntity{
+	rendered, err := renderTelegramReadableText(text, []platform.TextEntity{
 		{
-			Type:   otogi.TextEntityTypeHeading,
+			Type:   platform.TextEntityTypeHeading,
 			Offset: 0,
 			Length: runeLen(text),
-			Heading: &otogi.TextEntityHeadingMeta{
+			Heading: &platform.TextEntityHeadingMeta{
 				Level: 1,
 			},
 		},
 		{
-			Type:   otogi.TextEntityTypeItalic,
+			Type:   platform.TextEntityTypeItalic,
 			Offset: runeLen("# "),
 			Length: runeLen("😀x"),
 		},
@@ -185,7 +185,7 @@ func TestRenderTelegramReadableTextMultibyteOffsetRemap(t *testing.T) {
 		t.Fatalf("rendered text = %q, want %q", rendered.renderedText, "😀x")
 	}
 
-	italic, ok := findEntityByType(rendered.renderedEntities, otogi.TextEntityTypeItalic)
+	italic, ok := findEntityByType(rendered.renderedEntities, platform.TextEntityTypeItalic)
 	if !ok {
 		t.Fatal("italic entity not found")
 	}
@@ -221,13 +221,13 @@ func TestApplyTelegramRewriteOpsSortsDeterministically(t *testing.T) {
 	}
 }
 
-func findEntityByType(entities []otogi.TextEntity, typ otogi.TextEntityType) (otogi.TextEntity, bool) {
+func findEntityByType(entities []platform.TextEntity, typ platform.TextEntityType) (platform.TextEntity, bool) {
 	for _, entity := range entities {
 		if entity.Type == typ {
 			return entity, true
 		}
 	}
-	return otogi.TextEntity{}, false
+	return platform.TextEntity{}, false
 }
 
 func runeIndex(text string, token string) int {

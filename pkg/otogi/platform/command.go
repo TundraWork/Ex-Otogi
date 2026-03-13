@@ -1,4 +1,4 @@
-package otogi
+package platform
 
 import (
 	"fmt"
@@ -57,7 +57,7 @@ func ScopeFromPrefix(prefix CommandPrefix) (CommandScope, error) {
 	}
 }
 
-// CommandCandidate is a parsed command-looking message before command-spec binding.
+// CommandCandidate is a parsed command-looking article before command-spec binding.
 type CommandCandidate struct {
 	// Prefix is the leading command prefix.
 	Prefix CommandPrefix

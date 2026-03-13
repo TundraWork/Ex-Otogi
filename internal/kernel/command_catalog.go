@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 // kernelCommandCatalog exposes kernel command registrations through ServiceRegistry.
@@ -14,7 +14,7 @@ type kernelCommandCatalog struct {
 }
 
 // ListCommands returns all registered command entries sorted by command then module.
-func (c *kernelCommandCatalog) ListCommands(ctx context.Context) ([]otogi.RegisteredCommand, error) {
+func (c *kernelCommandCatalog) ListCommands(ctx context.Context) ([]core.RegisteredCommand, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list commands: %w", err)
 	}
@@ -23,9 +23,9 @@ func (c *kernelCommandCatalog) ListCommands(ctx context.Context) ([]otogi.Regist
 	}
 
 	c.kernel.mu.RLock()
-	commands := make([]otogi.RegisteredCommand, 0, len(c.kernel.commands))
+	commands := make([]core.RegisteredCommand, 0, len(c.kernel.commands))
 	for _, registration := range c.kernel.commands {
-		commands = append(commands, otogi.RegisteredCommand{
+		commands = append(commands, core.RegisteredCommand{
 			ModuleName: registration.moduleName,
 			Command:    cloneCommandSpec(registration.spec),
 		})
@@ -44,4 +44,4 @@ func (c *kernelCommandCatalog) ListCommands(ctx context.Context) ([]otogi.Regist
 	return commands, nil
 }
 
-var _ otogi.CommandCatalog = (*kernelCommandCatalog)(nil)
+var _ core.CommandCatalog = (*kernelCommandCatalog)(nil)

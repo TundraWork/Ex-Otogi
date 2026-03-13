@@ -3,7 +3,7 @@ package telegram
 import (
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // UpdateType identifies the Telegram update semantic category.
@@ -30,7 +30,7 @@ const (
 	UpdateTypeMigration UpdateType = "migration"
 )
 
-// Update is the Telegram adapter's internal DTO before neutral decoding.
+// Update is the Telegram adapter's internal DTO before Otogi decoding.
 type Update struct {
 	// ID is a stable identifier for the mapped Telegram update.
 	ID string
@@ -67,7 +67,7 @@ type ChatRef struct {
 	// Title is the Telegram chat title when available.
 	Title string
 	// Type is the normalized conversation type.
-	Type otogi.ConversationType
+	Type platform.ConversationType
 }
 
 // ActorRef identifies Telegram actor context.
@@ -93,11 +93,11 @@ type ArticlePayload struct {
 	// Text is the normalized article text.
 	Text string
 	// Entities carries rich-text entity ranges.
-	Entities []otogi.TextEntity
+	Entities []platform.TextEntity
 	// Media carries normalized media attachments.
 	Media []MediaPayload
 	// Reactions carries projected reaction counts when included by Telegram updates.
-	Reactions []otogi.ArticleReaction
+	Reactions []platform.ArticleReaction
 }
 
 // MediaPayload represents Telegram media metadata.
@@ -105,7 +105,7 @@ type MediaPayload struct {
 	// ID is the attachment identifier.
 	ID string
 	// Type is the normalized media category.
-	Type otogi.MediaType
+	Type platform.MediaType
 	// MIMEType is the attachment MIME type.
 	MIMEType string
 	// FileName is the original attachment filename.
@@ -153,7 +153,7 @@ type ArticleSnapshotPayload struct {
 	// Text is the immutable article text snapshot.
 	Text string
 	// Entities stores immutable rich-text entities aligned with Text.
-	Entities []otogi.TextEntity
+	Entities []platform.TextEntity
 	// Media is the immutable media snapshot.
 	Media []MediaPayload
 }
@@ -208,26 +208,26 @@ type MigrationPayload struct {
 	Reason string
 }
 
-func eventKindFromUpdateType(updateType UpdateType) (otogi.EventKind, bool) {
+func eventKindFromUpdateType(updateType UpdateType) (platform.EventKind, bool) {
 	switch updateType {
 	case UpdateTypeMessage:
-		return otogi.EventKindArticleCreated, true
+		return platform.EventKindArticleCreated, true
 	case UpdateTypeEdit:
-		return otogi.EventKindArticleEdited, true
+		return platform.EventKindArticleEdited, true
 	case UpdateTypeDelete:
-		return otogi.EventKindArticleRetracted, true
+		return platform.EventKindArticleRetracted, true
 	case UpdateTypeReactionAdd:
-		return otogi.EventKindArticleReactionAdded, true
+		return platform.EventKindArticleReactionAdded, true
 	case UpdateTypeReactionRemove:
-		return otogi.EventKindArticleReactionRemoved, true
+		return platform.EventKindArticleReactionRemoved, true
 	case UpdateTypeMemberJoin:
-		return otogi.EventKindMemberJoined, true
+		return platform.EventKindMemberJoined, true
 	case UpdateTypeMemberLeave:
-		return otogi.EventKindMemberLeft, true
+		return platform.EventKindMemberLeft, true
 	case UpdateTypeRole:
-		return otogi.EventKindRoleUpdated, true
+		return platform.EventKindRoleUpdated, true
 	case UpdateTypeMigration:
-		return otogi.EventKindChatMigrated, true
+		return platform.EventKindChatMigrated, true
 	default:
 		return "", false
 	}

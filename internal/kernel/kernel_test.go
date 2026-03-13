@@ -10,7 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // TestRegisterModuleDependencyValidation verifies capability-required service validation.
@@ -48,8 +49,8 @@ func TestRegisterModuleDependencyValidation(t *testing.T) {
 
 			module := &stubModule{
 				name: "cap-module",
-				spec: otogi.ModuleSpec{
-					AdditionalCapabilities: []otogi.Capability{
+				spec: core.ModuleSpec{
+					AdditionalCapabilities: []core.Capability{
 						{Name: "needs-logger", RequiredServices: []string{"logger"}},
 					},
 				},
@@ -70,7 +71,7 @@ func TestNewFailsWhenBootstrapServiceRegistrationFails(t *testing.T) {
 
 	_, err := New(withBootstrapServicesForTest(
 		bootstrapServiceRegistration{
-			name:    otogi.ServiceCommandCatalog,
+			name:    core.ServiceCommandCatalog,
 			service: nil,
 		},
 	))
@@ -94,7 +95,7 @@ func TestRegisterModuleExposesConfigRegistryToOnRegister(t *testing.T) {
 	configSeen := make(chan string, 1)
 	module := &stubModule{
 		name: "config-reader",
-		onRegister: func(_ context.Context, runtime otogi.ModuleRuntime) error {
+		onRegister: func(_ context.Context, runtime core.ModuleRuntime) error {
 			resolved, err := runtime.Config().Resolve("config-reader")
 			if err != nil {
 				return fmt.Errorf("resolve module config: %w", err)
@@ -195,21 +196,21 @@ func TestRegisterModuleBindsDeclarativeHandlers(t *testing.T) {
 	handled := make(chan string, 1)
 	module := &stubModule{
 		name: "declarative",
-		spec: otogi.ModuleSpec{
-			Handlers: []otogi.ModuleHandler{
+		spec: core.ModuleSpec{
+			Handlers: []core.ModuleHandler{
 				{
-					Capability: otogi.Capability{
+					Capability: core.Capability{
 						Name: "message-created",
-						Interest: otogi.InterestSet{
-							Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+						Interest: core.InterestSet{
+							Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 						},
 					},
-					Subscription: otogi.SubscriptionSpec{
+					Subscription: core.SubscriptionSpec{
 						Name:    "declarative-handler",
 						Buffer:  1,
 						Workers: 1,
 					},
-					Handler: func(_ context.Context, event *otogi.Event) error {
+					Handler: func(_ context.Context, event *platform.Event) error {
 						handled <- event.ID
 						return nil
 					},
@@ -221,7 +222,7 @@ func TestRegisterModuleBindsDeclarativeHandlers(t *testing.T) {
 		t.Fatalf("register module failed: %v", err)
 	}
 
-	if err := kernelRuntime.EventBus().Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
+	if err := kernelRuntime.EventBus().Publish(context.Background(), newTestEvent("e1", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
 
@@ -251,22 +252,22 @@ func TestRegisterModuleDeclarativeHandlerTimeoutOverride(t *testing.T) {
 	observed := make(chan deadlineObservation, 1)
 	module := &stubModule{
 		name: "declarative-timeout-override",
-		spec: otogi.ModuleSpec{
-			Handlers: []otogi.ModuleHandler{
+		spec: core.ModuleSpec{
+			Handlers: []core.ModuleHandler{
 				{
-					Capability: otogi.Capability{
+					Capability: core.Capability{
 						Name: "timeout-observer",
-						Interest: otogi.InterestSet{
-							Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+						Interest: core.InterestSet{
+							Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 						},
 					},
-					Subscription: otogi.SubscriptionSpec{
+					Subscription: core.SubscriptionSpec{
 						Name:           "declarative-timeout-handler",
 						Buffer:         1,
 						Workers:        1,
 						HandlerTimeout: 250 * time.Millisecond,
 					},
-					Handler: func(ctx context.Context, _ *otogi.Event) error {
+					Handler: func(ctx context.Context, _ *platform.Event) error {
 						deadline, hasDeadline := ctx.Deadline()
 						remaining := time.Duration(0)
 						if hasDeadline {
@@ -290,7 +291,7 @@ func TestRegisterModuleDeclarativeHandlerTimeoutOverride(t *testing.T) {
 
 	if err := kernelRuntime.EventBus().Publish(
 		context.Background(),
-		newTestEvent("e-timeout-override", otogi.EventKindArticleCreated),
+		newTestEvent("e-timeout-override", platform.EventKindArticleCreated),
 	); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
@@ -315,22 +316,22 @@ func TestRegisterModuleImperativeSubscriptionCapabilityGate(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		spec    otogi.ModuleSpec
+		spec    core.ModuleSpec
 		wantErr bool
 	}{
 		{
 			name:    "missing capability fails",
-			spec:    otogi.ModuleSpec{},
+			spec:    core.ModuleSpec{},
 			wantErr: true,
 		},
 		{
 			name: "additional capability allows imperative subscribe",
-			spec: otogi.ModuleSpec{
-				AdditionalCapabilities: []otogi.Capability{
+			spec: core.ModuleSpec{
+				AdditionalCapabilities: []core.Capability{
 					{
 						Name: "imperative-capability",
-						Interest: otogi.InterestSet{
-							Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+						Interest: core.InterestSet{
+							Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 						},
 					},
 				},
@@ -352,12 +353,12 @@ func TestRegisterModuleImperativeSubscriptionCapabilityGate(t *testing.T) {
 			module := &stubModule{
 				name: "imperative",
 				spec: testCase.spec,
-				onRegister: func(ctx context.Context, runtime otogi.ModuleRuntime) error {
-					_, err := runtime.Subscribe(ctx, otogi.InterestSet{
-						Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-					}, otogi.SubscriptionSpec{
+				onRegister: func(ctx context.Context, runtime core.ModuleRuntime) error {
+					_, err := runtime.Subscribe(ctx, core.InterestSet{
+						Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+					}, core.SubscriptionSpec{
 						Name: "imperative-handler",
-					}, func(_ context.Context, _ *otogi.Event) error {
+					}, func(_ context.Context, _ *platform.Event) error {
 						return nil
 					})
 					if err != nil {
@@ -385,20 +386,20 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		spec       otogi.ModuleSpec
+		spec       core.ModuleSpec
 		wantErrSub string
 	}{
 		{
 			name: "empty handler capability name",
-			spec: otogi.ModuleSpec{
-				Handlers: []otogi.ModuleHandler{
+			spec: core.ModuleSpec{
+				Handlers: []core.ModuleHandler{
 					{
-						Capability: otogi.Capability{
-							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+						Capability: core.Capability{
+							Interest: core.InterestSet{
+								Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 							},
 						},
-						Handler: func(_ context.Context, _ *otogi.Event) error {
+						Handler: func(_ context.Context, _ *platform.Event) error {
 							return nil
 						},
 					},
@@ -408,27 +409,27 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 		},
 		{
 			name: "duplicate capability name",
-			spec: otogi.ModuleSpec{
-				Handlers: []otogi.ModuleHandler{
+			spec: core.ModuleSpec{
+				Handlers: []core.ModuleHandler{
 					{
-						Capability: otogi.Capability{
+						Capability: core.Capability{
 							Name: "dup",
-							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+							Interest: core.InterestSet{
+								Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 							},
 						},
-						Handler: func(_ context.Context, _ *otogi.Event) error {
+						Handler: func(_ context.Context, _ *platform.Event) error {
 							return nil
 						},
 					},
 					{
-						Capability: otogi.Capability{
+						Capability: core.Capability{
 							Name: "dup",
-							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindArticleEdited},
+							Interest: core.InterestSet{
+								Kinds: []platform.EventKind{platform.EventKindArticleEdited},
 							},
 						},
-						Handler: func(_ context.Context, _ *otogi.Event) error {
+						Handler: func(_ context.Context, _ *platform.Event) error {
 							return nil
 						},
 					},
@@ -438,13 +439,13 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 		},
 		{
 			name: "nil handler",
-			spec: otogi.ModuleSpec{
-				Handlers: []otogi.ModuleHandler{
+			spec: core.ModuleSpec{
+				Handlers: []core.ModuleHandler{
 					{
-						Capability: otogi.Capability{
+						Capability: core.Capability{
 							Name: "nil-handler",
-							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+							Interest: core.InterestSet{
+								Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 							},
 						},
 					},
@@ -454,29 +455,29 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 		},
 		{
 			name: "duplicate subscription name",
-			spec: otogi.ModuleSpec{
-				Handlers: []otogi.ModuleHandler{
+			spec: core.ModuleSpec{
+				Handlers: []core.ModuleHandler{
 					{
-						Capability: otogi.Capability{
+						Capability: core.Capability{
 							Name: "a",
-							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+							Interest: core.InterestSet{
+								Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 							},
 						},
-						Subscription: otogi.SubscriptionSpec{Name: "dup-sub"},
-						Handler: func(_ context.Context, _ *otogi.Event) error {
+						Subscription: core.SubscriptionSpec{Name: "dup-sub"},
+						Handler: func(_ context.Context, _ *platform.Event) error {
 							return nil
 						},
 					},
 					{
-						Capability: otogi.Capability{
+						Capability: core.Capability{
 							Name: "b",
-							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindArticleEdited},
+							Interest: core.InterestSet{
+								Kinds: []platform.EventKind{platform.EventKindArticleEdited},
 							},
 						},
-						Subscription: otogi.SubscriptionSpec{Name: "dup-sub"},
-						Handler: func(_ context.Context, _ *otogi.Event) error {
+						Subscription: core.SubscriptionSpec{Name: "dup-sub"},
+						Handler: func(_ context.Context, _ *platform.Event) error {
 							return nil
 						},
 					},
@@ -486,21 +487,21 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 		},
 		{
 			name: "duplicate additional capability name",
-			spec: otogi.ModuleSpec{
-				Handlers: []otogi.ModuleHandler{
+			spec: core.ModuleSpec{
+				Handlers: []core.ModuleHandler{
 					{
-						Capability: otogi.Capability{
+						Capability: core.Capability{
 							Name: "cap",
-							Interest: otogi.InterestSet{
-								Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
+							Interest: core.InterestSet{
+								Kinds: []platform.EventKind{platform.EventKindArticleCreated},
 							},
 						},
-						Handler: func(_ context.Context, _ *otogi.Event) error {
+						Handler: func(_ context.Context, _ *platform.Event) error {
 							return nil
 						},
 					},
 				},
-				AdditionalCapabilities: []otogi.Capability{
+				AdditionalCapabilities: []core.Capability{
 					{Name: "cap"},
 				},
 			},
@@ -508,10 +509,10 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 		},
 		{
 			name: "invalid command spec",
-			spec: otogi.ModuleSpec{
-				Commands: []otogi.CommandSpec{
+			spec: core.ModuleSpec{
+				Commands: []platform.CommandSpec{
 					{
-						Prefix: otogi.CommandPrefixOrdinary,
+						Prefix: platform.CommandPrefixOrdinary,
 					},
 				},
 			},
@@ -519,14 +520,14 @@ func TestRegisterModuleSpecValidation(t *testing.T) {
 		},
 		{
 			name: "duplicate command declaration",
-			spec: otogi.ModuleSpec{
-				Commands: []otogi.CommandSpec{
+			spec: core.ModuleSpec{
+				Commands: []platform.CommandSpec{
 					{
-						Prefix: otogi.CommandPrefixOrdinary,
+						Prefix: platform.CommandPrefixOrdinary,
 						Name:   "raw",
 					},
 					{
-						Prefix: otogi.CommandPrefixOrdinary,
+						Prefix: platform.CommandPrefixOrdinary,
 						Name:   "raw",
 					},
 				},
@@ -561,9 +562,9 @@ func TestKernelProvidesCommandCatalogService(t *testing.T) {
 	t.Parallel()
 
 	kernelRuntime := newTestKernel(t)
-	catalog, err := otogi.ResolveAs[otogi.CommandCatalog](
+	catalog, err := core.ResolveAs[core.CommandCatalog](
 		kernelRuntime.Services(),
-		otogi.ServiceCommandCatalog,
+		core.ServiceCommandCatalog,
 	)
 	if err != nil {
 		t.Fatalf("resolve command catalog failed: %v", err)
@@ -571,10 +572,10 @@ func TestKernelProvidesCommandCatalogService(t *testing.T) {
 
 	module := &stubModule{
 		name: "catalog-provider",
-		spec: otogi.ModuleSpec{
-			Commands: []otogi.CommandSpec{
-				{Prefix: otogi.CommandPrefixSystem, Name: "raw"},
-				{Prefix: otogi.CommandPrefixOrdinary, Name: "ping"},
+		spec: core.ModuleSpec{
+			Commands: []platform.CommandSpec{
+				{Prefix: platform.CommandPrefixSystem, Name: "raw"},
+				{Prefix: platform.CommandPrefixOrdinary, Name: "ping"},
 			},
 		},
 	}
@@ -592,22 +593,22 @@ func TestKernelProvidesCommandCatalogService(t *testing.T) {
 	if commands[0].ModuleName != "catalog-provider" {
 		t.Fatalf("commands[0].module_name = %q, want catalog-provider", commands[0].ModuleName)
 	}
-	if commands[0].Command.Prefix != otogi.CommandPrefixOrdinary || commands[0].Command.Name != "ping" {
+	if commands[0].Command.Prefix != platform.CommandPrefixOrdinary || commands[0].Command.Name != "ping" {
 		t.Fatalf("commands[0] = %+v, want /ping", commands[0])
 	}
 	if commands[1].ModuleName != "catalog-provider" {
 		t.Fatalf("commands[1].module_name = %q, want catalog-provider", commands[1].ModuleName)
 	}
-	if commands[1].Command.Prefix != otogi.CommandPrefixSystem || commands[1].Command.Name != "raw" {
+	if commands[1].Command.Prefix != platform.CommandPrefixSystem || commands[1].Command.Name != "raw" {
 		t.Fatalf("commands[1] = %+v, want ~raw", commands[1])
 	}
 }
 
 type stubModule struct {
 	name string
-	spec otogi.ModuleSpec
+	spec core.ModuleSpec
 
-	onRegister func(ctx context.Context, runtime otogi.ModuleRuntime) error
+	onRegister func(ctx context.Context, runtime core.ModuleRuntime) error
 
 	registered atomic.Int32
 	started    atomic.Int32
@@ -618,11 +619,11 @@ func (m *stubModule) Name() string {
 	return m.name
 }
 
-func (m *stubModule) Spec() otogi.ModuleSpec {
+func (m *stubModule) Spec() core.ModuleSpec {
 	return m.spec
 }
 
-func (m *stubModule) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) error {
+func (m *stubModule) OnRegister(ctx context.Context, runtime core.ModuleRuntime) error {
 	m.registered.Add(1)
 	if m.onRegister != nil {
 		if err := m.onRegister(ctx, runtime); err != nil {
@@ -654,7 +655,7 @@ func (d *stubDriver) Name() string {
 	return d.name
 }
 
-func (d *stubDriver) Start(ctx context.Context, _ otogi.EventDispatcher) error {
+func (d *stubDriver) Start(ctx context.Context, _ core.EventDispatcher) error {
 	d.started.Add(1)
 	<-ctx.Done()
 	return nil

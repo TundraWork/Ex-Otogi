@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
@@ -18,7 +18,7 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 	tests := []struct {
 		name   string
 		update Update
-		assert func(t *testing.T, event *otogi.Event)
+		assert func(t *testing.T, event *platform.Event)
 	}{
 		{
 			name: "message update without mutation",
@@ -28,13 +28,13 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 				OccurredAt: occurredAt,
 				Chat: ChatRef{
 					ID:   "100",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
 				Actor: ActorRef{ID: "42"},
 				Article: &ArticlePayload{
 					ID:   "777",
 					Text: "hello",
-					Reactions: []otogi.ArticleReaction{
+					Reactions: []platform.ArticleReaction{
 						{
 							Emoji: "❤️",
 							Count: 1,
@@ -42,10 +42,10 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 					},
 				},
 			},
-			assert: func(t *testing.T, event *otogi.Event) {
+			assert: func(t *testing.T, event *platform.Event) {
 				t.Helper()
-				if event.Kind != otogi.EventKindArticleCreated {
-					t.Fatalf("kind = %s, want %s", event.Kind, otogi.EventKindArticleCreated)
+				if event.Kind != platform.EventKindArticleCreated {
+					t.Fatalf("kind = %s, want %s", event.Kind, platform.EventKindArticleCreated)
 				}
 				if event.Article == nil {
 					t.Fatal("expected article payload")
@@ -72,7 +72,7 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 				OccurredAt: occurredAt,
 				Chat: ChatRef{
 					ID:   "100",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
 				Actor: ActorRef{ID: "42"},
 				Edit: &ArticleEditPayload{
@@ -80,29 +80,29 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 					ChangedAt: &changedAt,
 					Before: &ArticleSnapshotPayload{
 						Text: "hello",
-						Entities: []otogi.TextEntity{
-							{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 5},
+						Entities: []platform.TextEntity{
+							{Type: platform.TextEntityTypeBold, Offset: 0, Length: 5},
 						},
 					},
 					After: &ArticleSnapshotPayload{
 						Text: "hello edited",
-						Entities: []otogi.TextEntity{
-							{Type: otogi.TextEntityTypeItalic, Offset: 0, Length: 11},
+						Entities: []platform.TextEntity{
+							{Type: platform.TextEntityTypeItalic, Offset: 0, Length: 11},
 						},
 					},
 					Reason: "telegram_edit_update",
 				},
 			},
-			assert: func(t *testing.T, event *otogi.Event) {
+			assert: func(t *testing.T, event *platform.Event) {
 				t.Helper()
-				if event.Kind != otogi.EventKindArticleEdited {
-					t.Fatalf("kind = %s, want %s", event.Kind, otogi.EventKindArticleEdited)
+				if event.Kind != platform.EventKindArticleEdited {
+					t.Fatalf("kind = %s, want %s", event.Kind, platform.EventKindArticleEdited)
 				}
 				if event.Mutation == nil {
 					t.Fatal("expected mutation payload")
 				}
-				if event.Mutation.Type != otogi.MutationTypeEdit {
-					t.Fatalf("mutation type = %s, want %s", event.Mutation.Type, otogi.MutationTypeEdit)
+				if event.Mutation.Type != platform.MutationTypeEdit {
+					t.Fatalf("mutation type = %s, want %s", event.Mutation.Type, platform.MutationTypeEdit)
 				}
 				if event.Mutation.ChangedAt == nil {
 					t.Fatal("expected mutation changed_at")
@@ -116,13 +116,13 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 				if event.Mutation.Before == nil || event.Mutation.Before.Text != "hello" {
 					t.Fatalf("mutation before = %+v, want text hello", event.Mutation.Before)
 				}
-				if len(event.Mutation.Before.Entities) != 1 || event.Mutation.Before.Entities[0].Type != otogi.TextEntityTypeBold {
+				if len(event.Mutation.Before.Entities) != 1 || event.Mutation.Before.Entities[0].Type != platform.TextEntityTypeBold {
 					t.Fatalf("mutation before entities = %+v, want one bold entity", event.Mutation.Before.Entities)
 				}
 				if event.Mutation.After == nil || event.Mutation.After.Text != "hello edited" {
 					t.Fatalf("mutation after = %+v, want text hello edited", event.Mutation.After)
 				}
-				if len(event.Mutation.After.Entities) != 1 || event.Mutation.After.Entities[0].Type != otogi.TextEntityTypeItalic {
+				if len(event.Mutation.After.Entities) != 1 || event.Mutation.After.Entities[0].Type != platform.TextEntityTypeItalic {
 					t.Fatalf("mutation after entities = %+v, want one italic entity", event.Mutation.After.Entities)
 				}
 				if event.Article != nil {
@@ -138,7 +138,7 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 				OccurredAt: occurredAt,
 				Chat: ChatRef{
 					ID:   "100",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
 				Actor: ActorRef{ID: "42"},
 				Edit: &ArticleEditPayload{
@@ -148,10 +148,10 @@ func TestDefaultDecoderDecodeMessageAndEditPayloads(t *testing.T) {
 					},
 				},
 			},
-			assert: func(t *testing.T, event *otogi.Event) {
+			assert: func(t *testing.T, event *platform.Event) {
 				t.Helper()
-				if event.Kind != otogi.EventKindArticleEdited {
-					t.Fatalf("kind = %s, want %s", event.Kind, otogi.EventKindArticleEdited)
+				if event.Kind != platform.EventKindArticleEdited {
+					t.Fatalf("kind = %s, want %s", event.Kind, platform.EventKindArticleEdited)
 				}
 				if event.Mutation == nil {
 					t.Fatal("expected mutation payload")
@@ -192,7 +192,7 @@ func TestDefaultDecoderDecodeReactionRemove(t *testing.T) {
 		OccurredAt: occurredAt,
 		Chat: ChatRef{
 			ID:   "500",
-			Type: otogi.ConversationTypeChannel,
+			Type: platform.ConversationTypeChannel,
 		},
 		Actor: ActorRef{ID: "42"},
 		Reaction: &ArticleReactionPayload{
@@ -203,14 +203,14 @@ func TestDefaultDecoderDecodeReactionRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode failed: %v", err)
 	}
-	if event.Kind != otogi.EventKindArticleReactionRemoved {
-		t.Fatalf("kind = %s, want %s", event.Kind, otogi.EventKindArticleReactionRemoved)
+	if event.Kind != platform.EventKindArticleReactionRemoved {
+		t.Fatalf("kind = %s, want %s", event.Kind, platform.EventKindArticleReactionRemoved)
 	}
 	if event.Reaction == nil {
 		t.Fatal("expected reaction payload")
 	}
-	if event.Reaction.Action != otogi.ReactionActionRemove {
-		t.Fatalf("reaction action = %s, want %s", event.Reaction.Action, otogi.ReactionActionRemove)
+	if event.Reaction.Action != platform.ReactionActionRemove {
+		t.Fatalf("reaction action = %s, want %s", event.Reaction.Action, platform.ReactionActionRemove)
 	}
 	if event.Reaction.ArticleID != "777" {
 		t.Fatalf("reaction article id = %s, want 777", event.Reaction.ArticleID)

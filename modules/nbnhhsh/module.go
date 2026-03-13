@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -17,8 +18,8 @@ const (
 // Module expands Chinese internet abbreviations via the nbnhhsh API.
 type Module struct {
 	cfg        config
-	dispatcher otogi.SinkDispatcher
-	memory     otogi.MemoryService
+	dispatcher platform.SinkDispatcher
+	memory     core.MemoryService
 	client     guessClient
 }
 
@@ -33,14 +34,14 @@ func (m *Module) Name() string {
 }
 
 // Spec declares nbnhhsh command registrations and capability metadata.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		AdditionalCapabilities: []otogi.Capability{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		AdditionalCapabilities: []core.Capability{
 			{
 				Name:        "nbnhhsh-command-handler",
 				Description: "expands Chinese internet abbreviations for /nbnhhsh and /srh",
-				Interest: otogi.InterestSet{
-					Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+				Interest: core.InterestSet{
+					Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 					RequireCommand: true,
 					CommandNames: []string{
 						primaryCommandName,
@@ -49,19 +50,19 @@ func (m *Module) Spec() otogi.ModuleSpec {
 					RequireArticle: true,
 				},
 				RequiredServices: []string{
-					otogi.ServiceSinkDispatcher,
-					otogi.ServiceMemory,
+					platform.ServiceSinkDispatcher,
+					core.ServiceMemory,
 				},
 			},
 		},
-		Commands: []otogi.CommandSpec{
+		Commands: []platform.CommandSpec{
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        primaryCommandName,
-				Description: "expand Chinese internet abbreviations from text or a replied message",
+				Description: "expand Chinese internet abbreviations from text or a replied article",
 			},
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        aliasCommandName,
 				Description: "alias of /nbnhhsh",
 			},
@@ -70,23 +71,23 @@ func (m *Module) Spec() otogi.ModuleSpec {
 }
 
 // OnRegister loads configuration, resolves dependencies, and subscribes the command handler.
-func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) error {
+func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) error {
 	cfg, err := loadConfig(runtime.Config())
 	if err != nil {
 		return fmt.Errorf("nbnhhsh load config: %w", err)
 	}
 
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("nbnhhsh resolve sink dispatcher: %w", err)
 	}
 
-	memoryService, err := otogi.ResolveAs[otogi.MemoryService](
+	memoryService, err := core.ResolveAs[core.MemoryService](
 		runtime.Services(),
-		otogi.ServiceMemory,
+		core.ServiceMemory,
 	)
 	if err != nil {
 		return fmt.Errorf("nbnhhsh resolve memory service: %w", err)
@@ -99,15 +100,15 @@ func (m *Module) OnRegister(ctx context.Context, runtime otogi.ModuleRuntime) er
 	m.dispatcher = dispatcher
 	m.memory = memoryService
 
-	if _, err := runtime.Subscribe(ctx, otogi.InterestSet{
-		Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+	if _, err := runtime.Subscribe(ctx, core.InterestSet{
+		Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 		RequireCommand: true,
 		CommandNames: []string{
 			primaryCommandName,
 			aliasCommandName,
 		},
 		RequireArticle: true,
-	}, otogi.SubscriptionSpec{
+	}, core.SubscriptionSpec{
 		Name:           "nbnhhsh-commands",
 		HandlerTimeout: cfg.RequestTimeout + subscriptionTimeoutGrace,
 	}, m.handleCommand); err != nil {
@@ -127,11 +128,11 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleCommand(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Command == nil || event.Article == nil {
 		return nil
 	}
-	if event.Kind != otogi.EventKindCommandReceived {
+	if event.Kind != platform.EventKindCommandReceived {
 		return nil
 	}
 	if !isSupportedCommand(event.Command.Name) {
@@ -180,7 +181,7 @@ type replyOutcome struct {
 	err  error
 }
 
-func (m *Module) resolveQuerySource(ctx context.Context, event *otogi.Event) (string, replyOutcome) {
+func (m *Module) resolveQuerySource(ctx context.Context, event *platform.Event) (string, replyOutcome) {
 	query := strings.TrimSpace(event.Command.Value)
 	if query != "" {
 		return query, replyOutcome{}
@@ -197,7 +198,7 @@ func (m *Module) resolveQuerySource(ctx context.Context, event *otogi.Event) (st
 	if err != nil {
 		return "", replyOutcome{
 			sent: true,
-			err:  fmt.Errorf("nbnhhsh resolve replied message: %w", err),
+			err:  fmt.Errorf("nbnhhsh resolve replied article: %w", err),
 		}
 	}
 	if !found {
@@ -218,13 +219,13 @@ func (m *Module) resolveQuerySource(ctx context.Context, event *otogi.Event) (st
 	return query, replyOutcome{}
 }
 
-func (m *Module) reply(ctx context.Context, event *otogi.Event, message renderedMessage) error {
-	target, err := otogi.OutboundTargetFromEvent(event)
+func (m *Module) reply(ctx context.Context, event *platform.Event, message renderedMessage) error {
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("nbnhhsh derive outbound target: %w", err)
 	}
 
-	_, err = m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	_, err = m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             message.Text,
 		Entities:         message.Entities,
@@ -247,6 +248,6 @@ func isSupportedCommand(name string) bool {
 }
 
 var (
-	_ otogi.Module          = (*Module)(nil)
-	_ otogi.ModuleRegistrar = (*Module)(nil)
+	_ core.Module          = (*Module)(nil)
+	_ core.ModuleRegistrar = (*Module)(nil)
 )

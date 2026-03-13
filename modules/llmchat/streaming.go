@@ -8,7 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -20,10 +21,10 @@ const (
 func (m *Module) streamProviderReply(
 	streamCtx context.Context,
 	deliveryCtx context.Context,
-	target otogi.OutboundTarget,
+	target platform.OutboundTarget,
 	placeholderMessageID string,
-	provider otogi.LLMProvider,
-	req otogi.LLMGenerateRequest,
+	provider ai.LLMProvider,
+	req ai.LLMGenerateRequest,
 ) (err error) {
 	if streamCtx == nil {
 		return fmt.Errorf("stream provider reply: nil stream context")
@@ -79,7 +80,7 @@ func (m *Module) streamProviderReply(
 		}
 
 		switch chunk.Kind.Normalize() {
-		case otogi.LLMGenerateChunkKindThinkingSummary:
+		case ai.LLMGenerateChunkKindThinkingSummary:
 			thinkingChunks++
 			thinkingBuilder.WriteString(chunk.Delta)
 		default:
@@ -108,7 +109,7 @@ func (m *Module) streamProviderReply(
 			continue
 		}
 
-		editErr := m.dispatcher.EditMessage(streamCtx, otogi.EditMessageRequest{
+		editErr := m.dispatcher.EditMessage(streamCtx, platform.EditMessageRequest{
 			Target:    target,
 			MessageID: placeholderMessageID,
 			Text:      payload.Text,
@@ -146,7 +147,7 @@ func (m *Module) streamProviderReply(
 		return nil
 	}
 
-	finalEditErr := m.retryEditMessage(deliveryCtx, otogi.EditMessageRequest{
+	finalEditErr := m.retryEditMessage(deliveryCtx, platform.EditMessageRequest{
 		Target:    target,
 		MessageID: placeholderMessageID,
 		Text:      finalPayload.Text,
@@ -272,7 +273,7 @@ func isRateLimitError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if _, ok := otogi.AsOutboundRateLimit(err); ok {
+	if _, ok := platform.AsOutboundRateLimit(err); ok {
 		return true
 	}
 

@@ -1,4 +1,4 @@
-package otogi
+package platform
 
 import (
 	"context"
@@ -10,6 +10,9 @@ import (
 const ServiceMediaDownloader = "otogi.media_downloader"
 
 // MediaDownloader streams attachment bytes from one concrete source platform.
+//
+// Modules should use this interface as the standard attachment retrieval path
+// instead of calling platform SDKs directly.
 type MediaDownloader interface {
 	// Download resolves and streams one attachment into output.
 	Download(ctx context.Context, request MediaDownloadRequest, output io.Writer) (MediaAttachment, error)

@@ -11,7 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -107,7 +108,7 @@ type card struct {
 
 type conversationKey struct {
 	tenantID       string
-	platform       otogi.Platform
+	platform       platform.Platform
 	sourceID       string
 	conversationID string
 }
@@ -128,7 +129,7 @@ type participantRef struct {
 
 type gameState struct {
 	key            conversationKey
-	target         otogi.OutboundTarget
+	target         platform.OutboundTarget
 	boardMessageID string
 	phase          phase
 	hostID         string
@@ -158,9 +159,9 @@ type duelInput struct {
 // Module provides multiplayer blackjack-style duels in group conversations.
 type Module struct {
 	cfg            config
-	dispatcher     otogi.SinkDispatcher
-	moderation     otogi.ModerationDispatcher
-	memory         otogi.MemoryService
+	dispatcher     platform.SinkDispatcher
+	moderation     platform.ModerationDispatcher
+	memory         core.MemoryService
 	now            func() time.Time
 	shuffler       deckShuffler
 	renderer       *renderer
@@ -183,39 +184,39 @@ func (m *Module) Name() string {
 }
 
 // Spec declares duel command registrations and the serialized event handler.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		Handlers: []otogi.ModuleHandler{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		Handlers: []core.ModuleHandler{
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "duel-event-handler",
 					Description: "manages duel lobbies, gameplay, and timeout cleanup",
-					Interest: otogi.InterestSet{
-						Kinds: []otogi.EventKind{
-							otogi.EventKindArticleCreated,
-							otogi.EventKindCommandReceived,
+					Interest: core.InterestSet{
+						Kinds: []platform.EventKind{
+							platform.EventKindArticleCreated,
+							platform.EventKindCommandReceived,
 						},
 						RequireArticle: true,
 					},
 					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceModerationDispatcher,
-						otogi.ServiceMemory,
+						platform.ServiceSinkDispatcher,
+						platform.ServiceModerationDispatcher,
+						core.ServiceMemory,
 					},
 				},
-				Subscription: otogi.SubscriptionSpec{
+				Subscription: core.SubscriptionSpec{
 					Name:    "duel-events",
 					Workers: 1,
 				},
 				Handler: m.handleEvent,
 			},
 		},
-		Commands: []otogi.CommandSpec{
+		Commands: []platform.CommandSpec{
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        duelCommandName,
 				Description: "发起对局；回复消息可 1v1，也能用 --max/--start/--cancel 控制等待中的对局",
-				Options: []otogi.CommandOptionSpec{
+				Options: []platform.CommandOptionSpec{
 					{
 						Name:        "max",
 						Alias:       "m",
@@ -235,17 +236,17 @@ func (m *Module) Spec() otogi.ModuleSpec {
 				},
 			},
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        joinCommandName,
 				Description: "加入当前对局，或接受 1v1 邀请",
 			},
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        hitCommandName,
 				Description: "在对局中摸一张牌",
 			},
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        standCommandName,
 				Description: "在对局中停牌并保留当前点数",
 			},
@@ -254,31 +255,31 @@ func (m *Module) Spec() otogi.ModuleSpec {
 }
 
 // OnRegister loads config and resolves runtime dependencies.
-func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
+func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error {
 	cfg, err := loadConfig(runtime.Config())
 	if err != nil {
 		return fmt.Errorf("duel load config: %w", err)
 	}
 
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("duel resolve sink dispatcher: %w", err)
 	}
 
-	moderation, err := otogi.ResolveAs[otogi.ModerationDispatcher](
+	moderation, err := core.ResolveAs[platform.ModerationDispatcher](
 		runtime.Services(),
-		otogi.ServiceModerationDispatcher,
+		platform.ServiceModerationDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("duel resolve moderation dispatcher: %w", err)
 	}
 
-	memoryService, err := otogi.ResolveAs[otogi.MemoryService](
+	memoryService, err := core.ResolveAs[core.MemoryService](
 		runtime.Services(),
-		otogi.ServiceMemory,
+		core.ServiceMemory,
 	)
 	if err != nil {
 		return fmt.Errorf("duel resolve memory service: %w", err)
@@ -357,7 +358,7 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleEvent(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Article == nil {
 		return nil
 	}
@@ -377,10 +378,10 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 	if err := m.expireConversationStateLocked(ctx, conversationKeyFromEvent(event)); err != nil {
 		return err
 	}
-	if event.Kind != otogi.EventKindCommandReceived || event.Command == nil {
+	if event.Kind != platform.EventKindCommandReceived || event.Command == nil {
 		return nil
 	}
-	if event.Conversation.Type != otogi.ConversationTypeGroup {
+	if event.Conversation.Type != platform.ConversationTypeGroup {
 		return m.reply(ctx, event, notGroupMessage())
 	}
 	if strings.TrimSpace(event.Actor.ID) == "" {
@@ -401,7 +402,7 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 	}
 }
 
-func (m *Module) handleDuelCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleDuelCommand(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Command == nil || event.Article == nil {
 		return nil
 	}
@@ -436,7 +437,7 @@ func (m *Module) handleDuelCommand(ctx context.Context, event *otogi.Event) erro
 	return m.reply(ctx, event, duelBusyMessage())
 }
 
-func (m *Module) handleJoinCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleJoinCommand(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Article == nil {
 		return nil
 	}
@@ -468,7 +469,7 @@ func (m *Module) handleJoinCommand(ctx context.Context, event *otogi.Event) erro
 	return m.editBoard(ctx, state, m.renderer.lobbyBoard(state, m.now(), joinedLobbyNote(player.Name)))
 }
 
-func (m *Module) handleHitCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleHitCommand(ctx context.Context, event *platform.Event) error {
 	key := conversationKeyFromEvent(event)
 	state := m.games[key]
 	if state == nil || state.phase != phaseGame {
@@ -492,7 +493,7 @@ func (m *Module) handleHitCommand(ctx context.Context, event *otogi.Event) error
 	return m.editBoard(ctx, state, m.renderer.gameBoard(state, m.now(), hitNote(player.Name, card)))
 }
 
-func (m *Module) handleStandCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleStandCommand(ctx context.Context, event *platform.Event) error {
 	key := conversationKeyFromEvent(event)
 	state := m.games[key]
 	if state == nil || state.phase != phaseGame {
@@ -514,12 +515,12 @@ func (m *Module) handleStandCommand(ctx context.Context, event *otogi.Event) err
 
 func (m *Module) openDirectChallenge(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	key conversationKey,
 ) error {
 	replied, found, err := m.memory.GetReplied(ctx, event)
 	if err != nil {
-		return fmt.Errorf("duel resolve replied message: %w", err)
+		return fmt.Errorf("duel resolve replied article: %w", err)
 	}
 	if !found {
 		return m.reply(ctx, event, directChallengeNotFoundMessage())
@@ -534,7 +535,7 @@ func (m *Module) openDirectChallenge(
 		return m.reply(ctx, event, botCannotJoinMessage())
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("duel derive outbound target: %w", err)
 	}
@@ -548,7 +549,7 @@ func (m *Module) openDirectChallenge(
 		m.now().Add(m.cfg.JoinTimeout),
 	)
 
-	message, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	message, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             m.renderer.lobbyBoard(state, m.now(), directChallengeCreatedNote(actorName(event.Actor))),
 		ReplyToMessageID: event.Article.ID,
@@ -565,7 +566,7 @@ func (m *Module) openDirectChallenge(
 
 func (m *Module) openLobby(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	key conversationKey,
 	input duelInput,
 ) error {
@@ -580,14 +581,14 @@ func (m *Module) openLobby(
 		maxPlayers = input.max
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("duel derive outbound target: %w", err)
 	}
 
 	state := newLobbyState(key, target, event.Actor, nil, maxPlayers, m.now().Add(m.cfg.JoinTimeout))
 
-	message, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	message, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             m.renderer.lobbyBoard(state, m.now(), lobbyCreatedNote(actorName(event.Actor))),
 		ReplyToMessageID: event.Article.ID,
@@ -604,7 +605,7 @@ func (m *Module) openLobby(
 
 func (m *Module) controlExistingLobby(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	state *gameState,
 	input duelInput,
 ) error {
@@ -716,7 +717,7 @@ func (m *Module) finishCurrentGame(ctx context.Context, state *gameState, result
 	}
 	untilDate := m.now().Add(m.cfg.LoserMuteDuration)
 	for _, id := range state.loserOrder(result.loserReasons) {
-		if err := m.moderation.RestrictMember(ctx, otogi.RestrictMemberRequest{
+		if err := m.moderation.RestrictMember(ctx, platform.RestrictMemberRequest{
 			Target:      state.target,
 			MemberID:    id,
 			Permissions: duelMutedPermissions(),
@@ -738,7 +739,7 @@ func (m *Module) editBoard(ctx context.Context, state *gameState, text string) e
 		return nil
 	}
 
-	if err := m.dispatcher.EditMessage(ctx, otogi.EditMessageRequest{
+	if err := m.dispatcher.EditMessage(ctx, platform.EditMessageRequest{
 		Target:    state.target,
 		MessageID: state.boardMessageID,
 		Text:      text,
@@ -755,7 +756,7 @@ func (m *Module) editBoard(ctx context.Context, state *gameState, text string) e
 }
 
 func (m *Module) sendReplacementBoard(ctx context.Context, state *gameState, text string) error {
-	message, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	message, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target: state.target,
 		Text:   text,
 	})
@@ -768,13 +769,13 @@ func (m *Module) sendReplacementBoard(ctx context.Context, state *gameState, tex
 	return nil
 }
 
-func (m *Module) reply(ctx context.Context, event *otogi.Event, text string) error {
-	target, err := otogi.OutboundTargetFromEvent(event)
+func (m *Module) reply(ctx context.Context, event *platform.Event, text string) error {
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("duel derive reply target: %w", err)
 	}
 
-	if _, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	if _, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             text,
 		ReplyToMessageID: event.Article.ID,
@@ -785,7 +786,7 @@ func (m *Module) reply(ctx context.Context, event *otogi.Event, text string) err
 	return nil
 }
 
-func parseDuelInput(command *otogi.CommandInvocation) (duelInput, error) {
+func parseDuelInput(command *platform.CommandInvocation) (duelInput, error) {
 	if command == nil {
 		return duelInput{}, fmt.Errorf("%s", duelUsageMessage())
 	}
@@ -835,7 +836,7 @@ func parseDuelInput(command *otogi.CommandInvocation) (duelInput, error) {
 	return input, nil
 }
 
-func conversationKeyFromEvent(event *otogi.Event) conversationKey {
+func conversationKeyFromEvent(event *platform.Event) conversationKey {
 	if event == nil {
 		return conversationKey{}
 	}
@@ -848,7 +849,7 @@ func conversationKeyFromEvent(event *otogi.Event) conversationKey {
 	}
 }
 
-func actorName(actor otogi.Actor) string {
+func actorName(actor platform.Actor) string {
 	if displayName := strings.TrimSpace(actor.DisplayName); displayName != "" {
 		return displayName
 	}
@@ -884,8 +885,8 @@ func scoreHand(hand []card) int {
 	return total
 }
 
-func duelMutedPermissions() otogi.MemberPermissions {
-	return otogi.MemberPermissions{
+func duelMutedPermissions() platform.MemberPermissions {
+	return platform.MemberPermissions{
 		SendMessages: false,
 		SendMedia:    false,
 		SendPolls:    false,
@@ -899,6 +900,6 @@ func duelMutedPermissions() otogi.MemberPermissions {
 }
 
 var (
-	_ otogi.Module          = (*Module)(nil)
-	_ otogi.ModuleRegistrar = (*Module)(nil)
+	_ core.Module          = (*Module)(nil)
+	_ core.ModuleRegistrar = (*Module)(nil)
 )

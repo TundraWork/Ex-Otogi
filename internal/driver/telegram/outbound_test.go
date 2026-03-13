@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -18,18 +18,18 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		request     otogi.SendMessageRequest
+		request     platform.SendMessageRequest
 		rpcErr      error
 		wantErr     bool
 		wantMessage string
 	}{
 		{
 			name: "successful send",
-			request: otogi.SendMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SendMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				Text: "pong",
@@ -38,17 +38,17 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 		},
 		{
 			name: "successful send with entities",
-			request: otogi.SendMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SendMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				Text: "click me",
-				Entities: []otogi.TextEntity{
+				Entities: []platform.TextEntity{
 					{
-						Type:   otogi.TextEntityTypeTextURL,
+						Type:   platform.TextEntityTypeTextURL,
 						Offset: 0,
 						Length: 8,
 						URL:    "https://example.com",
@@ -59,11 +59,11 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 		},
 		{
 			name: "invalid request",
-			request: otogi.SendMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SendMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 			},
@@ -71,14 +71,14 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 		},
 		{
 			name: "unsupported platform",
-			request: otogi.SendMessageRequest{
-				Target: otogi.OutboundTarget{
-					Sink: &otogi.EventSink{
+			request: platform.SendMessageRequest{
+				Target: platform.OutboundTarget{
+					Sink: &platform.EventSink{
 						Platform: "discord",
 					},
-					Conversation: otogi.Conversation{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				Text: "pong",
@@ -87,11 +87,11 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 		},
 		{
 			name: "rpc failure",
-			request: otogi.SendMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SendMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				Text: "pong",
@@ -108,7 +108,7 @@ func TestOutboundDispatcherSendMessage(t *testing.T) {
 
 			cache := NewPeerCache()
 			cache.RememberConversation(
-				ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+				ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 				&tg.InputPeerChat{ChatID: 42},
 			)
 
@@ -153,29 +153,29 @@ func TestOutboundDispatcherEditMessage(t *testing.T) {
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 42},
 	)
 
 	tests := []struct {
 		name    string
-		request otogi.EditMessageRequest
+		request platform.EditMessageRequest
 		wantErr bool
 	}{
 		{
 			name: "successful edit with entities",
-			request: otogi.EditMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.EditMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				MessageID: "10",
 				Text:      "updated",
-				Entities: []otogi.TextEntity{
+				Entities: []platform.TextEntity{
 					{
-						Type:   otogi.TextEntityTypeBold,
+						Type:   platform.TextEntityTypeBold,
 						Offset: 0,
 						Length: 7,
 					},
@@ -184,18 +184,18 @@ func TestOutboundDispatcherEditMessage(t *testing.T) {
 		},
 		{
 			name: "invalid edit entity payload",
-			request: otogi.EditMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.EditMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				MessageID: "10",
 				Text:      "updated",
-				Entities: []otogi.TextEntity{
+				Entities: []platform.TextEntity{
 					{
-						Type:   otogi.TextEntityTypeCustomEmoji,
+						Type:   platform.TextEntityTypeCustomEmoji,
 						Offset: 0,
 						Length: 1,
 					},
@@ -245,7 +245,7 @@ func TestOutboundDispatcherSendMessageAppliesReadableRender(t *testing.T) {
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 42},
 	)
 
@@ -255,25 +255,25 @@ func TestOutboundDispatcherSendMessageAppliesReadableRender(t *testing.T) {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
 
-	request := otogi.SendMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{
+	request := platform.SendMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{
 				ID:   "42",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 		},
 		Text: "# Hi",
-		Entities: []otogi.TextEntity{
+		Entities: []platform.TextEntity{
 			{
-				Type:   otogi.TextEntityTypeHeading,
+				Type:   platform.TextEntityTypeHeading,
 				Offset: 0,
 				Length: 4,
-				Heading: &otogi.TextEntityHeadingMeta{
+				Heading: &platform.TextEntityHeadingMeta{
 					Level: 1,
 				},
 			},
 			{
-				Type:   otogi.TextEntityTypeBold,
+				Type:   platform.TextEntityTypeBold,
 				Offset: 2,
 				Length: 2,
 			},
@@ -287,7 +287,7 @@ func TestOutboundDispatcherSendMessageAppliesReadableRender(t *testing.T) {
 	if rpc.lastSendRequest.Text != "Hi" {
 		t.Fatalf("rendered text = %q, want %q", rpc.lastSendRequest.Text, "Hi")
 	}
-	bold, ok := findEntityByType(rpc.lastSendRequest.Entities, otogi.TextEntityTypeBold)
+	bold, ok := findEntityByType(rpc.lastSendRequest.Entities, platform.TextEntityTypeBold)
 	if !ok {
 		t.Fatal("bold entity not found")
 	}
@@ -301,7 +301,7 @@ func TestOutboundDispatcherEditMessageAppliesReadableRender(t *testing.T) {
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 42},
 	)
 
@@ -311,46 +311,46 @@ func TestOutboundDispatcherEditMessageAppliesReadableRender(t *testing.T) {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
 
-	request := otogi.EditMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{
+	request := platform.EditMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{
 				ID:   "42",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 		},
 		MessageID: "10",
 		Text:      "| h1 | h2 |\n| --- | :---: |\n| x | y |",
-		Entities: []otogi.TextEntity{
+		Entities: []platform.TextEntity{
 			{
-				Type:   otogi.TextEntityTypeTable,
+				Type:   platform.TextEntityTypeTable,
 				Offset: 0,
 				Length: runeLen("| h1 | h2 |\n| --- | :---: |\n| x | y |"),
-				Table: &otogi.TextEntityTableMeta{
+				Table: &platform.TextEntityTableMeta{
 					GroupID: "table:1",
 				},
 			},
 			{
-				Type:   otogi.TextEntityTypeTableRow,
+				Type:   platform.TextEntityTypeTableRow,
 				Offset: 0,
 				Length: 11,
-				Table: &otogi.TextEntityTableMeta{
+				Table: &platform.TextEntityTableMeta{
 					GroupID: "table:1",
 					Row:     0,
 					Header:  true,
 				},
 			},
 			{
-				Type:   otogi.TextEntityTypeTableRow,
+				Type:   platform.TextEntityTypeTableRow,
 				Offset: runeIndex("| h1 | h2 |\n| --- | :---: |\n| x | y |", "| x | y |"),
 				Length: 9,
-				Table: &otogi.TextEntityTableMeta{
+				Table: &platform.TextEntityTableMeta{
 					GroupID: "table:1",
 					Row:     1,
 					Header:  false,
 				},
 			},
 			{
-				Type:   otogi.TextEntityTypeBold,
+				Type:   platform.TextEntityTypeBold,
 				Offset: runeIndex("| h1 | h2 |\n| --- | :---: |\n| x | y |", "x"),
 				Length: 1,
 			},
@@ -364,7 +364,7 @@ func TestOutboundDispatcherEditMessageAppliesReadableRender(t *testing.T) {
 	if rpc.lastEditRequest.Text != "h1 | h2\nx | y" {
 		t.Fatalf("rendered text = %q, want %q", rpc.lastEditRequest.Text, "h1 | h2\nx | y")
 	}
-	bold, ok := findEntityByType(rpc.lastEditRequest.Entities, otogi.TextEntityTypeBold)
+	bold, ok := findEntityByType(rpc.lastEditRequest.Entities, platform.TextEntityTypeBold)
 	if !ok {
 		t.Fatal("bold entity not found")
 	}
@@ -378,7 +378,7 @@ func TestOutboundDispatcherSendMessageReadabilityFallbackUsesOriginalPayload(t *
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 42},
 	)
 
@@ -388,29 +388,29 @@ func TestOutboundDispatcherSendMessageReadabilityFallbackUsesOriginalPayload(t *
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
 
-	request := otogi.SendMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{
+	request := platform.SendMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{
 				ID:   "42",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 		},
 		Text: "![alt](https://a)",
-		Entities: []otogi.TextEntity{
+		Entities: []platform.TextEntity{
 			{
-				Type:   otogi.TextEntityTypeImage,
+				Type:   platform.TextEntityTypeImage,
 				Offset: 0,
 				Length: 17,
-				Image: &otogi.TextEntityImageMeta{
+				Image: &platform.TextEntityImageMeta{
 					URL: "https://a",
 					Alt: "alt",
 				},
 			},
 			{
-				Type:   otogi.TextEntityTypeImage,
+				Type:   platform.TextEntityTypeImage,
 				Offset: 2,
 				Length: 5,
-				Image: &otogi.TextEntityImageMeta{
+				Image: &platform.TextEntityImageMeta{
 					URL: "https://b",
 					Alt: "dup",
 				},
@@ -435,7 +435,7 @@ func TestOutboundDispatcherEditMessageMapsFloodWaitToTypedRateLimit(t *testing.T
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 42},
 	)
 
@@ -444,17 +444,17 @@ func TestOutboundDispatcherEditMessageMapsFloodWaitToTypedRateLimit(t *testing.T
 			editErr: tgerr.New(420, "FLOOD_WAIT_7"),
 		},
 		cache,
-		WithSinkRef(otogi.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
+		WithSinkRef(platform.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
 	)
 	if err != nil {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
 
-	editErr := dispatcher.EditMessage(context.Background(), otogi.EditMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{
+	editErr := dispatcher.EditMessage(context.Background(), platform.EditMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{
 				ID:   "42",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 		},
 		MessageID: "10",
@@ -464,15 +464,15 @@ func TestOutboundDispatcherEditMessageMapsFloodWaitToTypedRateLimit(t *testing.T
 		t.Fatal("edit error = nil, want outbound error")
 	}
 
-	outboundErr, ok := otogi.AsOutboundError(editErr)
+	outboundErr, ok := platform.AsOutboundError(editErr)
 	if !ok {
 		t.Fatalf("AsOutboundError(%v) = false, want true", editErr)
 	}
-	if outboundErr.Operation != otogi.OutboundOperationEditMessage {
-		t.Fatalf("operation = %s, want %s", outboundErr.Operation, otogi.OutboundOperationEditMessage)
+	if outboundErr.Operation != platform.OutboundOperationEditMessage {
+		t.Fatalf("operation = %s, want %s", outboundErr.Operation, platform.OutboundOperationEditMessage)
 	}
-	if outboundErr.Kind != otogi.OutboundErrorKindRateLimited {
-		t.Fatalf("kind = %s, want %s", outboundErr.Kind, otogi.OutboundErrorKindRateLimited)
+	if outboundErr.Kind != platform.OutboundErrorKindRateLimited {
+		t.Fatalf("kind = %s, want %s", outboundErr.Kind, platform.OutboundErrorKindRateLimited)
 	}
 	if outboundErr.Platform != DriverPlatform {
 		t.Fatalf("platform = %s, want %s", outboundErr.Platform, DriverPlatform)
@@ -490,7 +490,7 @@ func TestOutboundDispatcherEditMessageMapsFloodWaitToTypedRateLimit(t *testing.T
 		t.Fatalf("type = %q, want %q", outboundErr.Type, "FLOOD_WAIT")
 	}
 
-	retryAfter, isRateLimited := otogi.AsOutboundRateLimit(editErr)
+	retryAfter, isRateLimited := platform.AsOutboundRateLimit(editErr)
 	if !isRateLimited {
 		t.Fatalf("AsOutboundRateLimit(%v) = false, want true", editErr)
 	}
@@ -504,7 +504,7 @@ func TestOutboundDispatcherEditMessageMapsRPCErrorToTypedKind(t *testing.T) {
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 42},
 	)
 
@@ -514,17 +514,17 @@ func TestOutboundDispatcherEditMessageMapsRPCErrorToTypedKind(t *testing.T) {
 			editErr: rpcErr,
 		},
 		cache,
-		WithSinkRef(otogi.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
+		WithSinkRef(platform.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
 	)
 	if err != nil {
 		t.Fatalf("new dispatcher failed: %v", err)
 	}
 
-	editErr := dispatcher.EditMessage(context.Background(), otogi.EditMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{
+	editErr := dispatcher.EditMessage(context.Background(), platform.EditMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{
 				ID:   "42",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
 		},
 		MessageID: "10",
@@ -534,12 +534,12 @@ func TestOutboundDispatcherEditMessageMapsRPCErrorToTypedKind(t *testing.T) {
 		t.Fatal("edit error = nil, want outbound error")
 	}
 
-	outboundErr, ok := otogi.AsOutboundError(editErr)
+	outboundErr, ok := platform.AsOutboundError(editErr)
 	if !ok {
 		t.Fatalf("AsOutboundError(%v) = false, want true", editErr)
 	}
-	if outboundErr.Kind != otogi.OutboundErrorKindPermanent {
-		t.Fatalf("kind = %s, want %s", outboundErr.Kind, otogi.OutboundErrorKindPermanent)
+	if outboundErr.Kind != platform.OutboundErrorKindPermanent {
+		t.Fatalf("kind = %s, want %s", outboundErr.Kind, platform.OutboundErrorKindPermanent)
 	}
 	if outboundErr.Code != 400 {
 		t.Fatalf("code = %d, want 400", outboundErr.Code)
@@ -557,13 +557,13 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "42", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 42},
 	)
 
 	tests := []struct {
 		name                 string
-		request              otogi.SetReactionRequest
+		request              platform.SetReactionRequest
 		wantErr              bool
 		wantReactionLen      int
 		wantReactionType     string
@@ -572,16 +572,16 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 	}{
 		{
 			name: "add emoji reaction",
-			request: otogi.SetReactionRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SetReactionRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				MessageID: "10",
 				Emoji:     "👍",
-				Action:    otogi.ReactionActionAdd,
+				Action:    platform.ReactionActionAdd,
 			},
 			wantReactionLen:      1,
 			wantReactionType:     "*tg.ReactionEmoji",
@@ -589,16 +589,16 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 		},
 		{
 			name: "add custom reaction",
-			request: otogi.SetReactionRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SetReactionRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				MessageID: "10",
 				Emoji:     "custom:123",
-				Action:    otogi.ReactionActionAdd,
+				Action:    platform.ReactionActionAdd,
 			},
 			wantReactionLen:    1,
 			wantReactionType:   "*tg.ReactionCustomEmoji",
@@ -606,30 +606,30 @@ func TestOutboundDispatcherSetReaction(t *testing.T) {
 		},
 		{
 			name: "remove reaction",
-			request: otogi.SetReactionRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SetReactionRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				MessageID: "10",
-				Action:    otogi.ReactionActionRemove,
+				Action:    platform.ReactionActionRemove,
 			},
 			wantReactionLen: 0,
 		},
 		{
 			name: "invalid message id",
-			request: otogi.SetReactionRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.SetReactionRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeGroup,
+						Type: platform.ConversationTypeGroup,
 					},
 				},
 				MessageID: "bad",
 				Emoji:     "👍",
-				Action:    otogi.ReactionActionAdd,
+				Action:    platform.ReactionActionAdd,
 			},
 			wantErr: true,
 		},
@@ -689,22 +689,22 @@ func TestOutboundDispatcherDeleteMessage(t *testing.T) {
 
 	cache := NewPeerCache()
 	cache.RememberConversation(
-		ChatRef{ID: "42", Type: otogi.ConversationTypeChannel},
+		ChatRef{ID: "42", Type: platform.ConversationTypeChannel},
 		&tg.InputPeerChannel{ChannelID: 42, AccessHash: 100},
 	)
 
 	tests := []struct {
 		name    string
-		request otogi.DeleteMessageRequest
+		request platform.DeleteMessageRequest
 		wantErr bool
 	}{
 		{
 			name: "revoke channel delete succeeds",
-			request: otogi.DeleteMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.DeleteMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeChannel,
+						Type: platform.ConversationTypeChannel,
 					},
 				},
 				MessageID: "5",
@@ -713,11 +713,11 @@ func TestOutboundDispatcherDeleteMessage(t *testing.T) {
 		},
 		{
 			name: "non-revoke channel delete fails",
-			request: otogi.DeleteMessageRequest{
-				Target: otogi.OutboundTarget{
-					Conversation: otogi.Conversation{
+			request: platform.DeleteMessageRequest{
+				Target: platform.OutboundTarget{
+					Conversation: platform.Conversation{
 						ID:   "42",
-						Type: otogi.ConversationTypeChannel,
+						Type: platform.ConversationTypeChannel,
 					},
 				},
 				MessageID: "5",
@@ -776,7 +776,7 @@ func TestOutboundDispatcherListSinks(t *testing.T) {
 	dispatcherWithRef, err := newOutboundDispatcherWithRPC(
 		&stubOutboundRPC{},
 		NewPeerCache(),
-		WithSinkRef(otogi.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
+		WithSinkRef(platform.EventSink{Platform: DriverPlatform, ID: "tg-main"}),
 	)
 	if err != nil {
 		t.Fatalf("new dispatcher with ref failed: %v", err)
@@ -793,7 +793,7 @@ func TestOutboundDispatcherListSinks(t *testing.T) {
 		t.Fatalf("sink id = %s, want tg-main", sinks[0].ID)
 	}
 
-	sinks, err = dispatcherWithRef.ListSinksByPlatform(context.Background(), otogi.Platform("discord"))
+	sinks, err = dispatcherWithRef.ListSinksByPlatform(context.Background(), platform.Platform("discord"))
 	if err != nil {
 		t.Fatalf("list sinks by mismatched platform failed: %v", err)
 	}
@@ -827,7 +827,7 @@ func TestMapOutboundTextEntities(t *testing.T) {
 	tests := []struct {
 		name         string
 		text         string
-		entities     []otogi.TextEntity
+		entities     []platform.TextEntity
 		wantErr      bool
 		wantLen      int
 		wantTypeName string
@@ -841,8 +841,8 @@ func TestMapOutboundTextEntities(t *testing.T) {
 		{
 			name: "maps bold",
 			text: "hello",
-			entities: []otogi.TextEntity{
-				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 5},
+			entities: []platform.TextEntity{
+				{Type: platform.TextEntityTypeBold, Offset: 0, Length: 5},
 			},
 			wantLen:      1,
 			wantTypeName: "*tg.MessageEntityBold",
@@ -852,8 +852,8 @@ func TestMapOutboundTextEntities(t *testing.T) {
 		{
 			name: "maps pre language",
 			text: "fmt.Println()",
-			entities: []otogi.TextEntity{
-				{Type: otogi.TextEntityTypePre, Offset: 0, Length: 12, Language: "go"},
+			entities: []platform.TextEntity{
+				{Type: platform.TextEntityTypePre, Offset: 0, Length: 12, Language: "go"},
 			},
 			wantLen:      1,
 			wantTypeName: "*tg.MessageEntityPre",
@@ -863,8 +863,8 @@ func TestMapOutboundTextEntities(t *testing.T) {
 		{
 			name: "maps utf16 offsets",
 			text: "a😀b",
-			entities: []otogi.TextEntity{
-				{Type: otogi.TextEntityTypeBold, Offset: 1, Length: 1},
+			entities: []platform.TextEntity{
+				{Type: platform.TextEntityTypeBold, Offset: 1, Length: 1},
 			},
 			wantLen:      1,
 			wantTypeName: "*tg.MessageEntityBold",
@@ -874,20 +874,20 @@ func TestMapOutboundTextEntities(t *testing.T) {
 		{
 			name: "invalid range fails",
 			text: "hello",
-			entities: []otogi.TextEntity{
-				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 6},
+			entities: []platform.TextEntity{
+				{Type: platform.TextEntityTypeBold, Offset: 0, Length: 6},
 			},
 			wantErr: true,
 		},
 		{
 			name: "markdown structural entity skipped",
 			text: "## hello",
-			entities: []otogi.TextEntity{
+			entities: []platform.TextEntity{
 				{
-					Type:   otogi.TextEntityTypeHeading,
+					Type:   platform.TextEntityTypeHeading,
 					Offset: 0,
 					Length: 8,
-					Heading: &otogi.TextEntityHeadingMeta{
+					Heading: &platform.TextEntityHeadingMeta{
 						Level: 2,
 					},
 				},
@@ -897,7 +897,7 @@ func TestMapOutboundTextEntities(t *testing.T) {
 		{
 			name: "unsupported type fails",
 			text: "hello",
-			entities: []otogi.TextEntity{
+			entities: []platform.TextEntity{
 				{Type: "fancy", Offset: 0, Length: 5},
 			},
 			wantErr: true,
@@ -905,8 +905,8 @@ func TestMapOutboundTextEntities(t *testing.T) {
 		{
 			name: "mention_name unsupported",
 			text: "alice",
-			entities: []otogi.TextEntity{
-				{Type: otogi.TextEntityTypeMentionName, Offset: 0, Length: 5, MentionUserID: "123"},
+			entities: []platform.TextEntity{
+				{Type: platform.TextEntityTypeMentionName, Offset: 0, Length: 5, MentionUserID: "123"},
 			},
 			wantErr: true,
 		},
@@ -953,8 +953,8 @@ type stubOutboundRPC struct {
 	editErr         error
 	deleteErr       error
 	reactionErr     error
-	lastSendRequest otogi.SendMessageRequest
-	lastEditRequest otogi.EditMessageRequest
+	lastSendRequest platform.SendMessageRequest
+	lastEditRequest platform.EditMessageRequest
 	sendCalls       int
 	editCalls       int
 	deleteCalls     int
@@ -965,7 +965,7 @@ type stubOutboundRPC struct {
 func (s *stubOutboundRPC) SendText(
 	_ context.Context,
 	_ tg.InputPeerClass,
-	request otogi.SendMessageRequest,
+	request platform.SendMessageRequest,
 ) (int, error) {
 	s.sendCalls++
 	s.lastSendRequest = request
@@ -980,7 +980,7 @@ func (s *stubOutboundRPC) EditText(
 	_ context.Context,
 	_ tg.InputPeerClass,
 	_ int,
-	request otogi.EditMessageRequest,
+	request platform.EditMessageRequest,
 ) error {
 	s.editCalls++
 	s.lastEditRequest = request
@@ -1002,7 +1002,7 @@ func (s *stubOutboundRPC) DeleteMessage(
 		return s.deleteErr
 	}
 	if _, isChannel := peer.(*tg.InputPeerChannel); isChannel && !revoke {
-		return otogi.ErrOutboundUnsupported
+		return platform.ErrOutboundUnsupported
 	}
 
 	return nil

@@ -5,14 +5,14 @@ import (
 	"sort"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const telegramReadableThematicSeparator = "----------------"
 
 type telegramReadableRenderResult struct {
 	renderedText     string
-	renderedEntities []otogi.TextEntity
+	renderedEntities []platform.TextEntity
 }
 
 type telegramTextRewriteOp struct {
@@ -28,7 +28,7 @@ type telegramTextLine struct {
 	content string
 }
 
-func renderTelegramReadableText(text string, entities []otogi.TextEntity) (telegramReadableRenderResult, error) {
+func renderTelegramReadableText(text string, entities []platform.TextEntity) (telegramReadableRenderResult, error) {
 	renderedText := text
 	renderedEntities := cloneTelegramTextEntities(entities)
 
@@ -66,7 +66,7 @@ func renderTelegramReadableText(text string, entities []otogi.TextEntity) (teleg
 		return telegramReadableRenderResult{}, fmt.Errorf("collapse newline runs: %w", err)
 	}
 
-	if err := otogi.ValidateTextEntities(renderedText, renderedEntities); err != nil {
+	if err := platform.ValidateTextEntities(renderedText, renderedEntities); err != nil {
 		return telegramReadableRenderResult{}, fmt.Errorf("validate rendered entities: %w", err)
 	}
 
@@ -78,9 +78,9 @@ func renderTelegramReadableText(text string, entities []otogi.TextEntity) (teleg
 
 func applyTelegramRewritePass(
 	text string,
-	entities []otogi.TextEntity,
+	entities []platform.TextEntity,
 	ops []telegramTextRewriteOp,
-) (string, []otogi.TextEntity, error) {
+) (string, []platform.TextEntity, error) {
 	if len(ops) == 0 {
 		return text, entities, nil
 	}
@@ -173,12 +173,12 @@ func applyTelegramRewriteOps(text string, ops []telegramTextRewriteOp) (string, 
 	return string(rewrittenRunes), mapping, nil
 }
 
-func remapTelegramTextEntities(entities []otogi.TextEntity, oldToNewBoundary []int) ([]otogi.TextEntity, error) {
+func remapTelegramTextEntities(entities []platform.TextEntity, oldToNewBoundary []int) ([]platform.TextEntity, error) {
 	if len(entities) == 0 {
 		return nil, nil
 	}
 
-	rewritten := make([]otogi.TextEntity, 0, len(entities))
+	rewritten := make([]platform.TextEntity, 0, len(entities))
 	for index, entity := range entities {
 		start := entity.Offset
 		end := entity.Offset + entity.Length
@@ -221,11 +221,11 @@ func remapTelegramTextEntities(entities []otogi.TextEntity, oldToNewBoundary []i
 	return rewritten, nil
 }
 
-func cloneTelegramTextEntities(entities []otogi.TextEntity) []otogi.TextEntity {
+func cloneTelegramTextEntities(entities []platform.TextEntity) []platform.TextEntity {
 	if len(entities) == 0 {
 		return nil
 	}
-	cloned := make([]otogi.TextEntity, len(entities))
+	cloned := make([]platform.TextEntity, len(entities))
 	copy(cloned, entities)
 	return cloned
 }
@@ -264,7 +264,7 @@ func buildTelegramNewlineRewriteOps(text string) []telegramTextRewriteOp {
 
 func buildTelegramStructuralRewriteOps(
 	text string,
-	entities []otogi.TextEntity,
+	entities []platform.TextEntity,
 ) ([]telegramTextRewriteOp, error) {
 	runes := []rune(text)
 	lines := indexTelegramTextLines(runes)
@@ -276,7 +276,7 @@ func buildTelegramStructuralRewriteOps(
 
 	for index, entity := range entities {
 		typ := normalizeEntityType(entity.Type)
-		if typ == otogi.TextEntityTypeHeading {
+		if typ == platform.TextEntityTypeHeading {
 			lineIndex, err := telegramLineIndexForOffset(lines, entity.Offset)
 			if err != nil {
 				return nil, fmt.Errorf("entity[%d] heading line lookup: %w", index, err)
@@ -284,7 +284,7 @@ func buildTelegramStructuralRewriteOps(
 			headingLines[lineIndex] = struct{}{}
 			continue
 		}
-		if typ == otogi.TextEntityTypeThematicBreak {
+		if typ == platform.TextEntityTypeThematicBreak {
 			lineIndex, err := telegramLineIndexForOffset(lines, entity.Offset)
 			if err != nil {
 				return nil, fmt.Errorf("entity[%d] thematic line lookup: %w", index, err)
@@ -292,7 +292,7 @@ func buildTelegramStructuralRewriteOps(
 			thematicLines[lineIndex] = struct{}{}
 			continue
 		}
-		if typ == otogi.TextEntityTypeTableRow {
+		if typ == platform.TextEntityTypeTableRow {
 			lineIndex, err := telegramLineIndexForOffset(lines, entity.Offset)
 			if err != nil {
 				return nil, fmt.Errorf("entity[%d] table row line lookup: %w", index, err)
@@ -300,7 +300,7 @@ func buildTelegramStructuralRewriteOps(
 			tableRowLines[lineIndex] = struct{}{}
 			continue
 		}
-		if typ == otogi.TextEntityTypeImage {
+		if typ == platform.TextEntityTypeImage {
 			start := entity.Offset
 			end := entity.Offset + entity.Length
 			if start < 0 || end <= start || end > len(runes) {
@@ -526,7 +526,7 @@ func headingMarkerPrefixRuneLength(line string) int {
 	return count
 }
 
-func formatTelegramReadableImage(meta *otogi.TextEntityImageMeta) string {
+func formatTelegramReadableImage(meta *platform.TextEntityImageMeta) string {
 	if meta == nil {
 		return "Image"
 	}

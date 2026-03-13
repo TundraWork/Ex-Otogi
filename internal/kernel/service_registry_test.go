@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 // TestServiceRegistryRegisterAndResolve verifies happy-path registration and lookup.
@@ -32,7 +32,7 @@ func TestServiceRegistryRegisterAndResolve(t *testing.T) {
 			registerValue: "postgres",
 			resolveName:   "db",
 			wantResolve:   "postgres",
-			wantErr:       otogi.ErrServiceAlreadyRegistered,
+			wantErr:       core.ErrServiceAlreadyRegistered,
 		},
 	}
 
@@ -80,7 +80,7 @@ func TestServiceRegistryErrors(t *testing.T) {
 	if err := registry.Register("svc-pointer", nilPointerService); err == nil {
 		t.Fatal("expected nil pointer service register error")
 	}
-	if _, err := registry.Resolve("missing"); !errors.Is(err, otogi.ErrServiceNotFound) {
-		t.Fatalf("resolve missing error = %v, want %v", err, otogi.ErrServiceNotFound)
+	if _, err := registry.Resolve("missing"); !errors.Is(err, core.ErrServiceNotFound) {
+		t.Fatalf("resolve missing error = %v, want %v", err, core.ErrServiceNotFound)
 	}
 }

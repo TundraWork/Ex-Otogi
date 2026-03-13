@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"sync"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 )
@@ -109,7 +109,7 @@ func (c *mediaLocatorCache) ForgetMessage(chat ChatRef, articleID string) {
 	c.forgetMessageLocked(mediaLocatorMessageKey(chat, articleID))
 }
 
-func (c *mediaLocatorCache) Lookup(request otogi.MediaDownloadRequest) (mediaLocatorRecord, bool) {
+func (c *mediaLocatorCache) Lookup(request platform.MediaDownloadRequest) (mediaLocatorRecord, bool) {
 	if c == nil {
 		return mediaLocatorRecord{}, false
 	}
@@ -259,7 +259,7 @@ func buildMessageMediaLocators(media tg.MessageMediaClass) []messageMediaLocator
 			{
 				attachment: MediaPayload{
 					ID:   photoID,
-					Type: otogi.MediaTypePhoto,
+					Type: platform.MediaTypePhoto,
 				},
 				location: &tg.InputPhotoFileLocation{
 					ID:            typedPhoto.ID,
@@ -342,10 +342,10 @@ func (m DefaultGotdUpdateMapper) rememberMessageMediaLocators(
 	m.mediaLocatorCache.RememberMessage(chat, strconv.Itoa(message.ID), peer, locators)
 }
 
-func mediaLocatorRecordAttachment(record mediaLocatorRecord) (otogi.MediaAttachment, error) {
+func mediaLocatorRecordAttachment(record mediaLocatorRecord) (platform.MediaAttachment, error) {
 	mapped := mapMedia([]MediaPayload{record.attachment})
 	if len(mapped) != 1 {
-		return otogi.MediaAttachment{}, fmt.Errorf("%w: invalid mapped attachment", otogi.ErrMediaDownloadNotFound)
+		return platform.MediaAttachment{}, fmt.Errorf("%w: invalid mapped attachment", platform.ErrMediaDownloadNotFound)
 	}
 
 	return mapped[0], nil

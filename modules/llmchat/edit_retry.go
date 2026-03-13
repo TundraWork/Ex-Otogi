@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -26,7 +26,7 @@ var (
 	)
 )
 
-func (m *Module) retryEditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
+func (m *Module) retryEditMessage(ctx context.Context, request platform.EditMessageRequest) error {
 	if ctx == nil {
 		return fmt.Errorf("retry edit message %s: nil context", request.MessageID)
 	}
@@ -46,7 +46,7 @@ func (m *Module) retryEditMessage(ctx context.Context, request otogi.EditMessage
 		if editErr == nil {
 			return nil
 		}
-		if errors.Is(editErr, otogi.ErrInvalidOutboundRequest) {
+		if errors.Is(editErr, platform.ErrInvalidOutboundRequest) {
 			return fmt.Errorf("retry edit message %s: non-retryable edit error: %w", request.MessageID, editErr)
 		}
 		if attempts >= editRetryMaxAttempts {
@@ -100,7 +100,7 @@ func nextRetryDelay(attempt int, err error) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	if retryAfter, ok := otogi.AsOutboundRateLimit(err); ok {
+	if retryAfter, ok := platform.AsOutboundRateLimit(err); ok {
 		if retryAfter > 0 {
 			return clampDuration(retryAfter, editRetryMinInterval, maxEditInterval)
 		}

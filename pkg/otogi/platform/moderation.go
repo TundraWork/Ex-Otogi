@@ -1,4 +1,4 @@
-package otogi
+package platform
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 // ServiceModerationDispatcher is the canonical service registry key for moderation operations.
 const ServiceModerationDispatcher = "otogi.moderation_dispatcher"
 
-// ModerationDispatcher sends neutral moderation operations to one sink adapter.
+// ModerationDispatcher sends standardized moderation operations to one sink adapter.
 //
-// Implementations translate neutral restriction semantics into platform-specific
+// Implementations translate protocol restriction semantics into platform-specific
 // RPC calls. Not all platforms support every restriction flag; implementations
 // should apply best-effort mapping and return ErrOutboundUnsupported for
 // capabilities the platform cannot satisfy.
@@ -46,10 +46,10 @@ func (r RestrictMemberRequest) Validate() error {
 	return nil
 }
 
-// MemberPermissions describes platform-neutral member capability flags.
+// MemberPermissions describes standardized member capability flags.
 //
 // Each flag set to true means the member is ALLOWED to perform that action.
-// Platforms map these neutral flags to their own permission model.
+// Platforms map these flags to their own permission model.
 type MemberPermissions struct {
 	// SendMessages allows sending text messages.
 	SendMessages bool

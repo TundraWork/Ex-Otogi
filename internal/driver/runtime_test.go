@@ -3,19 +3,21 @@ package driver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
 	testDriverType     = "test-chat"
 	testDriverTypeAlt  = "test-chat-alt"
-	testDriverPlatform = otogi.Platform("test-platform")
+	testDriverPlatform = platform.Platform("test-platform")
 )
 
 func TestNewRegistryRejectsDuplicateDescriptorType(t *testing.T) {
@@ -86,7 +88,7 @@ func TestRegistryTypesSorted(t *testing.T) {
 	registry, err := NewRegistry([]Descriptor{
 		{
 			Type:     testDriverTypeAlt,
-			Platform: otogi.Platform("test-platform-alt"),
+			Platform: platform.Platform("test-platform-alt"),
 			Builder:  stubRuntimeBuilder,
 		},
 		{
@@ -123,7 +125,7 @@ func TestRegistryBuildEnabled(t *testing.T) {
 				}
 
 				return Runtime{
-					Source: otogi.EventSource{
+					Source: platform.EventSource{
 						Platform: testDriverPlatform,
 					},
 					Driver: stubDriver{name: definition.Name},
@@ -144,6 +146,154 @@ func TestRegistryBuildEnabled(t *testing.T) {
 	}
 }
 
+func TestRegistryBuildEnabledBridgesArticleTagsToDriverEvents(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry([]Descriptor{
+		{
+			Type:     testDriverType,
+			Platform: testDriverPlatform,
+			Builder: func(
+				_ context.Context,
+				_ Definition,
+				_ *slog.Logger,
+			) (Runtime, error) {
+				return Runtime{
+					Source: platform.EventSource{Platform: testDriverPlatform},
+					Driver: publishingDriver{
+						event: &platform.Event{
+							ID:         "evt-1",
+							Kind:       platform.EventKindArticleCreated,
+							OccurredAt: time.Unix(1, 0).UTC(),
+							Conversation: platform.Conversation{
+								ID:   "chat-1",
+								Type: platform.ConversationTypeGroup,
+							},
+							Article: &platform.Article{ID: "1", Text: "hello"},
+						},
+					},
+					SinkDispatcher: &stubSinkDispatcher{},
+				}, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new registry failed: %v", err)
+	}
+
+	runtimes, err := registry.BuildEnabled(context.Background(), []Definition{
+		{Name: "main", Type: testDriverType, Enabled: true, Config: []byte("{}")},
+	}, slog.Default())
+	if err != nil {
+		t.Fatalf("build enabled failed: %v", err)
+	}
+	if len(runtimes) != 1 {
+		t.Fatalf("runtimes len = %d, want 1", len(runtimes))
+	}
+
+	response, err := runtimes[0].SinkDispatcher.SendMessage(context.Background(), platform.SendMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+		},
+		Text: "hello",
+		Tags: map[string]string{
+			"llmchat.agent": "Otogi",
+		},
+	})
+	if err != nil {
+		t.Fatalf("send message failed: %v", err)
+	}
+	if response == nil {
+		t.Fatal("expected outbound response")
+	}
+	if response.Tags["llmchat.agent"] != "Otogi" {
+		t.Fatalf("response tags = %+v, want llmchat.agent=Otogi", response.Tags)
+	}
+
+	capture := &captureEventDispatcher{}
+	if err := runtimes[0].Driver.Start(context.Background(), capture); err != nil {
+		t.Fatalf("driver start failed: %v", err)
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("captured events len = %d, want 1", len(capture.events))
+	}
+	if capture.events[0].Article == nil {
+		t.Fatal("expected article payload")
+	}
+	if capture.events[0].Article.Tags["llmchat.agent"] != "Otogi" {
+		t.Fatalf("article tags = %+v, want llmchat.agent=Otogi", capture.events[0].Article.Tags)
+	}
+}
+
+func TestRegistryBuildEnabledDoesNotBridgeArticleTagsForMismatchedArticles(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry([]Descriptor{
+		{
+			Type:     testDriverType,
+			Platform: testDriverPlatform,
+			Builder: func(
+				_ context.Context,
+				_ Definition,
+				_ *slog.Logger,
+			) (Runtime, error) {
+				return Runtime{
+					Source: platform.EventSource{Platform: testDriverPlatform},
+					Driver: publishingDriver{
+						event: &platform.Event{
+							ID:         "evt-1",
+							Kind:       platform.EventKindArticleCreated,
+							OccurredAt: time.Unix(1, 0).UTC(),
+							Conversation: platform.Conversation{
+								ID:   "chat-1",
+								Type: platform.ConversationTypeGroup,
+							},
+							Article: &platform.Article{ID: "2", Text: "hello"},
+						},
+					},
+					SinkDispatcher: &stubSinkDispatcher{},
+				}, nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new registry failed: %v", err)
+	}
+
+	runtimes, err := registry.BuildEnabled(context.Background(), []Definition{
+		{Name: "main", Type: testDriverType, Enabled: true, Config: []byte("{}")},
+	}, slog.Default())
+	if err != nil {
+		t.Fatalf("build enabled failed: %v", err)
+	}
+
+	if _, err := runtimes[0].SinkDispatcher.SendMessage(context.Background(), platform.SendMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+		},
+		Text: "hello",
+		Tags: map[string]string{
+			"llmchat.agent": "Otogi",
+		},
+	}); err != nil {
+		t.Fatalf("send message failed: %v", err)
+	}
+
+	capture := &captureEventDispatcher{}
+	if err := runtimes[0].Driver.Start(context.Background(), capture); err != nil {
+		t.Fatalf("driver start failed: %v", err)
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("captured events len = %d, want 1", len(capture.events))
+	}
+	if capture.events[0].Article == nil {
+		t.Fatal("expected article payload")
+	}
+	if len(capture.events[0].Article.Tags) != 0 {
+		t.Fatalf("article tags = %+v, want none", capture.events[0].Article.Tags)
+	}
+}
+
 func TestSinkDispatcherRoutesByID(t *testing.T) {
 	t.Parallel()
 
@@ -151,14 +301,14 @@ func TestSinkDispatcherRoutesByID(t *testing.T) {
 	secondary := &stubSinkDispatcher{}
 	dispatcher, err := NewSinkDispatcher([]Runtime{
 		{
-			Source: otogi.EventSource{
+			Source: platform.EventSource{
 				Platform: testDriverPlatform,
 				ID:       "main",
 			},
 			SinkDispatcher: primary,
 		},
 		{
-			Source: otogi.EventSource{
+			Source: platform.EventSource{
 				Platform: testDriverPlatform,
 				ID:       "alt",
 			},
@@ -169,10 +319,10 @@ func TestSinkDispatcherRoutesByID(t *testing.T) {
 		t.Fatalf("new sink dispatcher failed: %v", err)
 	}
 
-	_, err = dispatcher.SendMessage(context.Background(), otogi.SendMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{ID: "1", Type: otogi.ConversationTypeGroup},
-			Sink: &otogi.EventSink{
+	_, err = dispatcher.SendMessage(context.Background(), platform.SendMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{ID: "1", Type: platform.ConversationTypeGroup},
+			Sink: &platform.EventSink{
 				ID: "main",
 			},
 		},
@@ -193,21 +343,21 @@ func TestMediaDownloaderRoutesBySource(t *testing.T) {
 	t.Parallel()
 
 	primary := &stubMediaDownloader{
-		attachment: otogi.MediaAttachment{ID: "photo-1", Type: otogi.MediaTypePhoto},
+		attachment: platform.MediaAttachment{ID: "photo-1", Type: platform.MediaTypePhoto},
 	}
 	secondary := &stubMediaDownloader{
-		attachment: otogi.MediaAttachment{ID: "doc-2", Type: otogi.MediaTypeDocument},
+		attachment: platform.MediaAttachment{ID: "doc-2", Type: platform.MediaTypeDocument},
 	}
 	downloader, err := NewMediaDownloader([]Runtime{
 		{
-			Source: otogi.EventSource{
+			Source: platform.EventSource{
 				Platform: testDriverPlatform,
 				ID:       "main",
 			},
 			MediaDownloader: primary,
 		},
 		{
-			Source: otogi.EventSource{
+			Source: platform.EventSource{
 				Platform: testDriverPlatform,
 				ID:       "alt",
 			},
@@ -218,14 +368,14 @@ func TestMediaDownloaderRoutesBySource(t *testing.T) {
 		t.Fatalf("new media downloader failed: %v", err)
 	}
 
-	got, err := downloader.Download(context.Background(), otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
+	got, err := downloader.Download(context.Background(), platform.MediaDownloadRequest{
+		Source: platform.EventSource{
 			Platform: testDriverPlatform,
 			ID:       "main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "55",
 		AttachmentID: "photo-1",
@@ -249,7 +399,7 @@ func TestMediaDownloaderRejectsUnknownSource(t *testing.T) {
 
 	downloader, err := NewMediaDownloader([]Runtime{
 		{
-			Source: otogi.EventSource{
+			Source: platform.EventSource{
 				Platform: testDriverPlatform,
 				ID:       "main",
 			},
@@ -260,20 +410,20 @@ func TestMediaDownloaderRejectsUnknownSource(t *testing.T) {
 		t.Fatalf("new media downloader failed: %v", err)
 	}
 
-	_, err = downloader.Download(context.Background(), otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
+	_, err = downloader.Download(context.Background(), platform.MediaDownloadRequest{
+		Source: platform.EventSource{
 			Platform: testDriverPlatform,
 			ID:       "missing",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "55",
 		AttachmentID: "photo-1",
 	}, io.Discard)
-	if !errors.Is(err, otogi.ErrMediaDownloadUnsupported) {
-		t.Fatalf("download error = %v, want %v", err, otogi.ErrMediaDownloadUnsupported)
+	if !errors.Is(err, platform.ErrMediaDownloadUnsupported) {
+		t.Fatalf("download error = %v, want %v", err, platform.ErrMediaDownloadUnsupported)
 	}
 }
 
@@ -282,11 +432,11 @@ func TestSinkDispatcherAmbiguousPlatform(t *testing.T) {
 
 	dispatcher, err := NewSinkDispatcher([]Runtime{
 		{
-			Source:         otogi.EventSource{Platform: testDriverPlatform, ID: "main"},
+			Source:         platform.EventSource{Platform: testDriverPlatform, ID: "main"},
 			SinkDispatcher: &stubSinkDispatcher{},
 		},
 		{
-			Source:         otogi.EventSource{Platform: testDriverPlatform, ID: "alt"},
+			Source:         platform.EventSource{Platform: testDriverPlatform, ID: "alt"},
 			SinkDispatcher: &stubSinkDispatcher{},
 		},
 	})
@@ -294,10 +444,10 @@ func TestSinkDispatcherAmbiguousPlatform(t *testing.T) {
 		t.Fatalf("new sink dispatcher failed: %v", err)
 	}
 
-	_, err = dispatcher.SendMessage(context.Background(), otogi.SendMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{ID: "1", Type: otogi.ConversationTypeGroup},
-			Sink: &otogi.EventSink{
+	_, err = dispatcher.SendMessage(context.Background(), platform.SendMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{ID: "1", Type: platform.ConversationTypeGroup},
+			Sink: &platform.EventSink{
 				Platform: testDriverPlatform,
 			},
 		},
@@ -312,9 +462,9 @@ func TestSinkDispatcherRouteEditPreservesOutboundError(t *testing.T) {
 	t.Parallel()
 
 	rootCause := errors.New("rpc flood wait")
-	routedErr := &otogi.OutboundError{
-		Operation:  otogi.OutboundOperationEditMessage,
-		Kind:       otogi.OutboundErrorKindRateLimited,
+	routedErr := &platform.OutboundError{
+		Operation:  platform.OutboundOperationEditMessage,
+		Kind:       platform.OutboundErrorKindRateLimited,
 		Platform:   testDriverPlatform,
 		SinkID:     "main",
 		RetryAfter: 5 * time.Second,
@@ -323,7 +473,7 @@ func TestSinkDispatcherRouteEditPreservesOutboundError(t *testing.T) {
 
 	dispatcher, err := NewSinkDispatcher([]Runtime{
 		{
-			Source: otogi.EventSource{
+			Source: platform.EventSource{
 				Platform: testDriverPlatform,
 				ID:       "main",
 			},
@@ -334,10 +484,10 @@ func TestSinkDispatcherRouteEditPreservesOutboundError(t *testing.T) {
 		t.Fatalf("new sink dispatcher failed: %v", err)
 	}
 
-	err = dispatcher.EditMessage(context.Background(), otogi.EditMessageRequest{
-		Target: otogi.OutboundTarget{
-			Conversation: otogi.Conversation{ID: "1", Type: otogi.ConversationTypeGroup},
-			Sink:         &otogi.EventSink{ID: "main"},
+	err = dispatcher.EditMessage(context.Background(), platform.EditMessageRequest{
+		Target: platform.OutboundTarget{
+			Conversation: platform.Conversation{ID: "1", Type: platform.ConversationTypeGroup},
+			Sink:         &platform.EventSink{ID: "main"},
 		},
 		MessageID: "9",
 		Text:      "updated",
@@ -346,15 +496,15 @@ func TestSinkDispatcherRouteEditPreservesOutboundError(t *testing.T) {
 		t.Fatal("expected routed edit error")
 	}
 
-	outboundErr, ok := otogi.AsOutboundError(err)
+	outboundErr, ok := platform.AsOutboundError(err)
 	if !ok {
 		t.Fatalf("AsOutboundError(%v) = false, want true", err)
 	}
-	if outboundErr.Kind != otogi.OutboundErrorKindRateLimited {
-		t.Fatalf("kind = %s, want %s", outboundErr.Kind, otogi.OutboundErrorKindRateLimited)
+	if outboundErr.Kind != platform.OutboundErrorKindRateLimited {
+		t.Fatalf("kind = %s, want %s", outboundErr.Kind, platform.OutboundErrorKindRateLimited)
 	}
-	if outboundErr.Operation != otogi.OutboundOperationEditMessage {
-		t.Fatalf("operation = %s, want %s", outboundErr.Operation, otogi.OutboundOperationEditMessage)
+	if outboundErr.Operation != platform.OutboundOperationEditMessage {
+		t.Fatalf("operation = %s, want %s", outboundErr.Operation, platform.OutboundOperationEditMessage)
 	}
 	if !errors.Is(err, rootCause) {
 		t.Fatalf("errors.Is(err, rootCause) = false, want true (err=%v)", err)
@@ -366,7 +516,7 @@ func TestSinkDispatcherListSinksByPlatform(t *testing.T) {
 
 	dispatcher, err := NewSinkDispatcher([]Runtime{
 		{
-			Source:         otogi.EventSource{Platform: testDriverPlatform, ID: "main"},
+			Source:         platform.EventSource{Platform: testDriverPlatform, ID: "main"},
 			SinkDispatcher: &stubSinkDispatcher{},
 		},
 	})
@@ -394,11 +544,43 @@ func (d stubDriver) Name() string {
 	return d.name
 }
 
-func (d stubDriver) Start(_ context.Context, _ otogi.EventDispatcher) error {
+func (d stubDriver) Start(_ context.Context, _ core.EventDispatcher) error {
 	return nil
 }
 
 func (d stubDriver) Shutdown(_ context.Context) error {
+	return nil
+}
+
+type publishingDriver struct {
+	event *platform.Event
+}
+
+func (d publishingDriver) Name() string {
+	return "publishing"
+}
+
+func (d publishingDriver) Start(ctx context.Context, dispatcher core.EventDispatcher) error {
+	if d.event == nil {
+		return nil
+	}
+	if err := dispatcher.Publish(ctx, d.event); err != nil {
+		return fmt.Errorf("publishing driver publish: %w", err)
+	}
+
+	return nil
+}
+
+func (d publishingDriver) Shutdown(context.Context) error {
+	return nil
+}
+
+type captureEventDispatcher struct {
+	events []*platform.Event
+}
+
+func (d *captureEventDispatcher) Publish(_ context.Context, event *platform.Event) error {
+	d.events = append(d.events, event)
 	return nil
 }
 
@@ -410,18 +592,18 @@ type stubSinkDispatcher struct {
 
 type stubMediaDownloader struct {
 	downloadCalls int
-	attachment    otogi.MediaAttachment
+	attachment    platform.MediaAttachment
 	err           error
 }
 
 func (d *stubMediaDownloader) Download(
 	_ context.Context,
-	_ otogi.MediaDownloadRequest,
+	_ platform.MediaDownloadRequest,
 	_ io.Writer,
-) (otogi.MediaAttachment, error) {
+) (platform.MediaAttachment, error) {
 	d.downloadCalls++
 	if d.err != nil {
-		return otogi.MediaAttachment{}, d.err
+		return platform.MediaAttachment{}, d.err
 	}
 
 	return d.attachment, nil
@@ -429,48 +611,48 @@ func (d *stubMediaDownloader) Download(
 
 func (d *stubSinkDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.sendCalls++
 	if d.sendErr != nil {
 		return nil, d.sendErr
 	}
 
-	return &otogi.OutboundMessage{
+	return &platform.OutboundMessage{
 		ID: "1",
-		Target: otogi.OutboundTarget{
+		Target: platform.OutboundTarget{
 			Conversation: request.Target.Conversation,
 			Sink:         request.Target.Sink,
 		},
 	}, nil
 }
 
-func (d *stubSinkDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (d *stubSinkDispatcher) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return d.editErr
 }
 
-func (*stubSinkDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (*stubSinkDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (*stubSinkDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (*stubSinkDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (*stubSinkDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (*stubSinkDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 func (*stubSinkDispatcher) ListSinksByPlatform(
 	context.Context,
-	otogi.Platform,
-) ([]otogi.EventSink, error) {
+	platform.Platform,
+) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 func stubRuntimeBuilder(_ context.Context, definition Definition, _ *slog.Logger) (Runtime, error) {
 	return Runtime{
-		Source: otogi.EventSource{
+		Source: platform.EventSource{
 			Platform: testDriverPlatform,
 		},
 		Driver: stubDriver{name: definition.Name},

@@ -6,7 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestMarkdownParserParseMarkdownBasicMappings(t *testing.T) {
@@ -24,13 +25,13 @@ func TestMarkdownParserParseMarkdownBasicMappings(t *testing.T) {
 		t.Fatalf("text = %q", got.Text)
 	}
 
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeBold, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeItalic, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeStrike, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeCode, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeTextURL, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeURL, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeEmail, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeBold, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeItalic, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeStrike, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeCode, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeTextURL, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeURL, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeEmail, 1)
 }
 
 func TestMarkdownParserParseMarkdownStructuralMappings(t *testing.T) {
@@ -50,24 +51,24 @@ func TestMarkdownParserParseMarkdownStructuralMappings(t *testing.T) {
 		t.Fatalf("text = %q, want %q", got.Text, wantText)
 	}
 
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeHeading, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeList, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeListItem, 2)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeTaskItem, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeThematicBreak, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeTable, 1)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeTableRow, 2)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeTableCell, 4)
-	assertEntityTypeCount(t, got.Entities, otogi.TextEntityTypeImage, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeHeading, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeList, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeListItem, 2)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeTaskItem, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeThematicBreak, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeTable, 1)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeTableRow, 2)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeTableCell, 4)
+	assertEntityTypeCount(t, got.Entities, platform.TextEntityTypeImage, 1)
 
 	var tableGroupID string
 	rowIndexes := map[int]bool{}
 	headerCellCount := 0
 	bodyCellCount := 0
 	for _, entity := range got.Entities {
-		if entity.Type != otogi.TextEntityTypeTable &&
-			entity.Type != otogi.TextEntityTypeTableRow &&
-			entity.Type != otogi.TextEntityTypeTableCell {
+		if entity.Type != platform.TextEntityTypeTable &&
+			entity.Type != platform.TextEntityTypeTableRow &&
+			entity.Type != platform.TextEntityTypeTableCell {
 			continue
 		}
 		if entity.Table == nil {
@@ -82,10 +83,10 @@ func TestMarkdownParserParseMarkdownStructuralMappings(t *testing.T) {
 		if entity.Table.GroupID != tableGroupID {
 			t.Fatalf("group id = %q, want %q", entity.Table.GroupID, tableGroupID)
 		}
-		if entity.Type == otogi.TextEntityTypeTableRow {
+		if entity.Type == platform.TextEntityTypeTableRow {
 			rowIndexes[entity.Table.Row] = true
 		}
-		if entity.Type == otogi.TextEntityTypeTableCell {
+		if entity.Type == platform.TextEntityTypeTableCell {
 			if entity.Table.Row < 0 {
 				t.Fatalf("table cell row = %d, want >= 0", entity.Table.Row)
 			}
@@ -130,7 +131,7 @@ func TestMarkdownParserParseMarkdownTableGroupIDDeterministic(t *testing.T) {
 
 	groupIDs := make([]string, 0, 2)
 	for _, entity := range got.Entities {
-		if entity.Type != otogi.TextEntityTypeTable {
+		if entity.Type != platform.TextEntityTypeTable {
 			continue
 		}
 		if entity.Table == nil {
@@ -157,8 +158,8 @@ func TestMarkdownParserParseMarkdownRuneOffsets(t *testing.T) {
 	if len(got.Entities) != 1 {
 		t.Fatalf("entities len = %d, want 1", len(got.Entities))
 	}
-	if got.Entities[0].Type != otogi.TextEntityTypeBold {
-		t.Fatalf("entity type = %q, want %q", got.Entities[0].Type, otogi.TextEntityTypeBold)
+	if got.Entities[0].Type != platform.TextEntityTypeBold {
+		t.Fatalf("entity type = %q, want %q", got.Entities[0].Type, platform.TextEntityTypeBold)
 	}
 	if got.Entities[0].Offset != 0 || got.Entities[0].Length != 2 {
 		t.Fatalf("entity range = [%d,%d)", got.Entities[0].Offset, got.Entities[0].Offset+got.Entities[0].Length)
@@ -205,9 +206,9 @@ func TestKernelProvidesMarkdownParserService(t *testing.T) {
 	t.Parallel()
 
 	kernelRuntime := newTestKernel(t)
-	parser, err := otogi.ResolveAs[otogi.MarkdownParser](
+	parser, err := core.ResolveAs[platform.MarkdownParser](
 		kernelRuntime.Services(),
-		otogi.ServiceMarkdownParser,
+		platform.ServiceMarkdownParser,
 	)
 	if err != nil {
 		t.Fatalf("resolve markdown parser failed: %v", err)
@@ -219,8 +220,8 @@ func TestKernelProvidesMarkdownParserService(t *testing.T) {
 
 func assertEntityTypeCount(
 	t *testing.T,
-	entities []otogi.TextEntity,
-	typ otogi.TextEntityType,
+	entities []platform.TextEntity,
+	typ platform.TextEntityType,
 	want int,
 ) {
 	t.Helper()

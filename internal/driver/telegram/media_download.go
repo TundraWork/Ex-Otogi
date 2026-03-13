@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	gotdtelegram "github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
@@ -161,14 +161,14 @@ func newMediaDownloader(
 // Download resolves one cached Telegram attachment and streams it into output.
 func (d *MediaDownloader) Download(
 	ctx context.Context,
-	request otogi.MediaDownloadRequest,
+	request platform.MediaDownloadRequest,
 	output io.Writer,
-) (otogi.MediaAttachment, error) {
+) (platform.MediaAttachment, error) {
 	if err := request.Validate(); err != nil {
-		return otogi.MediaAttachment{}, fmt.Errorf("download media validate: %w", err)
+		return platform.MediaAttachment{}, fmt.Errorf("download media validate: %w", err)
 	}
 	if output == nil {
-		return otogi.MediaAttachment{}, fmt.Errorf("%w: missing output writer", otogi.ErrInvalidMediaDownloadRequest)
+		return platform.MediaAttachment{}, fmt.Errorf("%w: missing output writer", platform.ErrInvalidMediaDownloadRequest)
 	}
 
 	downloadCtx, cancel := d.withTimeout(ctx)
@@ -176,7 +176,7 @@ func (d *MediaDownloader) Download(
 
 	record, err := d.resolveRecord(downloadCtx, request)
 	if err != nil {
-		return otogi.MediaAttachment{}, fmt.Errorf(
+		return platform.MediaAttachment{}, fmt.Errorf(
 			"download media article %s attachment %s resolve locator: %w",
 			request.ArticleID,
 			request.AttachmentID,
@@ -188,7 +188,7 @@ func (d *MediaDownloader) Download(
 		if isRefreshableMediaDownloadError(err) {
 			refreshed, refreshErr := d.refreshLocator(downloadCtx, request, record)
 			if refreshErr != nil {
-				return otogi.MediaAttachment{}, fmt.Errorf(
+				return platform.MediaAttachment{}, fmt.Errorf(
 					"download media article %s attachment %s initial failure: %w; refresh locator: %w",
 					request.ArticleID,
 					request.AttachmentID,
@@ -207,7 +207,7 @@ func (d *MediaDownloader) Download(
 	}
 
 	if err != nil {
-		return otogi.MediaAttachment{}, fmt.Errorf(
+		return platform.MediaAttachment{}, fmt.Errorf(
 			"download media article %s attachment %s: %w",
 			request.ArticleID,
 			request.AttachmentID,
@@ -217,7 +217,7 @@ func (d *MediaDownloader) Download(
 
 	attachment, err := mediaLocatorRecordAttachment(record)
 	if err != nil {
-		return otogi.MediaAttachment{}, fmt.Errorf(
+		return platform.MediaAttachment{}, fmt.Errorf(
 			"download media article %s attachment %s: %w",
 			request.ArticleID,
 			request.AttachmentID,
@@ -238,7 +238,7 @@ func (d *MediaDownloader) withTimeout(ctx context.Context) (context.Context, con
 
 func (d *MediaDownloader) resolveRecord(
 	ctx context.Context,
-	request otogi.MediaDownloadRequest,
+	request platform.MediaDownloadRequest,
 ) (mediaLocatorRecord, error) {
 	if record, ok := d.locators.Lookup(request); ok {
 		return record, nil
@@ -249,7 +249,7 @@ func (d *MediaDownloader) resolveRecord(
 
 func (d *MediaDownloader) refreshLocator(
 	ctx context.Context,
-	request otogi.MediaDownloadRequest,
+	request platform.MediaDownloadRequest,
 	current mediaLocatorRecord,
 ) (mediaLocatorRecord, error) {
 	peer, err := d.resolvePeer(request, current)
@@ -268,7 +268,7 @@ func (d *MediaDownloader) refreshLocator(
 			"refresh locator article %s attachment %s: %w",
 			request.ArticleID,
 			request.AttachmentID,
-			otogi.ErrMediaDownloadNotFound,
+			platform.ErrMediaDownloadNotFound,
 		)
 	}
 
@@ -283,7 +283,7 @@ func (d *MediaDownloader) refreshLocator(
 			"refresh locator article %s attachment %s: %w",
 			request.ArticleID,
 			request.AttachmentID,
-			otogi.ErrMediaDownloadNotFound,
+			platform.ErrMediaDownloadNotFound,
 		)
 	}
 
@@ -291,7 +291,7 @@ func (d *MediaDownloader) refreshLocator(
 }
 
 func (d *MediaDownloader) resolvePeer(
-	request otogi.MediaDownloadRequest,
+	request platform.MediaDownloadRequest,
 	current mediaLocatorRecord,
 ) (tg.InputPeerClass, error) {
 	if current.inputPeer != nil {
@@ -311,7 +311,7 @@ func (d *MediaDownloader) resolvePeer(
 
 func (d *MediaDownloader) fetchMessage(
 	ctx context.Context,
-	request otogi.MediaDownloadRequest,
+	request platform.MediaDownloadRequest,
 	peer tg.InputPeerClass,
 ) (*tg.Message, error) {
 	messageID, err := parseMessageID(request.ArticleID)
@@ -339,7 +339,7 @@ func (d *MediaDownloader) fetchMessage(
 		}
 	}
 
-	return nil, fmt.Errorf("fetch messages article %s: %w", request.ArticleID, otogi.ErrMediaDownloadNotFound)
+	return nil, fmt.Errorf("fetch messages article %s: %w", request.ArticleID, platform.ErrMediaDownloadNotFound)
 }
 
 func (d *MediaDownloader) fetchMessages(
@@ -373,7 +373,7 @@ func isRefreshableMediaDownloadError(err error) bool {
 		tg.IsFileReferenceExpired(err) ||
 		tg.IsFileReferenceInvalid(err) ||
 		tg.IsLocationInvalid(err) ||
-		errors.Is(err, otogi.ErrMediaDownloadNotFound)
+		errors.Is(err, platform.ErrMediaDownloadNotFound)
 }
 
 func (e gotdMediaDownloadExecutor) Download(
@@ -387,10 +387,10 @@ func (e gotdMediaDownloadExecutor) Download(
 		return fmt.Errorf("download media: nil rpc client")
 	}
 	if location == nil {
-		return fmt.Errorf("%w: missing media location", otogi.ErrMediaDownloadNotFound)
+		return fmt.Errorf("%w: missing media location", platform.ErrMediaDownloadNotFound)
 	}
 	if output == nil {
-		return fmt.Errorf("%w: missing output writer", otogi.ErrInvalidMediaDownloadRequest)
+		return fmt.Errorf("%w: missing output writer", platform.ErrInvalidMediaDownloadRequest)
 	}
 	if e.factory == nil {
 		return fmt.Errorf("download media: nil download factory")
@@ -451,4 +451,4 @@ func (b gotdMediaDownloadBuilder) Parallel(ctx context.Context, output io.Writer
 	return nil
 }
 
-var _ otogi.MediaDownloader = (*MediaDownloader)(nil)
+var _ platform.MediaDownloader = (*MediaDownloader)(nil)

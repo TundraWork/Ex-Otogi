@@ -9,7 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -53,7 +54,7 @@ func WithTTL(ttl time.Duration) Option {
 // Module stores article projections and per-article event history.
 type Module struct {
 	logger     *slog.Logger
-	dispatcher otogi.SinkDispatcher
+	dispatcher platform.SinkDispatcher
 	maxEntries int
 	ttl        time.Duration
 	clock      func() time.Time
@@ -61,7 +62,7 @@ type Module struct {
 	mu                       sync.RWMutex
 	records                  map[cacheKey]*cacheRecord
 	entities                 map[cacheKey]memorySnapshot
-	events                   map[cacheKey][]otogi.Event
+	events                   map[cacheKey][]platform.Event
 	streams                  map[conversationStreamKey][]conversationStreamEntry
 	articleStreams           map[cacheKey]conversationArticleStream
 	lru                      *list.List
@@ -71,7 +72,7 @@ type Module struct {
 
 type cacheKey struct {
 	tenantID       string
-	platform       otogi.Platform
+	platform       platform.Platform
 	conversationID string
 	articleID      string
 }
@@ -82,7 +83,7 @@ type cacheRecord struct {
 
 type conversationStreamKey struct {
 	tenantID       string
-	platform       otogi.Platform
+	platform       platform.Platform
 	conversationID string
 	threadID       string
 }
@@ -101,10 +102,10 @@ type conversationArticleStream struct {
 
 type memorySnapshot struct {
 	TenantID     string
-	Platform     otogi.Platform
-	Conversation otogi.Conversation
-	Actor        otogi.Actor
-	Article      otogi.Article
+	Platform     platform.Platform
+	Conversation platform.Conversation
+	Actor        platform.Actor
+	Article      platform.Article
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -118,7 +119,7 @@ func New(options ...Option) *Module {
 		clock:          time.Now,
 		records:        make(map[cacheKey]*cacheRecord),
 		entities:       make(map[cacheKey]memorySnapshot),
-		events:         make(map[cacheKey][]otogi.Event),
+		events:         make(map[cacheKey][]platform.Event),
 		streams:        make(map[conversationStreamKey][]conversationStreamEntry),
 		articleStreams: make(map[cacheKey]conversationArticleStream),
 		lru:            list.New(),
@@ -137,53 +138,53 @@ func (m *Module) Name() string {
 }
 
 // Spec declares which events mutate memory.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		Handlers: []otogi.ModuleHandler{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		Handlers: []core.ModuleHandler{
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "memory-writer",
 					Description: "persists per-article event history and projects article state",
-					Interest: otogi.InterestSet{
-						Kinds: []otogi.EventKind{
-							otogi.EventKindArticleCreated,
-							otogi.EventKindArticleEdited,
-							otogi.EventKindArticleRetracted,
-							otogi.EventKindArticleReactionAdded,
-							otogi.EventKindArticleReactionRemoved,
+					Interest: core.InterestSet{
+						Kinds: []platform.EventKind{
+							platform.EventKindArticleCreated,
+							platform.EventKindArticleEdited,
+							platform.EventKindArticleRetracted,
+							platform.EventKindArticleReactionAdded,
+							platform.EventKindArticleReactionRemoved,
 						},
 					},
-					RequiredServices: []string{otogi.ServiceSinkDispatcher},
+					RequiredServices: []string{platform.ServiceSinkDispatcher},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("memory-writer"),
+				Subscription: core.NewDefaultSubscriptionSpec("memory-writer"),
 				Handler:      m.handleEvent,
 			},
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "memory-introspection-command-handler",
 					Description: "handles ~raw and ~history introspection commands",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindSystemCommandReceived},
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindSystemCommandReceived},
 						RequireCommand: true,
 						CommandNames: []string{
 							rawCommandName,
 							historyCommandName,
 						},
 					},
-					RequiredServices: []string{otogi.ServiceSinkDispatcher},
+					RequiredServices: []string{platform.ServiceSinkDispatcher},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("memory-command-handler"),
+				Subscription: core.NewDefaultSubscriptionSpec("memory-command-handler"),
 				Handler:      m.handleCommandEvent,
 			},
 		},
-		Commands: []otogi.CommandSpec{
+		Commands: []platform.CommandSpec{
 			{
-				Prefix:      otogi.CommandPrefixSystem,
+				Prefix:      platform.CommandPrefixSystem,
 				Name:        rawCommandName,
 				Description: "reply with raw article projection JSON",
 			},
 			{
-				Prefix:      otogi.CommandPrefixSystem,
+				Prefix:      platform.CommandPrefixSystem,
 				Name:        historyCommandName,
 				Description: "reply with article event history JSON",
 			},
@@ -192,27 +193,27 @@ func (m *Module) Spec() otogi.ModuleSpec {
 }
 
 // OnRegister resolves dependencies and registers this module as MemoryService.
-func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
-	logger, err := otogi.ResolveAs[*slog.Logger](runtime.Services(), ServiceLogger)
+func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error {
+	logger, err := core.ResolveAs[*slog.Logger](runtime.Services(), ServiceLogger)
 	switch {
 	case err == nil:
 		m.logger = logger
-	case errors.Is(err, otogi.ErrServiceNotFound):
+	case errors.Is(err, core.ErrServiceNotFound):
 	default:
 		return fmt.Errorf("memory resolve logger: %w", err)
 	}
 
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("memory resolve outbound dispatcher: %w", err)
 	}
 	m.dispatcher = dispatcher
 
-	if err := runtime.Services().Register(otogi.ServiceMemory, m); err != nil {
-		return fmt.Errorf("memory register service %s: %w", otogi.ServiceMemory, err)
+	if err := runtime.Services().Register(core.ServiceMemory, m); err != nil {
+		return fmt.Errorf("memory register service %s: %w", core.ServiceMemory, err)
 	}
 
 	return nil
@@ -236,7 +237,7 @@ func (m *Module) OnShutdown(ctx context.Context) error {
 	recordCount := len(m.records)
 	m.records = make(map[cacheKey]*cacheRecord)
 	m.entities = make(map[cacheKey]memorySnapshot)
-	m.events = make(map[cacheKey][]otogi.Event)
+	m.events = make(map[cacheKey][]platform.Event)
 	m.streams = make(map[conversationStreamKey][]conversationStreamEntry)
 	m.articleStreams = make(map[cacheKey]conversationArticleStream)
 	m.index = make(map[cacheKey]*list.Element)
@@ -262,7 +263,7 @@ func withClock(clock func() time.Time) Option {
 }
 
 var (
-	_ otogi.Module          = (*Module)(nil)
-	_ otogi.ModuleRegistrar = (*Module)(nil)
-	_ otogi.MemoryService   = (*Module)(nil)
+	_ core.Module          = (*Module)(nil)
+	_ core.ModuleRegistrar = (*Module)(nil)
+	_ core.MemoryService   = (*Module)(nil)
 )

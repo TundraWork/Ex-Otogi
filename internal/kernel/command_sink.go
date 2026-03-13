@@ -6,25 +6,26 @@ import (
 	"fmt"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 type commandRegistration struct {
 	moduleName string
-	spec       otogi.CommandSpec
+	spec       platform.CommandSpec
 }
 
 // registerModuleCommands validates and registers module-owned command specs.
 func (k *Kernel) registerModuleCommands(
 	_ context.Context,
 	moduleName string,
-	commands []otogi.CommandSpec,
+	commands []platform.CommandSpec,
 ) error {
 	if len(commands) == 0 {
 		return nil
 	}
 
-	normalized := make([]otogi.CommandSpec, 0, len(commands))
+	normalized := make([]platform.CommandSpec, 0, len(commands))
 	seenInModule := make(map[string]struct{}, len(commands))
 	for index, command := range commands {
 		if err := command.Validate(); err != nil {
@@ -82,24 +83,24 @@ func (k *Kernel) unregisterModuleCommands(moduleName string) {
 }
 
 // lookupCommand resolves one command spec by prefix + normalized name.
-func (k *Kernel) lookupCommand(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
+func (k *Kernel) lookupCommand(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
 	key := commandRegistryKey(prefix, name)
 
 	k.mu.RLock()
 	registration, exists := k.commands[key]
 	k.mu.RUnlock()
 	if !exists {
-		return otogi.CommandSpec{}, false
+		return platform.CommandSpec{}, false
 	}
 
 	return cloneCommandSpec(registration.spec), true
 }
 
 // newDriverEventDispatcher creates the source-event dispatcher wrapped with command derivation.
-func (k *Kernel) newDriverEventDispatcher() otogi.EventDispatcher {
+func (k *Kernel) newDriverEventDispatcher() core.EventDispatcher {
 	return &commandDerivingDispatcher{
 		base: k.bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
 			return k.lookupCommand(prefix, name)
 		},
 		serviceLookup: k.services,
@@ -135,7 +136,7 @@ func (c ChatAllowlistConfig) IsConversationAllowed(sourceID string, conversation
 		return true
 	}
 
-	key := otogi.QualifiedConversationKey(sourceID, conversationID)
+	key := platform.QualifiedConversationKey(sourceID, conversationID)
 	_, allowed := c.ConversationIDs[key]
 
 	return allowed
@@ -154,9 +155,9 @@ func (c ChatAllowlistConfig) IsBypassCommand(name string) bool {
 
 // commandDerivingDispatcher publishes source events and conditionally derives command events.
 type commandDerivingDispatcher struct {
-	base          otogi.EventDispatcher
-	lookupCommand func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool)
-	serviceLookup otogi.ServiceRegistry
+	base          core.EventDispatcher
+	lookupCommand func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool)
+	serviceLookup core.ServiceRegistry
 	reportAsync   func(context.Context, string, error)
 	allowlist     ChatAllowlistConfig
 }
@@ -164,11 +165,11 @@ type commandDerivingDispatcher struct {
 // Publish forwards one source event and conditionally derives one command event.
 //
 // When the chat allowlist is enabled, events from unlisted conversations are
-// silently dropped unless the message text matches a registered system command
+// silently dropped unless the article text matches a registered system command
 // whose name appears in the bypass list. For bypass commands only the derived
 // command event is published — the source event is suppressed so that modules
 // subscribing to article.created do not process non-allowlisted traffic.
-func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *otogi.Event) error {
+func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *platform.Event) error {
 	if event == nil {
 		return fmt.Errorf("publish command deriving sink: nil event")
 	}
@@ -190,7 +191,7 @@ func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *otogi.Ev
 // publishBypassOnly handles events from non-allowlisted conversations.
 // Only bypass-eligible system commands are derived and published; everything
 // else is silently dropped.
-func (s *commandDerivingDispatcher) publishBypassOnly(ctx context.Context, event *otogi.Event) error {
+func (s *commandDerivingDispatcher) publishBypassOnly(ctx context.Context, event *platform.Event) error {
 	if !isCommandDerivableEventKind(event.Kind) {
 		return nil
 	}
@@ -199,11 +200,11 @@ func (s *commandDerivingDispatcher) publishBypassOnly(ctx context.Context, event
 	if !ok {
 		return nil
 	}
-	candidate, matched, parseErr := otogi.ParseCommandCandidate(commandText)
+	candidate, matched, parseErr := platform.ParseCommandCandidate(commandText)
 	if !matched {
 		return nil
 	}
-	if candidate.Prefix != otogi.CommandPrefixSystem {
+	if candidate.Prefix != platform.CommandPrefixSystem {
 		return nil
 	}
 	if !s.allowlist.IsBypassCommand(candidate.Name) {
@@ -219,7 +220,7 @@ func (s *commandDerivingDispatcher) publishBypassOnly(ctx context.Context, event
 		return nil
 	}
 
-	invocation, bindErr := otogi.BindCommand(candidate, spec, event)
+	invocation, bindErr := platform.BindCommand(candidate, spec, event)
 	if bindErr != nil {
 		s.replyCommandError(ctx, event, spec, bindErr)
 		return nil
@@ -234,7 +235,7 @@ func (s *commandDerivingDispatcher) publishBypassOnly(ctx context.Context, event
 }
 
 // deriveCommand attempts to derive a command event from the source event.
-func (s *commandDerivingDispatcher) deriveCommand(ctx context.Context, event *otogi.Event) error {
+func (s *commandDerivingDispatcher) deriveCommand(ctx context.Context, event *platform.Event) error {
 	if !isCommandDerivableEventKind(event.Kind) {
 		return nil
 	}
@@ -243,7 +244,7 @@ func (s *commandDerivingDispatcher) deriveCommand(ctx context.Context, event *ot
 	if !ok {
 		return nil
 	}
-	candidate, matched, parseErr := otogi.ParseCommandCandidate(commandText)
+	candidate, matched, parseErr := platform.ParseCommandCandidate(commandText)
 	if !matched {
 		return nil
 	}
@@ -257,7 +258,7 @@ func (s *commandDerivingDispatcher) deriveCommand(ctx context.Context, event *ot
 		return nil
 	}
 
-	invocation, bindErr := otogi.BindCommand(candidate, spec, event)
+	invocation, bindErr := platform.BindCommand(candidate, spec, event)
 	if bindErr != nil {
 		s.replyCommandError(ctx, event, spec, bindErr)
 		return nil
@@ -273,8 +274,8 @@ func (s *commandDerivingDispatcher) deriveCommand(ctx context.Context, event *ot
 
 func (s *commandDerivingDispatcher) replyCommandError(
 	ctx context.Context,
-	sourceEvent *otogi.Event,
-	spec otogi.CommandSpec,
+	sourceEvent *platform.Event,
+	spec platform.CommandSpec,
 	parseErr error,
 ) {
 	if s.serviceLookup == nil {
@@ -286,12 +287,12 @@ func (s *commandDerivingDispatcher) replyCommandError(
 		return
 	}
 
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		s.serviceLookup,
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
-		if errors.Is(err, otogi.ErrServiceNotFound) {
+		if errors.Is(err, core.ErrServiceNotFound) {
 			s.reportAsyncError(ctx, "command error reply resolve dispatcher", err)
 			return
 		}
@@ -299,13 +300,13 @@ func (s *commandDerivingDispatcher) replyCommandError(
 		return
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(sourceEvent)
+	target, err := platform.OutboundTargetFromEvent(sourceEvent)
 	if err != nil {
 		s.reportAsyncError(ctx, "command error reply derive target", err)
 		return
 	}
 
-	_, err = dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	_, err = dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             formatCommandErrorReply(spec, parseErr),
 		ReplyToMessageID: commandReplyToMessageID(sourceEvent),
@@ -321,56 +322,56 @@ func (s *commandDerivingDispatcher) reportAsyncError(ctx context.Context, scope 
 	}
 }
 
-func isCommandDerivableEventKind(kind otogi.EventKind) bool {
-	return kind == otogi.EventKindArticleCreated
+func isCommandDerivableEventKind(kind platform.EventKind) bool {
+	return kind == platform.EventKindArticleCreated
 }
 
-func commandContextFromEvent(event *otogi.Event) (text string, article otogi.Article, ok bool) {
+func commandContextFromEvent(event *platform.Event) (text string, article platform.Article, ok bool) {
 	if event == nil {
-		return "", otogi.Article{}, false
+		return "", platform.Article{}, false
 	}
 
 	switch event.Kind {
-	case otogi.EventKindArticleCreated:
+	case platform.EventKindArticleCreated:
 		if event.Article == nil {
-			return "", otogi.Article{}, false
+			return "", platform.Article{}, false
 		}
 		return event.Article.Text, cloneArticle(*event.Article), true
-	case otogi.EventKindArticleEdited:
+	case platform.EventKindArticleEdited:
 		if event.Mutation == nil || event.Mutation.After == nil || event.Mutation.TargetArticleID == "" {
-			return "", otogi.Article{}, false
+			return "", platform.Article{}, false
 		}
-		return event.Mutation.After.Text, otogi.Article{
+		return event.Mutation.After.Text, platform.Article{
 			ID:       event.Mutation.TargetArticleID,
 			Text:     event.Mutation.After.Text,
-			Entities: append([]otogi.TextEntity(nil), event.Mutation.After.Entities...),
+			Entities: append([]platform.TextEntity(nil), event.Mutation.After.Entities...),
 			Media:    cloneMedia(event.Mutation.After.Media),
 		}, true
 	default:
-		return "", otogi.Article{}, false
+		return "", platform.Article{}, false
 	}
 }
 
 func derivedCommandEvent(
-	sourceEvent *otogi.Event,
-	article otogi.Article,
-	prefix otogi.CommandPrefix,
-	invocation otogi.CommandInvocation,
-) *otogi.Event {
+	sourceEvent *platform.Event,
+	article platform.Article,
+	prefix platform.CommandPrefix,
+	invocation platform.CommandInvocation,
+) *platform.Event {
 	kind, suffix := derivedCommandEventKind(prefix)
 	source := sourceEvent.Source
-	commandEvent := &otogi.Event{
+	commandEvent := &platform.Event{
 		ID:         sourceEvent.ID + suffix,
 		Kind:       kind,
 		OccurredAt: sourceEvent.OccurredAt,
 		Source:     source,
 		TenantID:   sourceEvent.TenantID,
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:    sourceEvent.Conversation.ID,
 			Type:  sourceEvent.Conversation.Type,
 			Title: sourceEvent.Conversation.Title,
 		},
-		Actor: otogi.Actor{
+		Actor: platform.Actor{
 			ID:          sourceEvent.Actor.ID,
 			Username:    sourceEvent.Actor.Username,
 			DisplayName: sourceEvent.Actor.DisplayName,
@@ -384,16 +385,16 @@ func derivedCommandEvent(
 	return commandEvent
 }
 
-func derivedCommandEventKind(prefix otogi.CommandPrefix) (otogi.EventKind, string) {
+func derivedCommandEventKind(prefix platform.CommandPrefix) (platform.EventKind, string) {
 	switch prefix {
-	case otogi.CommandPrefixSystem:
-		return otogi.EventKindSystemCommandReceived, "#system-command"
+	case platform.CommandPrefixSystem:
+		return platform.EventKindSystemCommandReceived, "#system-command"
 	default:
-		return otogi.EventKindCommandReceived, "#command"
+		return platform.EventKindCommandReceived, "#command"
 	}
 }
 
-func commandReplyToMessageID(event *otogi.Event) string {
+func commandReplyToMessageID(event *platform.Event) string {
 	if event == nil {
 		return ""
 	}
@@ -407,7 +408,7 @@ func commandReplyToMessageID(event *otogi.Event) string {
 	return ""
 }
 
-func formatCommandErrorReply(spec otogi.CommandSpec, parseErr error) string {
+func formatCommandErrorReply(spec platform.CommandSpec, parseErr error) string {
 	if parseErr == nil {
 		return commandUsage(spec)
 	}
@@ -415,7 +416,7 @@ func formatCommandErrorReply(spec otogi.CommandSpec, parseErr error) string {
 	return fmt.Sprintf("%s\nusage: %s", parseErr.Error(), commandUsage(spec))
 }
 
-func commandUsage(spec otogi.CommandSpec) string {
+func commandUsage(spec platform.CommandSpec) string {
 	usage := fmt.Sprintf("%s%s", spec.Prefix, normalizeCommandName(spec.Name))
 	if len(spec.Options) == 0 {
 		return usage
@@ -440,7 +441,7 @@ func commandUsage(spec otogi.CommandSpec) string {
 	return usage + " " + strings.Join(parts, " ")
 }
 
-func commandOptionDescriptor(option otogi.CommandOptionSpec) string {
+func commandOptionDescriptor(option platform.CommandOptionSpec) string {
 	name := normalizeCommandName(option.Name)
 	alias := normalizeCommandAlias(option.Alias)
 	switch {
@@ -464,11 +465,11 @@ func commandOptionDescriptor(option otogi.CommandOptionSpec) string {
 	}
 }
 
-func commandRegistryKey(prefix otogi.CommandPrefix, name string) string {
+func commandRegistryKey(prefix platform.CommandPrefix, name string) string {
 	return fmt.Sprintf("%s:%s", prefix, normalizeCommandName(name))
 }
 
-func formatCommandKey(prefix otogi.CommandPrefix, name string) string {
+func formatCommandKey(prefix platform.CommandPrefix, name string) string {
 	return fmt.Sprintf("%s%s", prefix, normalizeCommandName(name))
 }
 
@@ -480,14 +481,14 @@ func normalizeCommandAlias(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-func cloneCommandSpec(spec otogi.CommandSpec) otogi.CommandSpec {
+func cloneCommandSpec(spec platform.CommandSpec) platform.CommandSpec {
 	cloned := spec
 	cloned.Name = normalizeCommandName(spec.Name)
 	if len(spec.Options) == 0 {
 		return cloned
 	}
 
-	cloned.Options = append([]otogi.CommandOptionSpec(nil), spec.Options...)
+	cloned.Options = append([]platform.CommandOptionSpec(nil), spec.Options...)
 	for index := range cloned.Options {
 		cloned.Options[index].Name = normalizeCommandName(cloned.Options[index].Name)
 		cloned.Options[index].Alias = normalizeCommandAlias(cloned.Options[index].Alias)
@@ -496,36 +497,36 @@ func cloneCommandSpec(spec otogi.CommandSpec) otogi.CommandSpec {
 	return cloned
 }
 
-func cloneCommandInvocation(invocation otogi.CommandInvocation) *otogi.CommandInvocation {
+func cloneCommandInvocation(invocation platform.CommandInvocation) *platform.CommandInvocation {
 	cloned := invocation
 	if len(invocation.Options) > 0 {
-		cloned.Options = append([]otogi.CommandOption(nil), invocation.Options...)
+		cloned.Options = append([]platform.CommandOption(nil), invocation.Options...)
 	}
 
 	return &cloned
 }
 
-func cloneArticle(article otogi.Article) otogi.Article {
+func cloneArticle(article platform.Article) platform.Article {
 	cloned := article
 	if len(article.Entities) > 0 {
-		cloned.Entities = append([]otogi.TextEntity(nil), article.Entities...)
+		cloned.Entities = append([]platform.TextEntity(nil), article.Entities...)
 	}
 	if len(article.Media) > 0 {
 		cloned.Media = cloneMedia(article.Media)
 	}
 	if len(article.Reactions) > 0 {
-		cloned.Reactions = append([]otogi.ArticleReaction(nil), article.Reactions...)
+		cloned.Reactions = append([]platform.ArticleReaction(nil), article.Reactions...)
 	}
 
 	return cloned
 }
 
-func cloneMedia(media []otogi.MediaAttachment) []otogi.MediaAttachment {
+func cloneMedia(media []platform.MediaAttachment) []platform.MediaAttachment {
 	if len(media) == 0 {
 		return nil
 	}
 
-	cloned := make([]otogi.MediaAttachment, 0, len(media))
+	cloned := make([]platform.MediaAttachment, 0, len(media))
 	for _, item := range media {
 		copyItem := item
 		if item.Preview != nil {

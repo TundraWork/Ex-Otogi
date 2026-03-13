@@ -3,7 +3,8 @@ package memory
 import (
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func (m *Module) upsertEntityLocked(key cacheKey, cached memorySnapshot, now time.Time) {
@@ -12,7 +13,7 @@ func (m *Module) upsertEntityLocked(key cacheKey, cached memorySnapshot, now tim
 	m.trimToCapacityLocked()
 }
 
-func (m *Module) upsertEventLocked(key cacheKey, event *otogi.Event, now time.Time) {
+func (m *Module) upsertEventLocked(key cacheKey, event *platform.Event, now time.Time) {
 	if event == nil {
 		return
 	}
@@ -30,7 +31,7 @@ func (m *Module) storeEntityLocked(key cacheKey, cached memorySnapshot) {
 	m.upsertConversationArticleLocked(key, cached)
 }
 
-func (m *Module) appendEventHistoryLocked(key cacheKey, event *otogi.Event) {
+func (m *Module) appendEventHistoryLocked(key cacheKey, event *platform.Event) {
 	if event == nil {
 		return
 	}
@@ -43,7 +44,7 @@ func (m *Module) appendEventHistoryLocked(key cacheKey, event *otogi.Event) {
 	m.events[key] = append(m.events[key], cloned)
 }
 
-func (m *Module) isDuplicateEventLocked(key cacheKey, event *otogi.Event) bool {
+func (m *Module) isDuplicateEventLocked(key cacheKey, event *platform.Event) bool {
 	if event == nil || event.ID == "" {
 		return false
 	}
@@ -56,8 +57,8 @@ func (m *Module) isDuplicateEventLocked(key cacheKey, event *otogi.Event) bool {
 	return history[len(history)-1].ID == event.ID
 }
 
-func (m *Module) enrichHistoryEventLocked(key cacheKey, event otogi.Event) otogi.Event {
-	if event.Kind != otogi.EventKindArticleEdited {
+func (m *Module) enrichHistoryEventLocked(key cacheKey, event platform.Event) platform.Event {
+	if event.Kind != platform.EventKindArticleEdited {
 		return event
 	}
 	if event.Mutation == nil || event.Mutation.Before != nil {
@@ -68,9 +69,9 @@ func (m *Module) enrichHistoryEventLocked(key cacheKey, event otogi.Event) otogi
 	if !exists {
 		return event
 	}
-	event.Mutation.Before = &otogi.ArticleSnapshot{
+	event.Mutation.Before = &platform.ArticleSnapshot{
 		Text:     existing.Article.Text,
-		Entities: append([]otogi.TextEntity(nil), existing.Article.Entities...),
+		Entities: append([]platform.TextEntity(nil), existing.Article.Entities...),
 		Media:    cloneMediaAttachments(existing.Article.Media),
 	}
 
@@ -160,7 +161,7 @@ func (m *Module) now() time.Time {
 	return m.clock().UTC()
 }
 
-func cacheKeyFromLookup(lookup otogi.MemoryLookup) cacheKey {
+func cacheKeyFromLookup(lookup core.MemoryLookup) cacheKey {
 	return cacheKey{
 		tenantID:       lookup.TenantID,
 		platform:       lookup.Platform,
@@ -177,7 +178,7 @@ func normalizeEventTime(occurredAt time.Time, fallback time.Time) time.Time {
 	return occurredAt.UTC()
 }
 
-func mutationChangedAtOrFallback(mutation *otogi.ArticleMutation, fallback time.Time) time.Time {
+func mutationChangedAtOrFallback(mutation *platform.ArticleMutation, fallback time.Time) time.Time {
 	if mutation == nil || mutation.ChangedAt == nil || mutation.ChangedAt.IsZero() {
 		return fallback
 	}

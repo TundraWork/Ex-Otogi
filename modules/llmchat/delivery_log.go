@@ -4,12 +4,12 @@ import (
 	"context"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func (m *Module) warnIntermediateEditFailure(
 	ctx context.Context,
-	target otogi.OutboundTarget,
+	target platform.OutboundTarget,
 	placeholderMessageID string,
 	attempts int,
 	err error,
@@ -26,7 +26,7 @@ func (m *Module) warnIntermediateEditFailure(
 
 func (m *Module) warnEditRetryExhausted(
 	ctx context.Context,
-	request otogi.EditMessageRequest,
+	request platform.EditMessageRequest,
 	attempts int,
 	err error,
 ) {
@@ -43,7 +43,7 @@ func (m *Module) warnEditRetryExhausted(
 func (m *Module) logDeliveryWarning(
 	ctx context.Context,
 	message string,
-	target otogi.OutboundTarget,
+	target platform.OutboundTarget,
 	placeholderMessageID string,
 	attempts int,
 	err error,
@@ -77,7 +77,7 @@ func (m *Module) logDeliveryWarning(
 
 func (m *Module) warnMarkdownParseFallback(
 	ctx context.Context,
-	target otogi.OutboundTarget,
+	target platform.OutboundTarget,
 	placeholderMessageID string,
 	err error,
 ) {
@@ -100,18 +100,18 @@ func (m *Module) warnMarkdownParseFallback(
 }
 
 func describeOutboundEditError(err error) (
-	operation otogi.OutboundOperation,
-	kind otogi.OutboundErrorKind,
+	operation platform.OutboundOperation,
+	kind platform.OutboundErrorKind,
 	retryAfter time.Duration,
 ) {
-	operation = otogi.OutboundOperationEditMessage
-	kind = otogi.OutboundErrorKindUnknown
+	operation = platform.OutboundOperationEditMessage
+	kind = platform.OutboundErrorKindUnknown
 
 	if err == nil {
 		return operation, kind, 0
 	}
 
-	if outboundErr, ok := otogi.AsOutboundError(err); ok {
+	if outboundErr, ok := platform.AsOutboundError(err); ok {
 		if outboundErr.Operation != "" {
 			operation = outboundErr.Operation
 		}
@@ -123,10 +123,10 @@ func describeOutboundEditError(err error) (
 	}
 
 	if hint, ok := parseRetryAfterHint(err); ok {
-		return operation, otogi.OutboundErrorKindRateLimited, hint
+		return operation, platform.OutboundErrorKindRateLimited, hint
 	}
 	if isRateLimitError(err) {
-		return operation, otogi.OutboundErrorKindRateLimited, 0
+		return operation, platform.OutboundErrorKindRateLimited, 0
 	}
 
 	return operation, kind, 0

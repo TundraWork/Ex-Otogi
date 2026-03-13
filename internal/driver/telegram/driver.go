@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const defaultPublishTimeout = 2 * time.Second
@@ -48,7 +49,7 @@ func WithErrorHandler(handler func(context.Context, error)) DriverOption {
 	}
 }
 
-// Driver adapts Telegram updates into neutral otogi events.
+// Driver adapts Telegram updates into Otogi events.
 type Driver struct {
 	cfg     driverConfig
 	source  UpdateSource
@@ -85,8 +86,8 @@ func (d *Driver) Name() string {
 	return d.cfg.name
 }
 
-// Start consumes Telegram updates and publishes neutral events.
-func (d *Driver) Start(ctx context.Context, sink otogi.EventDispatcher) error {
+// Start consumes Telegram updates and publishes Otogi events.
+func (d *Driver) Start(ctx context.Context, sink core.EventDispatcher) error {
 	if sink == nil {
 		return fmt.Errorf("start telegram driver: nil sink")
 	}
@@ -107,7 +108,7 @@ func (d *Driver) Start(ctx context.Context, sink otogi.EventDispatcher) error {
 }
 
 // handleUpdate decodes one platform update and publishes it with bounded latency.
-func (d *Driver) handleUpdate(ctx context.Context, update Update, sink otogi.EventDispatcher) error {
+func (d *Driver) handleUpdate(ctx context.Context, update Update, sink core.EventDispatcher) error {
 	event, err := d.decodeSafely(ctx, update)
 	if err != nil {
 		d.cfg.onAsyncError(ctx, err)
@@ -139,7 +140,7 @@ func (d *Driver) handleUpdate(ctx context.Context, update Update, sink otogi.Eve
 }
 
 // decodeSafely protects decoder panics at the adapter boundary.
-func (d *Driver) decodeSafely(ctx context.Context, update Update) (decoded *otogi.Event, err error) {
+func (d *Driver) decodeSafely(ctx context.Context, update Update) (decoded *platform.Event, err error) {
 	defer func() {
 		recovered := recover()
 		if recovered == nil {

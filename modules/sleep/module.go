@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -26,8 +27,8 @@ type fileConfig struct {
 // permissions for the specified duration. A wake code is posted in the same
 // conversation so the user can restore permissions early with /wake <code>.
 type Module struct {
-	dispatcher  otogi.SinkDispatcher
-	moderation  otogi.ModerationDispatcher
+	dispatcher  platform.SinkDispatcher
+	moderation  platform.ModerationDispatcher
 	codeManager *codeManager
 }
 
@@ -43,54 +44,54 @@ func (m *Module) Name() string {
 }
 
 // Spec declares interest in received sleep and wake command events.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		Handlers: []otogi.ModuleHandler{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		Handlers: []core.ModuleHandler{
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "sleep-command-handler",
 					Description: "restricts a user's chat permissions for a specified duration",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 						RequireCommand: true,
 						CommandNames:   []string{sleepCommandName},
 						RequireArticle: true,
 					},
 					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceModerationDispatcher,
+						platform.ServiceSinkDispatcher,
+						platform.ServiceModerationDispatcher,
 					},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("sleep-sleep-commands"),
+				Subscription: core.NewDefaultSubscriptionSpec("sleep-sleep-commands"),
 				Handler:      m.handleSleep,
 			},
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "wake-command-handler",
 					Description: "restores a user's chat permissions using a wake code",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 						RequireCommand: true,
 						CommandNames:   []string{wakeCommandName},
 						RequireArticle: true,
 					},
 					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceModerationDispatcher,
+						platform.ServiceSinkDispatcher,
+						platform.ServiceModerationDispatcher,
 					},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("sleep-wake-commands"),
+				Subscription: core.NewDefaultSubscriptionSpec("sleep-wake-commands"),
 				Handler:      m.handleWake,
 			},
 		},
-		Commands: []otogi.CommandSpec{
+		Commands: []platform.CommandSpec{
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        sleepCommandName,
 				Description: "restrict your chat permissions for a specified duration (1s–12h)",
 			},
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        wakeCommandName,
 				Description: "restore your chat permissions using a wake code",
 			},
@@ -99,7 +100,7 @@ func (m *Module) Spec() otogi.ModuleSpec {
 }
 
 // OnRegister loads configuration and resolves outbound dependencies.
-func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
+func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error {
 	signingKey, err := loadSigningKey(runtime.Config())
 	if err != nil {
 		return fmt.Errorf("sleep load config: %w", err)
@@ -111,18 +112,18 @@ func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) erro
 	}
 	m.codeManager = cm
 
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("sleep resolve sink dispatcher: %w", err)
 	}
 	m.dispatcher = dispatcher
 
-	moderation, err := otogi.ResolveAs[otogi.ModerationDispatcher](
+	moderation, err := core.ResolveAs[platform.ModerationDispatcher](
 		runtime.Services(),
-		otogi.ServiceModerationDispatcher,
+		platform.ServiceModerationDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("sleep resolve moderation dispatcher: %w", err)
@@ -143,8 +144,8 @@ func (m *Module) OnShutdown(_ context.Context) error {
 }
 
 // loadSigningKey reads and decodes the base64url signing key from module config.
-func loadSigningKey(configs otogi.ConfigRegistry) ([]byte, error) {
-	cfg, err := otogi.ParseModuleConfig[fileConfig](configs, "sleep")
+func loadSigningKey(configs core.ConfigRegistry) ([]byte, error) {
+	cfg, err := core.ParseModuleConfig[fileConfig](configs, "sleep")
 	if err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}

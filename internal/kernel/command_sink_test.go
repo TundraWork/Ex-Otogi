@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) {
@@ -19,12 +20,12 @@ func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) 
 		_ = bus.Close(context.Background())
 	})
 
-	received := make(chan *otogi.Event, 2)
+	received := make(chan *platform.Event, 2)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{},
-		otogi.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{},
+		core.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			received <- event
 			return nil
 		},
@@ -35,11 +36,11 @@ func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) 
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixOrdinary && name == "raw" {
-				return otogi.CommandSpec{Prefix: otogi.CommandPrefixOrdinary, Name: "raw"}, true
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixOrdinary && name == "raw" {
+				return platform.CommandSpec{Prefix: platform.CommandPrefixOrdinary, Name: "raw"}, true
 			}
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 	}
@@ -52,11 +53,11 @@ func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) 
 	first := waitEvent(t, received)
 	second := waitEvent(t, received)
 
-	if first.Kind != otogi.EventKindArticleCreated {
-		t.Fatalf("first kind = %s, want %s", first.Kind, otogi.EventKindArticleCreated)
+	if first.Kind != platform.EventKindArticleCreated {
+		t.Fatalf("first kind = %s, want %s", first.Kind, platform.EventKindArticleCreated)
 	}
-	if second.Kind != otogi.EventKindCommandReceived {
-		t.Fatalf("second kind = %s, want %s", second.Kind, otogi.EventKindCommandReceived)
+	if second.Kind != platform.EventKindCommandReceived {
+		t.Fatalf("second kind = %s, want %s", second.Kind, platform.EventKindCommandReceived)
 	}
 	if second.Command == nil {
 		t.Fatal("expected command payload")
@@ -80,13 +81,13 @@ func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testi
 		_ = bus.Close(context.Background())
 	})
 
-	editedEvents := make(chan *otogi.Event, 1)
-	commandEvents := make(chan *otogi.Event, 1)
+	editedEvents := make(chan *platform.Event, 1)
+	commandEvents := make(chan *platform.Event, 1)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{Kinds: []otogi.EventKind{otogi.EventKindArticleEdited}},
-		otogi.SubscriptionSpec{Name: "edited-events", Buffer: 2, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{Kinds: []platform.EventKind{platform.EventKindArticleEdited}},
+		core.SubscriptionSpec{Name: "edited-events", Buffer: 2, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			editedEvents <- event
 			return nil
 		},
@@ -96,9 +97,9 @@ func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testi
 	}
 	_, err = bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{Kinds: []otogi.EventKind{otogi.EventKindSystemCommandReceived}},
-		otogi.SubscriptionSpec{Name: "command-events", Buffer: 2, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{Kinds: []platform.EventKind{platform.EventKindSystemCommandReceived}},
+		core.SubscriptionSpec{Name: "command-events", Buffer: 2, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			commandEvents <- event
 			return nil
 		},
@@ -109,11 +110,11 @@ func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testi
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixSystem && name == "history" {
-				return otogi.CommandSpec{Prefix: otogi.CommandPrefixSystem, Name: "history"}, true
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixSystem && name == "history" {
+				return platform.CommandSpec{Prefix: platform.CommandPrefixSystem, Name: "history"}, true
 			}
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 	}
@@ -124,8 +125,8 @@ func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testi
 	}
 
 	editedEvent := waitEvent(t, editedEvents)
-	if editedEvent.Kind != otogi.EventKindArticleEdited {
-		t.Fatalf("kind = %s, want %s", editedEvent.Kind, otogi.EventKindArticleEdited)
+	if editedEvent.Kind != platform.EventKindArticleEdited {
+		t.Fatalf("kind = %s, want %s", editedEvent.Kind, platform.EventKindArticleEdited)
 	}
 	if editedEvent.Mutation == nil || editedEvent.Mutation.TargetArticleID != "msg-9" {
 		t.Fatalf("mutation = %+v, want target article id msg-9", editedEvent.Mutation)
@@ -146,12 +147,12 @@ func TestCommandDerivingSinkUnregisteredCommandPublishesOnlySourceEvent(t *testi
 		_ = bus.Close(context.Background())
 	})
 
-	commandEvents := make(chan *otogi.Event, 1)
+	commandEvents := make(chan *platform.Event, 1)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{Kinds: []otogi.EventKind{otogi.EventKindCommandReceived}},
-		otogi.SubscriptionSpec{Name: "command-events", Buffer: 1, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{Kinds: []platform.EventKind{platform.EventKindCommandReceived}},
+		core.SubscriptionSpec{Name: "command-events", Buffer: 1, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			commandEvents <- event
 			return nil
 		},
@@ -162,8 +163,8 @@ func TestCommandDerivingSinkUnregisteredCommandPublishesOnlySourceEvent(t *testi
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(otogi.CommandPrefix, string) (otogi.CommandSpec, bool) {
-			return otogi.CommandSpec{}, false
+		lookupCommand: func(platform.CommandPrefix, string) (platform.CommandSpec, bool) {
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 	}
@@ -187,12 +188,12 @@ func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *te
 		_ = bus.Close(context.Background())
 	})
 
-	commandEvents := make(chan *otogi.Event, 1)
+	commandEvents := make(chan *platform.Event, 1)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{Kinds: []otogi.EventKind{otogi.EventKindCommandReceived}},
-		otogi.SubscriptionSpec{Name: "command-events", Buffer: 1, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{Kinds: []platform.EventKind{platform.EventKindCommandReceived}},
+		core.SubscriptionSpec{Name: "command-events", Buffer: 1, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			commandEvents <- event
 			return nil
 		},
@@ -203,24 +204,24 @@ func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *te
 
 	dispatcher := &commandReplyCaptureDispatcher{}
 	services := NewServiceRegistry()
-	if err := services.Register(otogi.ServiceSinkDispatcher, dispatcher); err != nil {
+	if err := services.Register(platform.ServiceSinkDispatcher, dispatcher); err != nil {
 		t.Fatalf("register dispatcher failed: %v", err)
 	}
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixOrdinary && name == "raw" {
-				return otogi.CommandSpec{
-					Prefix: otogi.CommandPrefixOrdinary,
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixOrdinary && name == "raw" {
+				return platform.CommandSpec{
+					Prefix: platform.CommandPrefixOrdinary,
 					Name:   "raw",
-					Options: []otogi.CommandOptionSpec{
+					Options: []platform.CommandOptionSpec{
 						{Name: "article", Alias: "a", HasValue: true, Required: true},
 					},
 				}, true
 			}
 
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: services,
 	}
@@ -252,17 +253,17 @@ func TestKernelRegisterModuleRejectsDuplicateCommandAcrossModules(t *testing.T) 
 	kernelRuntime := newTestKernel(t)
 	moduleA := &stubModule{
 		name: "command-a",
-		spec: otogi.ModuleSpec{
-			Commands: []otogi.CommandSpec{
-				{Prefix: otogi.CommandPrefixOrdinary, Name: "raw"},
+		spec: core.ModuleSpec{
+			Commands: []platform.CommandSpec{
+				{Prefix: platform.CommandPrefixOrdinary, Name: "raw"},
 			},
 		},
 	}
 	moduleB := &stubModule{
 		name: "command-b",
-		spec: otogi.ModuleSpec{
-			Commands: []otogi.CommandSpec{
-				{Prefix: otogi.CommandPrefixOrdinary, Name: "raw"},
+		spec: core.ModuleSpec{
+			Commands: []platform.CommandSpec{
+				{Prefix: platform.CommandPrefixOrdinary, Name: "raw"},
 			},
 		},
 	}
@@ -279,7 +280,7 @@ func TestKernelRegisterModuleRejectsDuplicateCommandAcrossModules(t *testing.T) 
 	}
 }
 
-func waitEvent(t *testing.T, events <-chan *otogi.Event) *otogi.Event {
+func waitEvent(t *testing.T, events <-chan *platform.Event) *platform.Event {
 	t.Helper()
 
 	select {
@@ -291,20 +292,20 @@ func waitEvent(t *testing.T, events <-chan *otogi.Event) *otogi.Event {
 	}
 }
 
-func newSourceCreatedEvent(id string, messageID string, text string, replyToID string) *otogi.Event {
-	return &otogi.Event{
+func newSourceCreatedEvent(id string, messageID string, text string, replyToID string) *platform.Event {
+	return &platform.Event{
 		ID:         id,
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "actor-1"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "actor-1"},
+		Article: &platform.Article{
 			ID:               messageID,
 			ReplyToArticleID: replyToID,
 			Text:             text,
@@ -312,23 +313,23 @@ func newSourceCreatedEvent(id string, messageID string, text string, replyToID s
 	}
 }
 
-func newSourceEditedEvent(id string, targetArticleID string, text string) *otogi.Event {
-	return &otogi.Event{
+func newSourceEditedEvent(id string, targetArticleID string, text string) *platform.Event {
+	return &platform.Event{
 		ID:         id,
-		Kind:       otogi.EventKindArticleEdited,
+		Kind:       platform.EventKindArticleEdited,
 		OccurredAt: time.Unix(10, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "actor-1"},
-		Mutation: &otogi.ArticleMutation{
-			Type:            otogi.MutationTypeEdit,
+		Actor: platform.Actor{ID: "actor-1"},
+		Mutation: &platform.ArticleMutation{
+			Type:            platform.MutationTypeEdit,
 			TargetArticleID: targetArticleID,
-			After: &otogi.ArticleSnapshot{
+			After: &platform.ArticleSnapshot{
 				Text: text,
 			},
 		},
@@ -338,41 +339,41 @@ func newSourceEditedEvent(id string, targetArticleID string, text string) *otogi
 type commandReplyCaptureDispatcher struct {
 	calls       atomic.Int64
 	mu          sync.Mutex
-	lastRequest otogi.SendMessageRequest
+	lastRequest platform.SendMessageRequest
 }
 
 func (d *commandReplyCaptureDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.calls.Add(1)
 	d.mu.Lock()
 	d.lastRequest = request
 	d.mu.Unlock()
 
-	return &otogi.OutboundMessage{ID: "out-1", Target: request.Target}, nil
+	return &platform.OutboundMessage{ID: "out-1", Target: request.Target}, nil
 }
 
-func (*commandReplyCaptureDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (*commandReplyCaptureDispatcher) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return nil
 }
 
-func (*commandReplyCaptureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (*commandReplyCaptureDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (*commandReplyCaptureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (*commandReplyCaptureDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (*commandReplyCaptureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (*commandReplyCaptureDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 func (*commandReplyCaptureDispatcher) ListSinksByPlatform(
 	context.Context,
-	otogi.Platform,
-) ([]otogi.EventSink, error) {
+	platform.Platform,
+) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
@@ -492,12 +493,12 @@ func TestCommandDerivingDispatcherAllowlistDropsNonAllowlistedEvents(t *testing.
 		_ = bus.Close(context.Background())
 	})
 
-	allEvents := make(chan *otogi.Event, 4)
+	allEvents := make(chan *platform.Event, 4)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{},
-		otogi.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{},
+		core.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			allEvents <- event
 			return nil
 		},
@@ -508,11 +509,11 @@ func TestCommandDerivingDispatcherAllowlistDropsNonAllowlistedEvents(t *testing.
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixOrdinary && name == "ping" {
-				return otogi.CommandSpec{Prefix: otogi.CommandPrefixOrdinary, Name: "ping"}, true
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixOrdinary && name == "ping" {
+				return platform.CommandSpec{Prefix: platform.CommandPrefixOrdinary, Name: "ping"}, true
 			}
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 		allowlist: ChatAllowlistConfig{
@@ -540,12 +541,12 @@ func TestCommandDerivingDispatcherAllowlistPassesAllowlistedChat(t *testing.T) {
 		_ = bus.Close(context.Background())
 	})
 
-	allEvents := make(chan *otogi.Event, 4)
+	allEvents := make(chan *platform.Event, 4)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{},
-		otogi.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{},
+		core.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			allEvents <- event
 			return nil
 		},
@@ -556,11 +557,11 @@ func TestCommandDerivingDispatcherAllowlistPassesAllowlistedChat(t *testing.T) {
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixOrdinary && name == "ping" {
-				return otogi.CommandSpec{Prefix: otogi.CommandPrefixOrdinary, Name: "ping"}, true
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixOrdinary && name == "ping" {
+				return platform.CommandSpec{Prefix: platform.CommandPrefixOrdinary, Name: "ping"}, true
 			}
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 		allowlist: ChatAllowlistConfig{
@@ -576,11 +577,11 @@ func TestCommandDerivingDispatcherAllowlistPassesAllowlistedChat(t *testing.T) {
 	first := waitEvent(t, allEvents)
 	second := waitEvent(t, allEvents)
 
-	if first.Kind != otogi.EventKindArticleCreated {
-		t.Fatalf("first kind = %s, want %s", first.Kind, otogi.EventKindArticleCreated)
+	if first.Kind != platform.EventKindArticleCreated {
+		t.Fatalf("first kind = %s, want %s", first.Kind, platform.EventKindArticleCreated)
 	}
-	if second.Kind != otogi.EventKindCommandReceived {
-		t.Fatalf("second kind = %s, want %s", second.Kind, otogi.EventKindCommandReceived)
+	if second.Kind != platform.EventKindCommandReceived {
+		t.Fatalf("second kind = %s, want %s", second.Kind, platform.EventKindCommandReceived)
 	}
 }
 
@@ -592,12 +593,12 @@ func TestCommandDerivingDispatcherAllowlistBypassSystemCommand(t *testing.T) {
 		_ = bus.Close(context.Background())
 	})
 
-	allEvents := make(chan *otogi.Event, 4)
+	allEvents := make(chan *platform.Event, 4)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{},
-		otogi.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{},
+		core.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			allEvents <- event
 			return nil
 		},
@@ -608,11 +609,11 @@ func TestCommandDerivingDispatcherAllowlistBypassSystemCommand(t *testing.T) {
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixSystem && name == "whoami" {
-				return otogi.CommandSpec{Prefix: otogi.CommandPrefixSystem, Name: "whoami"}, true
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixSystem && name == "whoami" {
+				return platform.CommandSpec{Prefix: platform.CommandPrefixSystem, Name: "whoami"}, true
 			}
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 		allowlist: ChatAllowlistConfig{
@@ -627,8 +628,8 @@ func TestCommandDerivingDispatcherAllowlistBypassSystemCommand(t *testing.T) {
 	}
 
 	event := waitEvent(t, allEvents)
-	if event.Kind != otogi.EventKindSystemCommandReceived {
-		t.Fatalf("kind = %s, want %s", event.Kind, otogi.EventKindSystemCommandReceived)
+	if event.Kind != platform.EventKindSystemCommandReceived {
+		t.Fatalf("kind = %s, want %s", event.Kind, platform.EventKindSystemCommandReceived)
 	}
 	if event.Command == nil || event.Command.Name != "whoami" {
 		t.Fatalf("command = %+v, want whoami", event.Command)
@@ -650,12 +651,12 @@ func TestCommandDerivingDispatcherAllowlistBypassRejectsNonBypassSystemCommand(t
 		_ = bus.Close(context.Background())
 	})
 
-	allEvents := make(chan *otogi.Event, 4)
+	allEvents := make(chan *platform.Event, 4)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{},
-		otogi.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{},
+		core.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			allEvents <- event
 			return nil
 		},
@@ -666,11 +667,11 @@ func TestCommandDerivingDispatcherAllowlistBypassRejectsNonBypassSystemCommand(t
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixSystem && name == "sleep" {
-				return otogi.CommandSpec{Prefix: otogi.CommandPrefixSystem, Name: "sleep"}, true
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixSystem && name == "sleep" {
+				return platform.CommandSpec{Prefix: platform.CommandPrefixSystem, Name: "sleep"}, true
 			}
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 		allowlist: ChatAllowlistConfig{
@@ -699,12 +700,12 @@ func TestCommandDerivingDispatcherAllowlistBypassRejectsOrdinaryCommand(t *testi
 		_ = bus.Close(context.Background())
 	})
 
-	allEvents := make(chan *otogi.Event, 4)
+	allEvents := make(chan *platform.Event, 4)
 	_, err := bus.Subscribe(
 		context.Background(),
-		otogi.InterestSet{},
-		otogi.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
-		func(_ context.Context, event *otogi.Event) error {
+		core.InterestSet{},
+		core.SubscriptionSpec{Name: "all-events", Buffer: 4, Workers: 1},
+		func(_ context.Context, event *platform.Event) error {
 			allEvents <- event
 			return nil
 		},
@@ -715,11 +716,11 @@ func TestCommandDerivingDispatcherAllowlistBypassRejectsOrdinaryCommand(t *testi
 
 	sink := &commandDerivingDispatcher{
 		base: bus,
-		lookupCommand: func(prefix otogi.CommandPrefix, name string) (otogi.CommandSpec, bool) {
-			if prefix == otogi.CommandPrefixOrdinary && name == "ping" {
-				return otogi.CommandSpec{Prefix: otogi.CommandPrefixOrdinary, Name: "ping"}, true
+		lookupCommand: func(prefix platform.CommandPrefix, name string) (platform.CommandSpec, bool) {
+			if prefix == platform.CommandPrefixOrdinary && name == "ping" {
+				return platform.CommandSpec{Prefix: platform.CommandPrefixOrdinary, Name: "ping"}, true
 			}
-			return otogi.CommandSpec{}, false
+			return platform.CommandSpec{}, false
 		},
 		serviceLookup: NewServiceRegistry(),
 		allowlist: ChatAllowlistConfig{
@@ -747,7 +748,7 @@ func newSourceCreatedEventInChat(
 	text string,
 	sourceID string,
 	chatID string,
-) *otogi.Event {
+) *platform.Event {
 	event := newSourceCreatedEvent(id, messageID, text, "")
 	event.Source.ID = sourceID
 	event.Conversation.ID = chatID

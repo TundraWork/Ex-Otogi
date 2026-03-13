@@ -29,6 +29,7 @@
   "agents": [
     {
       "name": "Otogi",
+      "aliases": ["Oto"],
       "description": "General assistant persona",
       "provider": "openai-main",
       "model": "gpt-5-mini",
@@ -57,6 +58,7 @@
     },
     {
       "name": "OtogiGemini",
+      "aliases": ["OtoGemini"],
       "description": "Gemini assistant persona",
       "provider": "gemini-main",
       "model": "gemini-2.5-flash",

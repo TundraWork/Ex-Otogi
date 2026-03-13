@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestHandleSleepSuccess(t *testing.T) {
@@ -80,8 +81,8 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 
 	tests := []struct {
 		name                     string
-		buildEvent               func(t *testing.T, module *Module) *otogi.Event
-		handler                  func(context.Context, *Module, *otogi.Event) error
+		buildEvent               func(t *testing.T, module *Module) *platform.Event
+		handler                  func(context.Context, *Module, *platform.Event) error
 		wantModerationTargetID   string
 		wantReplyConversationID  string
 		wantReplyMessageContains string
@@ -89,10 +90,10 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 	}{
 		{
 			name: "sleep restrict failure",
-			buildEvent: func(_ *testing.T, _ *Module) *otogi.Event {
+			buildEvent: func(_ *testing.T, _ *Module) *platform.Event {
 				return newSleepEvent("30m")
 			},
-			handler: func(ctx context.Context, module *Module, event *otogi.Event) error {
+			handler: func(ctx context.Context, module *Module, event *platform.Event) error {
 				return module.handleSleep(ctx, event)
 			},
 			wantModerationTargetID:   "chat-42",
@@ -102,7 +103,7 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 		},
 		{
 			name: "wake unrestrict failure",
-			buildEvent: func(t *testing.T, module *Module) *otogi.Event {
+			buildEvent: func(t *testing.T, module *Module) *platform.Event {
 				event := newWakeEvent("")
 				code, err := module.codeManager.Generate(codeScopeFromEvent(event), time.Now().Add(time.Minute))
 				if err != nil {
@@ -113,7 +114,7 @@ func TestHandlePermissionChangeFailureRepliesInCommandConversation(t *testing.T)
 				event.Command.RawInput = "/wake " + code
 				return event
 			},
-			handler: func(ctx context.Context, module *Module, event *otogi.Event) error {
+			handler: func(ctx context.Context, module *Module, event *platform.Event) error {
 				return module.handleWake(ctx, event)
 			},
 			wantModerationTargetID:   "chat-42",
@@ -198,7 +199,7 @@ func TestHandleWakeSuccess(t *testing.T) {
 	}
 	event := newWakeEvent("")
 	event.Conversation.ID = "dm-7"
-	event.Conversation.Type = otogi.ConversationTypePrivate
+	event.Conversation.Type = platform.ConversationTypePrivate
 	event.Article.Text = "/wake " + code
 	event.Command.Value = code
 	event.Command.RawInput = "/wake " + code
@@ -322,7 +323,7 @@ func TestHandleWakeUsesOriginalConversationFromCode(t *testing.T) {
 
 	event := newWakeEvent(code)
 	event.Conversation.ID = "dm-99"
-	event.Conversation.Type = otogi.ConversationTypePrivate
+	event.Conversation.Type = platform.ConversationTypePrivate
 	event.Article.Text = "/wake " + code
 	event.Command.Value = code
 	event.Command.RawInput = "/wake " + code
@@ -399,8 +400,8 @@ func TestModuleOnRegister(t *testing.T) {
 	runtime := moduleRuntimeStub{
 		registry: serviceRegistryStub{
 			values: map[string]any{
-				otogi.ServiceSinkDispatcher:       dispatcher,
-				otogi.ServiceModerationDispatcher: moderation,
+				platform.ServiceSinkDispatcher:       dispatcher,
+				platform.ServiceModerationDispatcher: moderation,
 			},
 		},
 		configs: testConfigRegistry(t),
@@ -444,63 +445,63 @@ func TestModuleSpec(t *testing.T) {
 	}
 }
 
-func newSleepEvent(duration string) *otogi.Event {
-	return &otogi.Event{
+func newSleepEvent(duration string) *platform.Event {
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindCommandReceived,
+		Kind:       platform.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-42",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{
+		Actor: platform.Actor{
 			ID:       "user-1",
 			Username: "testuser",
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:   "msg-1",
 			Text: "/sleep " + duration,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            sleepCommandName,
 			Value:           duration,
 			SourceEventID:   "source-1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "/sleep " + duration,
 		},
 	}
 }
 
-func newWakeEvent(code string) *otogi.Event {
-	return &otogi.Event{
+func newWakeEvent(code string) *platform.Event {
+	return &platform.Event{
 		ID:         "event-2",
-		Kind:       otogi.EventKindCommandReceived,
+		Kind:       platform.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-42",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{
+		Actor: platform.Actor{
 			ID:       "user-1",
 			Username: "testuser",
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:   "msg-2",
 			Text: "/wake " + code,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            wakeCommandName,
 			Value:           code,
 			SourceEventID:   "source-2",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "/wake " + code,
 		},
 	}
@@ -512,14 +513,14 @@ type captureDispatcher struct {
 	messageID   string
 	sendErr     error
 	sendErrors  []error
-	lastRequest otogi.SendMessageRequest
-	allRequests []otogi.SendMessageRequest
+	lastRequest platform.SendMessageRequest
+	allRequests []platform.SendMessageRequest
 }
 
 func (d *captureDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.calls.Add(1)
 	d.mu.Lock()
 	d.lastRequest = request
@@ -534,41 +535,41 @@ func (d *captureDispatcher) SendMessage(
 		return nil, d.sendErr
 	}
 
-	return &otogi.OutboundMessage{ID: d.messageID}, nil
+	return &platform.OutboundMessage{ID: d.messageID}, nil
 }
 
-func (d *captureDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (d *captureDispatcher) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (d *captureDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (d *captureDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (d *captureDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 func (d *captureDispatcher) ListSinksByPlatform(
 	context.Context,
-	otogi.Platform,
-) ([]otogi.EventSink, error) {
+	platform.Platform,
+) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 type captureModerationDispatcher struct {
 	calls       atomic.Int64
-	lastRequest otogi.RestrictMemberRequest
+	lastRequest platform.RestrictMemberRequest
 	restrictErr error
 }
 
 func (d *captureModerationDispatcher) RestrictMember(
 	_ context.Context,
-	request otogi.RestrictMemberRequest,
+	request platform.RestrictMemberRequest,
 ) error {
 	d.calls.Add(1)
 	d.lastRequest = request
@@ -577,24 +578,24 @@ func (d *captureModerationDispatcher) RestrictMember(
 }
 
 type moduleRuntimeStub struct {
-	registry otogi.ServiceRegistry
-	configs  otogi.ConfigRegistry
+	registry core.ServiceRegistry
+	configs  core.ConfigRegistry
 }
 
-func (s moduleRuntimeStub) Services() otogi.ServiceRegistry {
+func (s moduleRuntimeStub) Services() core.ServiceRegistry {
 	return s.registry
 }
 
-func (s moduleRuntimeStub) Config() otogi.ConfigRegistry {
+func (s moduleRuntimeStub) Config() core.ConfigRegistry {
 	return s.configs
 }
 
 func (moduleRuntimeStub) Subscribe(
 	context.Context,
-	otogi.InterestSet,
-	otogi.SubscriptionSpec,
-	otogi.EventHandler,
-) (otogi.Subscription, error) {
+	core.InterestSet,
+	core.SubscriptionSpec,
+	core.EventHandler,
+) (core.Subscription, error) {
 	return nil, nil
 }
 
@@ -609,7 +610,7 @@ func (s serviceRegistryStub) Register(string, any) error {
 func (s serviceRegistryStub) Resolve(name string) (any, error) {
 	value, ok := s.values[name]
 	if !ok {
-		return nil, otogi.ErrServiceNotFound
+		return nil, core.ErrServiceNotFound
 	}
 
 	return value, nil
@@ -625,8 +626,8 @@ func mustNew(t *testing.T) *Module {
 	runtime := moduleRuntimeStub{
 		registry: serviceRegistryStub{
 			values: map[string]any{
-				otogi.ServiceSinkDispatcher:       dispatcher,
-				otogi.ServiceModerationDispatcher: moderation,
+				platform.ServiceSinkDispatcher:       dispatcher,
+				platform.ServiceModerationDispatcher: moderation,
 			},
 		},
 		configs: configs,

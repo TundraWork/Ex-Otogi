@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 )
@@ -200,7 +200,7 @@ func (m DefaultGotdUpdateMapper) PollReactionUpdates(ctx context.Context) ([]Upd
 
 		peer := watch.inputPeer
 		if peer == nil && m.peerCache != nil {
-			cachedPeer, err := m.peerCache.Resolve(otogi.Conversation{
+			cachedPeer, err := m.peerCache.Resolve(platform.Conversation{
 				ID:   watch.chat.ID,
 				Type: watch.chat.Type,
 			})
@@ -733,7 +733,7 @@ func (m DefaultGotdUpdateMapper) mapDeleteMessages(
 		OccurredAt: occurredAt,
 		Chat: ChatRef{
 			ID:   gotdUnknownConversationID,
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
 		Actor: ActorRef{ID: gotdUnknownActorID},
 		Delete: &ArticleDeletePayload{
@@ -1190,7 +1190,7 @@ type gotdReactionDelta struct {
 
 type gotdChatInfo struct {
 	title     string
-	kind      otogi.ConversationType
+	kind      platform.ConversationType
 	inputPeer tg.InputPeerClass
 }
 
@@ -1330,7 +1330,7 @@ func (m DefaultGotdUpdateMapper) reactionDeltaFromResolver(
 
 	peer := resolveInputPeerFromPeer(message.PeerID, envelope)
 	if peer == nil && m.peerCache != nil {
-		cachedPeer, err := m.peerCache.Resolve(otogi.Conversation{
+		cachedPeer, err := m.peerCache.Resolve(platform.Conversation{
 			ID:   chat.ID,
 			Type: chat.Type,
 		})
@@ -1473,7 +1473,7 @@ func (m DefaultGotdUpdateMapper) rememberReactionWatch(
 
 	peer := resolveInputPeerFromPeer(message.PeerID, envelope)
 	if peer == nil && m.peerCache != nil {
-		cachedPeer, err := m.peerCache.Resolve(otogi.Conversation{
+		cachedPeer, err := m.peerCache.Resolve(platform.Conversation{
 			ID:   chat.ID,
 			Type: chat.Type,
 		})
@@ -1749,7 +1749,7 @@ func mapArticlePayload(message *tg.Message) *ArticlePayload {
 	return payload
 }
 
-func mapArticleReactions(message *tg.Message) []otogi.ArticleReaction {
+func mapArticleReactions(message *tg.Message) []platform.ArticleReaction {
 	if message == nil {
 		return nil
 	}
@@ -1776,9 +1776,9 @@ func mapArticleReactions(message *tg.Message) []otogi.ArticleReaction {
 	}
 	sort.Strings(emojis)
 
-	projected := make([]otogi.ArticleReaction, 0, len(emojis))
+	projected := make([]platform.ArticleReaction, 0, len(emojis))
 	for _, emoji := range emojis {
-		projected = append(projected, otogi.ArticleReaction{
+		projected = append(projected, platform.ArticleReaction{
 			Emoji: emoji,
 			Count: counts[emoji],
 		})
@@ -1804,7 +1804,7 @@ func articleSnapshotPayloadFromMessage(message *tg.Message) *ArticleSnapshotPayl
 func cloneSnapshotPayload(snapshot ArticleSnapshotPayload) ArticleSnapshotPayload {
 	cloned := snapshot
 	if len(snapshot.Entities) > 0 {
-		cloned.Entities = append([]otogi.TextEntity(nil), snapshot.Entities...)
+		cloned.Entities = append([]platform.TextEntity(nil), snapshot.Entities...)
 	} else {
 		cloned.Entities = nil
 	}
@@ -1940,21 +1940,21 @@ func indexGotdChats(chats []tg.ChatClass) map[int64]gotdChatInfo {
 		case *tg.Chat:
 			out[typed.ID] = gotdChatInfo{
 				title:     typed.Title,
-				kind:      otogi.ConversationTypeGroup,
+				kind:      platform.ConversationTypeGroup,
 				inputPeer: typed.AsInputPeer(),
 			}
 		case *tg.ChatForbidden:
 			out[typed.ID] = gotdChatInfo{
 				title: typed.Title,
-				kind:  otogi.ConversationTypeGroup,
+				kind:  platform.ConversationTypeGroup,
 				inputPeer: &tg.InputPeerChat{
 					ChatID: typed.ID,
 				},
 			}
 		case *tg.Channel:
-			kind := otogi.ConversationTypeChannel
+			kind := platform.ConversationTypeChannel
 			if typed.Megagroup {
-				kind = otogi.ConversationTypeGroup
+				kind = platform.ConversationTypeGroup
 			}
 			out[typed.ID] = gotdChatInfo{
 				title:     typed.Title,
@@ -1962,9 +1962,9 @@ func indexGotdChats(chats []tg.ChatClass) map[int64]gotdChatInfo {
 				inputPeer: typed.AsInputPeer(),
 			}
 		case *tg.ChannelForbidden:
-			kind := otogi.ConversationTypeChannel
+			kind := platform.ConversationTypeChannel
 			if typed.Megagroup {
-				kind = otogi.ConversationTypeGroup
+				kind = platform.ConversationTypeGroup
 			}
 			out[typed.ID] = gotdChatInfo{
 				title: typed.Title,
@@ -1986,7 +1986,7 @@ func resolveChatFromPeer(peer tg.PeerClass, envelope gotdUpdateEnvelope) ChatRef
 		actor := resolveActorByUserID(typed.UserID, envelope)
 		return ChatRef{
 			ID:    actor.ID,
-			Type:  otogi.ConversationTypePrivate,
+			Type:  platform.ConversationTypePrivate,
 			Title: actor.DisplayName,
 		}
 	case *tg.PeerChat:
@@ -1996,7 +1996,7 @@ func resolveChatFromPeer(peer tg.PeerClass, envelope gotdUpdateEnvelope) ChatRef
 	default:
 		return ChatRef{
 			ID:   gotdUnknownConversationID,
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		}
 	}
 }
@@ -2007,7 +2007,7 @@ func resolveChatByChatID(chatID int64, envelope gotdUpdateEnvelope) ChatRef {
 	if !ok {
 		return ChatRef{
 			ID:   id,
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		}
 	}
 
@@ -2024,7 +2024,7 @@ func resolveChatByChannelID(channelID int64, envelope gotdUpdateEnvelope) ChatRe
 	if !ok {
 		return ChatRef{
 			ID:   id,
-			Type: otogi.ConversationTypeChannel,
+			Type: platform.ConversationTypeChannel,
 		}
 	}
 
@@ -2142,18 +2142,18 @@ func lookupChatTitle(chatID int64, envelope gotdUpdateEnvelope) string {
 	return info.title
 }
 
-func mapTextEntities(entities []tg.MessageEntityClass) []otogi.TextEntity {
+func mapTextEntities(entities []tg.MessageEntityClass) []platform.TextEntity {
 	if len(entities) == 0 {
 		return nil
 	}
 
-	out := make([]otogi.TextEntity, 0, len(entities))
+	out := make([]platform.TextEntity, 0, len(entities))
 	for _, entity := range entities {
 		if entity == nil {
 			continue
 		}
 
-		mapped := otogi.TextEntity{
+		mapped := platform.TextEntity{
 			Type:   mapTextEntityTypeFromTelegram(entity),
 			Offset: entity.GetOffset(),
 			Length: entity.GetLength(),
@@ -2183,54 +2183,54 @@ func mapTextEntities(entities []tg.MessageEntityClass) []otogi.TextEntity {
 	return out
 }
 
-func mapTextEntityTypeFromTelegram(entity tg.MessageEntityClass) otogi.TextEntityType {
+func mapTextEntityTypeFromTelegram(entity tg.MessageEntityClass) platform.TextEntityType {
 	if entity == nil {
-		return otogi.TextEntityTypeUnknown
+		return platform.TextEntityTypeUnknown
 	}
 
 	switch entity.(type) {
 	case *tg.MessageEntityUnknown:
-		return otogi.TextEntityTypeUnknown
+		return platform.TextEntityTypeUnknown
 	case *tg.MessageEntityMention:
-		return otogi.TextEntityTypeMention
+		return platform.TextEntityTypeMention
 	case *tg.MessageEntityHashtag:
-		return otogi.TextEntityTypeHashtag
+		return platform.TextEntityTypeHashtag
 	case *tg.MessageEntityBotCommand:
-		return otogi.TextEntityTypeBotCommand
+		return platform.TextEntityTypeBotCommand
 	case *tg.MessageEntityURL:
-		return otogi.TextEntityTypeURL
+		return platform.TextEntityTypeURL
 	case *tg.MessageEntityEmail:
-		return otogi.TextEntityTypeEmail
+		return platform.TextEntityTypeEmail
 	case *tg.MessageEntityBold:
-		return otogi.TextEntityTypeBold
+		return platform.TextEntityTypeBold
 	case *tg.MessageEntityItalic:
-		return otogi.TextEntityTypeItalic
+		return platform.TextEntityTypeItalic
 	case *tg.MessageEntityCode:
-		return otogi.TextEntityTypeCode
+		return platform.TextEntityTypeCode
 	case *tg.MessageEntityPre:
-		return otogi.TextEntityTypePre
+		return platform.TextEntityTypePre
 	case *tg.MessageEntityTextURL:
-		return otogi.TextEntityTypeTextURL
+		return platform.TextEntityTypeTextURL
 	case *tg.MessageEntityMentionName:
-		return otogi.TextEntityTypeMentionName
+		return platform.TextEntityTypeMentionName
 	case *tg.MessageEntityPhone:
-		return otogi.TextEntityTypePhone
+		return platform.TextEntityTypePhone
 	case *tg.MessageEntityCashtag:
-		return otogi.TextEntityTypeCashtag
+		return platform.TextEntityTypeCashtag
 	case *tg.MessageEntityBankCard:
-		return otogi.TextEntityTypeBankCard
+		return platform.TextEntityTypeBankCard
 	case *tg.MessageEntityUnderline:
-		return otogi.TextEntityTypeUnderline
+		return platform.TextEntityTypeUnderline
 	case *tg.MessageEntityStrike:
-		return otogi.TextEntityTypeStrike
+		return platform.TextEntityTypeStrike
 	case *tg.MessageEntityBlockquote:
-		return otogi.TextEntityTypeBlockquote
+		return platform.TextEntityTypeBlockquote
 	case *tg.MessageEntitySpoiler:
-		return otogi.TextEntityTypeSpoiler
+		return platform.TextEntityTypeSpoiler
 	case *tg.MessageEntityCustomEmoji:
-		return otogi.TextEntityTypeCustomEmoji
+		return platform.TextEntityTypeCustomEmoji
 	default:
-		return otogi.TextEntityTypeUnknown
+		return platform.TextEntityTypeUnknown
 	}
 }
 
@@ -2249,7 +2249,7 @@ func mapMessageMedia(media tg.MessageMediaClass) []MediaPayload {
 		return []MediaPayload{
 			{
 				ID:   photoID,
-				Type: otogi.MediaTypePhoto,
+				Type: platform.MediaTypePhoto,
 			},
 		}
 	case *tg.MessageMediaDocument:
@@ -2294,25 +2294,25 @@ func mapDocumentMedia(document tg.DocumentClass) []MediaPayload {
 	}
 }
 
-func mediaTypeFromDocument(mimeType string, attributes []tg.DocumentAttributeClass) otogi.MediaType {
+func mediaTypeFromDocument(mimeType string, attributes []tg.DocumentAttributeClass) platform.MediaType {
 	for _, attribute := range attributes {
 		switch attribute.(type) {
 		case *tg.DocumentAttributeAudio:
-			return otogi.MediaTypeAudio
+			return platform.MediaTypeAudio
 		case *tg.DocumentAttributeVideo:
-			return otogi.MediaTypeVideo
+			return platform.MediaTypeVideo
 		}
 	}
 
 	switch {
 	case strings.HasPrefix(mimeType, "image/"):
-		return otogi.MediaTypePhoto
+		return platform.MediaTypePhoto
 	case strings.HasPrefix(mimeType, "video/"):
-		return otogi.MediaTypeVideo
+		return platform.MediaTypeVideo
 	case strings.HasPrefix(mimeType, "audio/"):
-		return otogi.MediaTypeAudio
+		return platform.MediaTypeAudio
 	default:
-		return otogi.MediaTypeDocument
+		return platform.MediaTypeDocument
 	}
 }
 

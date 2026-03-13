@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -97,8 +97,8 @@ func New(cfg ProviderConfig) (*Provider, error) {
 // GenerateStream starts one OpenAI Responses streaming request.
 func (p *Provider) GenerateStream(
 	ctx context.Context,
-	req otogi.LLMGenerateRequest,
-) (otogi.LLMStream, error) {
+	req ai.LLMGenerateRequest,
+) (ai.LLMStream, error) {
 	if p == nil {
 		return nil, fmt.Errorf("openai generate stream: nil provider")
 	}
@@ -125,7 +125,7 @@ func (p *Provider) GenerateStream(
 	return newOpenAIStream(stream), nil
 }
 
-func mapGenerateRequest(req otogi.LLMGenerateRequest) (responses.ResponseNewParams, error) {
+func mapGenerateRequest(req ai.LLMGenerateRequest) (responses.ResponseNewParams, error) {
 	items := make(responses.ResponseInputParam, 0, len(req.Messages))
 	for index, message := range req.Messages {
 		role, err := mapMessageRole(message.Role)
@@ -177,7 +177,7 @@ func mapGenerateRequest(req otogi.LLMGenerateRequest) (responses.ResponseNewPara
 	return params, nil
 }
 
-func mapMessageContent(message otogi.LLMMessage) (responses.ResponseInputMessageContentListParam, error) {
+func mapMessageContent(message ai.LLMMessage) (responses.ResponseInputMessageContentListParam, error) {
 	parts := message.ContentParts()
 	content := make(responses.ResponseInputMessageContentListParam, 0, len(parts))
 	for index, part := range parts {
@@ -191,11 +191,11 @@ func mapMessageContent(message otogi.LLMMessage) (responses.ResponseInputMessage
 	return content, nil
 }
 
-func mapMessagePart(part otogi.LLMMessagePart) (responses.ResponseInputContentUnionParam, error) {
+func mapMessagePart(part ai.LLMMessagePart) (responses.ResponseInputContentUnionParam, error) {
 	switch part.Type {
-	case otogi.LLMMessagePartTypeText:
+	case ai.LLMMessagePartTypeText:
 		return responses.ResponseInputContentParamOfInputText(part.Text), nil
-	case otogi.LLMMessagePartTypeImage:
+	case ai.LLMMessagePartTypeImage:
 		if part.Image == nil {
 			return responses.ResponseInputContentUnionParam{}, fmt.Errorf("missing image payload")
 		}
@@ -211,18 +211,18 @@ func mapMessagePart(part otogi.LLMMessagePart) (responses.ResponseInputContentUn
 	}
 }
 
-func mapInputImageDetail(detail otogi.LLMInputImageDetail) responses.ResponseInputImageDetail {
+func mapInputImageDetail(detail ai.LLMInputImageDetail) responses.ResponseInputImageDetail {
 	switch detail {
-	case otogi.LLMInputImageDetailLow:
+	case ai.LLMInputImageDetailLow:
 		return responses.ResponseInputImageDetailLow
-	case otogi.LLMInputImageDetailHigh:
+	case ai.LLMInputImageDetailHigh:
 		return responses.ResponseInputImageDetailHigh
 	default:
 		return responses.ResponseInputImageDetailAuto
 	}
 }
 
-func formatInputImageDataURL(image otogi.LLMInputImage) string {
+func formatInputImageDataURL(image ai.LLMInputImage) string {
 	return "data:" + strings.TrimSpace(image.MIMEType) + ";base64," +
 		base64.StdEncoding.EncodeToString(image.Data)
 }
@@ -301,13 +301,13 @@ func normalizeOpenAIReasoningEffort(raw string) (shared.ReasoningEffort, error) 
 	}
 }
 
-func mapMessageRole(role otogi.LLMMessageRole) (responses.EasyInputMessageRole, error) {
+func mapMessageRole(role ai.LLMMessageRole) (responses.EasyInputMessageRole, error) {
 	switch role {
-	case otogi.LLMMessageRoleSystem:
+	case ai.LLMMessageRoleSystem:
 		return responses.EasyInputMessageRoleSystem, nil
-	case otogi.LLMMessageRoleUser:
+	case ai.LLMMessageRoleUser:
 		return responses.EasyInputMessageRoleUser, nil
-	case otogi.LLMMessageRoleAssistant:
+	case ai.LLMMessageRoleAssistant:
 		return responses.EasyInputMessageRoleAssistant, nil
 	default:
 		return "", fmt.Errorf("unsupported role %q", role)
@@ -339,4 +339,4 @@ func normalizeProviderConfig(cfg ProviderConfig) (ProviderConfig, error) {
 	return cfg, nil
 }
 
-var _ otogi.LLMProvider = (*Provider)(nil)
+var _ ai.LLMProvider = (*Provider)(nil)

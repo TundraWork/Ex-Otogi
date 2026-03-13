@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
@@ -17,11 +17,11 @@ const (
 	maxSleepDuration = 12 * time.Hour
 )
 
-func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleSleep(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Command == nil || event.Article == nil {
 		return nil
 	}
-	if event.Kind != otogi.EventKindCommandReceived {
+	if event.Kind != platform.EventKindCommandReceived {
 		return nil
 	}
 	if event.Command.Name != sleepCommandName {
@@ -33,7 +33,7 @@ func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
 		return m.replyError(ctx, event, err.Error())
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("sleep derive outbound target: %w", err)
 	}
@@ -52,7 +52,7 @@ func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
 	humanDuration := formatDuration(duration)
 
 	sleepText := fmt.Sprintf("好好休息%s吧～祝好梦哦✨\n要提前回来的话，可以私聊我发送以下命令：", humanDuration)
-	if _, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	if _, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             sleepText,
 		ReplyToMessageID: event.Article.ID,
@@ -62,12 +62,12 @@ func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
 
 	wakeCommand := "/wake " + code
 	wakeLen := utf8.RuneCountInString(wakeCommand)
-	if _, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	if _, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target: target,
 		Text:   wakeCommand,
-		Entities: []otogi.TextEntity{
+		Entities: []platform.TextEntity{
 			{
-				Type:   otogi.TextEntityTypePre,
+				Type:   platform.TextEntityTypePre,
 				Offset: 0,
 				Length: wakeLen,
 			},
@@ -77,7 +77,7 @@ func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
 		return fmt.Errorf("sleep send wake code message: %w", err)
 	}
 
-	if err := m.moderation.RestrictMember(ctx, otogi.RestrictMemberRequest{
+	if err := m.moderation.RestrictMember(ctx, platform.RestrictMemberRequest{
 		Target:      target,
 		MemberID:    userID,
 		Permissions: mutedPermissions(),
@@ -94,11 +94,11 @@ func (m *Module) handleSleep(ctx context.Context, event *otogi.Event) error {
 	return nil
 }
 
-func (m *Module) handleWake(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleWake(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Command == nil || event.Article == nil {
 		return nil
 	}
-	if event.Kind != otogi.EventKindCommandReceived {
+	if event.Kind != platform.EventKindCommandReceived {
 		return nil
 	}
 	if event.Command.Name != wakeCommandName {
@@ -127,10 +127,10 @@ func (m *Module) handleWake(ctx context.Context, event *otogi.Event) error {
 		return fmt.Errorf("sleep derive wake target: missing conversation type")
 	}
 
-	if err := m.moderation.RestrictMember(ctx, otogi.RestrictMemberRequest{
+	if err := m.moderation.RestrictMember(ctx, platform.RestrictMemberRequest{
 		Target:      target,
 		MemberID:    userID,
-		Permissions: otogi.AllPermissionsGranted(),
+		Permissions: platform.AllPermissionsGranted(),
 		UntilDate:   time.Now(),
 	}); err != nil {
 		return m.replyPermissionChangeFailure(
@@ -141,7 +141,7 @@ func (m *Module) handleWake(ctx context.Context, event *otogi.Event) error {
 		)
 	}
 
-	if _, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	if _, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target: target,
 		Text:   "咦，有坏孩子不好好睡觉跑回来了，是谁呢～😉",
 	}); err != nil {
@@ -151,27 +151,27 @@ func (m *Module) handleWake(ctx context.Context, event *otogi.Event) error {
 	return nil
 }
 
-func outboundTargetFromWakeScope(scope wakeTargetScope) (otogi.OutboundTarget, error) {
-	target := otogi.OutboundTarget{
-		Conversation: otogi.Conversation{
+func outboundTargetFromWakeScope(scope wakeTargetScope) (platform.OutboundTarget, error) {
+	target := platform.OutboundTarget{
+		Conversation: platform.Conversation{
 			ID:   scope.ConversationID,
 			Type: scope.ConversationType,
 		},
 	}
 	if scope.SourcePlatform != "" || scope.SourceID != "" {
-		target.Sink = &otogi.EventSink{
+		target.Sink = &platform.EventSink{
 			Platform: scope.SourcePlatform,
 			ID:       scope.SourceID,
 		}
 	}
 	if err := target.Validate(); err != nil {
-		return otogi.OutboundTarget{}, fmt.Errorf("validate wake target: %w", err)
+		return platform.OutboundTarget{}, fmt.Errorf("validate wake target: %w", err)
 	}
 
 	return target, nil
 }
 
-func codeScopeFromEvent(event *otogi.Event) codeScope {
+func codeScopeFromEvent(event *platform.Event) codeScope {
 	if event == nil {
 		return codeScope{}
 	}
@@ -185,13 +185,13 @@ func codeScopeFromEvent(event *otogi.Event) codeScope {
 	}
 }
 
-func (m *Module) replyError(ctx context.Context, event *otogi.Event, message string) error {
-	target, err := otogi.OutboundTargetFromEvent(event)
+func (m *Module) replyError(ctx context.Context, event *platform.Event, message string) error {
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("sleep reply error derive target: %w", err)
 	}
 
-	_, sendErr := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	_, sendErr := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             message,
 		ReplyToMessageID: event.Article.ID,
@@ -205,7 +205,7 @@ func (m *Module) replyError(ctx context.Context, event *otogi.Event, message str
 
 func (m *Module) replyPermissionChangeFailure(
 	ctx context.Context,
-	event *otogi.Event,
+	event *platform.Event,
 	message string,
 	cause error,
 ) error {
@@ -219,8 +219,8 @@ func (m *Module) replyPermissionChangeFailure(
 
 // mutedPermissions returns permissions that block all message-sending capabilities
 // but still allow inviting users and pinning messages.
-func mutedPermissions() otogi.MemberPermissions {
-	return otogi.MemberPermissions{
+func mutedPermissions() platform.MemberPermissions {
+	return platform.MemberPermissions{
 		SendMessages: false,
 		SendMedia:    false,
 		SendPolls:    false,

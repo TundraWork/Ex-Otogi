@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"sync"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 // ServiceRegistry is the default in-memory service registry implementation.
@@ -34,7 +34,7 @@ func (r *ServiceRegistry) Register(name string, service any) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.services[name]; exists {
-		return fmt.Errorf("register service %s: %w", name, otogi.ErrServiceAlreadyRegistered)
+		return fmt.Errorf("register service %s: %w", name, core.ErrServiceAlreadyRegistered)
 	}
 
 	r.services[name] = service
@@ -67,7 +67,7 @@ func (r *ServiceRegistry) Resolve(name string) (any, error) {
 
 	service, exists := r.services[name]
 	if !exists {
-		return nil, fmt.Errorf("resolve service %s: %w", name, otogi.ErrServiceNotFound)
+		return nil, fmt.Errorf("resolve service %s: %w", name, core.ErrServiceNotFound)
 	}
 
 	return service, nil

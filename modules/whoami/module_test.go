@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestModuleHandleCommand(t *testing.T) {
 	tests := []struct {
 		name            string
-		event           *otogi.Event
+		event           *platform.Event
 		sendErr         error
 		wantErr         bool
 		wantSent        bool
@@ -23,7 +24,7 @@ func TestModuleHandleCommand(t *testing.T) {
 	}{
 		{
 			name:     "whoami reports full identity",
-			event:    newWhoamiEvent("user-42", "johndoe", "John Doe", "chat-100", otogi.ConversationTypeGroup, "My Group"),
+			event:    newWhoamiEvent("user-42", "johndoe", "John Doe", "chat-100", platform.ConversationTypeGroup, "My Group"),
 			wantSent: true,
 			wantContains: []string{
 				"source_platform: telegram",
@@ -41,7 +42,7 @@ func TestModuleHandleCommand(t *testing.T) {
 		},
 		{
 			name:     "whoami with minimal identity",
-			event:    newWhoamiEvent("user-1", "", "", "chat-1", otogi.ConversationTypePrivate, ""),
+			event:    newWhoamiEvent("user-1", "", "", "chat-1", platform.ConversationTypePrivate, ""),
 			wantSent: true,
 			wantContains: []string{
 				"source_platform: telegram",
@@ -59,7 +60,7 @@ func TestModuleHandleCommand(t *testing.T) {
 		},
 		{
 			name:     "whoami with empty user ID shows dash",
-			event:    newWhoamiEvent("", "", "", "chat-1", otogi.ConversationTypePrivate, ""),
+			event:    newWhoamiEvent("", "", "", "chat-1", platform.ConversationTypePrivate, ""),
 			wantSent: true,
 			wantContains: []string{
 				"user_id: -",
@@ -91,7 +92,7 @@ func TestModuleHandleCommand(t *testing.T) {
 		},
 		{
 			name:     "send failure returns error",
-			event:    newWhoamiEvent("user-1", "", "", "chat-1", otogi.ConversationTypePrivate, ""),
+			event:    newWhoamiEvent("user-1", "", "", "chat-1", platform.ConversationTypePrivate, ""),
 			sendErr:  errors.New("dispatcher failure"),
 			wantErr:  true,
 			wantSent: true,
@@ -152,7 +153,7 @@ func TestModuleHandleCommand(t *testing.T) {
 	}
 }
 
-func assertPreformattedText(t *testing.T, entities []otogi.TextEntity, text string) {
+func assertPreformattedText(t *testing.T, entities []platform.TextEntity, text string) {
 	t.Helper()
 
 	if len(entities) != 1 {
@@ -160,8 +161,8 @@ func assertPreformattedText(t *testing.T, entities []otogi.TextEntity, text stri
 	}
 
 	entity := entities[0]
-	if entity.Type != otogi.TextEntityTypePre {
-		t.Fatalf("entity type = %q, want %q", entity.Type, otogi.TextEntityTypePre)
+	if entity.Type != platform.TextEntityTypePre {
+		t.Fatalf("entity type = %q, want %q", entity.Type, platform.TextEntityTypePre)
 	}
 	if entity.Offset != 0 {
 		t.Fatalf("entity offset = %d, want 0", entity.Offset)
@@ -179,7 +180,7 @@ func TestModuleOnRegister(t *testing.T) {
 	runtime := moduleRuntimeStub{
 		registry: serviceRegistryStub{
 			values: map[string]any{
-				otogi.ServiceSinkDispatcher: dispatcher,
+				platform.ServiceSinkDispatcher: dispatcher,
 			},
 		},
 	}
@@ -203,8 +204,8 @@ func TestModuleSpecUsesSystemCommandCapability(t *testing.T) {
 	if len(spec.Commands) != 1 {
 		t.Fatalf("command count = %d, want 1", len(spec.Commands))
 	}
-	if spec.Commands[0].Prefix != otogi.CommandPrefixSystem {
-		t.Fatalf("command prefix = %q, want %q", spec.Commands[0].Prefix, otogi.CommandPrefixSystem)
+	if spec.Commands[0].Prefix != platform.CommandPrefixSystem {
+		t.Fatalf("command prefix = %q, want %q", spec.Commands[0].Prefix, platform.CommandPrefixSystem)
 	}
 	if spec.Commands[0].Name != commandName {
 		t.Fatalf("command name = %q, want %q", spec.Commands[0].Name, commandName)
@@ -217,8 +218,8 @@ func TestModuleSpecUsesSystemCommandCapability(t *testing.T) {
 	if !handler.Capability.Interest.RequireCommand {
 		t.Fatal("expected RequireCommand to be true")
 	}
-	if len(handler.Capability.Interest.Kinds) != 1 || handler.Capability.Interest.Kinds[0] != otogi.EventKindSystemCommandReceived {
-		t.Fatalf("kinds = %v, want [%s]", handler.Capability.Interest.Kinds, otogi.EventKindSystemCommandReceived)
+	if len(handler.Capability.Interest.Kinds) != 1 || handler.Capability.Interest.Kinds[0] != platform.EventKindSystemCommandReceived {
+		t.Fatalf("kinds = %v, want [%s]", handler.Capability.Interest.Kinds, platform.EventKindSystemCommandReceived)
 	}
 	if len(handler.Capability.Interest.CommandNames) != 1 || handler.Capability.Interest.CommandNames[0] != commandName {
 		t.Fatalf("command names = %v, want [%s]", handler.Capability.Interest.CommandNames, commandName)
@@ -230,108 +231,108 @@ func newWhoamiEvent(
 	username string,
 	displayName string,
 	chatID string,
-	chatType otogi.ConversationType,
+	chatType platform.ConversationType,
 	chatTitle string,
-) *otogi.Event {
-	return &otogi.Event{
+) *platform.Event {
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindSystemCommandReceived,
+		Kind:       platform.EventKindSystemCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:    chatID,
 			Type:  chatType,
 			Title: chatTitle,
 		},
-		Actor: otogi.Actor{
+		Actor: platform.Actor{
 			ID:          userID,
 			Username:    username,
 			DisplayName: displayName,
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:   "msg-1",
 			Text: "~whoami",
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            commandName,
 			SourceEventID:   "source-event-1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "~whoami",
 		},
 	}
 }
 
-func newSystemCommandEvent(name string, userID string, chatID string) *otogi.Event {
-	return &otogi.Event{
+func newSystemCommandEvent(name string, userID string, chatID string) *platform.Event {
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindSystemCommandReceived,
+		Kind:       platform.EventKindSystemCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   chatID,
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Actor: otogi.Actor{ID: userID},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: userID},
+		Article: &platform.Article{
 			ID:   "msg-1",
 			Text: "~" + name,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            name,
 			SourceEventID:   "source-event-1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "~" + name,
 		},
 	}
 }
 
-func newOrdinaryCommandEvent(name string, userID string, chatID string) *otogi.Event {
-	return &otogi.Event{
+func newOrdinaryCommandEvent(name string, userID string, chatID string) *platform.Event {
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindCommandReceived,
+		Kind:       platform.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   chatID,
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Actor: otogi.Actor{ID: userID},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: userID},
+		Article: &platform.Article{
 			ID:   "msg-1",
 			Text: "/" + name,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            name,
 			SourceEventID:   "source-event-1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "/" + name,
 		},
 	}
 }
 
-func newMissingCommandPayloadEvent() *otogi.Event {
-	return &otogi.Event{
+func newMissingCommandPayloadEvent() *platform.Event {
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindSystemCommandReceived,
+		Kind:       platform.EventKindSystemCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:   "msg-1",
 			Text: "~whoami",
 		},
@@ -342,64 +343,64 @@ type captureDispatcher struct {
 	calls       atomic.Int64
 	messageID   string
 	sendErr     error
-	lastRequest otogi.SendMessageRequest
+	lastRequest platform.SendMessageRequest
 }
 
 func (d *captureDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.calls.Add(1)
 	d.lastRequest = request
 	if d.sendErr != nil {
 		return nil, d.sendErr
 	}
 
-	return &otogi.OutboundMessage{ID: d.messageID}, nil
+	return &platform.OutboundMessage{ID: d.messageID}, nil
 }
 
-func (d *captureDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (d *captureDispatcher) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (d *captureDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (d *captureDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (d *captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (d *captureDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 func (d *captureDispatcher) ListSinksByPlatform(
 	context.Context,
-	otogi.Platform,
-) ([]otogi.EventSink, error) {
+	platform.Platform,
+) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 type moduleRuntimeStub struct {
-	registry otogi.ServiceRegistry
-	configs  otogi.ConfigRegistry
+	registry core.ServiceRegistry
+	configs  core.ConfigRegistry
 }
 
-func (s moduleRuntimeStub) Services() otogi.ServiceRegistry {
+func (s moduleRuntimeStub) Services() core.ServiceRegistry {
 	return s.registry
 }
 
-func (s moduleRuntimeStub) Config() otogi.ConfigRegistry {
+func (s moduleRuntimeStub) Config() core.ConfigRegistry {
 	return s.configs
 }
 
 func (moduleRuntimeStub) Subscribe(
 	context.Context,
-	otogi.InterestSet,
-	otogi.SubscriptionSpec,
-	otogi.EventHandler,
-) (otogi.Subscription, error) {
+	core.InterestSet,
+	core.SubscriptionSpec,
+	core.EventHandler,
+) (core.Subscription, error) {
 	return nil, nil
 }
 
@@ -414,7 +415,7 @@ func (s serviceRegistryStub) Register(string, any) error {
 func (s serviceRegistryStub) Resolve(name string) (any, error) {
 	value, ok := s.values[name]
 	if !ok {
-		return nil, otogi.ErrServiceNotFound
+		return nil, core.ErrServiceNotFound
 	}
 
 	return value, nil

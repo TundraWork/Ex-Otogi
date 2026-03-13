@@ -1,4 +1,10 @@
-package otogi
+package core
+
+import (
+	"strings"
+
+	"ex-otogi/pkg/otogi/platform"
+)
 
 // Capability describes what a module can process and what resources it requires.
 type Capability struct {
@@ -6,7 +12,7 @@ type Capability struct {
 	Name string
 	// Description explains the capability intent for operators and tooling.
 	Description string
-	// Interest declares which neutral events the capability can process.
+	// Interest declares which Otogi events the capability can process.
 	Interest InterestSet
 	// RequiredServices lists service registry keys required before activation.
 	RequiredServices []string
@@ -17,15 +23,15 @@ type Capability struct {
 // InterestSet describes event selection criteria for capability negotiation.
 type InterestSet struct {
 	// Kinds restricts matching to specific event kinds when non-empty.
-	Kinds []EventKind
+	Kinds []platform.EventKind
 	// Sources restricts matching to one or more source identities.
 	//
 	// Empty ID in one source entry acts as a platform wildcard.
-	Sources []EventSource
+	Sources []platform.EventSource
 	// CommandNames restricts matching to specific command names when non-empty.
 	CommandNames []string
 	// MediaTypes restricts matching to events carrying at least one listed media type.
-	MediaTypes []MediaType
+	MediaTypes []platform.MediaType
 	// RequireArticle requires article payload presence.
 	RequireArticle bool
 	// RequireMutation requires mutation payload presence.
@@ -39,7 +45,7 @@ type InterestSet struct {
 }
 
 // Matches reports whether an event satisfies the declared interest set.
-func (i InterestSet) Matches(event *Event) bool {
+func (i InterestSet) Matches(event *platform.Event) bool {
 	if event == nil {
 		return false
 	}
@@ -113,7 +119,7 @@ func (i InterestSet) Allows(filter InterestSet) bool {
 }
 
 // containsKind reports whether target is present in kinds.
-func containsKind(kinds []EventKind, target EventKind) bool {
+func containsKind(kinds []platform.EventKind, target platform.EventKind) bool {
 	for _, candidate := range kinds {
 		if candidate == target {
 			return true
@@ -124,7 +130,7 @@ func containsKind(kinds []EventKind, target EventKind) bool {
 }
 
 // containsSource reports whether target is matched by one configured source filter.
-func containsSource(sources []EventSource, target EventSource) bool {
+func containsSource(sources []platform.EventSource, target platform.EventSource) bool {
 	for _, source := range sources {
 		if source.Platform != "" && source.Platform != target.Platform {
 			continue
@@ -140,7 +146,7 @@ func containsSource(sources []EventSource, target EventSource) bool {
 }
 
 // eventContainsMediaType checks effective event media across article and mutation payloads.
-func eventContainsMediaType(event *Event, types []MediaType) bool {
+func eventContainsMediaType(event *platform.Event, types []platform.MediaType) bool {
 	for _, media := range event.ArticleMedia() {
 		if containsMediaType(types, media.Type) {
 			return true
@@ -150,29 +156,8 @@ func eventContainsMediaType(event *Event, types []MediaType) bool {
 	return false
 }
 
-// articleMedia returns the canonical media payload for filtering purposes.
-// For mutation events it prefers the post-mutation snapshot.
-func (e *Event) articleMedia() []MediaAttachment {
-	if e == nil {
-		return nil
-	}
-	if e.Article != nil {
-		return e.Article.Media
-	}
-	if e.Mutation != nil && e.Mutation.After != nil {
-		return e.Mutation.After.Media
-	}
-
-	return nil
-}
-
-// ArticleMedia returns the media payload that best represents this event.
-func (e *Event) ArticleMedia() []MediaAttachment {
-	return e.articleMedia()
-}
-
 // allKindsIncluded reports whether subset is fully contained in allowed.
-func allKindsIncluded(subset, allowed []EventKind) bool {
+func allKindsIncluded(subset, allowed []platform.EventKind) bool {
 	for _, item := range subset {
 		if !containsKind(allowed, item) {
 			return false
@@ -183,7 +168,7 @@ func allKindsIncluded(subset, allowed []EventKind) bool {
 }
 
 // allSourcesIncluded reports whether each source filter in subset is allowed.
-func allSourcesIncluded(subset, allowed []EventSource) bool {
+func allSourcesIncluded(subset, allowed []platform.EventSource) bool {
 	for _, source := range subset {
 		if !containsSource(allowed, source) {
 			return false
@@ -194,7 +179,7 @@ func allSourcesIncluded(subset, allowed []EventSource) bool {
 }
 
 // allMediaTypesIncluded reports whether subset is fully contained in allowed.
-func allMediaTypesIncluded(subset, allowed []MediaType) bool {
+func allMediaTypesIncluded(subset, allowed []platform.MediaType) bool {
 	for _, item := range subset {
 		if !containsMediaType(allowed, item) {
 			return false
@@ -205,7 +190,7 @@ func allMediaTypesIncluded(subset, allowed []MediaType) bool {
 }
 
 // containsMediaType reports whether target is present in types.
-func containsMediaType(types []MediaType, target MediaType) bool {
+func containsMediaType(types []platform.MediaType, target platform.MediaType) bool {
 	for _, candidate := range types {
 		if candidate == target {
 			return true
@@ -228,16 +213,20 @@ func allCommandNamesIncluded(subset, allowed []string) bool {
 
 // containsCommandName reports whether target is present in command names.
 func containsCommandName(commandNames []string, target string) bool {
-	normalizedTarget := normalizeCommandName(target)
+	normalizedTarget := normalizeRuntimeCommandName(target)
 	if normalizedTarget == "" {
 		return false
 	}
 
 	for _, candidate := range commandNames {
-		if normalizeCommandName(candidate) == normalizedTarget {
+		if normalizeRuntimeCommandName(candidate) == normalizedTarget {
 			return true
 		}
 	}
 
 	return false
+}
+
+func normalizeRuntimeCommandName(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }

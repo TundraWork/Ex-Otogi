@@ -7,7 +7,8 @@ import (
 	"log/slog"
 	"sort"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // Definition describes one configured driver entry.
@@ -23,34 +24,41 @@ type Definition struct {
 }
 
 // Runtime contains one fully built driver runtime instance.
+//
+// All adapters in one runtime should describe the same configured driver
+// instance and Source identity so shared runtime policies can correlate inbound
+// and outbound traffic consistently.
 type Runtime struct {
 	// Source identifies the concrete event source produced by Driver.
-	Source otogi.EventSource
+	Source platform.EventSource
 	// Driver is the inbound runtime implementation registered with kernel.
-	Driver otogi.Driver
+	Driver core.Driver
 	// MediaDownloader adapts media download operations for this runtime when supported.
-	MediaDownloader otogi.MediaDownloader
+	MediaDownloader platform.MediaDownloader
 	// SinkDispatcher adapts outbound operations for this runtime when supported.
-	SinkDispatcher otogi.SinkDispatcher
+	SinkDispatcher platform.SinkDispatcher
 	// ModerationDispatcher adapts moderation operations for this runtime when supported.
-	ModerationDispatcher otogi.ModerationDispatcher
+	ModerationDispatcher platform.ModerationDispatcher
 }
 
 // BuilderFunc builds one runtime from one configured driver definition.
+//
+// Builders should keep platform SDK types internal and return only adapters
+// that satisfy Otogi contracts.
 type BuilderFunc func(ctx context.Context, definition Definition, logger *slog.Logger) (Runtime, error)
 
 // Descriptor binds one driver type token to platform metadata and a runtime builder.
 type Descriptor struct {
 	// Type is the driver type token from configuration (for example "telegram").
 	Type string
-	// Platform is the neutral otogi platform for this driver type.
-	Platform otogi.Platform
+	// Platform is the Otogi platform for this driver type.
+	Platform platform.Platform
 	// Builder constructs one runtime instance for this driver type.
 	Builder BuilderFunc
 }
 
 type registryEntry struct {
-	platform otogi.Platform
+	platform platform.Platform
 	builder  BuilderFunc
 }
 
@@ -104,8 +112,8 @@ func (r *Registry) Types() []string {
 	return types
 }
 
-// PlatformForType resolves one registered driver type to its neutral otogi platform.
-func (r *Registry) PlatformForType(driverType string) (otogi.Platform, error) {
+// PlatformForType resolves one registered driver type to its Otogi platform.
+func (r *Registry) PlatformForType(driverType string) (platform.Platform, error) {
 	if r == nil {
 		return "", fmt.Errorf("resolve platform: nil registry")
 	}
@@ -119,6 +127,10 @@ func (r *Registry) PlatformForType(driverType string) (otogi.Platform, error) {
 }
 
 // BuildEnabled builds all enabled driver definitions.
+//
+// The returned runtimes are standardized by the registry: identity is
+// validated, default source IDs are filled, and shared runtime decorators such
+// as the article tag bridge are applied when supported by the runtime shape.
 func (r *Registry) BuildEnabled(
 	ctx context.Context,
 	definitions []Definition,
@@ -167,24 +179,24 @@ func (r *Registry) BuildEnabled(
 		runtimes = append(runtimes, runtime)
 	}
 
-	return runtimes, nil
+	return wrapRuntimesWithArticleTags(runtimes), nil
 }
 
 type mediaRoute struct {
-	ref        otogi.EventSource
-	downloader otogi.MediaDownloader
+	ref        platform.EventSource
+	downloader platform.MediaDownloader
 }
 
 type mediaDispatcher struct {
 	byID           map[string]mediaRoute
-	byPlatform     map[otogi.Platform][]string
+	byPlatform     map[platform.Platform][]string
 	sortedSourceID []string
 }
 
 // NewMediaDownloader creates a media downloader router from runtime instances.
-func NewMediaDownloader(runtimes []Runtime) (otogi.MediaDownloader, error) {
+func NewMediaDownloader(runtimes []Runtime) (platform.MediaDownloader, error) {
 	byID := make(map[string]mediaRoute)
-	byPlatform := make(map[otogi.Platform][]string)
+	byPlatform := make(map[platform.Platform][]string)
 	sortedIDs := make([]string, 0, len(runtimes))
 	for _, runtime := range runtimes {
 		if runtime.MediaDownloader == nil {
@@ -217,45 +229,45 @@ func NewMediaDownloader(runtimes []Runtime) (otogi.MediaDownloader, error) {
 // Download routes one media download request to one concrete driver downloader.
 func (d *mediaDispatcher) Download(
 	ctx context.Context,
-	request otogi.MediaDownloadRequest,
+	request platform.MediaDownloadRequest,
 	output io.Writer,
-) (otogi.MediaAttachment, error) {
+) (platform.MediaAttachment, error) {
 	if err := request.Validate(); err != nil {
-		return otogi.MediaAttachment{}, fmt.Errorf("validate media download request: %w", err)
+		return platform.MediaAttachment{}, fmt.Errorf("validate media download request: %w", err)
 	}
 	if output == nil {
-		return otogi.MediaAttachment{}, fmt.Errorf("%w: missing output writer", otogi.ErrInvalidMediaDownloadRequest)
+		return platform.MediaAttachment{}, fmt.Errorf("%w: missing output writer", platform.ErrInvalidMediaDownloadRequest)
 	}
 
 	downloader, err := d.resolve(request.Source)
 	if err != nil {
-		return otogi.MediaAttachment{}, fmt.Errorf("resolve media downloader: %w", err)
+		return platform.MediaAttachment{}, fmt.Errorf("resolve media downloader: %w", err)
 	}
 
 	attachment, err := downloader.Download(ctx, request, output)
 	if err != nil {
-		return otogi.MediaAttachment{}, fmt.Errorf("route media download: %w", err)
+		return platform.MediaAttachment{}, fmt.Errorf("route media download: %w", err)
 	}
 
 	return attachment, nil
 }
 
-func (d *mediaDispatcher) resolve(source otogi.EventSource) (otogi.MediaDownloader, error) {
+func (d *mediaDispatcher) resolve(source platform.EventSource) (platform.MediaDownloader, error) {
 	if d == nil {
 		return nil, fmt.Errorf("nil dispatcher")
 	}
 	if len(d.byID) == 0 {
-		return nil, fmt.Errorf("%w: no media downloaders configured", otogi.ErrMediaDownloadUnsupported)
+		return nil, fmt.Errorf("%w: no media downloaders configured", platform.ErrMediaDownloadUnsupported)
 	}
 
 	route, exists := d.byID[source.ID]
 	if !exists {
-		return nil, fmt.Errorf("%w: source %s not found", otogi.ErrMediaDownloadUnsupported, source.ID)
+		return nil, fmt.Errorf("%w: source %s not found", platform.ErrMediaDownloadUnsupported, source.ID)
 	}
 	if source.Platform != "" && route.ref.Platform != source.Platform {
 		return nil, fmt.Errorf(
 			"%w: source %s platform mismatch: expected %s got %s",
-			otogi.ErrMediaDownloadUnsupported,
+			platform.ErrMediaDownloadUnsupported,
 			source.ID,
 			source.Platform,
 			route.ref.Platform,
@@ -266,20 +278,20 @@ func (d *mediaDispatcher) resolve(source otogi.EventSource) (otogi.MediaDownload
 }
 
 type sinkRoute struct {
-	ref        otogi.EventSink
-	dispatcher otogi.SinkDispatcher
+	ref        platform.EventSink
+	dispatcher platform.SinkDispatcher
 }
 
 type sinkDispatcher struct {
 	byID         map[string]sinkRoute
-	byPlatform   map[otogi.Platform][]string
+	byPlatform   map[platform.Platform][]string
 	sortedSinkID []string
 }
 
 // NewSinkDispatcher creates a sink dispatcher from runtime sinks.
-func NewSinkDispatcher(runtimes []Runtime) (otogi.SinkDispatcher, error) {
+func NewSinkDispatcher(runtimes []Runtime) (platform.SinkDispatcher, error) {
 	byID := make(map[string]sinkRoute)
-	byPlatform := make(map[otogi.Platform][]string)
+	byPlatform := make(map[platform.Platform][]string)
 	sortedIDs := make([]string, 0, len(runtimes))
 	for _, runtime := range runtimes {
 		if runtime.SinkDispatcher == nil {
@@ -292,7 +304,7 @@ func NewSinkDispatcher(runtimes []Runtime) (otogi.SinkDispatcher, error) {
 			return nil, fmt.Errorf("new sink dispatcher: duplicate sink id %s", runtime.Source.ID)
 		}
 
-		ref := otogi.EventSink{
+		ref := platform.EventSink{
 			Platform: runtime.Source.Platform,
 			ID:       runtime.Source.ID,
 		}
@@ -315,8 +327,8 @@ func NewSinkDispatcher(runtimes []Runtime) (otogi.SinkDispatcher, error) {
 // SendMessage routes send-message requests to one concrete sink.
 func (d *sinkDispatcher) SendMessage(
 	ctx context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
 		return nil, fmt.Errorf("resolve sink for send message: %w", err)
@@ -331,7 +343,7 @@ func (d *sinkDispatcher) SendMessage(
 }
 
 // EditMessage routes edit-message requests to one concrete sink.
-func (d *sinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMessageRequest) error {
+func (d *sinkDispatcher) EditMessage(ctx context.Context, request platform.EditMessageRequest) error {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
 		return fmt.Errorf("resolve sink for edit message: %w", err)
@@ -345,7 +357,7 @@ func (d *sinkDispatcher) EditMessage(ctx context.Context, request otogi.EditMess
 }
 
 // DeleteMessage routes delete-message requests to one concrete sink.
-func (d *sinkDispatcher) DeleteMessage(ctx context.Context, request otogi.DeleteMessageRequest) error {
+func (d *sinkDispatcher) DeleteMessage(ctx context.Context, request platform.DeleteMessageRequest) error {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
 		return fmt.Errorf("resolve sink for delete message: %w", err)
@@ -359,7 +371,7 @@ func (d *sinkDispatcher) DeleteMessage(ctx context.Context, request otogi.Delete
 }
 
 // SetReaction routes set-reaction requests to one concrete sink.
-func (d *sinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReactionRequest) error {
+func (d *sinkDispatcher) SetReaction(ctx context.Context, request platform.SetReactionRequest) error {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
 		return fmt.Errorf("resolve sink for set reaction: %w", err)
@@ -373,11 +385,11 @@ func (d *sinkDispatcher) SetReaction(ctx context.Context, request otogi.SetReact
 }
 
 // ListSinks returns all known concrete sinks.
-func (d *sinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, error) {
+func (d *sinkDispatcher) ListSinks(ctx context.Context) ([]platform.EventSink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list sinks: %w", err)
 	}
-	sinks := make([]otogi.EventSink, 0, len(d.sortedSinkID))
+	sinks := make([]platform.EventSink, 0, len(d.sortedSinkID))
 	for _, id := range d.sortedSinkID {
 		route, exists := d.byID[id]
 		if !exists {
@@ -392,14 +404,14 @@ func (d *sinkDispatcher) ListSinks(ctx context.Context) ([]otogi.EventSink, erro
 // ListSinksByPlatform returns all known concrete sinks for one platform.
 func (d *sinkDispatcher) ListSinksByPlatform(
 	ctx context.Context,
-	platform otogi.Platform,
-) ([]otogi.EventSink, error) {
+	targetPlatform platform.Platform,
+) ([]platform.EventSink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list sinks by platform: %w", err)
 	}
 
-	ids := d.byPlatform[platform]
-	sinks := make([]otogi.EventSink, 0, len(ids))
+	ids := d.byPlatform[targetPlatform]
+	sinks := make([]platform.EventSink, 0, len(ids))
 	for _, id := range ids {
 		route, exists := d.byID[id]
 		if !exists {
@@ -411,12 +423,12 @@ func (d *sinkDispatcher) ListSinksByPlatform(
 	return sinks, nil
 }
 
-func (d *sinkDispatcher) resolve(target otogi.OutboundTarget) (otogi.SinkDispatcher, error) {
+func (d *sinkDispatcher) resolve(target platform.OutboundTarget) (platform.SinkDispatcher, error) {
 	if d == nil {
 		return nil, fmt.Errorf("nil dispatcher")
 	}
 	if len(d.byID) == 0 {
-		return nil, fmt.Errorf("%w: no sinks configured", otogi.ErrOutboundUnsupported)
+		return nil, fmt.Errorf("%w: no sinks configured", platform.ErrOutboundUnsupported)
 	}
 
 	if target.Sink != nil {
@@ -428,19 +440,19 @@ func (d *sinkDispatcher) resolve(target otogi.OutboundTarget) (otogi.SinkDispatc
 		}
 	}
 
-	return nil, fmt.Errorf("%w: missing target sink", otogi.ErrOutboundUnsupported)
+	return nil, fmt.Errorf("%w: missing target sink", platform.ErrOutboundUnsupported)
 }
 
-func (d *sinkDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.SinkDispatcher, error) {
+func (d *sinkDispatcher) resolveSinkRef(ref platform.EventSink) (platform.SinkDispatcher, error) {
 	if ref.ID != "" {
 		route, exists := d.byID[ref.ID]
 		if !exists {
-			return nil, fmt.Errorf("%w: sink %s not found", otogi.ErrOutboundUnsupported, ref.ID)
+			return nil, fmt.Errorf("%w: sink %s not found", platform.ErrOutboundUnsupported, ref.ID)
 		}
 		if ref.Platform != "" && route.ref.Platform != ref.Platform {
 			return nil, fmt.Errorf(
 				"%w: sink %s platform mismatch: expected %s got %s",
-				otogi.ErrOutboundUnsupported,
+				platform.ErrOutboundUnsupported,
 				ref.ID,
 				ref.Platform,
 				route.ref.Platform,
@@ -452,37 +464,37 @@ func (d *sinkDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.SinkDispatch
 	if ref.Platform != "" {
 		ids := d.byPlatform[ref.Platform]
 		if len(ids) == 0 {
-			return nil, fmt.Errorf("%w: no sink for platform %s", otogi.ErrOutboundUnsupported, ref.Platform)
+			return nil, fmt.Errorf("%w: no sink for platform %s", platform.ErrOutboundUnsupported, ref.Platform)
 		}
 		if len(ids) > 1 {
-			return nil, fmt.Errorf("%w: ambiguous sink for platform %s", otogi.ErrOutboundUnsupported, ref.Platform)
+			return nil, fmt.Errorf("%w: ambiguous sink for platform %s", platform.ErrOutboundUnsupported, ref.Platform)
 		}
 		route, exists := d.byID[ids[0]]
 		if !exists {
-			return nil, fmt.Errorf("%w: sink %s not found", otogi.ErrOutboundUnsupported, ids[0])
+			return nil, fmt.Errorf("%w: sink %s not found", platform.ErrOutboundUnsupported, ids[0])
 		}
 
 		return route.dispatcher, nil
 	}
 
-	return nil, fmt.Errorf("%w: empty sink reference", otogi.ErrOutboundUnsupported)
+	return nil, fmt.Errorf("%w: empty sink reference", platform.ErrOutboundUnsupported)
 }
 
 type moderationRoute struct {
-	ref        otogi.EventSink
-	dispatcher otogi.ModerationDispatcher
+	ref        platform.EventSink
+	dispatcher platform.ModerationDispatcher
 }
 
 type moderationDispatcher struct {
 	byID         map[string]moderationRoute
-	byPlatform   map[otogi.Platform][]string
+	byPlatform   map[platform.Platform][]string
 	sortedSinkID []string
 }
 
 // NewModerationDispatcher creates a moderation dispatcher from runtime instances.
-func NewModerationDispatcher(runtimes []Runtime) (otogi.ModerationDispatcher, error) {
+func NewModerationDispatcher(runtimes []Runtime) (platform.ModerationDispatcher, error) {
 	byID := make(map[string]moderationRoute)
-	byPlatform := make(map[otogi.Platform][]string)
+	byPlatform := make(map[platform.Platform][]string)
 	sortedIDs := make([]string, 0, len(runtimes))
 	for _, runtime := range runtimes {
 		if runtime.ModerationDispatcher == nil {
@@ -495,7 +507,7 @@ func NewModerationDispatcher(runtimes []Runtime) (otogi.ModerationDispatcher, er
 			return nil, fmt.Errorf("new moderation dispatcher: duplicate sink id %s", runtime.Source.ID)
 		}
 
-		ref := otogi.EventSink{
+		ref := platform.EventSink{
 			Platform: runtime.Source.Platform,
 			ID:       runtime.Source.ID,
 		}
@@ -518,7 +530,7 @@ func NewModerationDispatcher(runtimes []Runtime) (otogi.ModerationDispatcher, er
 // RestrictMember routes restrict-member requests to one concrete moderation dispatcher.
 func (d *moderationDispatcher) RestrictMember(
 	ctx context.Context,
-	request otogi.RestrictMemberRequest,
+	request platform.RestrictMemberRequest,
 ) error {
 	dispatcher, err := d.resolve(request.Target)
 	if err != nil {
@@ -532,12 +544,12 @@ func (d *moderationDispatcher) RestrictMember(
 	return nil
 }
 
-func (d *moderationDispatcher) resolve(target otogi.OutboundTarget) (otogi.ModerationDispatcher, error) {
+func (d *moderationDispatcher) resolve(target platform.OutboundTarget) (platform.ModerationDispatcher, error) {
 	if d == nil {
 		return nil, fmt.Errorf("nil moderation dispatcher")
 	}
 	if len(d.byID) == 0 {
-		return nil, fmt.Errorf("%w: no moderation sinks configured", otogi.ErrOutboundUnsupported)
+		return nil, fmt.Errorf("%w: no moderation sinks configured", platform.ErrOutboundUnsupported)
 	}
 
 	if target.Sink != nil {
@@ -549,19 +561,19 @@ func (d *moderationDispatcher) resolve(target otogi.OutboundTarget) (otogi.Moder
 		}
 	}
 
-	return nil, fmt.Errorf("%w: missing target sink for moderation", otogi.ErrOutboundUnsupported)
+	return nil, fmt.Errorf("%w: missing target sink for moderation", platform.ErrOutboundUnsupported)
 }
 
-func (d *moderationDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.ModerationDispatcher, error) {
+func (d *moderationDispatcher) resolveSinkRef(ref platform.EventSink) (platform.ModerationDispatcher, error) {
 	if ref.ID != "" {
 		route, exists := d.byID[ref.ID]
 		if !exists {
-			return nil, fmt.Errorf("%w: moderation sink %s not found", otogi.ErrOutboundUnsupported, ref.ID)
+			return nil, fmt.Errorf("%w: moderation sink %s not found", platform.ErrOutboundUnsupported, ref.ID)
 		}
 		if ref.Platform != "" && route.ref.Platform != ref.Platform {
 			return nil, fmt.Errorf(
 				"%w: moderation sink %s platform mismatch: expected %s got %s",
-				otogi.ErrOutboundUnsupported,
+				platform.ErrOutboundUnsupported,
 				ref.ID,
 				ref.Platform,
 				route.ref.Platform,
@@ -573,18 +585,18 @@ func (d *moderationDispatcher) resolveSinkRef(ref otogi.EventSink) (otogi.Modera
 	if ref.Platform != "" {
 		ids := d.byPlatform[ref.Platform]
 		if len(ids) == 0 {
-			return nil, fmt.Errorf("%w: no moderation sink for platform %s", otogi.ErrOutboundUnsupported, ref.Platform)
+			return nil, fmt.Errorf("%w: no moderation sink for platform %s", platform.ErrOutboundUnsupported, ref.Platform)
 		}
 		if len(ids) > 1 {
-			return nil, fmt.Errorf("%w: ambiguous moderation sink for platform %s", otogi.ErrOutboundUnsupported, ref.Platform)
+			return nil, fmt.Errorf("%w: ambiguous moderation sink for platform %s", platform.ErrOutboundUnsupported, ref.Platform)
 		}
 		route, exists := d.byID[ids[0]]
 		if !exists {
-			return nil, fmt.Errorf("%w: moderation sink %s not found", otogi.ErrOutboundUnsupported, ids[0])
+			return nil, fmt.Errorf("%w: moderation sink %s not found", platform.ErrOutboundUnsupported, ids[0])
 		}
 
 		return route.dispatcher, nil
 	}
 
-	return nil, fmt.Errorf("%w: empty moderation sink reference", otogi.ErrOutboundUnsupported)
+	return nil, fmt.Errorf("%w: empty moderation sink reference", platform.ErrOutboundUnsupported)
 }

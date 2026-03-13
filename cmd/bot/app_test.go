@@ -15,7 +15,7 @@ import (
 
 	driverpkg "ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func writeConfigFile(t *testing.T, path string, contents string) {
@@ -351,7 +351,7 @@ func TestRegisterRuntimeServices(t *testing.T) {
 			t.Fatalf("registerRuntimeServices failed: %v", err)
 		}
 
-		_, resolveErr := kernelRuntime.Services().Resolve(otogi.ServiceSinkDispatcher)
+		_, resolveErr := kernelRuntime.Services().Resolve(platform.ServiceSinkDispatcher)
 		if resolveErr != nil {
 			t.Fatalf("resolve sink dispatcher failed: %v", resolveErr)
 		}
@@ -371,7 +371,7 @@ func TestRegisterRuntimeServices(t *testing.T) {
 			t.Fatalf("registerRuntimeServices failed: %v", err)
 		}
 
-		_, resolveErr := kernelRuntime.Services().Resolve(otogi.ServiceMediaDownloader)
+		_, resolveErr := kernelRuntime.Services().Resolve(platform.ServiceMediaDownloader)
 		if resolveErr != nil {
 			t.Fatalf("resolve media downloader failed: %v", resolveErr)
 		}
@@ -382,10 +382,10 @@ type mediaDownloaderTestStub struct{}
 
 func (mediaDownloaderTestStub) Download(
 	context.Context,
-	otogi.MediaDownloadRequest,
+	platform.MediaDownloadRequest,
 	io.Writer,
-) (otogi.MediaAttachment, error) {
-	return otogi.MediaAttachment{}, nil
+) (platform.MediaAttachment, error) {
+	return platform.MediaAttachment{}, nil
 }
 
 func TestConfigureStdlibLogBridge(t *testing.T) {
@@ -466,26 +466,26 @@ func TestConfiguredRuntimeModuleNamesIncludesQuotehelper(t *testing.T) {
 
 type sinkDispatcherTestStub struct{}
 
-func (*sinkDispatcherTestStub) SendMessage(context.Context, otogi.SendMessageRequest) (*otogi.OutboundMessage, error) {
-	return &otogi.OutboundMessage{ID: "msg-1"}, nil
+func (*sinkDispatcherTestStub) SendMessage(context.Context, platform.SendMessageRequest) (*platform.OutboundMessage, error) {
+	return &platform.OutboundMessage{ID: "msg-1"}, nil
 }
 
-func (*sinkDispatcherTestStub) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (*sinkDispatcherTestStub) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return nil
 }
 
-func (*sinkDispatcherTestStub) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (*sinkDispatcherTestStub) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (*sinkDispatcherTestStub) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (*sinkDispatcherTestStub) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (*sinkDispatcherTestStub) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (*sinkDispatcherTestStub) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
-func (*sinkDispatcherTestStub) ListSinksByPlatform(context.Context, otogi.Platform) ([]otogi.EventSink, error) {
+func (*sinkDispatcherTestStub) ListSinksByPlatform(context.Context, platform.Platform) ([]platform.EventSink, error) {
 	return nil, nil
 }

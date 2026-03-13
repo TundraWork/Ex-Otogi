@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 type conclusionKind string
@@ -19,8 +19,8 @@ const (
 
 func newLobbyState(
 	key conversationKey,
-	target otogi.OutboundTarget,
-	host otogi.Actor,
+	target platform.OutboundTarget,
+	host platform.Actor,
 	invited *participantRef,
 	maxPlayers int,
 	deadline time.Time,
@@ -42,7 +42,7 @@ func newLobbyState(
 	return state
 }
 
-func newPlayer(actor otogi.Actor) *playerState {
+func newPlayer(actor platform.Actor) *playerState {
 	return &playerState{
 		ID:   actor.ID,
 		Name: actorName(actor),
@@ -74,7 +74,7 @@ func (s *gameState) hasPlayer(id string) bool {
 	return s.player(id) != nil
 }
 
-func (s *gameState) addPlayer(actor otogi.Actor) *playerState {
+func (s *gameState) addPlayer(actor platform.Actor) *playerState {
 	if s == nil {
 		return nil
 	}

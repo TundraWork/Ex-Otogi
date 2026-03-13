@@ -4,20 +4,20 @@ import (
 	"context"
 	"fmt"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
-func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleEvent(ctx context.Context, event *platform.Event) error {
 	if event == nil {
 		return fmt.Errorf("memory handle event: nil event")
 	}
 
 	switch event.Kind {
-	case otogi.EventKindArticleCreated:
+	case platform.EventKindArticleCreated:
 		if err := m.rememberCreated(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
-	case otogi.EventKindArticleEdited:
+	case platform.EventKindArticleEdited:
 		appended, err := m.appendEvent(event)
 		if err != nil {
 			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
@@ -28,7 +28,7 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 		if err := m.rememberEdit(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
-	case otogi.EventKindArticleRetracted:
+	case platform.EventKindArticleRetracted:
 		appended, err := m.appendEvent(event)
 		if err != nil {
 			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
@@ -39,7 +39,7 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 		if err := m.forgetRetracted(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
-	case otogi.EventKindArticleReactionAdded, otogi.EventKindArticleReactionRemoved:
+	case platform.EventKindArticleReactionAdded, platform.EventKindArticleReactionRemoved:
 		appended, err := m.appendEvent(event)
 		if err != nil {
 			return fmt.Errorf("memory handle %s append event: %w", event.Kind, err)
@@ -50,7 +50,7 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 		if err := m.rememberReaction(event); err != nil {
 			return fmt.Errorf("memory handle %s project article: %w", event.Kind, err)
 		}
-	case otogi.EventKindSystemCommandReceived:
+	case platform.EventKindSystemCommandReceived:
 		if err := m.handleCommandEvent(ctx, event); err != nil {
 			return fmt.Errorf("memory handle %s: %w", event.Kind, err)
 		}
@@ -60,11 +60,11 @@ func (m *Module) handleEvent(ctx context.Context, event *otogi.Event) error {
 	return nil
 }
 
-func (m *Module) handleCommandEvent(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleCommandEvent(ctx context.Context, event *platform.Event) error {
 	if event == nil {
 		return fmt.Errorf("nil event")
 	}
-	if event.Kind != otogi.EventKindSystemCommandReceived {
+	if event.Kind != platform.EventKindSystemCommandReceived {
 		return nil
 	}
 	if event.Command == nil {
@@ -79,7 +79,7 @@ func (m *Module) handleCommandEvent(ctx context.Context, event *otogi.Event) err
 		return fmt.Errorf("%s command: outbound dispatcher not configured", command.kind)
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("%s command derive outbound target: %w", command.kind, err)
 	}
@@ -144,11 +144,11 @@ func (m *Module) handleCommandEvent(ctx context.Context, event *otogi.Event) err
 
 func (m *Module) replyCommandResult(
 	ctx context.Context,
-	target otogi.OutboundTarget,
+	target platform.OutboundTarget,
 	replyToMessageID string,
 	body string,
 ) error {
-	_, err := m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	_, err := m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             body,
 		Entities:         commandReplyEntities(body),

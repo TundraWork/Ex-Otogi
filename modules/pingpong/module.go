@@ -4,14 +4,15 @@ import (
 	"context"
 	"fmt"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const pingCommandName = "ping"
 
 // Module replies with "pong!" when it receives a "/ping" command event.
 type Module struct {
-	dispatcher otogi.SinkDispatcher
+	dispatcher platform.SinkDispatcher
 }
 
 // New creates a ping-pong module with default configuration.
@@ -25,28 +26,28 @@ func (m *Module) Name() string {
 }
 
 // Spec declares interest in received ping command events.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		Handlers: []otogi.ModuleHandler{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		Handlers: []core.ModuleHandler{
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "ping-command-handler",
 					Description: "responds with pong! for /ping commands",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 						RequireCommand: true,
 						CommandNames:   []string{pingCommandName},
 						RequireArticle: true,
 					},
-					RequiredServices: []string{otogi.ServiceSinkDispatcher},
+					RequiredServices: []string{platform.ServiceSinkDispatcher},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("pingpong-commands"),
+				Subscription: core.NewDefaultSubscriptionSpec("pingpong-commands"),
 				Handler:      m.handleCommand,
 			},
 		},
-		Commands: []otogi.CommandSpec{
+		Commands: []platform.CommandSpec{
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        pingCommandName,
 				Description: "reply with pong!",
 			},
@@ -55,10 +56,10 @@ func (m *Module) Spec() otogi.ModuleSpec {
 }
 
 // OnRegister resolves outbound dependencies required by this module.
-func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error {
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("pingpong resolve outbound dispatcher: %w", err)
@@ -79,22 +80,22 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleCommand(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Command == nil || event.Article == nil {
 		return nil
 	}
-	if event.Kind != otogi.EventKindCommandReceived {
+	if event.Kind != platform.EventKindCommandReceived {
 		return nil
 	}
 	if event.Command.Name != pingCommandName {
 		return nil
 	}
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("pingpong derive outbound target: %w", err)
 	}
-	_, err = m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	_, err = m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             "pong!",
 		ReplyToMessageID: event.Article.ID,

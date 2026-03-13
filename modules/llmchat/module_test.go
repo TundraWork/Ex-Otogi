@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestSpecDeclaresAdditionalCapabilities(t *testing.T) {
@@ -32,8 +34,8 @@ func TestSpecDeclaresAdditionalCapabilities(t *testing.T) {
 	if !capability.Interest.RequireArticle {
 		t.Fatal("expected RequireArticle to be true")
 	}
-	if len(capability.Interest.Kinds) != 1 || capability.Interest.Kinds[0] != otogi.EventKindArticleCreated {
-		t.Fatalf("kinds = %v, want [%s]", capability.Interest.Kinds, otogi.EventKindArticleCreated)
+	if len(capability.Interest.Kinds) != 1 || capability.Interest.Kinds[0] != platform.EventKindArticleCreated {
+		t.Fatalf("kinds = %v, want [%s]", capability.Interest.Kinds, platform.EventKindArticleCreated)
 	}
 }
 
@@ -43,6 +45,7 @@ func TestMatchTriggeredAgent(t *testing.T) {
 		Agents: []Agent{
 			{
 				Name:                 "Otogi",
+				Aliases:              []string{"Oto", "Otogi Sensei"},
 				Description:          "primary",
 				Provider:             "p",
 				Model:                "m",
@@ -68,12 +71,21 @@ func TestMatchTriggeredAgent(t *testing.T) {
 		wantBody  string
 	}{
 		{name: "exact prefix", text: "Otogi hello", wantMatch: true, wantAgent: "Otogi", wantBody: "hello"},
+		{name: "alias prefix", text: "Oto hello", wantMatch: true, wantAgent: "Otogi", wantBody: "hello"},
 		{name: "colon separator", text: "Otogi: hello", wantMatch: true, wantAgent: "Otogi", wantBody: "hello"},
 		{name: "punct separator", text: "Otogi, hello", wantMatch: true, wantAgent: "Otogi", wantBody: "hello"},
 		{name: "no body", text: "Otogi", wantMatch: true, wantAgent: "Otogi", wantBody: ""},
 		{name: "not prefix", text: "hello Otogi", wantMatch: false},
 		{name: "word continuation rejects", text: "Otogix hi", wantMatch: false},
 		{name: "case-insensitive", text: "otogi hi", wantMatch: true, wantAgent: "Otogi", wantBody: "hi"},
+		{name: "case-insensitive alias", text: "oto hi", wantMatch: true, wantAgent: "Otogi", wantBody: "hi"},
+		{
+			name:      "longest alias wins",
+			text:      "Otogi Sensei hi",
+			wantMatch: true,
+			wantAgent: "Otogi",
+			wantBody:  "hi",
+		},
 	}
 
 	for _, testCase := range tests {
@@ -129,31 +141,31 @@ func TestBuildGenerateRequestStructuresContextAndPreservesRoles(t *testing.T) {
 	})
 
 	module.memory = &memoryStub{
-		leadingContext: []otogi.ConversationContextEntry{
+		leadingContext: []core.ConversationContextEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
-				Article:      otogi.Article{ID: "ctx-1", Text: "background before the thread"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u0", Username: "eve"},
+				Article:      platform.Article{ID: "ctx-1", Text: "background before the thread"},
 				CreatedAt:    time.Unix(80, 0).UTC(),
 			},
 		},
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article:      otogi.Article{ID: "m1", Text: "hello"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article:      platform.Article{ID: "m1", Text: "hello"},
 				CreatedAt:    time.Unix(90, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "bot-1", Username: "otogi", IsBot: true},
-				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "previous bot reply"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "bot-1", Username: "otogi", IsBot: true},
+				Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "previous bot reply"},
 				CreatedAt:    time.Unix(95, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", DisplayName: "Bob"},
-				Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger text"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", DisplayName: "Bob"},
+				Article:      platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger text"},
 				CreatedAt:    time.Unix(100, 0).UTC(),
 				IsCurrent:    true,
 			},
@@ -161,17 +173,17 @@ func TestBuildGenerateRequestStructuresContextAndPreservesRoles(t *testing.T) {
 	}
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-		Actor:        otogi.Actor{ID: "u2", DisplayName: "Bob"},
-		Article: &otogi.Article{
+		Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+		Actor:        platform.Actor{ID: "u2", DisplayName: "Bob"},
+		Article: &platform.Article{
 			ID:               "m3",
 			ReplyToArticleID: "m2",
 			Text:             "Otogi hi",
@@ -183,34 +195,34 @@ func TestBuildGenerateRequestStructuresContextAndPreservesRoles(t *testing.T) {
 	if len(req.Messages) != 6 {
 		t.Fatalf("messages len = %d, want 6", len(req.Messages))
 	}
-	if req.Messages[0].Role != otogi.LLMMessageRoleSystem {
-		t.Fatalf("system role = %q, want %q", req.Messages[0].Role, otogi.LLMMessageRoleSystem)
+	if req.Messages[0].Role != ai.LLMMessageRoleSystem {
+		t.Fatalf("system role = %q, want %q", req.Messages[0].Role, ai.LLMMessageRoleSystem)
 	}
-	if req.Messages[1].Role != otogi.LLMMessageRoleSystem {
-		t.Fatalf("message[1] role = %q, want %q", req.Messages[1].Role, otogi.LLMMessageRoleSystem)
+	if req.Messages[1].Role != ai.LLMMessageRoleSystem {
+		t.Fatalf("message[1] role = %q, want %q", req.Messages[1].Role, ai.LLMMessageRoleSystem)
 	}
 	if !strings.Contains(req.Messages[1].Content, "structured conversation context") {
 		t.Fatalf("message[1] = %q, want context handling instructions", req.Messages[1].Content)
 	}
-	if req.Messages[2].Role != otogi.LLMMessageRoleUser || !strings.Contains(req.Messages[2].Content, "<leading_context") {
+	if req.Messages[2].Role != ai.LLMMessageRoleUser || !strings.Contains(req.Messages[2].Content, "<leading_context") {
 		t.Fatalf("message[2] = %+v, want leading_context user message", req.Messages[2])
 	}
 	if !strings.Contains(req.Messages[2].Content, "background before the thread") {
 		t.Fatalf("message[2] = %q, want leading context body", req.Messages[2].Content)
 	}
-	if req.Messages[3].Role != otogi.LLMMessageRoleUser || !strings.Contains(req.Messages[3].Content, `<reply_thread_message`) {
+	if req.Messages[3].Role != ai.LLMMessageRoleUser || !strings.Contains(req.Messages[3].Content, `<reply_thread_message`) {
 		t.Fatalf("message[3] = %+v, want user reply-thread message", req.Messages[3])
 	}
 	if !strings.Contains(req.Messages[3].Content, `article_id="m1"`) {
 		t.Fatalf("message[3] = %q, want root article id", req.Messages[3].Content)
 	}
-	if req.Messages[4].Role != otogi.LLMMessageRoleAssistant {
+	if req.Messages[4].Role != ai.LLMMessageRoleAssistant {
 		t.Fatalf("message[4] role = %q, want assistant", req.Messages[4].Role)
 	}
 	if !strings.Contains(req.Messages[4].Content, "previous bot reply") {
 		t.Fatalf("message[4] = %q, want previous assistant content", req.Messages[4].Content)
 	}
-	if req.Messages[5].Role != otogi.LLMMessageRoleUser {
+	if req.Messages[5].Role != ai.LLMMessageRoleUser {
 		t.Fatalf("message[5] role = %q, want user", req.Messages[5].Role)
 	}
 	if !strings.Contains(req.Messages[5].Content, "<current_message") {
@@ -277,21 +289,21 @@ func TestBuildGenerateRequestIncludesCurrentEventImages(t *testing.T) {
 					MaxImages:     2,
 					MaxImageBytes: 1 << 20,
 					MaxTotalBytes: 2 << 20,
-					Detail:        otogi.LLMInputImageDetailHigh,
+					Detail:        ai.LLMInputImageDetailHigh,
 				},
 			},
 		},
 	})
 
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "trigger text",
-					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, Caption: "diagram"}},
+					Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto, Caption: "diagram"}},
 				},
 				CreatedAt: time.Unix(100, 0).UTC(),
 				IsCurrent: true,
@@ -300,24 +312,24 @@ func TestBuildGenerateRequestIncludesCurrentEventImages(t *testing.T) {
 	}
 	module.mediaDownloader = &mediaDownloaderStub{
 		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
-		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg", FileName: "diagram.jpg"},
+		attachment: platform.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg", FileName: "diagram.jpg"},
 	}
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u1", Username: "alice"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u1", Username: "alice"},
+		Article: &platform.Article{
 			ID:    "m1",
 			Text:  "Otogi inspect this",
-			Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, Caption: "diagram"}},
+			Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto, Caption: "diagram"}},
 		},
 	}, module.cfg.Agents[0], "inspect this")
 	if err != nil {
@@ -331,7 +343,7 @@ func TestBuildGenerateRequestIncludesCurrentEventImages(t *testing.T) {
 	if len(last.Parts) != 2 {
 		t.Fatalf("last.Parts len = %d, want 2", len(last.Parts))
 	}
-	if last.Parts[0].Type != otogi.LLMMessagePartTypeText {
+	if last.Parts[0].Type != ai.LLMMessagePartTypeText {
 		t.Fatalf("last.Parts[0].Type = %q, want text", last.Parts[0].Type)
 	}
 	if !strings.Contains(last.Parts[0].Text, "<current_message") {
@@ -340,7 +352,7 @@ func TestBuildGenerateRequestIncludesCurrentEventImages(t *testing.T) {
 	if !strings.Contains(last.Parts[0].Text, "<image_inputs") {
 		t.Fatalf("last text part = %q, want image_inputs summary", last.Parts[0].Text)
 	}
-	if last.Parts[1].Type != otogi.LLMMessagePartTypeImage {
+	if last.Parts[1].Type != ai.LLMMessagePartTypeImage {
 		t.Fatalf("last.Parts[1].Type = %q, want image", last.Parts[1].Type)
 	}
 	if last.Parts[1].Image == nil {
@@ -349,7 +361,7 @@ func TestBuildGenerateRequestIncludesCurrentEventImages(t *testing.T) {
 	if last.Parts[1].Image.MIMEType != "image/jpeg" {
 		t.Fatalf("image MIMEType = %q, want image/jpeg", last.Parts[1].Image.MIMEType)
 	}
-	if last.Parts[1].Image.Detail != otogi.LLMInputImageDetailHigh {
+	if last.Parts[1].Image.Detail != ai.LLMInputImageDetailHigh {
 		t.Fatalf("image detail = %q, want high", last.Parts[1].Image.Detail)
 	}
 	downloader, ok := module.mediaDownloader.(*mediaDownloaderStub)
@@ -397,26 +409,26 @@ func TestBuildGenerateRequestIncludesLeadingContextImageOnlyMessage(t *testing.T
 
 	downloader := &mediaDownloaderStub{
 		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
-		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+		attachment: platform.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
 	}
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "alice"},
-				Article:      otogi.Article{ID: "m2", Text: "trigger text"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "alice"},
+				Article:      platform.Article{ID: "m2", Text: "trigger text"},
 				CreatedAt:    time.Unix(100, 0).UTC(),
 				IsCurrent:    true,
 			},
 		},
-		leadingContext: []otogi.ConversationContextEntry{
+		leadingContext: []core.ConversationContextEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "",
-					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(95, 0).UTC(),
 			},
@@ -425,17 +437,17 @@ func TestBuildGenerateRequestIncludesLeadingContextImageOnlyMessage(t *testing.T
 	module.mediaDownloader = downloader
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u2", Username: "alice"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u2", Username: "alice"},
+		Article: &platform.Article{
 			ID:   "m2",
 			Text: "Otogi，描述一下上面的图片",
 		},
@@ -504,24 +516,24 @@ func TestBuildGenerateRequestIncludesReplyThreadImageOnlyMessage(t *testing.T) {
 
 	downloader := &mediaDownloaderStub{
 		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
-		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+		attachment: platform.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
 	}
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "",
-					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(95, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "alice"},
-				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger text"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "alice"},
+				Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger text"},
 				CreatedAt:    time.Unix(100, 0).UTC(),
 				IsCurrent:    true,
 			},
@@ -530,17 +542,17 @@ func TestBuildGenerateRequestIncludesReplyThreadImageOnlyMessage(t *testing.T) {
 	module.mediaDownloader = downloader
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u2", Username: "alice"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u2", Username: "alice"},
+		Article: &platform.Article{
 			ID:               "m2",
 			ReplyToArticleID: "m1",
 			Text:             "Otogi，描述一下上面的图片",
@@ -610,42 +622,42 @@ func TestBuildGenerateRequestDownloadsImagesConcurrentlyAndPreservesPriorityOrde
 
 	downloader := &mediaDownloaderStub{
 		data:          []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
-		attachment:    otogi.MediaAttachment{MIMEType: "image/jpeg"},
+		attachment:    platform.MediaAttachment{MIMEType: "image/jpeg"},
 		downloadDelay: 20 * time.Millisecond,
 	}
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "root message",
-					Media: []otogi.MediaAttachment{{ID: "photo-reply", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-reply", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(95, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "bob"},
+				Article: platform.Article{
 					ID:               "m2",
 					ReplyToArticleID: "m1",
 					Text:             "trigger text",
-					Media:            []otogi.MediaAttachment{{ID: "photo-current", Type: otogi.MediaTypePhoto}},
+					Media:            []platform.MediaAttachment{{ID: "photo-current", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(100, 0).UTC(),
 				IsCurrent: true,
 			},
 		},
-		leadingContext: []otogi.ConversationContextEntry{
+		leadingContext: []core.ConversationContextEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u0", Username: "eve"},
+				Article: platform.Article{
 					ID:    "ctx-1",
 					Text:  "earlier context",
-					Media: []otogi.MediaAttachment{{ID: "photo-leading", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-leading", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(90, 0).UTC(),
 			},
@@ -654,22 +666,22 @@ func TestBuildGenerateRequestDownloadsImagesConcurrentlyAndPreservesPriorityOrde
 	module.mediaDownloader = downloader
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u2", Username: "bob"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u2", Username: "bob"},
+		Article: &platform.Article{
 			ID:               "m2",
 			ReplyToArticleID: "m1",
 			Text:             "Otogi inspect all three",
-			Media: []otogi.MediaAttachment{
-				{ID: "photo-current", Type: otogi.MediaTypePhoto},
+			Media: []platform.MediaAttachment{
+				{ID: "photo-current", Type: platform.MediaTypePhoto},
 			},
 		},
 	}, module.cfg.Agents[0], "inspect all three")
@@ -730,41 +742,41 @@ func TestBuildGenerateRequestDeduplicatesImagesAcrossContextSources(t *testing.T
 
 	downloader := &mediaDownloaderStub{
 		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
-		attachment: otogi.MediaAttachment{ID: "photo-shared", MIMEType: "image/jpeg"},
+		attachment: platform.MediaAttachment{ID: "photo-shared", MIMEType: "image/jpeg"},
 	}
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "reply image",
-					Media: []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-shared", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(95, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "bob"},
+				Article: platform.Article{
 					ID:               "m2",
 					ReplyToArticleID: "m1",
 					Text:             "trigger text",
-					Media:            []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+					Media:            []platform.MediaAttachment{{ID: "photo-shared", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(100, 0).UTC(),
 				IsCurrent: true,
 			},
 		},
-		leadingContext: []otogi.ConversationContextEntry{
+		leadingContext: []core.ConversationContextEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u0", Username: "eve"},
+				Article: platform.Article{
 					ID:    "ctx-1",
 					Text:  "leading image",
-					Media: []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-shared", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(90, 0).UTC(),
 			},
@@ -773,21 +785,21 @@ func TestBuildGenerateRequestDeduplicatesImagesAcrossContextSources(t *testing.T
 	module.mediaDownloader = downloader
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u2", Username: "bob"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u2", Username: "bob"},
+		Article: &platform.Article{
 			ID:               "m2",
 			ReplyToArticleID: "m1",
 			Text:             "Otogi inspect shared image",
-			Media:            []otogi.MediaAttachment{{ID: "photo-shared", Type: otogi.MediaTypePhoto}},
+			Media:            []platform.MediaAttachment{{ID: "photo-shared", Type: platform.MediaTypePhoto}},
 		},
 	}, module.cfg.Agents[0], "inspect shared image")
 	if err != nil {
@@ -847,24 +859,24 @@ func TestBuildGenerateRequestIncludesBotSentImageOnCurrentMessage(t *testing.T) 
 
 	downloader := &mediaDownloaderStub{
 		data:       []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00},
-		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+		attachment: platform.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
 	}
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "bot-1", Username: "thebot", IsBot: true},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "bot-1", Username: "thebot", IsBot: true},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "here is the result",
-					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(95, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "alice"},
-				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger text"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "alice"},
+				Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger text"},
 				CreatedAt:    time.Unix(100, 0).UTC(),
 				IsCurrent:    true,
 			},
@@ -873,17 +885,17 @@ func TestBuildGenerateRequestIncludesBotSentImageOnCurrentMessage(t *testing.T) 
 	module.mediaDownloader = downloader
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u2", Username: "alice"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u2", Username: "alice"},
+		Article: &platform.Article{
 			ID:               "m2",
 			ReplyToArticleID: "m1",
 			Text:             "Otogi describe what you sent",
@@ -898,7 +910,7 @@ func TestBuildGenerateRequestIncludesBotSentImageOnCurrentMessage(t *testing.T) 
 	}
 	// Bot reply thread message should be assistant role, text-only.
 	botMsg := req.Messages[2]
-	if botMsg.Role != otogi.LLMMessageRoleAssistant {
+	if botMsg.Role != ai.LLMMessageRoleAssistant {
 		t.Fatalf("bot message role = %q, want assistant", botMsg.Role)
 	}
 	if len(botMsg.Parts) != 0 {
@@ -939,14 +951,14 @@ func TestBuildGenerateRequestSkipsImagesWithoutMediaDownloader(t *testing.T) {
 	})
 
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "trigger text",
-					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+					Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto}},
 				},
 				CreatedAt: time.Unix(100, 0).UTC(),
 				IsCurrent: true,
@@ -955,20 +967,20 @@ func TestBuildGenerateRequestSkipsImagesWithoutMediaDownloader(t *testing.T) {
 	}
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u1", Username: "alice"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u1", Username: "alice"},
+		Article: &platform.Article{
 			ID:    "m1",
 			Text:  "Otogi inspect this",
-			Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto}},
+			Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto}},
 		},
 	}, module.cfg.Agents[0], "inspect this")
 	if err != nil {
@@ -1007,17 +1019,17 @@ func TestBuildGenerateRequestSkipsOversizedImages(t *testing.T) {
 
 	downloader := &mediaDownloaderStub{
 		data:       []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10},
-		attachment: otogi.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
+		attachment: platform.MediaAttachment{ID: "photo-1", MIMEType: "image/jpeg"},
 	}
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:    "m1",
 					Text:  "trigger text",
-					Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, SizeBytes: 8}},
+					Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto, SizeBytes: 8}},
 				},
 				CreatedAt: time.Unix(100, 0).UTC(),
 				IsCurrent: true,
@@ -1027,20 +1039,20 @@ func TestBuildGenerateRequestSkipsOversizedImages(t *testing.T) {
 	module.mediaDownloader = downloader
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u1", Username: "alice"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u1", Username: "alice"},
+		Article: &platform.Article{
 			ID:    "m1",
 			Text:  "Otogi inspect this",
-			Media: []otogi.MediaAttachment{{ID: "photo-1", Type: otogi.MediaTypePhoto, SizeBytes: 8}},
+			Media: []platform.MediaAttachment{{ID: "photo-1", Type: platform.MediaTypePhoto, SizeBytes: 8}},
 		},
 	}, module.cfg.Agents[0], "inspect this")
 	if err != nil {
@@ -1078,16 +1090,16 @@ func TestBuildGenerateRequestIncludesImageDocumentAttachments(t *testing.T) {
 	})
 
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article: otogi.Article{
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article: platform.Article{
 					ID:   "m1",
 					Text: "trigger text",
-					Media: []otogi.MediaAttachment{{
+					Media: []platform.MediaAttachment{{
 						ID:       "doc-1",
-						Type:     otogi.MediaTypeDocument,
+						Type:     platform.MediaTypeDocument,
 						MIMEType: "image/png",
 						FileName: "chart.png",
 					}},
@@ -1102,22 +1114,22 @@ func TestBuildGenerateRequestIncludesImageDocumentAttachments(t *testing.T) {
 	}
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "u1", Username: "alice"},
-		Article: &otogi.Article{
+		Actor: platform.Actor{ID: "u1", Username: "alice"},
+		Article: &platform.Article{
 			ID:   "m1",
 			Text: "Otogi inspect this",
-			Media: []otogi.MediaAttachment{{
+			Media: []platform.MediaAttachment{{
 				ID:       "doc-1",
-				Type:     otogi.MediaTypeDocument,
+				Type:     platform.MediaTypeDocument,
 				MIMEType: "image/png",
 				FileName: "chart.png",
 			}},
@@ -1162,43 +1174,43 @@ func TestBuildGenerateRequestAppliesContextBudgets(t *testing.T) {
 	})
 
 	module.memory = &memoryStub{
-		leadingContext: []otogi.ConversationContextEntry{
+		leadingContext: []core.ConversationContextEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u0", Username: "eve"},
-				Article:      otogi.Article{ID: "ctx-1", Text: strings.Repeat("leading ", 20)},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u0", Username: "eve"},
+				Article:      platform.Article{ID: "ctx-1", Text: strings.Repeat("leading ", 20)},
 				CreatedAt:    time.Unix(70, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u9", Username: "mallory"},
-				Article:      otogi.Article{ID: "ctx-2", Text: strings.Repeat("more-leading ", 20)},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u9", Username: "mallory"},
+				Article:      platform.Article{ID: "ctx-2", Text: strings.Repeat("more-leading ", 20)},
 				CreatedAt:    time.Unix(80, 0).UTC(),
 			},
 		},
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article:      otogi.Article{ID: "m1", Text: strings.Repeat("root ", 20)},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article:      platform.Article{ID: "m1", Text: strings.Repeat("root ", 20)},
 				CreatedAt:    time.Unix(90, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: strings.Repeat("middle-one ", 20)},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "bob"},
+				Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: strings.Repeat("middle-one ", 20)},
 				CreatedAt:    time.Unix(95, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u3", Username: "carol"},
-				Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: strings.Repeat("middle-two ", 20)},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u3", Username: "carol"},
+				Article:      platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: strings.Repeat("middle-two ", 20)},
 				CreatedAt:    time.Unix(100, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u4", DisplayName: "Dave"},
-				Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger text"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u4", DisplayName: "Dave"},
+				Article:      platform.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger text"},
 				CreatedAt:    time.Unix(105, 0).UTC(),
 				IsCurrent:    true,
 			},
@@ -1206,17 +1218,17 @@ func TestBuildGenerateRequestAppliesContextBudgets(t *testing.T) {
 	}
 	module.clock = func() time.Time { return time.Unix(105, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-2",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(105, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-		Actor:        otogi.Actor{ID: "u4", DisplayName: "Dave"},
-		Article: &otogi.Article{
+		Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+		Actor:        platform.Actor{ID: "u4", DisplayName: "Dave"},
+		Article: &platform.Article{
 			ID:               "m4",
 			ReplyToArticleID: "m3",
 			Text:             "Otogi summarize",
@@ -1273,25 +1285,25 @@ func TestBuildGenerateRequestNonReplyUsesRecentConversationContext(t *testing.T)
 	})
 
 	module.memory = &memoryStub{
-		leadingContext: []otogi.ConversationContextEntry{
+		leadingContext: []core.ConversationContextEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article:      otogi.Article{ID: "m1", Text: "earlier discussion"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article:      platform.Article{ID: "m1", Text: "earlier discussion"},
 				CreatedAt:    time.Unix(90, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-				Article:      otogi.Article{ID: "m2", Text: "latest local context"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "bob"},
+				Article:      platform.Article{ID: "m2", Text: "latest local context"},
 				CreatedAt:    time.Unix(95, 0).UTC(),
 			},
 		},
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u3", DisplayName: "Carol"},
-				Article:      otogi.Article{ID: "m3", Text: "trigger text"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u3", DisplayName: "Carol"},
+				Article:      platform.Article{ID: "m3", Text: "trigger text"},
 				CreatedAt:    time.Unix(100, 0).UTC(),
 				IsCurrent:    true,
 			},
@@ -1299,17 +1311,17 @@ func TestBuildGenerateRequestNonReplyUsesRecentConversationContext(t *testing.T)
 	}
 	module.clock = func() time.Time { return time.Unix(100, 0).UTC() }
 
-	req, err := module.buildGenerateRequest(context.Background(), &otogi.Event{
+	req, err := module.buildGenerateRequest(context.Background(), &platform.Event{
 		ID:         "evt-3",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-		Actor:        otogi.Actor{ID: "u3", DisplayName: "Carol"},
-		Article: &otogi.Article{
+		Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+		Actor:        platform.Actor{ID: "u3", DisplayName: "Carol"},
+		Article: &platform.Article{
 			ID:   "m3",
 			Text: "Otogi summarize",
 		},
@@ -1321,7 +1333,7 @@ func TestBuildGenerateRequestNonReplyUsesRecentConversationContext(t *testing.T)
 	if len(req.Messages) != 4 {
 		t.Fatalf("messages len = %d, want 4", len(req.Messages))
 	}
-	if req.Messages[2].Role != otogi.LLMMessageRoleUser {
+	if req.Messages[2].Role != ai.LLMMessageRoleUser {
 		t.Fatalf("message[2] role = %q, want user", req.Messages[2].Role)
 	}
 	if !strings.Contains(req.Messages[2].Content, `<leading_context reason="messages_before_current_message">`) {
@@ -1349,98 +1361,98 @@ func TestBuildGenerateRequestInlinesQuotedReplies(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		replyChain       []otogi.ReplyChainEntry
-		leadingContext   []otogi.ConversationContextEntry
-		memories         map[string]otogi.Memory
+		replyChain       []core.ReplyChainEntry
+		leadingContext   []core.ConversationContextEntry
+		memories         map[string]core.Memory
 		quoteReplyDepth  int
-		event            *otogi.Event
+		event            *platform.Event
 		wantQuotedReply  []string
 		wantNoQuote      []string
 		wantMessageCount int
 	}{
 		{
 			name: "reply_chain_message_quotes_unknown_parent",
-			replyChain: []otogi.ReplyChainEntry{
+			replyChain: []core.ReplyChainEntry{
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-					Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "reply to m1"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u1", Username: "alice"},
+					Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "reply to m1"},
 					CreatedAt:    time.Unix(90, 0).UTC(),
 				},
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger text"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u2", Username: "bob"},
+					Article:      platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger text"},
 					CreatedAt:    time.Unix(100, 0).UTC(),
 					IsCurrent:    true,
 				},
 			},
-			memories: map[string]otogi.Memory{
+			memories: map[string]core.Memory{
 				"m1": {
-					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
-					Article:   otogi.Article{ID: "m1", Text: "original message from eve"},
+					Actor:     platform.Actor{ID: "u0", Username: "eve"},
+					Article:   platform.Article{ID: "m1", Text: "original message from eve"},
 					CreatedAt: time.Unix(80, 0).UTC(),
 				},
 			},
 			quoteReplyDepth: 2,
-			event: &otogi.Event{
+			event: &platform.Event{
 				ID:         "evt-1",
-				Kind:       otogi.EventKindArticleCreated,
+				Kind:       platform.EventKindArticleCreated,
 				OccurredAt: time.Unix(100, 0).UTC(),
-				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
-				Conversation: otogi.Conversation{
+				Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg"},
+				Conversation: platform.Conversation{
 					ID:   "chat-1",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
-				Actor:   otogi.Actor{ID: "u2", Username: "bob"},
-				Article: &otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "Otogi hello"},
+				Actor:   platform.Actor{ID: "u2", Username: "bob"},
+				Article: &platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: "Otogi hello"},
 			},
 			wantQuotedReply:  []string{"<quoted_reply", "original message from eve", `article_id="m1"`},
 			wantMessageCount: 4,
 		},
 		{
 			name: "nested_quote_depth_2",
-			replyChain: []otogi.ReplyChainEntry{
+			replyChain: []core.ReplyChainEntry{
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u3", Username: "carol"},
-					Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u3", Username: "carol"},
+					Article:      platform.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger"},
 					CreatedAt:    time.Unix(100, 0).UTC(),
 					IsCurrent:    true,
 				},
 			},
-			leadingContext: []otogi.ConversationContextEntry{
+			leadingContext: []core.ConversationContextEntry{
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "bob replies to m2"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u2", Username: "bob"},
+					Article:      platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: "bob replies to m2"},
 					CreatedAt:    time.Unix(95, 0).UTC(),
 				},
 			},
-			memories: map[string]otogi.Memory{
+			memories: map[string]core.Memory{
 				"m2": {
-					Actor:     otogi.Actor{ID: "u1", Username: "alice"},
-					Article:   otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice replies to m1"},
+					Actor:     platform.Actor{ID: "u1", Username: "alice"},
+					Article:   platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice replies to m1"},
 					CreatedAt: time.Unix(85, 0).UTC(),
 				},
 				"m1": {
-					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
-					Article:   otogi.Article{ID: "m1", Text: "root from eve"},
+					Actor:     platform.Actor{ID: "u0", Username: "eve"},
+					Article:   platform.Article{ID: "m1", Text: "root from eve"},
 					CreatedAt: time.Unix(80, 0).UTC(),
 				},
 			},
 			quoteReplyDepth: 2,
-			event: &otogi.Event{
+			event: &platform.Event{
 				ID:         "evt-2",
-				Kind:       otogi.EventKindArticleCreated,
+				Kind:       platform.EventKindArticleCreated,
 				OccurredAt: time.Unix(100, 0).UTC(),
-				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
-				Conversation: otogi.Conversation{
+				Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg"},
+				Conversation: platform.Conversation{
 					ID:   "chat-1",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
-				Actor:   otogi.Actor{ID: "u3", Username: "carol"},
-				Article: &otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "Otogi hi"},
+				Actor:   platform.Actor{ID: "u3", Username: "carol"},
+				Article: &platform.Article{ID: "m4", ReplyToArticleID: "m3", Text: "Otogi hi"},
 			},
 			wantQuotedReply: []string{
 				"alice replies to m1",
@@ -1452,87 +1464,87 @@ func TestBuildGenerateRequestInlinesQuotedReplies(t *testing.T) {
 		},
 		{
 			name: "depth_0_disables_quoting",
-			replyChain: []otogi.ReplyChainEntry{
+			replyChain: []core.ReplyChainEntry{
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-					Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "reply to m1"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u1", Username: "alice"},
+					Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "reply to m1"},
 					CreatedAt:    time.Unix(90, 0).UTC(),
 				},
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u2", Username: "bob"},
+					Article:      platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: "trigger"},
 					CreatedAt:    time.Unix(100, 0).UTC(),
 					IsCurrent:    true,
 				},
 			},
-			memories: map[string]otogi.Memory{
+			memories: map[string]core.Memory{
 				"m1": {
-					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
-					Article:   otogi.Article{ID: "m1", Text: "should not appear"},
+					Actor:     platform.Actor{ID: "u0", Username: "eve"},
+					Article:   platform.Article{ID: "m1", Text: "should not appear"},
 					CreatedAt: time.Unix(80, 0).UTC(),
 				},
 			},
 			quoteReplyDepth: 0,
-			event: &otogi.Event{
+			event: &platform.Event{
 				ID:         "evt-3",
-				Kind:       otogi.EventKindArticleCreated,
+				Kind:       platform.EventKindArticleCreated,
 				OccurredAt: time.Unix(100, 0).UTC(),
-				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
-				Conversation: otogi.Conversation{
+				Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg"},
+				Conversation: platform.Conversation{
 					ID:   "chat-1",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
-				Actor:   otogi.Actor{ID: "u2", Username: "bob"},
-				Article: &otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "Otogi hi"},
+				Actor:   platform.Actor{ID: "u2", Username: "bob"},
+				Article: &platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: "Otogi hi"},
 			},
 			wantNoQuote:      []string{"<quoted_reply", "should not appear"},
 			wantMessageCount: 4,
 		},
 		{
 			name: "depth_1_limits_nesting",
-			replyChain: []otogi.ReplyChainEntry{
+			replyChain: []core.ReplyChainEntry{
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u3", Username: "carol"},
-					Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u3", Username: "carol"},
+					Article:      platform.Article{ID: "m4", ReplyToArticleID: "m3", Text: "trigger"},
 					CreatedAt:    time.Unix(100, 0).UTC(),
 					IsCurrent:    true,
 				},
 			},
-			leadingContext: []otogi.ConversationContextEntry{
+			leadingContext: []core.ConversationContextEntry{
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-					Article:      otogi.Article{ID: "m3", ReplyToArticleID: "m2", Text: "bob msg"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u2", Username: "bob"},
+					Article:      platform.Article{ID: "m3", ReplyToArticleID: "m2", Text: "bob msg"},
 					CreatedAt:    time.Unix(95, 0).UTC(),
 				},
 			},
-			memories: map[string]otogi.Memory{
+			memories: map[string]core.Memory{
 				"m2": {
-					Actor:     otogi.Actor{ID: "u1", Username: "alice"},
-					Article:   otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice msg"},
+					Actor:     platform.Actor{ID: "u1", Username: "alice"},
+					Article:   platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice msg"},
 					CreatedAt: time.Unix(85, 0).UTC(),
 				},
 				"m1": {
-					Actor:     otogi.Actor{ID: "u0", Username: "eve"},
-					Article:   otogi.Article{ID: "m1", Text: "root from eve depth limited"},
+					Actor:     platform.Actor{ID: "u0", Username: "eve"},
+					Article:   platform.Article{ID: "m1", Text: "root from eve depth limited"},
 					CreatedAt: time.Unix(80, 0).UTC(),
 				},
 			},
 			quoteReplyDepth: 1,
-			event: &otogi.Event{
+			event: &platform.Event{
 				ID:         "evt-4",
-				Kind:       otogi.EventKindArticleCreated,
+				Kind:       platform.EventKindArticleCreated,
 				OccurredAt: time.Unix(100, 0).UTC(),
-				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
-				Conversation: otogi.Conversation{
+				Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg"},
+				Conversation: platform.Conversation{
 					ID:   "chat-1",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
-				Actor:   otogi.Actor{ID: "u3", Username: "carol"},
-				Article: &otogi.Article{ID: "m4", ReplyToArticleID: "m3", Text: "Otogi hi"},
+				Actor:   platform.Actor{ID: "u3", Username: "carol"},
+				Article: &platform.Article{ID: "m4", ReplyToArticleID: "m3", Text: "Otogi hi"},
 			},
 			wantQuotedReply:  []string{"alice msg", `article_id="m2"`},
 			wantNoQuote:      []string{"root from eve depth limited"},
@@ -1540,40 +1552,40 @@ func TestBuildGenerateRequestInlinesQuotedReplies(t *testing.T) {
 		},
 		{
 			name: "known_article_not_quoted",
-			replyChain: []otogi.ReplyChainEntry{
+			replyChain: []core.ReplyChainEntry{
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-					Article:      otogi.Article{ID: "m1", Text: "thread root"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u1", Username: "alice"},
+					Article:      platform.Article{ID: "m1", Text: "thread root"},
 					CreatedAt:    time.Unix(90, 0).UTC(),
 				},
 				{
-					Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-					Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-					Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger"},
+					Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+					Actor:        platform.Actor{ID: "u2", Username: "bob"},
+					Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "trigger"},
 					CreatedAt:    time.Unix(100, 0).UTC(),
 					IsCurrent:    true,
 				},
 			},
-			memories: map[string]otogi.Memory{
+			memories: map[string]core.Memory{
 				"m1": {
-					Actor:     otogi.Actor{ID: "u1", Username: "alice"},
-					Article:   otogi.Article{ID: "m1", Text: "should not be quoted"},
+					Actor:     platform.Actor{ID: "u1", Username: "alice"},
+					Article:   platform.Article{ID: "m1", Text: "should not be quoted"},
 					CreatedAt: time.Unix(90, 0).UTC(),
 				},
 			},
 			quoteReplyDepth: 2,
-			event: &otogi.Event{
+			event: &platform.Event{
 				ID:         "evt-5",
-				Kind:       otogi.EventKindArticleCreated,
+				Kind:       platform.EventKindArticleCreated,
 				OccurredAt: time.Unix(100, 0).UTC(),
-				Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
-				Conversation: otogi.Conversation{
+				Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg"},
+				Conversation: platform.Conversation{
 					ID:   "chat-1",
-					Type: otogi.ConversationTypeGroup,
+					Type: platform.ConversationTypeGroup,
 				},
-				Actor:   otogi.Actor{ID: "u2", Username: "bob"},
-				Article: &otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "Otogi hello"},
+				Actor:   platform.Actor{ID: "u2", Username: "bob"},
+				Article: &platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "Otogi hello"},
 			},
 			wantNoQuote:      []string{"<quoted_reply"},
 			wantMessageCount: 4,
@@ -1669,51 +1681,51 @@ func TestBuildGenerateRequestBatchLoadsDanglingQuotedReplies(t *testing.T) {
 
 	var (
 		batchCallCount int
-		batchLookups   []otogi.MemoryLookup
-		getLookups     []otogi.MemoryLookup
+		batchLookups   []core.MemoryLookup
+		getLookups     []core.MemoryLookup
 	)
 
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u1", Username: "alice"},
-				Article:      otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice replies"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u1", Username: "alice"},
+				Article:      platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice replies"},
 				CreatedAt:    time.Unix(90, 0).UTC(),
 			},
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u2", Username: "bob"},
-				Article:      otogi.Article{ID: "m4", ReplyToArticleID: "m2", Text: "trigger"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u2", Username: "bob"},
+				Article:      platform.Article{ID: "m4", ReplyToArticleID: "m2", Text: "trigger"},
 				CreatedAt:    time.Unix(100, 0).UTC(),
 				IsCurrent:    true,
 			},
 		},
-		leadingContext: []otogi.ConversationContextEntry{
+		leadingContext: []core.ConversationContextEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "u3", Username: "carol"},
-				Article:      otogi.Article{ID: "m5", ReplyToArticleID: "m6", Text: "carol replies"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "u3", Username: "carol"},
+				Article:      platform.Article{ID: "m5", ReplyToArticleID: "m6", Text: "carol replies"},
 				CreatedAt:    time.Unix(95, 0).UTC(),
 			},
 		},
-		memories: map[string]otogi.Memory{
+		memories: map[string]core.Memory{
 			"m1": {
-				Actor:     otogi.Actor{ID: "u0", Username: "eve"},
-				Article:   otogi.Article{ID: "m1", Text: "root one"},
+				Actor:     platform.Actor{ID: "u0", Username: "eve"},
+				Article:   platform.Article{ID: "m1", Text: "root one"},
 				CreatedAt: time.Unix(80, 0).UTC(),
 			},
 			"m6": {
-				Actor:     otogi.Actor{ID: "u4", Username: "dan"},
-				Article:   otogi.Article{ID: "m6", Text: "root two"},
+				Actor:     platform.Actor{ID: "u4", Username: "dan"},
+				Article:   platform.Article{ID: "m6", Text: "root two"},
 				CreatedAt: time.Unix(85, 0).UTC(),
 			},
 		},
-		onGetBatch: func(lookups []otogi.MemoryLookup) {
+		onGetBatch: func(lookups []core.MemoryLookup) {
 			batchCallCount++
 			batchLookups = append(batchLookups, lookups...)
 		},
-		onGet: func(lookup otogi.MemoryLookup) {
+		onGet: func(lookup core.MemoryLookup) {
 			getLookups = append(getLookups, lookup)
 		},
 	}
@@ -1721,17 +1733,17 @@ func TestBuildGenerateRequestBatchLoadsDanglingQuotedReplies(t *testing.T) {
 
 	req, err := module.buildGenerateRequest(
 		context.Background(),
-		&otogi.Event{
+		&platform.Event{
 			ID:         "evt-6",
-			Kind:       otogi.EventKindArticleCreated,
+			Kind:       platform.EventKindArticleCreated,
 			OccurredAt: time.Unix(100, 0).UTC(),
-			Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg"},
-			Conversation: otogi.Conversation{
+			Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg"},
+			Conversation: platform.Conversation{
 				ID:   "chat-1",
-				Type: otogi.ConversationTypeGroup,
+				Type: platform.ConversationTypeGroup,
 			},
-			Actor:   otogi.Actor{ID: "u2", Username: "bob"},
-			Article: &otogi.Article{ID: "m4", ReplyToArticleID: "m2", Text: "Otogi hello"},
+			Actor:   platform.Actor{ID: "u2", Username: "bob"},
+			Article: &platform.Article{ID: "m4", ReplyToArticleID: "m2", Text: "Otogi hello"},
 		},
 		module.cfg.Agents[0],
 		"how are you",
@@ -1776,12 +1788,12 @@ func TestSerializeQuotedReplyRendersNestedChain(t *testing.T) {
 	t.Parallel()
 
 	quote := quotedReply{
-		Actor:     otogi.Actor{ID: "u1", Username: "alice"},
-		Article:   otogi.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice reply"},
+		Actor:     platform.Actor{ID: "u1", Username: "alice"},
+		Article:   platform.Article{ID: "m2", ReplyToArticleID: "m1", Text: "alice reply"},
 		CreatedAt: time.Unix(90, 0).UTC(),
 		Nested: &quotedReply{
-			Actor:     otogi.Actor{ID: "u0", Username: "eve"},
-			Article:   otogi.Article{ID: "m1", Text: "eve root"},
+			Actor:     platform.Actor{ID: "u0", Username: "eve"},
+			Article:   platform.Article{ID: "m1", Text: "eve root"},
 			CreatedAt: time.Unix(80, 0).UTC(),
 		},
 	}
@@ -1814,8 +1826,8 @@ func TestSerializeQuotedReplyEmptyTextReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
 	quote := quotedReply{
-		Actor:   otogi.Actor{ID: "u1", Username: "alice"},
-		Article: otogi.Article{ID: "m1", Text: ""},
+		Actor:   platform.Actor{ID: "u1", Username: "alice"},
+		Article: platform.Article{ID: "m1", Text: ""},
 	}
 
 	result := serializeQuotedReply(quote, 1600)
@@ -1827,15 +1839,15 @@ func TestSerializeQuotedReplyEmptyTextReturnsEmpty(t *testing.T) {
 func TestCollectKnownArticleIDs(t *testing.T) {
 	t.Parallel()
 
-	event := &otogi.Event{
-		Article: &otogi.Article{ID: "current"},
+	event := &platform.Event{
+		Article: &platform.Article{ID: "current"},
 	}
-	replyChain := []otogi.ReplyChainEntry{
-		{Article: otogi.Article{ID: "r1"}},
-		{Article: otogi.Article{ID: "r2"}},
+	replyChain := []core.ReplyChainEntry{
+		{Article: platform.Article{ID: "r1"}},
+		{Article: platform.Article{ID: "r2"}},
 	}
-	leading := []otogi.ConversationContextEntry{
-		{Article: otogi.Article{ID: "l1"}},
+	leading := []core.ConversationContextEntry{
+		{Article: platform.Article{ID: "l1"}},
 	}
 
 	known := collectKnownArticleIDs(event, replyChain, leading)
@@ -1860,19 +1872,19 @@ func TestRenderSystemPromptTemplateVariablesDoNotOverrideBuiltIns(t *testing.T) 
 			"AgentName": "custom-name",
 		},
 	}
-	event := &otogi.Event{
-		Kind:       otogi.EventKindArticleCreated,
+	event := &platform.Event{
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(100, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor:   otogi.Actor{ID: "u2", DisplayName: "Bob"},
-		Article: &otogi.Article{ID: "m2", Text: "Otogi hi"},
+		Actor:   platform.Actor{ID: "u2", DisplayName: "Bob"},
+		Article: &platform.Article{ID: "m2", Text: "Otogi hi"},
 	}
 
 	rendered, err := renderSystemPrompt(agent, event, time.Unix(100, 0).UTC())
@@ -1881,6 +1893,40 @@ func TestRenderSystemPromptTemplateVariablesDoNotOverrideBuiltIns(t *testing.T) 
 	}
 	if rendered != "built_in=Otogi user=custom-name" {
 		t.Fatalf("rendered prompt = %q, want built-in precedence", rendered)
+	}
+}
+
+func TestRenderSystemPromptIncludesAgentAliasFields(t *testing.T) {
+	t.Parallel()
+
+	agent := Agent{
+		Name:                 "Otogi",
+		Aliases:              []string{"Oto", "Otogi Sensei"},
+		Description:          "assistant",
+		SystemPromptTemplate: `name={{.AgentName}} aliases={{printf "%v" .AgentAliases}} triggers={{printf "%v" .AgentTriggerNames}}`,
+	}
+	event := &platform.Event{
+		Kind:       platform.EventKindArticleCreated,
+		OccurredAt: time.Unix(100, 0).UTC(),
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
+			ID:       "tg-main",
+		},
+		Conversation: platform.Conversation{
+			ID:   "chat-1",
+			Type: platform.ConversationTypeGroup,
+		},
+		Actor:   platform.Actor{ID: "u2", DisplayName: "Bob"},
+		Article: &platform.Article{ID: "m2", Text: "Otogi hi"},
+	}
+
+	rendered, err := renderSystemPrompt(agent, event, time.Unix(100, 0).UTC())
+	if err != nil {
+		t.Fatalf("renderSystemPrompt failed: %v", err)
+	}
+	want := "name=Otogi aliases=[Oto Otogi Sensei] triggers=[Otogi Oto Otogi Sensei]"
+	if rendered != want {
+		t.Fatalf("rendered prompt = %q, want %q", rendered, want)
 	}
 }
 
@@ -1929,10 +1975,10 @@ func TestStreamProviderReplyUsesMarkdownParserPayload(t *testing.T) {
 
 	module.dispatcher = &sinkDispatcherStub{}
 	module.parser = markdownParserResultStub{
-		result: otogi.ParsedText{
+		result: platform.ParsedText{
 			Text: "converted",
-			Entities: []otogi.TextEntity{
-				{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 9},
+			Entities: []platform.TextEntity{
+				{Type: platform.TextEntityTypeBold, Offset: 0, Length: 9},
 			},
 		},
 	}
@@ -1941,20 +1987,20 @@ func TestStreamProviderReplyUsesMarkdownParserPayload(t *testing.T) {
 		time.Unix(0, 0).UTC(),
 	})
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "hello"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -1975,8 +2021,8 @@ func TestStreamProviderReplyUsesMarkdownParserPayload(t *testing.T) {
 	if len(sink.editRequests[0].Entities) != 1 {
 		t.Fatalf("edit entities len = %d, want 1", len(sink.editRequests[0].Entities))
 	}
-	if sink.editRequests[0].Entities[0].Type != otogi.TextEntityTypeBold {
-		t.Fatalf("entity type = %q, want %q", sink.editRequests[0].Entities[0].Type, otogi.TextEntityTypeBold)
+	if sink.editRequests[0].Entities[0].Type != platform.TextEntityTypeBold {
+		t.Fatalf("entity type = %q, want %q", sink.editRequests[0].Entities[0].Type, platform.TextEntityTypeBold)
 	}
 }
 
@@ -1992,20 +2038,20 @@ func TestStreamProviderReplyMarkdownParseErrorFallsBackToPlainText(t *testing.T)
 		time.Unix(0, 0).UTC(),
 	})
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "hello"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2033,17 +2079,17 @@ func TestStreamProviderReplyDedupeConsidersEntities(t *testing.T) {
 
 	module.dispatcher = &sinkDispatcherStub{}
 	module.parser = &markdownParserSequenceStub{
-		results: []otogi.ParsedText{
+		results: []platform.ParsedText{
 			{
 				Text: "normalized",
-				Entities: []otogi.TextEntity{
-					{Type: otogi.TextEntityTypeBold, Offset: 0, Length: 10},
+				Entities: []platform.TextEntity{
+					{Type: platform.TextEntityTypeBold, Offset: 0, Length: 10},
 				},
 			},
 			{
 				Text: "normalized",
-				Entities: []otogi.TextEntity{
-					{Type: otogi.TextEntityTypeItalic, Offset: 0, Length: 10},
+				Entities: []platform.TextEntity{
+					{Type: platform.TextEntityTypeItalic, Offset: 0, Length: 10},
 				},
 			},
 		},
@@ -2053,21 +2099,21 @@ func TestStreamProviderReplyDedupeConsidersEntities(t *testing.T) {
 		time.Unix(3, 0).UTC(),
 	})
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "a"},
 		{Delta: "b"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2085,11 +2131,11 @@ func TestStreamProviderReplyDedupeConsidersEntities(t *testing.T) {
 	if sink.editRequests[0].Text != "normalized" || sink.editRequests[1].Text != "normalized" {
 		t.Fatalf("edit texts = [%q, %q], want both normalized", sink.editRequests[0].Text, sink.editRequests[1].Text)
 	}
-	if sink.editRequests[0].Entities[0].Type != otogi.TextEntityTypeBold {
-		t.Fatalf("first entity type = %q, want %q", sink.editRequests[0].Entities[0].Type, otogi.TextEntityTypeBold)
+	if sink.editRequests[0].Entities[0].Type != platform.TextEntityTypeBold {
+		t.Fatalf("first entity type = %q, want %q", sink.editRequests[0].Entities[0].Type, platform.TextEntityTypeBold)
 	}
-	if sink.editRequests[1].Entities[0].Type != otogi.TextEntityTypeItalic {
-		t.Fatalf("second entity type = %q, want %q", sink.editRequests[1].Entities[0].Type, otogi.TextEntityTypeItalic)
+	if sink.editRequests[1].Entities[0].Type != platform.TextEntityTypeItalic {
+		t.Fatalf("second entity type = %q, want %q", sink.editRequests[1].Entities[0].Type, platform.TextEntityTypeItalic)
 	}
 }
 
@@ -2098,7 +2144,7 @@ func TestStreamProviderReplySkipsMarkdownParsingWhenPacerDefersEdit(t *testing.T
 
 	module.dispatcher = &sinkDispatcherStub{}
 	parser := &markdownParserSequenceStub{
-		results: []otogi.ParsedText{
+		results: []platform.ParsedText{
 			{Text: "a"},
 			{Text: "ab"},
 		},
@@ -2110,21 +2156,21 @@ func TestStreamProviderReplySkipsMarkdownParsingWhenPacerDefersEdit(t *testing.T
 		time.Unix(1, 0).UTC(),
 	})
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "a"},
 		{Delta: "b"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2211,7 +2257,7 @@ func TestStreamProviderReplyIntermediateEditsContinueBeyondThreeFailures(t *test
 	})
 	module.clock = clock
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "a"},
 		{Delta: "b"},
 		{Delta: "c"},
@@ -2219,17 +2265,17 @@ func TestStreamProviderReplyIntermediateEditsContinueBeyondThreeFailures(t *test
 		{Delta: "e"},
 		{Delta: "f"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2283,21 +2329,21 @@ func TestStreamProviderReplyFinalEditRetriesUntilSuccess(t *testing.T) {
 		return nil
 	}
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "hello"},
 		{Delta: " world"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2331,10 +2377,10 @@ func TestStreamProviderReplyFinalEditHonorsTypedRetryAfter(t *testing.T) {
 	sink := &sinkDispatcherStub{
 		editErrors: []error{
 			nil,
-			&otogi.OutboundError{
-				Operation:  otogi.OutboundOperationEditMessage,
-				Kind:       otogi.OutboundErrorKindRateLimited,
-				Platform:   otogi.PlatformTelegram,
+			&platform.OutboundError{
+				Operation:  platform.OutboundOperationEditMessage,
+				Kind:       platform.OutboundErrorKindRateLimited,
+				Platform:   platform.PlatformTelegram,
 				SinkID:     "tg-main",
 				RetryAfter: 4 * time.Second,
 				Cause:      errors.New("flood wait"),
@@ -2354,22 +2400,22 @@ func TestStreamProviderReplyFinalEditHonorsTypedRetryAfter(t *testing.T) {
 		return nil
 	}
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "hello"},
 		{Delta: " world"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{
-			Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+		platform.OutboundTarget{
+			Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
 		},
 		"placeholder-1",
 		provider,
@@ -2430,21 +2476,21 @@ func TestStreamProviderReplyFinalEditExhaustsAtHandlerDeadline(t *testing.T) {
 		return deliveryCtx.Err()
 	}
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "hello"},
 		{Delta: " world"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	err := module.streamProviderReply(
 		context.Background(),
 		deliveryCtx,
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2507,23 +2553,23 @@ func TestStreamProviderReplyWarnsOncePerFailureStreak(t *testing.T) {
 		time.Unix(22, 0).UTC(),
 	})
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 		{Delta: "a"},
 		{Delta: "b"},
 		{Delta: "c"},
 		{Delta: "d"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2579,18 +2625,18 @@ func TestStreamProviderReplySkipsFinalEditWhenFinalTextAlreadyDelivered(t *testi
 		time.Unix(0, 0).UTC(),
 	})
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "hello"}}}}
-	req := otogi.LLMGenerateRequest{
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{{Delta: "hello"}}}}
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2632,21 +2678,21 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 		time.Unix(3, 0).UTC(),
 	})
 
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
-		{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: "  Plan\nsteps\t"},
-		{Kind: otogi.LLMGenerateChunkKindOutputText, Delta: "final answer"},
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
+		{Kind: ai.LLMGenerateChunkKindThinkingSummary, Delta: "  Plan\nsteps\t"},
+		{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "final answer"},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	if err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2696,20 +2742,20 @@ func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 	})
 
 	longSummary := strings.Repeat("summary ", 80)
-	provider := &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
-		{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: longSummary},
+	provider := &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{
+		{Kind: ai.LLMGenerateChunkKindThinkingSummary, Delta: longSummary},
 	}}}
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		provider,
 		req,
@@ -2769,11 +2815,11 @@ func TestStreamProviderReplyNoOutputReturnsContextErrorWhenCanceled(t *testing.T
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
 
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2782,7 +2828,7 @@ func TestStreamProviderReplyNoOutputReturnsContextErrorWhenCanceled(t *testing.T
 	err := module.streamProviderReply(
 		ctx,
 		ctx,
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"placeholder-1",
 		&providerStub{stream: &streamStub{}},
 		req,
@@ -2822,19 +2868,19 @@ func TestStreamProviderReplyRequiresPlaceholderMessageID(t *testing.T) {
 		},
 	})
 
-	req := otogi.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: "gpt-test",
-		Messages: []otogi.LLMMessage{
-			{Role: otogi.LLMMessageRoleSystem, Content: "sys"},
-			{Role: otogi.LLMMessageRoleUser, Content: "u"},
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
 		},
 	}
 	err := module.streamProviderReply(
 		context.Background(),
 		context.Background(),
-		otogi.OutboundTarget{Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup}},
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
 		"",
-		&providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "hello"}}}},
+		&providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{{Delta: "hello"}}}},
 		req,
 	)
 	if err == nil {
@@ -2862,8 +2908,8 @@ func TestFinalizePlaceholderFailureRetriesUntilSuccess(t *testing.T) {
 	}
 
 	handlerErr := errors.New("handler failed")
-	target := otogi.OutboundTarget{
-		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+	target := platform.OutboundTarget{
+		Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
 	}
 	err := module.finalizePlaceholderFailure(context.Background(), target, "placeholder-1", handlerErr)
 	if !errors.Is(err, handlerErr) {
@@ -2893,8 +2939,8 @@ func TestFinalizePlaceholderFailureSkipsWhenContextDone(t *testing.T) {
 	cancel()
 
 	handlerErr := errors.New("handler failed")
-	target := otogi.OutboundTarget{
-		Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
+	target := platform.OutboundTarget{
+		Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
 	}
 	err := module.finalizePlaceholderFailure(ctx, target, "placeholder-1", handlerErr)
 	if !errors.Is(err, handlerErr) {
@@ -2922,20 +2968,20 @@ func TestHandleArticleIgnoresBotMessages(t *testing.T) {
 
 	module.dispatcher = &sinkDispatcherStub{}
 	module.memory = &memoryStub{}
-	module.providers = map[string]otogi.LLMProvider{
-		"openai": &providerStub{stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "hello"}}}},
+	module.providers = map[string]ai.LLMProvider{
+		"openai": &providerStub{stream: &streamStub{chunks: []ai.LLMGenerateChunk{{Delta: "hello"}}}},
 	}
 
-	err := module.handleArticle(context.Background(), &otogi.Event{
-		Kind:       otogi.EventKindArticleCreated,
+	err := module.handleArticle(context.Background(), &platform.Event{
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor:   otogi.Actor{ID: "bot-1", IsBot: true},
-		Article: &otogi.Article{ID: "m-1", Text: "Otogi hello"},
+		Actor:   platform.Actor{ID: "bot-1", IsBot: true},
+		Article: &platform.Article{ID: "m-1", Text: "Otogi hello"},
 	})
 	if err != nil {
 		t.Fatalf("handleArticle failed: %v", err)
@@ -2959,16 +3005,16 @@ func TestHandleArticleSendsPlaceholderBeforeBuildAndStream(t *testing.T) {
 
 	callOrder := make([]string, 0, 3)
 	sink := &sinkDispatcherStub{
-		onSend: func(otogi.SendMessageRequest) {
+		onSend: func(platform.SendMessageRequest) {
 			callOrder = append(callOrder, "send")
 		},
 	}
 	memory := &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
-				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      platform.Article{ID: "m-1", Text: "Otogi hello"},
 				IsCurrent:    true,
 			},
 		},
@@ -2977,7 +3023,7 @@ func TestHandleArticleSendsPlaceholderBeforeBuildAndStream(t *testing.T) {
 		},
 	}
 	provider := &providerStub{
-		stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
+		stream: &streamStub{chunks: []ai.LLMGenerateChunk{
 			{Delta: "hello"},
 		}},
 		onGenerateStream: func() {
@@ -2986,7 +3032,7 @@ func TestHandleArticleSendsPlaceholderBeforeBuildAndStream(t *testing.T) {
 	}
 	module.dispatcher = sink
 	module.memory = memory
-	module.providers = map[string]otogi.LLMProvider{"openai": provider}
+	module.providers = map[string]ai.LLMProvider{"openai": provider}
 	module.clock = sequenceClock([]time.Time{
 		time.Unix(0, 0).UTC(),
 		time.Unix(2, 0).UTC(),
@@ -3031,18 +3077,18 @@ func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
-				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      platform.Article{ID: "m-1", Text: "Otogi hello"},
 				IsCurrent:    true,
 			},
 		},
 	}
-	module.providers = map[string]otogi.LLMProvider{
+	module.providers = map[string]ai.LLMProvider{
 		"openai": &providerStub{
-			stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "unused"}}},
+			stream: &streamStub{chunks: []ai.LLMGenerateChunk{{Delta: "unused"}}},
 			onGenerateStream: func() {
 				providerCalled = true
 			},
@@ -3109,9 +3155,9 @@ func TestHandleArticleBuildFailureEditsPlaceholder(t *testing.T) {
 	module.memory = &memoryStub{
 		replyErr: errors.New("reply chain failed"),
 	}
-	module.providers = map[string]otogi.LLMProvider{
+	module.providers = map[string]ai.LLMProvider{
 		"openai": &providerStub{
-			stream: &streamStub{chunks: []otogi.LLMGenerateChunk{{Delta: "unused"}}},
+			stream: &streamStub{chunks: []ai.LLMGenerateChunk{{Delta: "unused"}}},
 			onGenerateStream: func() {
 				providerCalled = true
 			},
@@ -3160,16 +3206,16 @@ func TestHandleArticleProviderStartFailureEditsPlaceholder(t *testing.T) {
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
-				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      platform.Article{ID: "m-1", Text: "Otogi hello"},
 				IsCurrent:    true,
 			},
 		},
 	}
-	module.providers = map[string]otogi.LLMProvider{
+	module.providers = map[string]ai.LLMProvider{
 		"openai": &providerStub{
 			streamErr: errors.New("provider start failed"),
 		},
@@ -3214,19 +3260,19 @@ func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
 	sink := &sinkDispatcherStub{}
 	module.dispatcher = sink
 	module.memory = &memoryStub{
-		replyChain: []otogi.ReplyChainEntry{
+		replyChain: []core.ReplyChainEntry{
 			{
-				Conversation: otogi.Conversation{ID: "chat-1", Type: otogi.ConversationTypeGroup},
-				Actor:        otogi.Actor{ID: "user-1", DisplayName: "Alice"},
-				Article:      otogi.Article{ID: "m-1", Text: "Otogi hello"},
+				Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup},
+				Actor:        platform.Actor{ID: "user-1", DisplayName: "Alice"},
+				Article:      platform.Article{ID: "m-1", Text: "Otogi hello"},
 				IsCurrent:    true,
 			},
 		},
 	}
-	module.providers = map[string]otogi.LLMProvider{
+	module.providers = map[string]ai.LLMProvider{
 		"openai": &providerStub{
-			stream: &streamStub{chunks: []otogi.LLMGenerateChunk{
-				{Kind: otogi.LLMGenerateChunkKindThinkingSummary, Delta: "draft steps"},
+			stream: &streamStub{chunks: []ai.LLMGenerateChunk{
+				{Kind: ai.LLMGenerateChunkKindThinkingSummary, Delta: "draft steps"},
 			}},
 		},
 	}
@@ -3265,33 +3311,33 @@ func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
 	}
 }
 
-func testLLMChatEvent(text string) *otogi.Event {
-	return &otogi.Event{
-		Kind:       otogi.EventKindArticleCreated,
+func testLLMChatEvent(text string) *platform.Event {
+	return &platform.Event{
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source:     otogi.EventSource{Platform: otogi.PlatformTelegram, ID: "tg-main"},
-		Conversation: otogi.Conversation{
+		Source:     platform.EventSource{Platform: platform.PlatformTelegram, ID: "tg-main"},
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor:   otogi.Actor{ID: "user-1", DisplayName: "Alice"},
-		Article: &otogi.Article{ID: "m-1", Text: text},
+		Actor:   platform.Actor{ID: "user-1", DisplayName: "Alice"},
+		Article: &platform.Article{ID: "m-1", Text: text},
 	}
 }
 
 type sinkDispatcherStub struct {
-	sendRequests []otogi.SendMessageRequest
-	editRequests []otogi.EditMessageRequest
+	sendRequests []platform.SendMessageRequest
+	editRequests []platform.EditMessageRequest
 	sendErrors   []error
 	editErrors   []error
-	onSend       func(otogi.SendMessageRequest)
-	onEdit       func(otogi.EditMessageRequest)
+	onSend       func(platform.SendMessageRequest)
+	onEdit       func(platform.EditMessageRequest)
 }
 
 func (s *sinkDispatcherStub) SendMessage(
 	_ context.Context,
-	req otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	req platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	index := len(s.sendRequests)
 	s.sendRequests = append(s.sendRequests, req)
 	if s.onSend != nil {
@@ -3301,10 +3347,10 @@ func (s *sinkDispatcherStub) SendMessage(
 		return nil, s.sendErrors[index]
 	}
 
-	return &otogi.OutboundMessage{ID: fmt.Sprintf("msg-%d", index+1), Target: req.Target}, nil
+	return &platform.OutboundMessage{ID: fmt.Sprintf("msg-%d", index+1), Target: req.Target}, nil
 }
 
-func (s *sinkDispatcherStub) EditMessage(_ context.Context, req otogi.EditMessageRequest) error {
+func (s *sinkDispatcherStub) EditMessage(_ context.Context, req platform.EditMessageRequest) error {
 	index := len(s.editRequests)
 	s.editRequests = append(s.editRequests, req)
 	if s.onEdit != nil {
@@ -3317,33 +3363,40 @@ func (s *sinkDispatcherStub) EditMessage(_ context.Context, req otogi.EditMessag
 	return nil
 }
 
-func (*sinkDispatcherStub) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (*sinkDispatcherStub) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
-func (*sinkDispatcherStub) SetReaction(context.Context, otogi.SetReactionRequest) error { return nil }
-func (*sinkDispatcherStub) ListSinks(context.Context) ([]otogi.EventSink, error)        { return nil, nil }
-func (*sinkDispatcherStub) ListSinksByPlatform(context.Context, otogi.Platform) ([]otogi.EventSink, error) {
+
+func (*sinkDispatcherStub) SetReaction(context.Context, platform.SetReactionRequest) error {
+	return nil
+}
+func (*sinkDispatcherStub) ListSinks(context.Context) ([]platform.EventSink, error) { return nil, nil }
+func (*sinkDispatcherStub) ListSinksByPlatform(context.Context, platform.Platform) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 type memoryStub struct {
-	replyChain                []otogi.ReplyChainEntry
+	replyChain                []core.ReplyChainEntry
 	replyErr                  error
-	leadingContext            []otogi.ConversationContextEntry
+	repliedMemory             core.Memory
+	repliedFound              bool
+	repliedErr                error
+	leadingContext            []core.ConversationContextEntry
 	leadingContextErr         error
-	memories                  map[string]otogi.Memory
-	onGet                     func(otogi.MemoryLookup)
-	onGetBatch                func([]otogi.MemoryLookup)
+	memories                  map[string]core.Memory
+	onGet                     func(core.MemoryLookup)
+	onGetBatch                func([]core.MemoryLookup)
+	onGetReplied              func()
 	onGetReplyChain           func()
 	onListConversationContext func()
 }
 
-func (m *memoryStub) Get(_ context.Context, lookup otogi.MemoryLookup) (otogi.Memory, bool, error) {
+func (m *memoryStub) Get(_ context.Context, lookup core.MemoryLookup) (core.Memory, bool, error) {
 	if m.onGet != nil {
 		m.onGet(lookup)
 	}
 	if m.memories == nil {
-		return otogi.Memory{}, false, nil
+		return core.Memory{}, false, nil
 	}
 	mem, found := m.memories[lookup.ArticleID]
 	return mem, found, nil
@@ -3351,17 +3404,17 @@ func (m *memoryStub) Get(_ context.Context, lookup otogi.MemoryLookup) (otogi.Me
 
 func (m *memoryStub) GetBatch(
 	_ context.Context,
-	lookups []otogi.MemoryLookup,
-) (map[otogi.MemoryLookup]otogi.Memory, error) {
+	lookups []core.MemoryLookup,
+) (map[core.MemoryLookup]core.Memory, error) {
 	if m.onGetBatch != nil {
-		cloned := append([]otogi.MemoryLookup(nil), lookups...)
+		cloned := append([]core.MemoryLookup(nil), lookups...)
 		m.onGetBatch(cloned)
 	}
 	if m.memories == nil {
 		return nil, nil
 	}
 
-	results := make(map[otogi.MemoryLookup]otogi.Memory)
+	results := make(map[core.MemoryLookup]core.Memory)
 	for _, lookup := range lookups {
 		mem, found := m.memories[lookup.ArticleID]
 		if !found {
@@ -3373,11 +3426,21 @@ func (m *memoryStub) GetBatch(
 	return results, nil
 }
 
-func (*memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
-	return otogi.Memory{}, false, nil
+func (m *memoryStub) GetReplied(context.Context, *platform.Event) (core.Memory, bool, error) {
+	if m.onGetReplied != nil {
+		m.onGetReplied()
+	}
+	if m.repliedErr != nil {
+		return core.Memory{}, false, m.repliedErr
+	}
+	if !m.repliedFound {
+		return core.Memory{}, false, nil
+	}
+
+	return m.repliedMemory, true, nil
 }
 
-func (m *memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.ReplyChainEntry, error) {
+func (m *memoryStub) GetReplyChain(context.Context, *platform.Event) ([]core.ReplyChainEntry, error) {
 	if m.onGetReplyChain != nil {
 		m.onGetReplyChain()
 	}
@@ -3385,9 +3448,9 @@ func (m *memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.Reply
 		return nil, m.replyErr
 	}
 
-	cloned := make([]otogi.ReplyChainEntry, 0, len(m.replyChain))
+	cloned := make([]core.ReplyChainEntry, 0, len(m.replyChain))
 	for _, entry := range m.replyChain {
-		cloned = append(cloned, otogi.ReplyChainEntry{
+		cloned = append(cloned, core.ReplyChainEntry{
 			Conversation: entry.Conversation,
 			Actor:        entry.Actor,
 			Article:      entry.Article,
@@ -3400,8 +3463,8 @@ func (m *memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.Reply
 
 func (m *memoryStub) ListConversationContextBefore(
 	context.Context,
-	otogi.ConversationContextBeforeQuery,
-) ([]otogi.ConversationContextEntry, error) {
+	core.ConversationContextBeforeQuery,
+) ([]core.ConversationContextEntry, error) {
 	if m.onListConversationContext != nil {
 		m.onListConversationContext()
 	}
@@ -3409,9 +3472,9 @@ func (m *memoryStub) ListConversationContextBefore(
 		return nil, m.leadingContextErr
 	}
 
-	cloned := make([]otogi.ConversationContextEntry, 0, len(m.leadingContext))
+	cloned := make([]core.ConversationContextEntry, 0, len(m.leadingContext))
 	for _, entry := range m.leadingContext {
-		cloned = append(cloned, otogi.ConversationContextEntry{
+		cloned = append(cloned, core.ConversationContextEntry{
 			Conversation: entry.Conversation,
 			Actor:        entry.Actor,
 			Article:      entry.Article,
@@ -3424,10 +3487,10 @@ func (m *memoryStub) ListConversationContextBefore(
 }
 
 type providerStub struct {
-	stream           otogi.LLMStream
+	stream           ai.LLMStream
 	streamErr        error
 	onGenerateStream func()
-	lastRequest      otogi.LLMGenerateRequest
+	lastRequest      ai.LLMGenerateRequest
 }
 
 type markdownParserStub struct{}
@@ -3435,23 +3498,23 @@ type markdownParserStub struct{}
 func (markdownParserStub) ParseMarkdown(
 	_ context.Context,
 	markdown string,
-) (otogi.ParsedText, error) {
-	return otogi.ParsedText{
+) (platform.ParsedText, error) {
+	return platform.ParsedText{
 		Text: markdown,
 	}, nil
 }
 
 type markdownParserResultStub struct {
-	result otogi.ParsedText
+	result platform.ParsedText
 	err    error
 }
 
 func (s markdownParserResultStub) ParseMarkdown(
 	_ context.Context,
 	markdown string,
-) (otogi.ParsedText, error) {
+) (platform.ParsedText, error) {
 	if s.err != nil {
-		return otogi.ParsedText{}, s.err
+		return platform.ParsedText{}, s.err
 	}
 	if s.result.Text == "" {
 		s.result.Text = markdown
@@ -3461,16 +3524,16 @@ func (s markdownParserResultStub) ParseMarkdown(
 }
 
 type markdownParserSequenceStub struct {
-	results []otogi.ParsedText
+	results []platform.ParsedText
 	calls   int
 }
 
 func (s *markdownParserSequenceStub) ParseMarkdown(
 	_ context.Context,
 	markdown string,
-) (otogi.ParsedText, error) {
+) (platform.ParsedText, error) {
 	if s == nil || len(s.results) == 0 {
-		return otogi.ParsedText{Text: markdown}, nil
+		return platform.ParsedText{Text: markdown}, nil
 	}
 
 	index := s.calls
@@ -3488,8 +3551,8 @@ func (s *markdownParserSequenceStub) ParseMarkdown(
 
 func (p *providerStub) GenerateStream(
 	_ context.Context,
-	req otogi.LLMGenerateRequest,
-) (otogi.LLMStream, error) {
+	req ai.LLMGenerateRequest,
+) (ai.LLMStream, error) {
 	if p.onGenerateStream != nil {
 		p.onGenerateStream()
 	}
@@ -3505,18 +3568,18 @@ func (p *providerStub) GenerateStream(
 }
 
 type streamStub struct {
-	chunks   []otogi.LLMGenerateChunk
+	chunks   []ai.LLMGenerateChunk
 	index    int
 	recvErr  error
 	closeErr error
 }
 
-func (s *streamStub) Recv(context.Context) (otogi.LLMGenerateChunk, error) {
+func (s *streamStub) Recv(context.Context) (ai.LLMGenerateChunk, error) {
 	if s.recvErr != nil {
-		return otogi.LLMGenerateChunk{}, s.recvErr
+		return ai.LLMGenerateChunk{}, s.recvErr
 	}
 	if s.index >= len(s.chunks) {
-		return otogi.LLMGenerateChunk{}, io.EOF
+		return ai.LLMGenerateChunk{}, io.EOF
 	}
 	chunk := s.chunks[s.index]
 	s.index++
@@ -3530,9 +3593,9 @@ func (s *streamStub) Close() error {
 
 type mediaDownloaderStub struct {
 	mu              sync.Mutex
-	lastRequest     otogi.MediaDownloadRequest
-	requests        []otogi.MediaDownloadRequest
-	attachment      otogi.MediaAttachment
+	lastRequest     platform.MediaDownloadRequest
+	requests        []platform.MediaDownloadRequest
+	attachment      platform.MediaAttachment
 	err             error
 	writeErr        error
 	data            []byte
@@ -3543,9 +3606,9 @@ type mediaDownloaderStub struct {
 
 func (s *mediaDownloaderStub) Download(
 	_ context.Context,
-	request otogi.MediaDownloadRequest,
+	request platform.MediaDownloadRequest,
 	output io.Writer,
-) (otogi.MediaAttachment, error) {
+) (platform.MediaAttachment, error) {
 	active := s.activeDownloads.Add(1)
 	defer s.activeDownloads.Add(-1)
 	for {
@@ -3572,35 +3635,35 @@ func (s *mediaDownloaderStub) Download(
 		time.Sleep(delay)
 	}
 	if err != nil {
-		return otogi.MediaAttachment{}, s.err
+		return platform.MediaAttachment{}, s.err
 	}
 	if len(data) > 0 {
 		if _, err := output.Write(data); err != nil {
-			return otogi.MediaAttachment{}, fmt.Errorf("write media downloader stub output: %w", err)
+			return platform.MediaAttachment{}, fmt.Errorf("write media downloader stub output: %w", err)
 		}
 	}
 	if writeErr != nil {
-		return otogi.MediaAttachment{}, writeErr
+		return platform.MediaAttachment{}, writeErr
 	}
 
 	return attachment, nil
 }
 
 type moduleRuntimeStub struct {
-	registry otogi.ServiceRegistry
-	configs  otogi.ConfigRegistry
+	registry core.ServiceRegistry
+	configs  core.ConfigRegistry
 }
 
-func (s moduleRuntimeStub) Services() otogi.ServiceRegistry { return s.registry }
+func (s moduleRuntimeStub) Services() core.ServiceRegistry { return s.registry }
 
-func (s moduleRuntimeStub) Config() otogi.ConfigRegistry { return s.configs }
+func (s moduleRuntimeStub) Config() core.ConfigRegistry { return s.configs }
 
 func (moduleRuntimeStub) Subscribe(
 	context.Context,
-	otogi.InterestSet,
-	otogi.SubscriptionSpec,
-	otogi.EventHandler,
-) (otogi.Subscription, error) {
+	core.InterestSet,
+	core.SubscriptionSpec,
+	core.EventHandler,
+) (core.Subscription, error) {
 	return nil, nil
 }
 
@@ -3613,7 +3676,7 @@ func (s serviceRegistryStub) Register(string, any) error { return nil }
 func (s serviceRegistryStub) Resolve(name string) (any, error) {
 	value, ok := s.values[name]
 	if !ok {
-		return nil, otogi.ErrServiceNotFound
+		return nil, core.ErrServiceNotFound
 	}
 
 	return value, nil
@@ -3625,12 +3688,12 @@ func newTestModule(cfg Config) *Module {
 	return module
 }
 
-func allMessageContents(messages []otogi.LLMMessage) []string {
+func allMessageContents(messages []ai.LLMMessage) []string {
 	contents := make([]string, 0, len(messages))
 	for _, message := range messages {
 		var builder strings.Builder
 		for _, part := range message.ContentParts() {
-			if part.Type != otogi.LLMMessagePartTypeText {
+			if part.Type != ai.LLMMessagePartTypeText {
 				continue
 			}
 			builder.WriteString(part.Text)

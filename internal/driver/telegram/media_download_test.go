@@ -8,7 +8,7 @@ import (
 	"io"
 	"testing"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -19,14 +19,14 @@ func TestMediaDownloaderDownloadsCachedAttachment(t *testing.T) {
 
 	cache := newMediaLocatorCache()
 	cache.RememberMessage(
-		ChatRef{ID: "100", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "100", Type: platform.ConversationTypeGroup},
 		"55",
 		&tg.InputPeerChat{ChatID: 100},
 		[]messageMediaLocator{
 			{
 				attachment: MediaPayload{
 					ID:        "doc-1",
-					Type:      otogi.MediaTypeDocument,
+					Type:      platform.MediaTypeDocument,
 					MIMEType:  "text/plain",
 					FileName:  "notes.txt",
 					SizeBytes: 4,
@@ -66,14 +66,14 @@ func TestMediaDownloaderDownloadsCachedAttachment(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	attachment, err := downloader.Download(context.Background(), otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+	attachment, err := downloader.Download(context.Background(), platform.MediaDownloadRequest{
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "100",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "55",
 		AttachmentID: "doc-1",
@@ -94,7 +94,7 @@ func TestMediaDownloaderCacheMiss(t *testing.T) {
 
 	peers := NewPeerCache()
 	peers.RememberConversation(
-		ChatRef{ID: "100", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "100", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 100},
 	)
 	rpc := stubMediaDownloadRPC{
@@ -108,20 +108,20 @@ func TestMediaDownloaderCacheMiss(t *testing.T) {
 		t.Fatalf("new media downloader failed: %v", err)
 	}
 
-	_, err = downloader.Download(context.Background(), otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+	_, err = downloader.Download(context.Background(), platform.MediaDownloadRequest{
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "100",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "55",
 		AttachmentID: "123",
 	}, io.Discard)
-	if !errors.Is(err, otogi.ErrMediaDownloadNotFound) {
-		t.Fatalf("download error = %v, want %v", err, otogi.ErrMediaDownloadNotFound)
+	if !errors.Is(err, platform.ErrMediaDownloadNotFound) {
+		t.Fatalf("download error = %v, want %v", err, platform.ErrMediaDownloadNotFound)
 	}
 }
 
@@ -130,7 +130,7 @@ func TestMediaDownloaderRefreshesCacheMiss(t *testing.T) {
 
 	peers := NewPeerCache()
 	peers.RememberConversation(
-		ChatRef{ID: "100", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "100", Type: platform.ConversationTypeGroup},
 		&tg.InputPeerChat{ChatID: 100},
 	)
 	rpc := stubMediaDownloadRPC{
@@ -176,14 +176,14 @@ func TestMediaDownloaderRefreshesCacheMiss(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	attachment, err := downloader.Download(context.Background(), otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+	attachment, err := downloader.Download(context.Background(), platform.MediaDownloadRequest{
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "100",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "55",
 		AttachmentID: "987",
@@ -204,14 +204,14 @@ func TestMediaDownloaderRetriesExpiredFileReference(t *testing.T) {
 
 	cache := newMediaLocatorCache()
 	cache.RememberMessage(
-		ChatRef{ID: "100", Type: otogi.ConversationTypeGroup},
+		ChatRef{ID: "100", Type: platform.ConversationTypeGroup},
 		"55",
 		&tg.InputPeerChat{ChatID: 100},
 		[]messageMediaLocator{
 			{
 				attachment: MediaPayload{
 					ID:        "123",
-					Type:      otogi.MediaTypeDocument,
+					Type:      platform.MediaTypeDocument,
 					MIMEType:  "text/plain",
 					FileName:  "notes.txt",
 					SizeBytes: 4,
@@ -283,14 +283,14 @@ func TestMediaDownloaderRetriesExpiredFileReference(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	attachment, err := downloader.Download(context.Background(), otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+	attachment, err := downloader.Download(context.Background(), platform.MediaDownloadRequest{
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "100",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
 		ArticleID:    "55",
 		AttachmentID: "123",
@@ -314,7 +314,7 @@ func TestMediaDownloaderRefreshesChannelLocator(t *testing.T) {
 
 	peers := NewPeerCache()
 	peers.RememberConversation(
-		ChatRef{ID: "200", Type: otogi.ConversationTypeChannel},
+		ChatRef{ID: "200", Type: platform.ConversationTypeChannel},
 		&tg.InputPeerChannel{ChannelID: 200, AccessHash: 777},
 	)
 
@@ -369,14 +369,14 @@ func TestMediaDownloaderRefreshesChannelLocator(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	_, err = downloader.Download(context.Background(), otogi.MediaDownloadRequest{
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+	_, err = downloader.Download(context.Background(), platform.MediaDownloadRequest{
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "200",
-			Type: otogi.ConversationTypeChannel,
+			Type: platform.ConversationTypeChannel,
 		},
 		ArticleID:    "55",
 		AttachmentID: "321",

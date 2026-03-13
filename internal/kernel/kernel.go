@@ -8,7 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // Kernel is the framework core orchestrating modules, drivers, and the event bus.
@@ -23,7 +24,7 @@ type Kernel struct {
 	modules     map[string]*moduleRecord
 	moduleOrder []string
 	commands    map[string]commandRegistration
-	drivers     map[string]otogi.Driver
+	drivers     map[string]core.Driver
 	driverOrder []string
 
 	runMu   sync.Mutex
@@ -58,7 +59,7 @@ func New(options ...Option) (*Kernel, error) {
 		configs:     configs,
 		modules:     make(map[string]*moduleRecord),
 		commands:    make(map[string]commandRegistration),
-		drivers:     make(map[string]otogi.Driver),
+		drivers:     make(map[string]core.Driver),
 		moduleOrder: make([]string, 0),
 		driverOrder: make([]string, 0),
 	}
@@ -70,7 +71,7 @@ func New(options ...Option) (*Kernel, error) {
 }
 
 // EventBus exposes the kernel event bus to integration code.
-func (k *Kernel) EventBus() otogi.EventBus {
+func (k *Kernel) EventBus() core.EventBus {
 	return k.bus
 }
 
@@ -79,11 +80,11 @@ func (k *Kernel) registerBootstrapServices() error {
 	if len(services) == 0 {
 		services = []bootstrapServiceRegistration{
 			{
-				name:    otogi.ServiceCommandCatalog,
+				name:    core.ServiceCommandCatalog,
 				service: &kernelCommandCatalog{kernel: k},
 			},
 			{
-				name:    otogi.ServiceMarkdownParser,
+				name:    platform.ServiceMarkdownParser,
 				service: newMarkdownParser(),
 			},
 		}
@@ -99,12 +100,12 @@ func (k *Kernel) registerBootstrapServices() error {
 }
 
 // Services exposes the kernel service registry.
-func (k *Kernel) Services() otogi.ServiceRegistry {
+func (k *Kernel) Services() core.ServiceRegistry {
 	return k.services
 }
 
 // Configs exposes the kernel module config registry.
-func (k *Kernel) Configs() otogi.ConfigRegistry {
+func (k *Kernel) Configs() core.ConfigRegistry {
 	return k.configs
 }
 
@@ -128,7 +129,7 @@ func (k *Kernel) RegisterService(name string, service any) error {
 
 // RegisterModule registers a lifecycle-aware module, runs optional registration,
 // and wires declarative handlers.
-func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error {
+func (k *Kernel) RegisterModule(ctx context.Context, module core.Module) error {
 	if module == nil {
 		return fmt.Errorf("register module: nil module")
 	}
@@ -153,7 +154,7 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 	k.mu.Lock()
 	if _, exists := k.modules[name]; exists {
 		k.mu.Unlock()
-		return fmt.Errorf("register module %s: %w", name, otogi.ErrModuleAlreadyRegistered)
+		return fmt.Errorf("register module %s: %w", name, core.ErrModuleAlreadyRegistered)
 	}
 	k.modules[name] = record
 	k.moduleOrder = append(k.moduleOrder, name)
@@ -176,7 +177,7 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 	hookCtx, cancel := context.WithTimeout(ctx, k.cfg.moduleHookTimeout)
 	defer cancel()
 
-	registrar, hasRegistrar := module.(otogi.ModuleRegistrar)
+	registrar, hasRegistrar := module.(core.ModuleRegistrar)
 	if hasRegistrar {
 		if err := runSafely("module "+name+" OnRegister", func() error {
 			return registrar.OnRegister(hookCtx, runtime)
@@ -195,7 +196,7 @@ func (k *Kernel) RegisterModule(ctx context.Context, module otogi.Module) error 
 }
 
 // RegisterDriver registers a platform driver.
-func (k *Kernel) RegisterDriver(driver otogi.Driver) error {
+func (k *Kernel) RegisterDriver(driver core.Driver) error {
 	if driver == nil {
 		return fmt.Errorf("register driver: nil driver")
 	}
@@ -208,7 +209,7 @@ func (k *Kernel) RegisterDriver(driver otogi.Driver) error {
 	defer k.mu.Unlock()
 
 	if _, exists := k.drivers[name]; exists {
-		return fmt.Errorf("register driver %s: %w", name, otogi.ErrDriverAlreadyRegistered)
+		return fmt.Errorf("register driver %s: %w", name, core.ErrDriverAlreadyRegistered)
 	}
 
 	k.drivers[name] = driver
@@ -318,7 +319,7 @@ func (k *Kernel) startDrivers(ctx context.Context) (<-chan error, func()) {
 
 	k.mu.RLock()
 	order := append([]string(nil), k.driverOrder...)
-	drivers := make(map[string]otogi.Driver, len(k.drivers))
+	drivers := make(map[string]core.Driver, len(k.drivers))
 	for name, driver := range k.drivers {
 		drivers[name] = driver
 	}
@@ -333,7 +334,7 @@ func (k *Kernel) startDrivers(ctx context.Context) (<-chan error, func()) {
 		}
 
 		workerWG.Add(1)
-		go func(driverName string, adapter otogi.Driver) {
+		go func(driverName string, adapter core.Driver) {
 			defer workerWG.Done()
 			err := runSafely("driver "+driverName+" Start", func() error {
 				return adapter.Start(ctx, eventDispatcher)
@@ -399,7 +400,7 @@ func (k *Kernel) shutdownAll(ctx context.Context) error {
 func (k *Kernel) shutdownDrivers(ctx context.Context) error {
 	k.mu.RLock()
 	order := append([]string(nil), k.driverOrder...)
-	drivers := make(map[string]otogi.Driver, len(k.drivers))
+	drivers := make(map[string]core.Driver, len(k.drivers))
 	for name, driver := range k.drivers {
 		drivers[name] = driver
 	}
@@ -474,7 +475,7 @@ func (k *Kernel) rollbackModuleRegistration(ctx context.Context, name string, re
 }
 
 // validateCapabilityDependencies checks required services declared by capabilities.
-func (k *Kernel) validateCapabilityDependencies(capabilities []otogi.Capability) error {
+func (k *Kernel) validateCapabilityDependencies(capabilities []core.Capability) error {
 	for _, capability := range capabilities {
 		for _, serviceName := range capability.RequiredServices {
 			_, err := k.services.Resolve(serviceName)
@@ -497,7 +498,7 @@ func (k *Kernel) registerDeclaredHandlers(
 	ctx context.Context,
 	moduleName string,
 	runtime *moduleRuntime,
-	handlers []otogi.ModuleHandler,
+	handlers []core.ModuleHandler,
 ) error {
 	route := k.moduleRouteFor(moduleName)
 	for idx, declared := range handlers {
@@ -505,7 +506,7 @@ func (k *Kernel) registerDeclaredHandlers(
 		spec := declared.Subscription
 		interest := declared.Capability.Interest
 		if len(route.Sources) > 0 {
-			interest.Sources = append([]otogi.EventSource(nil), route.Sources...)
+			interest.Sources = append([]platform.EventSource(nil), route.Sources...)
 		}
 		if spec.Name == "" {
 			spec.Name = fmt.Sprintf("%s-handler-%d", moduleName, idx+1)
@@ -530,7 +531,7 @@ func (k *Kernel) moduleRouteFor(moduleName string) ModuleRoute {
 }
 
 // validateModuleSpec ensures declarative module definitions are coherent.
-func validateModuleSpec(spec otogi.ModuleSpec) error {
+func validateModuleSpec(spec core.ModuleSpec) error {
 	seenCapabilities := make(map[string]struct{}, len(spec.Handlers)+len(spec.AdditionalCapabilities))
 	seenSubscriptions := make(map[string]struct{}, len(spec.Handlers))
 	seenCommands := make(map[string]struct{}, len(spec.Commands))

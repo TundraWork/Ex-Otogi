@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestModuleHandleReplyCommands(t *testing.T) {
@@ -17,8 +18,8 @@ func TestModuleHandleReplyCommands(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		event            *otogi.Event
-		replied          otogi.Memory
+		event            *platform.Event
+		replied          core.Memory
 		repliedFound     bool
 		repliedErr       error
 		sendErr          error
@@ -30,7 +31,7 @@ func TestModuleHandleReplyCommands(t *testing.T) {
 			name:          "you rewrites replied text",
 			event:         newCommandEvent("/you", "msg-0"),
 			repliedFound:  true,
-			replied:       otogi.Memory{Article: otogi.Article{Text: "我和你"}},
+			replied:       core.Memory{Article: platform.Article{Text: "我和你"}},
 			wantReplyText: "您和我",
 			wantSendCalls: 1,
 		},
@@ -38,7 +39,7 @@ func TestModuleHandleReplyCommands(t *testing.T) {
 			name:          "we rewrites replied text",
 			event:         newCommandEvent("/we", "msg-0"),
 			repliedFound:  true,
-			replied:       otogi.Memory{Article: otogi.Article{Text: "我和你谢谢您"}},
+			replied:       core.Memory{Article: platform.Article{Text: "我和你谢谢您"}},
 			wantReplyText: "大伙自己和大伙自己谢谢大伙自己",
 			wantSendCalls: 1,
 		},
@@ -46,7 +47,7 @@ func TestModuleHandleReplyCommands(t *testing.T) {
 			name:          "command arguments are ignored for parity",
 			event:         newCommandEvent("/you now", "msg-0"),
 			repliedFound:  true,
-			replied:       otogi.Memory{Article: otogi.Article{Text: "我和你"}},
+			replied:       core.Memory{Article: platform.Article{Text: "我和你"}},
 			wantSendCalls: 0,
 		},
 		{
@@ -63,7 +64,7 @@ func TestModuleHandleReplyCommands(t *testing.T) {
 			name:          "empty replied text is ignored",
 			event:         newCommandEvent("/we", "msg-0"),
 			repliedFound:  true,
-			replied:       otogi.Memory{Article: otogi.Article{Text: "   "}},
+			replied:       core.Memory{Article: platform.Article{Text: "   "}},
 			wantSendCalls: 0,
 		},
 		{
@@ -77,7 +78,7 @@ func TestModuleHandleReplyCommands(t *testing.T) {
 			name:             "send failure returns error",
 			event:            newCommandEvent("/we", "msg-0"),
 			repliedFound:     true,
-			replied:          otogi.Memory{Article: otogi.Article{Text: "我"}},
+			replied:          core.Memory{Article: platform.Article{Text: "我"}},
 			sendErr:          errors.New("dispatcher down"),
 			wantErrSubstring: "dispatcher down",
 			wantReplyText:    "大伙自己",
@@ -150,8 +151,8 @@ func TestModuleHandleSubstituteArticle(t *testing.T) {
 
 	tests := []struct {
 		name             string
-		event            *otogi.Event
-		replied          otogi.Memory
+		event            *platform.Event
+		replied          core.Memory
 		repliedFound     bool
 		repliedErr       error
 		runnerResult     string
@@ -168,7 +169,7 @@ func TestModuleHandleSubstituteArticle(t *testing.T) {
 			name:            "matching substitute expression runs runner",
 			event:           newArticleEvent("s/我/你/g", "msg-0"),
 			repliedFound:    true,
-			replied:         otogi.Memory{Article: otogi.Article{Text: "我爱我"}},
+			replied:         core.Memory{Article: platform.Article{Text: "我爱我"}},
 			runnerResult:    "你爱你",
 			wantRunnerExpr:  "s/我/你/g",
 			wantRunnerInput: "我爱我",
@@ -180,7 +181,7 @@ func TestModuleHandleSubstituteArticle(t *testing.T) {
 			name:            "non substitute text is ignored",
 			event:           newArticleEvent("hello", "msg-0"),
 			repliedFound:    true,
-			replied:         otogi.Memory{Article: otogi.Article{Text: "我爱我"}},
+			replied:         core.Memory{Article: platform.Article{Text: "我爱我"}},
 			wantRunnerCalls: 0,
 			wantSendCalls:   0,
 		},
@@ -208,7 +209,7 @@ func TestModuleHandleSubstituteArticle(t *testing.T) {
 			name:             "runner error sends failure reply",
 			event:            newArticleEvent("s/a/b/", "msg-0"),
 			repliedFound:     true,
-			replied:          otogi.Memory{Article: otogi.Article{Text: "abc"}},
+			replied:          core.Memory{Article: platform.Article{Text: "abc"}},
 			runnerErr:        errors.New("sed failed"),
 			wantErrSubstring: "sed failed",
 			wantRunnerExpr:   "s/a/b/",
@@ -221,7 +222,7 @@ func TestModuleHandleSubstituteArticle(t *testing.T) {
 			name:             "send failure on success returns error",
 			event:            newArticleEvent("s/a/b/", "msg-0"),
 			repliedFound:     true,
-			replied:          otogi.Memory{Article: otogi.Article{Text: "abc"}},
+			replied:          core.Memory{Article: platform.Article{Text: "abc"}},
 			runnerResult:     "bbc",
 			sendErr:          errors.New("dispatcher down"),
 			wantErrSubstring: "dispatcher down",
@@ -367,8 +368,8 @@ func TestModuleOnRegister(t *testing.T) {
 	runtime := moduleRuntimeStub{
 		registry: serviceRegistryStub{
 			values: map[string]any{
-				otogi.ServiceSinkDispatcher: dispatcher,
-				otogi.ServiceMemory:         memory,
+				platform.ServiceSinkDispatcher: dispatcher,
+				core.ServiceMemory:             memory,
 			},
 		},
 		configs: noopConfigRegistry{},
@@ -404,8 +405,8 @@ func TestModuleSpec(t *testing.T) {
 	}
 }
 
-func newCommandEvent(text string, replyToID string) *otogi.Event {
-	candidate, matched, err := otogi.ParseCommandCandidate(text)
+func newCommandEvent(text string, replyToID string) *platform.Event {
+	candidate, matched, err := platform.ParseCommandCandidate(text)
 	if err != nil {
 		panic(err)
 	}
@@ -413,48 +414,48 @@ func newCommandEvent(text string, replyToID string) *otogi.Event {
 		panic("newCommandEvent expects command text")
 	}
 
-	return &otogi.Event{
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindCommandReceived,
+		Kind:       platform.EventKindCommandReceived,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-42",
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:               "msg-1",
 			Text:             text,
 			ReplyToArticleID: replyToID,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            candidate.Name,
 			Mention:         candidate.Mention,
 			Value:           strings.Join(candidate.Tokens, " "),
 			SourceEventID:   "source-1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        text,
 		},
 	}
 }
 
-func newArticleEvent(text string, replyToID string) *otogi.Event {
-	return &otogi.Event{
+func newArticleEvent(text string, replyToID string) *platform.Event {
+	return &platform.Event{
 		ID:         "event-1",
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Unix(1, 0).UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-42",
-			Type: otogi.ConversationTypePrivate,
+			Type: platform.ConversationTypePrivate,
 		},
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:               "msg-1",
 			Text:             text,
 			ReplyToArticleID: replyToID,
@@ -466,68 +467,68 @@ type captureDispatcher struct {
 	sendErr     error
 	messageID   string
 	sendCalls   int
-	lastRequest otogi.SendMessageRequest
+	lastRequest platform.SendMessageRequest
 }
 
 func (d *captureDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.sendCalls++
 	d.lastRequest = request
 	if d.sendErr != nil {
 		return nil, d.sendErr
 	}
 
-	return &otogi.OutboundMessage{ID: d.messageID}, nil
+	return &platform.OutboundMessage{ID: d.messageID}, nil
 }
 
-func (*captureDispatcher) EditMessage(context.Context, otogi.EditMessageRequest) error {
+func (*captureDispatcher) EditMessage(context.Context, platform.EditMessageRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (*captureDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (*captureDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (*captureDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
-func (*captureDispatcher) ListSinksByPlatform(context.Context, otogi.Platform) ([]otogi.EventSink, error) {
+func (*captureDispatcher) ListSinksByPlatform(context.Context, platform.Platform) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 type memoryStub struct {
-	replied      otogi.Memory
+	replied      core.Memory
 	repliedFound bool
 	repliedErr   error
 }
 
-func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool, error) {
-	return otogi.Memory{}, false, nil
+func (*memoryStub) Get(context.Context, core.MemoryLookup) (core.Memory, bool, error) {
+	return core.Memory{}, false, nil
 }
 
-func (*memoryStub) GetBatch(context.Context, []otogi.MemoryLookup) (map[otogi.MemoryLookup]otogi.Memory, error) {
+func (*memoryStub) GetBatch(context.Context, []core.MemoryLookup) (map[core.MemoryLookup]core.Memory, error) {
 	return nil, nil
 }
 
-func (m *memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
+func (m *memoryStub) GetReplied(context.Context, *platform.Event) (core.Memory, bool, error) {
 	return m.replied, m.repliedFound, m.repliedErr
 }
 
-func (*memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.ReplyChainEntry, error) {
+func (*memoryStub) GetReplyChain(context.Context, *platform.Event) ([]core.ReplyChainEntry, error) {
 	return nil, nil
 }
 
 func (*memoryStub) ListConversationContextBefore(
 	context.Context,
-	otogi.ConversationContextBeforeQuery,
-) ([]otogi.ConversationContextEntry, error) {
+	core.ConversationContextBeforeQuery,
+) ([]core.ConversationContextEntry, error) {
 	return nil, nil
 }
 
@@ -551,24 +552,24 @@ func (r *fakeRunner) Run(_ context.Context, expression string, input string) (st
 }
 
 type moduleRuntimeStub struct {
-	registry otogi.ServiceRegistry
-	configs  otogi.ConfigRegistry
+	registry core.ServiceRegistry
+	configs  core.ConfigRegistry
 }
 
-func (s moduleRuntimeStub) Services() otogi.ServiceRegistry {
+func (s moduleRuntimeStub) Services() core.ServiceRegistry {
 	return s.registry
 }
 
-func (s moduleRuntimeStub) Config() otogi.ConfigRegistry {
+func (s moduleRuntimeStub) Config() core.ConfigRegistry {
 	return s.configs
 }
 
 func (moduleRuntimeStub) Subscribe(
 	context.Context,
-	otogi.InterestSet,
-	otogi.SubscriptionSpec,
-	otogi.EventHandler,
-) (otogi.Subscription, error) {
+	core.InterestSet,
+	core.SubscriptionSpec,
+	core.EventHandler,
+) (core.Subscription, error) {
 	return nil, nil
 }
 
@@ -583,7 +584,7 @@ func (serviceRegistryStub) Register(string, any) error {
 func (s serviceRegistryStub) Resolve(name string) (any, error) {
 	value, ok := s.values[name]
 	if !ok {
-		return nil, otogi.ErrServiceNotFound
+		return nil, core.ErrServiceNotFound
 	}
 
 	return value, nil
@@ -596,5 +597,5 @@ func (noopConfigRegistry) Register(string, json.RawMessage) error {
 }
 
 func (noopConfigRegistry) Resolve(string) (json.RawMessage, error) {
-	return nil, otogi.ErrConfigNotFound
+	return nil, core.ErrConfigNotFound
 }

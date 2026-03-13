@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // TestEventBusPublishDeliversMatchingSubscriptions verifies filtered publish delivery.
@@ -20,12 +21,12 @@ func TestEventBusPublishDeliversMatchingSubscriptions(t *testing.T) {
 		_ = bus.Close(context.Background())
 	})
 
-	received := make(chan *otogi.Event, 1)
-	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-	}, otogi.SubscriptionSpec{
+	received := make(chan *platform.Event, 1)
+	_, err := bus.Subscribe(context.Background(), core.InterestSet{
+		Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+	}, core.SubscriptionSpec{
 		Name: "match",
-	}, func(_ context.Context, event *otogi.Event) error {
+	}, func(_ context.Context, event *platform.Event) error {
 		received <- event
 		return nil
 	})
@@ -33,7 +34,7 @@ func TestEventBusPublishDeliversMatchingSubscriptions(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e1", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
 
@@ -53,17 +54,17 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		policy     otogi.BackpressurePolicy
+		policy     core.BackpressurePolicy
 		wantEvents []string
 	}{
 		{
 			name:       "drop newest keeps queued oldest",
-			policy:     otogi.BackpressureDropNewest,
+			policy:     core.BackpressureDropNewest,
 			wantEvents: []string{"e1", "e2"},
 		},
 		{
 			name:       "drop oldest keeps latest",
-			policy:     otogi.BackpressureDropOldest,
+			policy:     core.BackpressureDropOldest,
 			wantEvents: []string{"e1", "e3"},
 		},
 	}
@@ -84,14 +85,14 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 			var first sync.Once
 			var mu sync.Mutex
 
-			_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-				Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-			}, otogi.SubscriptionSpec{
+			_, err := bus.Subscribe(context.Background(), core.InterestSet{
+				Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+			}, core.SubscriptionSpec{
 				Name:         "policy",
 				Workers:      1,
 				Buffer:       1,
 				Backpressure: testCase.policy,
-			}, func(_ context.Context, event *otogi.Event) error {
+			}, func(_ context.Context, event *platform.Event) error {
 				first.Do(func() {
 					blocked <- struct{}{}
 					<-release
@@ -105,7 +106,7 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 				t.Fatalf("subscribe failed: %v", err)
 			}
 
-			if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
+			if err := bus.Publish(context.Background(), newTestEvent("e1", platform.EventKindArticleCreated)); err != nil {
 				t.Fatalf("publish e1 failed: %v", err)
 			}
 			select {
@@ -113,10 +114,10 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("handler did not block as expected")
 			}
-			if err := bus.Publish(context.Background(), newTestEvent("e2", otogi.EventKindArticleCreated)); err != nil {
+			if err := bus.Publish(context.Background(), newTestEvent("e2", platform.EventKindArticleCreated)); err != nil {
 				t.Fatalf("publish e2 failed: %v", err)
 			}
-			if err := bus.Publish(context.Background(), newTestEvent("e3", otogi.EventKindArticleCreated)); err != nil {
+			if err := bus.Publish(context.Background(), newTestEvent("e3", platform.EventKindArticleCreated)); err != nil {
 				t.Fatalf("publish e3 failed: %v", err)
 			}
 
@@ -156,18 +157,18 @@ func TestEventBusBackpressureBlockSelfPublishDoesNotDeadlock(t *testing.T) {
 	selfPublishErr := make(chan error, 1)
 	processed := make(chan string, 3)
 
-	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-	}, otogi.SubscriptionSpec{
+	_, err := bus.Subscribe(context.Background(), core.InterestSet{
+		Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+	}, core.SubscriptionSpec{
 		Name:         "self-block",
 		Buffer:       1,
 		Workers:      1,
-		Backpressure: otogi.BackpressureBlock,
-	}, func(ctx context.Context, event *otogi.Event) error {
+		Backpressure: core.BackpressureBlock,
+	}, func(ctx context.Context, event *platform.Event) error {
 		if event.ID == "e1" {
 			firstStarted <- struct{}{}
 			<-allowSelfPublish
-			selfPublishErr <- bus.Publish(ctx, newTestEvent("e3", otogi.EventKindArticleCreated))
+			selfPublishErr <- bus.Publish(ctx, newTestEvent("e3", platform.EventKindArticleCreated))
 		}
 
 		processed <- event.ID
@@ -177,7 +178,7 @@ func TestEventBusBackpressureBlockSelfPublishDoesNotDeadlock(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e1", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish e1 failed: %v", err)
 	}
 	select {
@@ -185,7 +186,7 @@ func TestEventBusBackpressureBlockSelfPublishDoesNotDeadlock(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for first handler entry")
 	}
-	if err := bus.Publish(context.Background(), newTestEvent("e2", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e2", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish e2 failed: %v", err)
 	}
 
@@ -215,7 +216,7 @@ func TestEventBusBackpressureBlockSelfPublishDoesNotDeadlock(t *testing.T) {
 
 	select {
 	case err := <-asyncErr:
-		if !errors.Is(err, otogi.ErrEventDropped) {
+		if !errors.Is(err, core.ErrEventDropped) {
 			t.Fatalf("async error = %v, want ErrEventDropped", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -232,13 +233,13 @@ func TestEventBusCloseDrainsBufferedEvents(t *testing.T) {
 	unblockFirst := make(chan struct{})
 	processed := make(chan string, 3)
 
-	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-	}, otogi.SubscriptionSpec{
+	_, err := bus.Subscribe(context.Background(), core.InterestSet{
+		Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+	}, core.SubscriptionSpec{
 		Name:    "drain-on-close",
 		Buffer:  4,
 		Workers: 1,
-	}, func(_ context.Context, event *otogi.Event) error {
+	}, func(_ context.Context, event *platform.Event) error {
 		if event.ID == "e1" {
 			firstStarted <- struct{}{}
 			<-unblockFirst
@@ -250,7 +251,7 @@ func TestEventBusCloseDrainsBufferedEvents(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	if err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e1", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish e1 failed: %v", err)
 	}
 	select {
@@ -258,10 +259,10 @@ func TestEventBusCloseDrainsBufferedEvents(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for first handler entry")
 	}
-	if err := bus.Publish(context.Background(), newTestEvent("e2", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e2", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish e2 failed: %v", err)
 	}
-	if err := bus.Publish(context.Background(), newTestEvent("e3", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e3", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish e3 failed: %v", err)
 	}
 
@@ -304,7 +305,7 @@ func TestEventBusCloseRejectsNewPublish(t *testing.T) {
 		t.Fatalf("close failed: %v", err)
 	}
 
-	err := bus.Publish(context.Background(), newTestEvent("e1", otogi.EventKindArticleCreated))
+	err := bus.Publish(context.Background(), newTestEvent("e1", platform.EventKindArticleCreated))
 	if err == nil {
 		t.Fatal("expected publish on closed bus to fail")
 	}
@@ -338,12 +339,12 @@ func TestEventBusHandlerTimeoutOverridePrecedence(t *testing.T) {
 	}
 
 	observed := make(chan deadlineObservation, 1)
-	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-	}, otogi.SubscriptionSpec{
+	_, err := bus.Subscribe(context.Background(), core.InterestSet{
+		Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+	}, core.SubscriptionSpec{
 		Name:           "override-timeout",
 		HandlerTimeout: 250 * time.Millisecond,
-	}, func(ctx context.Context, _ *otogi.Event) error {
+	}, func(ctx context.Context, _ *platform.Event) error {
 		deadline, hasDeadline := ctx.Deadline()
 		remaining := time.Duration(0)
 		if hasDeadline {
@@ -360,7 +361,7 @@ func TestEventBusHandlerTimeoutOverridePrecedence(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	if err := bus.Publish(context.Background(), newTestEvent("e-timeout-override", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e-timeout-override", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
 
@@ -391,11 +392,11 @@ func TestEventBusHandlerTimeoutDefaultsWhenUnset(t *testing.T) {
 	}
 
 	observed := make(chan deadlineObservation, 1)
-	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-	}, otogi.SubscriptionSpec{
+	_, err := bus.Subscribe(context.Background(), core.InterestSet{
+		Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+	}, core.SubscriptionSpec{
 		Name: "default-timeout",
-	}, func(ctx context.Context, _ *otogi.Event) error {
+	}, func(ctx context.Context, _ *platform.Event) error {
 		deadline, hasDeadline := ctx.Deadline()
 		remaining := time.Duration(0)
 		if hasDeadline {
@@ -412,7 +413,7 @@ func TestEventBusHandlerTimeoutDefaultsWhenUnset(t *testing.T) {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	if err := bus.Publish(context.Background(), newTestEvent("e-timeout-default", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e-timeout-default", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
 
@@ -446,18 +447,18 @@ func TestEventBusHandlerErrorIncludesTimeoutDiagnostics(t *testing.T) {
 		_ = bus.Close(context.Background())
 	})
 
-	_, err := bus.Subscribe(context.Background(), otogi.InterestSet{
-		Kinds: []otogi.EventKind{otogi.EventKindArticleCreated},
-	}, otogi.SubscriptionSpec{
+	_, err := bus.Subscribe(context.Background(), core.InterestSet{
+		Kinds: []platform.EventKind{platform.EventKindArticleCreated},
+	}, core.SubscriptionSpec{
 		Name: "handler-error-diagnostics",
-	}, func(_ context.Context, _ *otogi.Event) error {
+	}, func(_ context.Context, _ *platform.Event) error {
 		return errors.New("boom")
 	})
 	if err != nil {
 		t.Fatalf("subscribe failed: %v", err)
 	}
 
-	if err := bus.Publish(context.Background(), newTestEvent("e-diagnostics", otogi.EventKindArticleCreated)); err != nil {
+	if err := bus.Publish(context.Background(), newTestEvent("e-diagnostics", platform.EventKindArticleCreated)); err != nil {
 		t.Fatalf("publish failed: %v", err)
 	}
 
@@ -484,56 +485,56 @@ func TestEventBusHandlerErrorIncludesTimeoutDiagnostics(t *testing.T) {
 	}
 }
 
-func newTestEvent(id string, kind otogi.EventKind) *otogi.Event {
-	event := &otogi.Event{
+func newTestEvent(id string, kind platform.EventKind) *platform.Event {
+	event := &platform.Event{
 		ID:         id,
 		Kind:       kind,
 		OccurredAt: time.Now().UTC(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:   "chat-1",
-			Type: otogi.ConversationTypeGroup,
+			Type: platform.ConversationTypeGroup,
 		},
-		Actor: otogi.Actor{ID: "user-1"},
+		Actor: platform.Actor{ID: "user-1"},
 	}
 
 	switch kind {
-	case otogi.EventKindArticleCreated:
-		event.Article = &otogi.Article{ID: "msg-1", Text: "hello"}
-	case otogi.EventKindArticleEdited:
-		event.Mutation = &otogi.ArticleMutation{Type: otogi.MutationTypeEdit, TargetArticleID: "msg-1"}
-	case otogi.EventKindArticleRetracted:
-		event.Mutation = &otogi.ArticleMutation{Type: otogi.MutationTypeRetraction, TargetArticleID: "msg-1"}
-	case otogi.EventKindArticleReactionAdded:
-		event.Reaction = &otogi.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionAdd}
-	case otogi.EventKindArticleReactionRemoved:
-		event.Reaction = &otogi.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: otogi.ReactionActionRemove}
-	case otogi.EventKindCommandReceived:
-		event.Article = &otogi.Article{ID: "msg-1", Text: "/raw"}
-		event.Command = &otogi.CommandInvocation{
+	case platform.EventKindArticleCreated:
+		event.Article = &platform.Article{ID: "msg-1", Text: "hello"}
+	case platform.EventKindArticleEdited:
+		event.Mutation = &platform.ArticleMutation{Type: platform.MutationTypeEdit, TargetArticleID: "msg-1"}
+	case platform.EventKindArticleRetracted:
+		event.Mutation = &platform.ArticleMutation{Type: platform.MutationTypeRetraction, TargetArticleID: "msg-1"}
+	case platform.EventKindArticleReactionAdded:
+		event.Reaction = &platform.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: platform.ReactionActionAdd}
+	case platform.EventKindArticleReactionRemoved:
+		event.Reaction = &platform.Reaction{ArticleID: "msg-1", Emoji: "👍", Action: platform.ReactionActionRemove}
+	case platform.EventKindCommandReceived:
+		event.Article = &platform.Article{ID: "msg-1", Text: "/raw"}
+		event.Command = &platform.CommandInvocation{
 			Name:            "raw",
 			SourceEventID:   "source-e1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "/raw",
 		}
-	case otogi.EventKindSystemCommandReceived:
-		event.Article = &otogi.Article{ID: "msg-1", Text: "~raw"}
-		event.Command = &otogi.CommandInvocation{
+	case platform.EventKindSystemCommandReceived:
+		event.Article = &platform.Article{ID: "msg-1", Text: "~raw"}
+		event.Command = &platform.CommandInvocation{
 			Name:            "raw",
 			SourceEventID:   "source-e1",
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "~raw",
 		}
-	case otogi.EventKindMemberJoined:
-		event.StateChange = &otogi.StateChange{Type: otogi.StateChangeTypeMember, Member: &otogi.MemberChange{Action: kind, Member: otogi.Actor{ID: "user-1"}}}
-	case otogi.EventKindMemberLeft:
-		event.StateChange = &otogi.StateChange{Type: otogi.StateChangeTypeMember, Member: &otogi.MemberChange{Action: kind, Member: otogi.Actor{ID: "user-1"}}}
-	case otogi.EventKindRoleUpdated:
-		event.StateChange = &otogi.StateChange{Type: otogi.StateChangeTypeRole, Role: &otogi.RoleChange{MemberID: "user-1"}}
-	case otogi.EventKindChatMigrated:
-		event.StateChange = &otogi.StateChange{Type: otogi.StateChangeTypeMigration, Migration: &otogi.ChatMigration{FromConversationID: "old", ToConversationID: "new"}}
+	case platform.EventKindMemberJoined:
+		event.StateChange = &platform.StateChange{Type: platform.StateChangeTypeMember, Member: &platform.MemberChange{Action: kind, Member: platform.Actor{ID: "user-1"}}}
+	case platform.EventKindMemberLeft:
+		event.StateChange = &platform.StateChange{Type: platform.StateChangeTypeMember, Member: &platform.MemberChange{Action: kind, Member: platform.Actor{ID: "user-1"}}}
+	case platform.EventKindRoleUpdated:
+		event.StateChange = &platform.StateChange{Type: platform.StateChangeTypeRole, Role: &platform.RoleChange{MemberID: "user-1"}}
+	case platform.EventKindChatMigrated:
+		event.StateChange = &platform.StateChange{Type: platform.StateChangeTypeMigration, Migration: &platform.ChatMigration{FromConversationID: "old", ToConversationID: "new"}}
 	}
 
 	return event

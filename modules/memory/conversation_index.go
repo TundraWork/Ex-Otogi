@@ -3,7 +3,7 @@ package memory
 import (
 	"sort"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 func conversationStreamKeyFromSnapshot(snapshot memorySnapshot) conversationStreamKey {
@@ -126,7 +126,7 @@ func conversationStreamEntryEqual(left conversationStreamEntry, right conversati
 		left.createdAt.Equal(right.createdAt)
 }
 
-func reverseConversationContextEntries(entries []otogi.ConversationContextEntry) {
+func reverseConversationContextEntries(entries []core.ConversationContextEntry) {
 	for left, right := 0, len(entries)-1; left < right; left, right = left+1, right-1 {
 		entries[left], entries[right] = entries[right], entries[left]
 	}

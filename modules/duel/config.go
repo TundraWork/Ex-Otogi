@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
 )
 
 const (
@@ -44,7 +44,7 @@ func defaultConfig() config {
 	}
 }
 
-func loadConfig(registry otogi.ConfigRegistry) (config, error) {
+func loadConfig(registry core.ConfigRegistry) (config, error) {
 	cfg := defaultConfig()
 	if registry == nil {
 		return cfg, nil
@@ -53,7 +53,7 @@ func loadConfig(registry otogi.ConfigRegistry) (config, error) {
 	raw, err := registry.Resolve(moduleName)
 	switch {
 	case err == nil:
-	case errors.Is(err, otogi.ErrConfigNotFound):
+	case errors.Is(err, core.ErrConfigNotFound):
 		return cfg, nil
 	default:
 		return config{}, fmt.Errorf("resolve config: %w", err)

@@ -1,7 +1,9 @@
-package otogi
+package core
 
 import (
 	"context"
+
+	"ex-otogi/pkg/otogi/platform"
 )
 
 // ServiceCommandCatalog is the canonical service registry key for command discovery.
@@ -12,7 +14,7 @@ type RegisteredCommand struct {
 	// ModuleName identifies which module registered this command.
 	ModuleName string
 	// Command is the registered command specification.
-	Command CommandSpec
+	Command platform.CommandSpec
 }
 
 // CommandCatalog provides read access to registered command specifications.

@@ -7,15 +7,16 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 const helpCommandName = "help"
 
 // Module replies with command reference text when it receives a /help command.
 type Module struct {
-	dispatcher     otogi.SinkDispatcher
-	commandCatalog otogi.CommandCatalog
+	dispatcher     platform.SinkDispatcher
+	commandCatalog core.CommandCatalog
 }
 
 // New creates a help module with default configuration.
@@ -29,31 +30,31 @@ func (m *Module) Name() string {
 }
 
 // Spec declares interest in ordinary help command events.
-func (m *Module) Spec() otogi.ModuleSpec {
-	return otogi.ModuleSpec{
-		Handlers: []otogi.ModuleHandler{
+func (m *Module) Spec() core.ModuleSpec {
+	return core.ModuleSpec{
+		Handlers: []core.ModuleHandler{
 			{
-				Capability: otogi.Capability{
+				Capability: core.Capability{
 					Name:        "help-command-handler",
 					Description: "renders registered command help for /help",
-					Interest: otogi.InterestSet{
-						Kinds:          []otogi.EventKind{otogi.EventKindCommandReceived},
+					Interest: core.InterestSet{
+						Kinds:          []platform.EventKind{platform.EventKindCommandReceived},
 						RequireCommand: true,
 						CommandNames:   []string{helpCommandName},
 						RequireArticle: true,
 					},
 					RequiredServices: []string{
-						otogi.ServiceSinkDispatcher,
-						otogi.ServiceCommandCatalog,
+						platform.ServiceSinkDispatcher,
+						core.ServiceCommandCatalog,
 					},
 				},
-				Subscription: otogi.NewDefaultSubscriptionSpec("help-commands"),
+				Subscription: core.NewDefaultSubscriptionSpec("help-commands"),
 				Handler:      m.handleCommand,
 			},
 		},
-		Commands: []otogi.CommandSpec{
+		Commands: []platform.CommandSpec{
 			{
-				Prefix:      otogi.CommandPrefixOrdinary,
+				Prefix:      platform.CommandPrefixOrdinary,
 				Name:        helpCommandName,
 				Description: "show all available commands",
 			},
@@ -62,17 +63,17 @@ func (m *Module) Spec() otogi.ModuleSpec {
 }
 
 // OnRegister resolves dependencies required by this module.
-func (m *Module) OnRegister(_ context.Context, runtime otogi.ModuleRuntime) error {
-	dispatcher, err := otogi.ResolveAs[otogi.SinkDispatcher](
+func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error {
+	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
 		runtime.Services(),
-		otogi.ServiceSinkDispatcher,
+		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
 		return fmt.Errorf("help resolve outbound dispatcher: %w", err)
 	}
-	commandCatalog, err := otogi.ResolveAs[otogi.CommandCatalog](
+	commandCatalog, err := core.ResolveAs[core.CommandCatalog](
 		runtime.Services(),
-		otogi.ServiceCommandCatalog,
+		core.ServiceCommandCatalog,
 	)
 	if err != nil {
 		return fmt.Errorf("help resolve command catalog: %w", err)
@@ -94,11 +95,11 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleCommand(ctx context.Context, event *otogi.Event) error {
+func (m *Module) handleCommand(ctx context.Context, event *platform.Event) error {
 	if event == nil || event.Command == nil || event.Article == nil {
 		return nil
 	}
-	if event.Kind != otogi.EventKindCommandReceived {
+	if event.Kind != platform.EventKindCommandReceived {
 		return nil
 	}
 	if event.Command.Name != helpCommandName {
@@ -117,11 +118,11 @@ func (m *Module) handleCommand(ctx context.Context, event *otogi.Event) error {
 	}
 	body := renderHelp(commands)
 
-	target, err := otogi.OutboundTargetFromEvent(event)
+	target, err := platform.OutboundTargetFromEvent(event)
 	if err != nil {
 		return fmt.Errorf("help derive outbound target: %w", err)
 	}
-	_, err = m.dispatcher.SendMessage(ctx, otogi.SendMessageRequest{
+	_, err = m.dispatcher.SendMessage(ctx, platform.SendMessageRequest{
 		Target:           target,
 		Text:             body,
 		Entities:         helpReplyEntities(body),
@@ -134,12 +135,12 @@ func (m *Module) handleCommand(ctx context.Context, event *otogi.Event) error {
 	return nil
 }
 
-func renderHelp(commands []otogi.RegisteredCommand) string {
+func renderHelp(commands []core.RegisteredCommand) string {
 	if len(commands) == 0 {
 		return "Available commands:\n(none)"
 	}
 
-	sorted := append([]otogi.RegisteredCommand(nil), commands...)
+	sorted := append([]core.RegisteredCommand(nil), commands...)
 	sort.Slice(sorted, func(i, j int) bool {
 		left := commandLabel(sorted[i].Command)
 		right := commandLabel(sorted[j].Command)
@@ -175,14 +176,14 @@ func renderHelp(commands []otogi.RegisteredCommand) string {
 	return strings.Join(lines, "\n")
 }
 
-func helpReplyEntities(body string) []otogi.TextEntity {
+func helpReplyEntities(body string) []platform.TextEntity {
 	if body == "" {
 		return nil
 	}
 
-	return []otogi.TextEntity{
+	return []platform.TextEntity{
 		{
-			Type:      otogi.TextEntityTypeBlockquote,
+			Type:      platform.TextEntityTypeBlockquote,
 			Offset:    0,
 			Length:    utf8.RuneCountInString(body),
 			Collapsed: true,
@@ -190,11 +191,11 @@ func helpReplyEntities(body string) []otogi.TextEntity {
 	}
 }
 
-func commandLabel(command otogi.CommandSpec) string {
+func commandLabel(command platform.CommandSpec) string {
 	return fmt.Sprintf("%s%s", command.Prefix, strings.ToLower(strings.TrimSpace(command.Name)))
 }
 
-func renderCommandOptions(options []otogi.CommandOptionSpec) string {
+func renderCommandOptions(options []platform.CommandOptionSpec) string {
 	sort.Slice(options, func(i, j int) bool {
 		return optionSortKey(options[i]) < optionSortKey(options[j])
 	})
@@ -213,11 +214,11 @@ func renderCommandOptions(options []otogi.CommandOptionSpec) string {
 	return strings.Join(descriptors, ", ")
 }
 
-func optionSortKey(option otogi.CommandOptionSpec) string {
+func optionSortKey(option platform.CommandOptionSpec) string {
 	return strings.ToLower(strings.TrimSpace(option.Name)) + "|" + strings.ToLower(strings.TrimSpace(option.Alias))
 }
 
-func renderCommandOption(option otogi.CommandOptionSpec) string {
+func renderCommandOption(option platform.CommandOptionSpec) string {
 	name := strings.ToLower(strings.TrimSpace(option.Name))
 	alias := strings.ToLower(strings.TrimSpace(option.Alias))
 
@@ -244,6 +245,6 @@ func renderCommandOption(option otogi.CommandOptionSpec) string {
 }
 
 var (
-	_ otogi.Module          = (*Module)(nil)
-	_ otogi.ModuleRegistrar = (*Module)(nil)
+	_ core.Module          = (*Module)(nil)
+	_ core.ModuleRegistrar = (*Module)(nil)
 )

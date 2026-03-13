@@ -1,4 +1,4 @@
-package otogi
+package core
 
 import (
 	"encoding/json"
@@ -9,7 +9,9 @@ import (
 //
 // Modules read their own configuration during OnRegister via
 // ModuleRuntime.Config(). Configuration is populated before module
-// registration by the application wiring layer.
+// registration by the application wiring layer. The registry is intentionally
+// raw so pkg/otogi remains the stable configuration boundary while each module
+// owns its typed schema.
 type ConfigRegistry interface {
 	// Register stores raw JSON configuration for the named module.
 	Register(moduleName string, raw json.RawMessage) error

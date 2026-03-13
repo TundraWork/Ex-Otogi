@@ -4,12 +4,12 @@ import (
 	"context"
 	"reflect"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 type editPayload struct {
 	Text     string
-	Entities []otogi.TextEntity
+	Entities []platform.TextEntity
 }
 
 func plainEditPayload(text string) editPayload {
@@ -34,6 +34,6 @@ func (m *Module) parseEditPayload(ctx context.Context, text string) (editPayload
 
 	return editPayload{
 		Text:     parsed.Text,
-		Entities: append([]otogi.TextEntity(nil), parsed.Entities...),
+		Entities: append([]platform.TextEntity(nil), parsed.Entities...),
 	}, nil
 }

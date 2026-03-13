@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/platform"
 )
 
-// Decoder converts Telegram update DTOs into neutral otogi events.
+// Decoder converts Telegram update DTOs into Otogi events.
 type Decoder interface {
-	// Decode maps one adapter update into a validated neutral event envelope.
-	Decode(ctx context.Context, update Update) (*otogi.Event, error)
+	// Decode maps one adapter update into a validated Otogi event envelope.
+	Decode(ctx context.Context, update Update) (*platform.Event, error)
 }
 
 // DefaultDecoder provides default Telegram-to-otogi mappings.
@@ -22,8 +22,8 @@ func NewDefaultDecoder() DefaultDecoder {
 	return DefaultDecoder{}
 }
 
-// Decode converts a Telegram update into a neutral event.
-func (d DefaultDecoder) Decode(_ context.Context, update Update) (*otogi.Event, error) {
+// Decode converts a Telegram update into an Otogi event.
+func (d DefaultDecoder) Decode(_ context.Context, update Update) (*platform.Event, error) {
 	event := newBaseEvent(update)
 	eventKind, known := eventKindFromUpdateType(update.Type)
 	if !known {
@@ -86,24 +86,24 @@ func (d DefaultDecoder) Decode(_ context.Context, update Update) (*otogi.Event, 
 }
 
 // newBaseEvent builds the shared envelope fields used by all update mappings.
-func newBaseEvent(update Update) *otogi.Event {
+func newBaseEvent(update Update) *platform.Event {
 	occurredAt := update.OccurredAt
 	if occurredAt.IsZero() {
 		occurredAt = time.Now().UTC()
 	}
 
-	return &otogi.Event{
+	return &platform.Event{
 		ID:         update.ID,
 		OccurredAt: occurredAt,
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:    update.Chat.ID,
 			Type:  update.Chat.Type,
 			Title: update.Chat.Title,
 		},
-		Actor: otogi.Actor{
+		Actor: platform.Actor{
 			ID:          update.Actor.ID,
 			Username:    update.Actor.Username,
 			DisplayName: update.Actor.DisplayName,
@@ -113,25 +113,25 @@ func newBaseEvent(update Update) *otogi.Event {
 	}
 }
 
-// decodeArticle maps Telegram article payload into neutral article content.
-func decodeArticle(payload *ArticlePayload) (*otogi.Article, error) {
+// decodeArticle maps Telegram article payload into standardized article content.
+func decodeArticle(payload *ArticlePayload) (*platform.Article, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing article payload")
 	}
 
-	return &otogi.Article{
+	return &platform.Article{
 		ID:               payload.ID,
 		ThreadID:         payload.ThreadID,
 		ReplyToArticleID: payload.ReplyToArticleID,
 		Text:             payload.Text,
 		Entities:         payload.Entities,
 		Media:            mapMedia(payload.Media),
-		Reactions:        append([]otogi.ArticleReaction(nil), payload.Reactions...),
+		Reactions:        append([]platform.ArticleReaction(nil), payload.Reactions...),
 	}, nil
 }
 
 // decodeEdit maps Telegram edit payload into mutation semantics.
-func decodeEdit(payload *ArticleEditPayload, occurredAt time.Time) (*otogi.ArticleMutation, error) {
+func decodeEdit(payload *ArticleEditPayload, occurredAt time.Time) (*platform.ArticleMutation, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing edit payload")
 	}
@@ -140,8 +140,8 @@ func decodeEdit(payload *ArticleEditPayload, occurredAt time.Time) (*otogi.Artic
 		changedAt = eventTimePointer(occurredAt)
 	}
 
-	return &otogi.ArticleMutation{
-		Type:            otogi.MutationTypeEdit,
+	return &platform.ArticleMutation{
+		Type:            platform.MutationTypeEdit,
 		TargetArticleID: payload.ArticleID,
 		ChangedAt:       changedAt,
 		Before:          mapSnapshot(payload.Before),
@@ -151,52 +151,52 @@ func decodeEdit(payload *ArticleEditPayload, occurredAt time.Time) (*otogi.Artic
 }
 
 // decodeDelete maps Telegram delete payload into retraction mutation semantics.
-func decodeDelete(payload *ArticleDeletePayload, occurredAt time.Time) (*otogi.ArticleMutation, error) {
+func decodeDelete(payload *ArticleDeletePayload, occurredAt time.Time) (*platform.ArticleMutation, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing delete payload")
 	}
 	changedAt := eventTimePointer(occurredAt)
 
-	return &otogi.ArticleMutation{
-		Type:            otogi.MutationTypeRetraction,
+	return &platform.ArticleMutation{
+		Type:            platform.MutationTypeRetraction,
 		TargetArticleID: payload.ArticleID,
 		ChangedAt:       changedAt,
 		Reason:          payload.Reason,
 	}, nil
 }
 
-// decodeReaction maps reaction add/remove payload into neutral reaction metadata.
-func decodeReaction(updateType UpdateType, payload *ArticleReactionPayload) (*otogi.Reaction, error) {
+// decodeReaction maps reaction add/remove payload into standardized reaction metadata.
+func decodeReaction(updateType UpdateType, payload *ArticleReactionPayload) (*platform.Reaction, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing reaction payload")
 	}
 
-	action := otogi.ReactionActionAdd
+	action := platform.ReactionActionAdd
 	if updateType == UpdateTypeReactionRemove {
-		action = otogi.ReactionActionRemove
+		action = platform.ReactionActionRemove
 	}
 
-	return &otogi.Reaction{
+	return &platform.Reaction{
 		ArticleID: payload.ArticleID,
 		Emoji:     payload.Emoji,
 		Action:    action,
 	}, nil
 }
 
-// decodeMember maps join/leave transitions into neutral member state changes.
-func decodeMember(updateType UpdateType, payload *MemberPayload) (*otogi.StateChange, error) {
+// decodeMember maps join/leave transitions into standardized member state changes.
+func decodeMember(updateType UpdateType, payload *MemberPayload) (*platform.StateChange, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing member payload")
 	}
 
-	action := otogi.EventKindMemberJoined
+	action := platform.EventKindMemberJoined
 	if updateType == UpdateTypeMemberLeave {
-		action = otogi.EventKindMemberLeft
+		action = platform.EventKindMemberLeft
 	}
 
-	var inviter *otogi.Actor
+	var inviter *platform.Actor
 	if payload.Inviter != nil {
-		inviter = &otogi.Actor{
+		inviter = &platform.Actor{
 			ID:          payload.Inviter.ID,
 			Username:    payload.Inviter.Username,
 			DisplayName: payload.Inviter.DisplayName,
@@ -204,9 +204,9 @@ func decodeMember(updateType UpdateType, payload *MemberPayload) (*otogi.StateCh
 		}
 	}
 
-	return &otogi.StateChange{
-		Type: otogi.StateChangeTypeMember,
-		Member: &otogi.MemberChange{
+	return &platform.StateChange{
+		Type: platform.StateChangeTypeMember,
+		Member: &platform.MemberChange{
 			Action:   action,
 			Member:   mapActor(payload.Member),
 			Inviter:  inviter,
@@ -216,19 +216,19 @@ func decodeMember(updateType UpdateType, payload *MemberPayload) (*otogi.StateCh
 	}, nil
 }
 
-// decodeRole maps role transitions into neutral role state changes.
-func decodeRole(payload *RolePayload) (*otogi.StateChange, error) {
+// decodeRole maps role transitions into standardized role state changes.
+func decodeRole(payload *RolePayload) (*platform.StateChange, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing role payload")
 	}
 
-	return &otogi.StateChange{
-		Type: otogi.StateChangeTypeRole,
-		Role: &otogi.RoleChange{
+	return &platform.StateChange{
+		Type: platform.StateChangeTypeRole,
+		Role: &platform.RoleChange{
 			MemberID: payload.MemberID,
 			OldRole:  payload.OldRole,
 			NewRole:  payload.NewRole,
-			ChangedBy: otogi.Actor{
+			ChangedBy: platform.Actor{
 				ID:          payload.ChangedBy.ID,
 				Username:    payload.ChangedBy.Username,
 				DisplayName: payload.ChangedBy.DisplayName,
@@ -238,15 +238,15 @@ func decodeRole(payload *RolePayload) (*otogi.StateChange, error) {
 	}, nil
 }
 
-// decodeMigration maps Telegram chat migrations into neutral migration state changes.
-func decodeMigration(payload *MigrationPayload) (*otogi.StateChange, error) {
+// decodeMigration maps Telegram chat migrations into standardized migration state changes.
+func decodeMigration(payload *MigrationPayload) (*platform.StateChange, error) {
 	if payload == nil {
 		return nil, fmt.Errorf("missing migration payload")
 	}
 
-	return &otogi.StateChange{
-		Type: otogi.StateChangeTypeMigration,
-		Migration: &otogi.ChatMigration{
+	return &platform.StateChange{
+		Type: platform.StateChangeTypeMigration,
+		Migration: &platform.ChatMigration{
 			FromConversationID: payload.FromChatID,
 			ToConversationID:   payload.ToChatID,
 			Reason:             payload.Reason,
@@ -254,15 +254,15 @@ func decodeMigration(payload *MigrationPayload) (*otogi.StateChange, error) {
 	}, nil
 }
 
-// mapMedia converts media descriptors into neutral attachment metadata.
-func mapMedia(media []MediaPayload) []otogi.MediaAttachment {
+// mapMedia converts media descriptors into standardized attachment metadata.
+func mapMedia(media []MediaPayload) []platform.MediaAttachment {
 	if len(media) == 0 {
 		return nil
 	}
 
-	mapped := make([]otogi.MediaAttachment, 0, len(media))
+	mapped := make([]platform.MediaAttachment, 0, len(media))
 	for _, item := range media {
-		mapped = append(mapped, otogi.MediaAttachment{
+		mapped = append(mapped, platform.MediaAttachment{
 			ID:        item.ID,
 			Type:      item.Type,
 			MIMEType:  item.MIMEType,
@@ -278,12 +278,12 @@ func mapMedia(media []MediaPayload) []otogi.MediaAttachment {
 }
 
 // mapPreview converts optional preview metadata.
-func mapPreview(preview *MediaPreviewPayload) *otogi.MediaPreview {
+func mapPreview(preview *MediaPreviewPayload) *platform.MediaPreview {
 	if preview == nil {
 		return nil
 	}
 
-	return &otogi.MediaPreview{
+	return &platform.MediaPreview{
 		MIMEType: preview.MIMEType,
 		Bytes:    preview.Bytes,
 		Width:    preview.Width,
@@ -293,21 +293,21 @@ func mapPreview(preview *MediaPreviewPayload) *otogi.MediaPreview {
 }
 
 // mapSnapshot converts immutable article snapshots for mutation payloads.
-func mapSnapshot(snapshot *ArticleSnapshotPayload) *otogi.ArticleSnapshot {
+func mapSnapshot(snapshot *ArticleSnapshotPayload) *platform.ArticleSnapshot {
 	if snapshot == nil {
 		return nil
 	}
 
-	return &otogi.ArticleSnapshot{
+	return &platform.ArticleSnapshot{
 		Text:     snapshot.Text,
-		Entities: append([]otogi.TextEntity(nil), snapshot.Entities...),
+		Entities: append([]platform.TextEntity(nil), snapshot.Entities...),
 		Media:    mapMedia(snapshot.Media),
 	}
 }
 
-// mapActor converts adapter actor references to neutral actor values.
-func mapActor(actor ActorRef) otogi.Actor {
-	return otogi.Actor{
+// mapActor converts adapter actor references to standardized actor values.
+func mapActor(actor ActorRef) platform.Actor {
+	return platform.Actor{
 		ID:          actor.ID,
 		Username:    actor.Username,
 		DisplayName: actor.DisplayName,

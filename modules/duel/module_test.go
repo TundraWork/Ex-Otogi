@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/core"
+	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestScoreHand(t *testing.T) {
@@ -186,20 +187,20 @@ func TestParseDuelInput(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		command *otogi.CommandInvocation
+		command *platform.CommandInvocation
 		want    duelInput
 		wantErr string
 	}{
 		{
 			name:    "empty input",
-			command: &otogi.CommandInvocation{Name: duelCommandName},
+			command: &platform.CommandInvocation{Name: duelCommandName},
 			want:    duelInput{},
 		},
 		{
 			name: "option max",
-			command: &otogi.CommandInvocation{
+			command: &platform.CommandInvocation{
 				Name: duelCommandName,
-				Options: []otogi.CommandOption{
+				Options: []platform.CommandOption{
 					{Name: "max", HasValue: true, Value: "6"},
 				},
 			},
@@ -207,7 +208,7 @@ func TestParseDuelInput(t *testing.T) {
 		},
 		{
 			name: "bare value shorthand",
-			command: &otogi.CommandInvocation{
+			command: &platform.CommandInvocation{
 				Name:  duelCommandName,
 				Value: "5",
 			},
@@ -215,7 +216,7 @@ func TestParseDuelInput(t *testing.T) {
 		},
 		{
 			name: "start shorthand",
-			command: &otogi.CommandInvocation{
+			command: &platform.CommandInvocation{
 				Name:  duelCommandName,
 				Value: "start",
 			},
@@ -223,9 +224,9 @@ func TestParseDuelInput(t *testing.T) {
 		},
 		{
 			name: "conflicting controls",
-			command: &otogi.CommandInvocation{
+			command: &platform.CommandInvocation{
 				Name: duelCommandName,
-				Options: []otogi.CommandOption{
+				Options: []platform.CommandOption{
 					{Name: "start"},
 					{Name: "cancel"},
 				},
@@ -303,9 +304,9 @@ func TestModuleDirectChallengeOnlyAllowsInvitedPlayer(t *testing.T) {
 		{rank: 10, label: "♧10"},
 		{rank: 10, label: "♢10"},
 	})
-	memory.replied = otogi.Memory{
+	memory.replied = core.Memory{
 		Actor: actor("target", "受邀者"),
-		Article: otogi.Article{
+		Article: platform.Article{
 			ID:   "reply-msg",
 			Text: "challenge me",
 		},
@@ -622,17 +623,17 @@ func (fixedEmojiPicker) Pick(options []string) string {
 
 type captureDispatcher struct {
 	mu           sync.Mutex
-	sendRequests []otogi.SendMessageRequest
+	sendRequests []platform.SendMessageRequest
 	sendErrors   []error
-	editRequests []otogi.EditMessageRequest
+	editRequests []platform.EditMessageRequest
 	editErrors   []error
 	nextID       int
 }
 
 func (d *captureDispatcher) SendMessage(
 	_ context.Context,
-	request otogi.SendMessageRequest,
-) (*otogi.OutboundMessage, error) {
+	request platform.SendMessageRequest,
+) (*platform.OutboundMessage, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -644,13 +645,13 @@ func (d *captureDispatcher) SendMessage(
 
 	d.nextID++
 
-	return &otogi.OutboundMessage{
+	return &platform.OutboundMessage{
 		ID:     "board-" + strconv.Itoa(d.nextID),
 		Target: request.Target,
 	}, nil
 }
 
-func (d *captureDispatcher) EditMessage(_ context.Context, request otogi.EditMessageRequest) error {
+func (d *captureDispatcher) EditMessage(_ context.Context, request platform.EditMessageRequest) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -663,30 +664,30 @@ func (d *captureDispatcher) EditMessage(_ context.Context, request otogi.EditMes
 	return nil
 }
 
-func (*captureDispatcher) DeleteMessage(context.Context, otogi.DeleteMessageRequest) error {
+func (*captureDispatcher) DeleteMessage(context.Context, platform.DeleteMessageRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) SetReaction(context.Context, otogi.SetReactionRequest) error {
+func (*captureDispatcher) SetReaction(context.Context, platform.SetReactionRequest) error {
 	return nil
 }
 
-func (*captureDispatcher) ListSinks(context.Context) ([]otogi.EventSink, error) {
+func (*captureDispatcher) ListSinks(context.Context) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
-func (*captureDispatcher) ListSinksByPlatform(context.Context, otogi.Platform) ([]otogi.EventSink, error) {
+func (*captureDispatcher) ListSinksByPlatform(context.Context, platform.Platform) ([]platform.EventSink, error) {
 	return nil, nil
 }
 
 type captureModerationDispatcher struct {
 	mu       sync.Mutex
-	requests []otogi.RestrictMemberRequest
+	requests []platform.RestrictMemberRequest
 }
 
 func (d *captureModerationDispatcher) RestrictMember(
 	_ context.Context,
-	request otogi.RestrictMemberRequest,
+	request platform.RestrictMemberRequest,
 ) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -697,31 +698,31 @@ func (d *captureModerationDispatcher) RestrictMember(
 }
 
 type memoryStub struct {
-	replied otogi.Memory
+	replied core.Memory
 	found   bool
 	err     error
 }
 
-func (*memoryStub) Get(context.Context, otogi.MemoryLookup) (otogi.Memory, bool, error) {
-	return otogi.Memory{}, false, nil
+func (*memoryStub) Get(context.Context, core.MemoryLookup) (core.Memory, bool, error) {
+	return core.Memory{}, false, nil
 }
 
-func (*memoryStub) GetBatch(context.Context, []otogi.MemoryLookup) (map[otogi.MemoryLookup]otogi.Memory, error) {
+func (*memoryStub) GetBatch(context.Context, []core.MemoryLookup) (map[core.MemoryLookup]core.Memory, error) {
 	return nil, nil
 }
 
-func (m *memoryStub) GetReplied(context.Context, *otogi.Event) (otogi.Memory, bool, error) {
+func (m *memoryStub) GetReplied(context.Context, *platform.Event) (core.Memory, bool, error) {
 	return m.replied, m.found, m.err
 }
 
-func (*memoryStub) GetReplyChain(context.Context, *otogi.Event) ([]otogi.ReplyChainEntry, error) {
+func (*memoryStub) GetReplyChain(context.Context, *platform.Event) ([]core.ReplyChainEntry, error) {
 	return nil, nil
 }
 
 func (*memoryStub) ListConversationContextBefore(
 	context.Context,
-	otogi.ConversationContextBeforeQuery,
-) ([]otogi.ConversationContextEntry, error) {
+	core.ConversationContextBeforeQuery,
+) ([]core.ConversationContextEntry, error) {
 	return nil, nil
 }
 
@@ -754,8 +755,8 @@ func newTestModule(
 	return module, dispatcher, moderation, memory
 }
 
-func actor(id string, name string) otogi.Actor {
-	return otogi.Actor{
+func actor(id string, name string) platform.Actor {
+	return platform.Actor{
 		ID:          id,
 		DisplayName: name,
 	}
@@ -763,58 +764,58 @@ func actor(id string, name string) otogi.Actor {
 
 func commandEvent(
 	messageID string,
-	actor otogi.Actor,
+	actor platform.Actor,
 	commandName string,
 	value string,
-	options []otogi.CommandOption,
+	options []platform.CommandOption,
 	replyTo string,
-) *otogi.Event {
-	return &otogi.Event{
+) *platform.Event {
+	return &platform.Event{
 		ID:         "evt-" + messageID,
-		Kind:       otogi.EventKindCommandReceived,
+		Kind:       platform.EventKindCommandReceived,
 		OccurredAt: time.Now(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:    "chat-1",
-			Type:  otogi.ConversationTypeGroup,
+			Type:  platform.ConversationTypeGroup,
 			Title: "Test Group",
 		},
 		Actor: actor,
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:               messageID,
 			Text:             "/" + commandName,
 			ReplyToArticleID: replyTo,
 		},
-		Command: &otogi.CommandInvocation{
+		Command: &platform.CommandInvocation{
 			Name:            commandName,
 			Value:           value,
-			Options:         append([]otogi.CommandOption(nil), options...),
+			Options:         append([]platform.CommandOption(nil), options...),
 			SourceEventID:   "src-" + messageID,
-			SourceEventKind: otogi.EventKindArticleCreated,
+			SourceEventKind: platform.EventKindArticleCreated,
 			RawInput:        "/" + commandName,
 		},
 	}
 }
 
-func articleEvent(messageID string, actor otogi.Actor) *otogi.Event {
-	return &otogi.Event{
+func articleEvent(messageID string, actor platform.Actor) *platform.Event {
+	return &platform.Event{
 		ID:         "evt-" + messageID,
-		Kind:       otogi.EventKindArticleCreated,
+		Kind:       platform.EventKindArticleCreated,
 		OccurredAt: time.Now(),
-		Source: otogi.EventSource{
-			Platform: otogi.PlatformTelegram,
+		Source: platform.EventSource{
+			Platform: platform.PlatformTelegram,
 			ID:       "tg-main",
 		},
-		Conversation: otogi.Conversation{
+		Conversation: platform.Conversation{
 			ID:    "chat-1",
-			Type:  otogi.ConversationTypeGroup,
+			Type:  platform.ConversationTypeGroup,
 			Title: "Test Group",
 		},
 		Actor: actor,
-		Article: &otogi.Article{
+		Article: &platform.Article{
 			ID:   messageID,
 			Text: "hello",
 		},
@@ -835,7 +836,7 @@ func waitUntil(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Fatal("condition not met before timeout")
 }
 
-func runCommands(t *testing.T, module *Module, events ...*otogi.Event) {
+func runCommands(t *testing.T, module *Module, events ...*platform.Event) {
 	t.Helper()
 
 	for _, event := range events {

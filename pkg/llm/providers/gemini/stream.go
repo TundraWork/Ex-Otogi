@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"ex-otogi/pkg/otogi"
+	"ex-otogi/pkg/otogi/ai"
 
 	"google.golang.org/genai"
 )
@@ -24,7 +24,7 @@ type geminiStream struct {
 	closed          bool
 	finished        bool
 	includeThoughts bool
-	pending         []otogi.LLMGenerateChunk
+	pending         []ai.LLMGenerateChunk
 	logger          *slog.Logger
 	request         geminiRequestDiagnostics
 
@@ -49,15 +49,15 @@ func newGeminiStream(
 	}
 }
 
-func (s *geminiStream) Recv(ctx context.Context) (otogi.LLMGenerateChunk, error) {
+func (s *geminiStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, error) {
 	if ctx == nil {
-		return otogi.LLMGenerateChunk{}, fmt.Errorf("gemini stream recv: nil context")
+		return ai.LLMGenerateChunk{}, fmt.Errorf("gemini stream recv: nil context")
 	}
 
 	for {
 		if err := ctx.Err(); err != nil {
 			_ = s.Close()
-			return otogi.LLMGenerateChunk{}, fmt.Errorf("gemini stream recv context: %w", err)
+			return ai.LLMGenerateChunk{}, fmt.Errorf("gemini stream recv context: %w", err)
 		}
 		if chunk, ok := s.dequeuePending(); ok {
 			if chunk.Delta == "" {
@@ -68,7 +68,7 @@ func (s *geminiStream) Recv(ctx context.Context) (otogi.LLMGenerateChunk, error)
 
 		response, err := s.nextResponse(ctx)
 		if err != nil {
-			return otogi.LLMGenerateChunk{}, err
+			return ai.LLMGenerateChunk{}, err
 		}
 
 		summary := summarizeGenerateContentResponse(response)
@@ -77,7 +77,7 @@ func (s *geminiStream) Recv(ctx context.Context) (otogi.LLMGenerateChunk, error)
 		chunks, mapErr := mapGenerateContentResponse(response, s.includeThoughts)
 		if mapErr != nil {
 			s.logResponseError(ctx, mapErr, summary)
-			return otogi.LLMGenerateChunk{}, mapErr
+			return ai.LLMGenerateChunk{}, mapErr
 		}
 		if len(chunks) == 0 {
 			continue
@@ -154,12 +154,12 @@ func (s *geminiStream) markFinished() {
 	s.mu.Unlock()
 }
 
-func (s *geminiStream) dequeuePending() (otogi.LLMGenerateChunk, bool) {
+func (s *geminiStream) dequeuePending() (ai.LLMGenerateChunk, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.pending) == 0 {
-		return otogi.LLMGenerateChunk{}, false
+		return ai.LLMGenerateChunk{}, false
 	}
 
 	chunk := s.pending[0]
@@ -167,7 +167,7 @@ func (s *geminiStream) dequeuePending() (otogi.LLMGenerateChunk, bool) {
 	return chunk, true
 }
 
-func (s *geminiStream) enqueuePending(chunks []otogi.LLMGenerateChunk) {
+func (s *geminiStream) enqueuePending(chunks []ai.LLMGenerateChunk) {
 	if len(chunks) == 0 {
 		return
 	}
@@ -261,7 +261,7 @@ type geminiRequestDiagnostics struct {
 }
 
 func newGeminiRequestDiagnostics(
-	req otogi.LLMGenerateRequest,
+	req ai.LLMGenerateRequest,
 	options requestOptions,
 ) geminiRequestDiagnostics {
 	diagnostics := geminiRequestDiagnostics{
@@ -278,7 +278,7 @@ func newGeminiRequestDiagnostics(
 		safetyFilterOff: isTrue(options.safetyFilterOff),
 	}
 	for _, message := range req.Messages {
-		if message.Role == otogi.LLMMessageRoleSystem {
+		if message.Role == ai.LLMMessageRoleSystem {
 			diagnostics.systemMessages++
 		}
 	}
@@ -422,7 +422,7 @@ func (d geminiResponseDiagnostics) slogArgs() []any {
 func mapGenerateContentResponse(
 	response *genai.GenerateContentResponse,
 	includeThoughts bool,
-) ([]otogi.LLMGenerateChunk, error) {
+) ([]ai.LLMGenerateChunk, error) {
 	if response == nil {
 		return nil, fmt.Errorf("gemini stream parse response: nil response")
 	}
@@ -441,7 +441,7 @@ func mapGenerateContentResponse(
 		return nil, nil
 	}
 
-	chunks := make([]otogi.LLMGenerateChunk, 0, len(content.Parts))
+	chunks := make([]ai.LLMGenerateChunk, 0, len(content.Parts))
 	for _, part := range content.Parts {
 		if part == nil || part.Text == "" {
 			continue
@@ -450,14 +450,14 @@ func mapGenerateContentResponse(
 			if !includeThoughts {
 				continue
 			}
-			chunks = append(chunks, otogi.LLMGenerateChunk{
-				Kind:  otogi.LLMGenerateChunkKindThinkingSummary,
+			chunks = append(chunks, ai.LLMGenerateChunk{
+				Kind:  ai.LLMGenerateChunkKindThinkingSummary,
 				Delta: part.Text,
 			})
 			continue
 		}
-		chunks = append(chunks, otogi.LLMGenerateChunk{
-			Kind:  otogi.LLMGenerateChunkKindOutputText,
+		chunks = append(chunks, ai.LLMGenerateChunk{
+			Kind:  ai.LLMGenerateChunkKindOutputText,
 			Delta: part.Text,
 		})
 	}
@@ -527,4 +527,4 @@ func formatSafetyRatings(ratings []*genai.SafetyRating) []string {
 	return parts
 }
 
-var _ otogi.LLMStream = (*geminiStream)(nil)
+var _ ai.LLMStream = (*geminiStream)(nil)

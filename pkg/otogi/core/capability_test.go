@@ -1,6 +1,10 @@
-package otogi
+package core
 
-import "testing"
+import (
+	"testing"
+
+	. "ex-otogi/pkg/otogi/platform"
+)
 
 func TestInterestSetMatches(t *testing.T) {
 	t.Parallel()
