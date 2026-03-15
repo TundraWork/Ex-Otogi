@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ type articleTagBridge struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[articleTagKey]articleTagEntry
+	dispatcher core.EventDispatcher
 }
 
 type articleTagKey struct {
@@ -53,6 +55,11 @@ func newArticleTagBridge(ttl time.Duration, maxEntries int) *articleTagBridge {
 // wrapRuntimesWithArticleTags decorates runtimes with a shared bridge that
 // remembers framework tags accepted on outbound sends and reattaches them when
 // the same driver later publishes the corresponding self-authored article.
+//
+// When the driver platform does not relay the bot's own sent or edited messages
+// as inbound events, the bridge compensates by publishing synthetic events
+// through the kernel's event dispatcher so that downstream modules (eventcache)
+// can still project the bot's own articles with framework tags.
 //
 // This bridge is intentionally best-effort, process-local, and bounded. It
 // only correlates outbound sends and later article.created events that share
@@ -107,7 +114,23 @@ func (d *articleTagSinkDispatcher) SendMessage(
 
 	tags := cloneTags(request.Tags)
 	if len(tags) > 0 {
-		d.bridge.remember(d.source, request.Target.Conversation.ID, response.ID, tags, time.Now().UTC())
+		now := time.Now().UTC()
+		d.bridge.remember(d.source, request.Target.Conversation.ID, response.ID, tags, now)
+		d.bridge.publishSynthetic(ctx, &platform.Event{
+			ID:           syntheticEventID(platform.EventKindArticleCreated, request.Target.Conversation.ID, response.ID, now),
+			Kind:         platform.EventKindArticleCreated,
+			OccurredAt:   now,
+			Source:       d.source,
+			Conversation: request.Target.Conversation,
+			Actor:        platform.Actor{IsBot: true},
+			Article: &platform.Article{
+				ID:               response.ID,
+				Text:             request.Text,
+				Entities:         cloneTextEntities(request.Entities),
+				Tags:             cloneTags(tags),
+				ReplyToArticleID: request.ReplyToMessageID,
+			},
+		})
 	}
 	response.Tags = cloneTags(tags)
 
@@ -117,6 +140,31 @@ func (d *articleTagSinkDispatcher) SendMessage(
 func (d *articleTagSinkDispatcher) EditMessage(ctx context.Context, request platform.EditMessageRequest) error {
 	if err := d.base.EditMessage(ctx, request); err != nil {
 		return fmt.Errorf("article tag sink edit message: %w", err)
+	}
+
+	now := time.Now().UTC()
+	tags, ok := d.bridge.peek(d.source, request.Target.Conversation.ID, request.MessageID, now)
+	if ok {
+		d.bridge.publishSynthetic(ctx, &platform.Event{
+			ID:           syntheticEventID(platform.EventKindArticleEdited, request.Target.Conversation.ID, request.MessageID, now),
+			Kind:         platform.EventKindArticleEdited,
+			OccurredAt:   now,
+			Source:       d.source,
+			Conversation: request.Target.Conversation,
+			Actor:        platform.Actor{IsBot: true},
+			Article: &platform.Article{
+				ID:   request.MessageID,
+				Tags: cloneTags(tags),
+			},
+			Mutation: &platform.ArticleMutation{
+				Type:            platform.MutationTypeEdit,
+				TargetArticleID: request.MessageID,
+				After: &platform.ArticleSnapshot{
+					Text:     request.Text,
+					Entities: cloneTextEntities(request.Entities),
+				},
+			},
+		})
 	}
 
 	return nil
@@ -170,6 +218,8 @@ func (d *articleTagDriver) Name() string {
 }
 
 func (d *articleTagDriver) Start(ctx context.Context, dispatcher core.EventDispatcher) error {
+	d.bridge.setDispatcher(dispatcher)
+
 	if err := d.base.Start(ctx, &articleTagEventDispatcher{
 		source: d.source,
 		base:   dispatcher,
@@ -196,16 +246,23 @@ type articleTagEventDispatcher struct {
 }
 
 func (d *articleTagEventDispatcher) Publish(ctx context.Context, event *platform.Event) error {
-	if event != nil && event.Kind == platform.EventKindArticleCreated && event.Article != nil {
-		source := event.Source
-		if source.Platform == "" {
-			source.Platform = d.source.Platform
-		}
-		if source.ID == "" {
-			source.ID = d.source.ID
-		}
-		if tags, ok := d.bridge.take(source, event.Conversation.ID, event.Article.ID, time.Now().UTC()); ok {
-			event.Article.Tags = mergeTags(event.Article.Tags, tags)
+	if event != nil {
+		source := d.resolveSource(event.Source)
+		now := time.Now().UTC()
+
+		switch {
+		case event.Kind == platform.EventKindArticleCreated && event.Article != nil:
+			if tags, ok := d.bridge.take(source, event.Conversation.ID, event.Article.ID, now); ok {
+				event.Article.Tags = mergeTags(event.Article.Tags, tags)
+			}
+		case event.Kind == platform.EventKindArticleEdited && event.Mutation != nil:
+			articleID := event.Mutation.TargetArticleID
+			if tags, ok := d.bridge.peek(source, event.Conversation.ID, articleID, now); ok {
+				if event.Article == nil {
+					event.Article = &platform.Article{ID: articleID}
+				}
+				event.Article.Tags = mergeTags(event.Article.Tags, tags)
+			}
 		}
 	}
 
@@ -214,6 +271,56 @@ func (d *articleTagEventDispatcher) Publish(ctx context.Context, event *platform
 	}
 
 	return nil
+}
+
+func (d *articleTagEventDispatcher) resolveSource(source platform.EventSource) platform.EventSource {
+	if source.Platform == "" {
+		source.Platform = d.source.Platform
+	}
+	if source.ID == "" {
+		source.ID = d.source.ID
+	}
+
+	return source
+}
+
+func (b *articleTagBridge) setDispatcher(dispatcher core.EventDispatcher) {
+	if b == nil {
+		return
+	}
+
+	b.mu.Lock()
+	b.dispatcher = dispatcher
+	b.mu.Unlock()
+}
+
+// publishSynthetic publishes one synthetic event through the kernel event
+// dispatcher so that downstream modules can project the bot's own outbound
+// articles. This compensates for platforms that do not relay the bot's own
+// sent or edited messages as inbound events.
+//
+// Errors are logged but not propagated because synthetic events are
+// best-effort infrastructure — the actual outbound operation already succeeded.
+func (b *articleTagBridge) publishSynthetic(ctx context.Context, event *platform.Event) {
+	if b == nil || event == nil {
+		return
+	}
+
+	b.mu.Lock()
+	dispatcher := b.dispatcher
+	b.mu.Unlock()
+
+	if dispatcher == nil {
+		return
+	}
+
+	if err := dispatcher.Publish(ctx, event); err != nil {
+		slog.Warn("article tag bridge: synthetic event publish failed",
+			"kind", event.Kind,
+			"event_id", event.ID,
+			"err", err,
+		)
+	}
 }
 
 func (b *articleTagBridge) remember(
@@ -271,6 +378,37 @@ func (b *articleTagBridge) take(
 		return nil, false
 	}
 	delete(b.entries, key)
+
+	return cloneTags(entry.tags), true
+}
+
+// peek returns a copy of stored tags without removing the entry, so that
+// subsequent events (article.created or further edits) for the same article
+// can still retrieve the tags.
+func (b *articleTagBridge) peek(
+	source platform.EventSource,
+	conversationID string,
+	articleID string,
+	now time.Time,
+) (map[string]string, bool) {
+	if b == nil {
+		return nil, false
+	}
+
+	key, ok := newArticleTagKey(source, conversationID, articleID)
+	if !ok {
+		return nil, false
+	}
+	lookupTime := normalizeArticleTagTime(now)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.pruneLocked(lookupTime)
+	entry, exists := b.entries[key]
+	if !exists {
+		return nil, false
+	}
 
 	return cloneTags(entry.tags), true
 }
@@ -336,6 +474,10 @@ func normalizeArticleTagTime(now time.Time) time.Time {
 	return now.UTC()
 }
 
+func syntheticEventID(kind platform.EventKind, conversationID string, articleID string, now time.Time) string {
+	return fmt.Sprintf("synth:%s:%s:%s:%d", kind, conversationID, articleID, now.UnixNano())
+}
+
 func cloneTags(tags map[string]string) map[string]string {
 	if len(tags) == 0 {
 		return nil
@@ -347,6 +489,14 @@ func cloneTags(tags map[string]string) map[string]string {
 	}
 
 	return cloned
+}
+
+func cloneTextEntities(entities []platform.TextEntity) []platform.TextEntity {
+	if len(entities) == 0 {
+		return nil
+	}
+
+	return append([]platform.TextEntity(nil), entities...)
 }
 
 func mergeTags(existing map[string]string, added map[string]string) map[string]string {

@@ -114,6 +114,9 @@ func (m *Module) rememberEdit(event *platform.Event) error {
 		cached.Article.Entities = append([]platform.TextEntity(nil), event.Mutation.After.Entities...)
 		cached.Article.Media = cloneMediaAttachments(event.Mutation.After.Media)
 	}
+	if event.Article != nil && len(event.Article.Tags) > 0 {
+		cached.Article.Tags = mergeArticleTags(cached.Article.Tags, event.Article.Tags)
+	}
 	cached.UpdatedAt = updatedAt
 	if cached.CreatedAt.IsZero() {
 		cached.CreatedAt = occurredAt

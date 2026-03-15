@@ -208,6 +208,33 @@ func applyReactionHistoryToArticle(article *platform.Article, history []platform
 	}
 }
 
+// mergeArticleTags merges source tags into existing tags. Existing keys are
+// not overwritten so that previously projected tags take precedence.
+func mergeArticleTags(existing map[string]string, source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return existing
+	}
+	if len(existing) == 0 {
+		merged := make(map[string]string, len(source))
+		for key, value := range source {
+			merged[key] = value
+		}
+		return merged
+	}
+
+	merged := make(map[string]string, len(existing)+len(source))
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range source {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+
+	return merged
+}
+
 func cloneMediaAttachments(media []platform.MediaAttachment) []platform.MediaAttachment {
 	if len(media) == 0 {
 		return nil

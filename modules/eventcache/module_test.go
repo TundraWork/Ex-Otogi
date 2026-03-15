@@ -620,6 +620,175 @@ func TestModuleGetReplied(t *testing.T) {
 	}
 }
 
+func TestModuleEditEventMergesProjectedTags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		seedCreated  bool
+		createdTags  map[string]string
+		editTags     map[string]string
+		wantTags     map[string]string
+		wantText     string
+		wantNotFound bool
+	}{
+		{
+			name:        "edit projects tags onto existing snapshot without tags",
+			seedCreated: true,
+			editTags: map[string]string{
+				"platform.module": "llmchat",
+				"llmchat.agent":   "Otogi",
+			},
+			wantTags: map[string]string{
+				"platform.module": "llmchat",
+				"llmchat.agent":   "Otogi",
+			},
+			wantText: "hello edited",
+		},
+		{
+			name:        "edit projects tags when no prior created event exists",
+			seedCreated: false,
+			editTags: map[string]string{
+				"platform.module": "llmchat",
+				"llmchat.agent":   "Otogi",
+			},
+			wantTags: map[string]string{
+				"platform.module": "llmchat",
+				"llmchat.agent":   "Otogi",
+			},
+			wantText: "hello edited",
+		},
+		{
+			name:        "existing tags are not overwritten by edit projection",
+			seedCreated: true,
+			createdTags: map[string]string{
+				"platform.module": "other",
+			},
+			editTags: map[string]string{
+				"platform.module": "llmchat",
+				"llmchat.agent":   "Otogi",
+			},
+			wantTags: map[string]string{
+				"platform.module": "other",
+				"llmchat.agent":   "Otogi",
+			},
+			wantText: "hello edited",
+		},
+		{
+			name:        "edit without tags does not affect existing snapshot tags",
+			seedCreated: true,
+			createdTags: map[string]string{
+				"platform.module": "llmchat",
+			},
+			editTags: nil,
+			wantTags: map[string]string{
+				"platform.module": "llmchat",
+			},
+			wantText: "hello edited",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			module := New(
+				WithTTL(24*time.Hour),
+				withClock(func() time.Time { return time.Unix(200, 0).UTC() }),
+			)
+
+			if testCase.seedCreated {
+				created := newCreatedEvent("msg-1", "hello", "")
+				if testCase.createdTags != nil {
+					created.Article.Tags = testCase.createdTags
+				}
+				if err := module.handleEvent(context.Background(), created); err != nil {
+					t.Fatalf("seed created event failed: %v", err)
+				}
+			}
+
+			edited := newEditedEvent("msg-1", "hello edited")
+			if testCase.editTags != nil {
+				edited.Article = &platform.Article{
+					ID:   "msg-1",
+					Tags: testCase.editTags,
+				}
+			}
+			if err := module.handleEvent(context.Background(), edited); err != nil {
+				t.Fatalf("handle edited event failed: %v", err)
+			}
+
+			cached, found, err := module.Get(context.Background(), core.MemoryLookup{
+				Platform:       platform.PlatformTelegram,
+				ConversationID: "chat-1",
+				ArticleID:      "msg-1",
+			})
+			if err != nil {
+				t.Fatalf("get article failed: %v", err)
+			}
+			if !found {
+				t.Fatal("expected memory hit")
+			}
+			if cached.Article.Text != testCase.wantText {
+				t.Fatalf("article text = %q, want %q", cached.Article.Text, testCase.wantText)
+			}
+			for key, wantValue := range testCase.wantTags {
+				if cached.Article.Tags[key] != wantValue {
+					t.Fatalf("tag %q = %q, want %q (all tags: %+v)",
+						key, cached.Article.Tags[key], wantValue, cached.Article.Tags)
+				}
+			}
+			if len(cached.Article.Tags) != len(testCase.wantTags) {
+				t.Fatalf("tags count = %d, want %d (tags: %+v)",
+					len(cached.Article.Tags), len(testCase.wantTags), cached.Article.Tags)
+			}
+		})
+	}
+}
+
+func TestModuleEditTagsVisibleViaGetReplied(t *testing.T) {
+	t.Parallel()
+
+	module := New(
+		WithTTL(24*time.Hour),
+		withClock(func() time.Time { return time.Unix(200, 0).UTC() }),
+	)
+
+	// Simulate the real flow: article.created may not arrive, only article.edited.
+	edited := newEditedEvent("msg-1", "LLM response text")
+	edited.Article = &platform.Article{
+		ID: "msg-1",
+		Tags: map[string]string{
+			"platform.module": "llmchat",
+			"llmchat.agent":   "Otogi",
+		},
+	}
+	if err := module.handleEvent(context.Background(), edited); err != nil {
+		t.Fatalf("handle edited event failed: %v", err)
+	}
+
+	// User replies to the bot's article.
+	replyEvent := newCreatedEvent("msg-2", "user reply", "msg-1")
+	if err := module.handleEvent(context.Background(), replyEvent); err != nil {
+		t.Fatalf("seed reply event failed: %v", err)
+	}
+
+	cached, found, err := module.GetReplied(context.Background(), replyEvent)
+	if err != nil {
+		t.Fatalf("get replied article failed: %v", err)
+	}
+	if !found {
+		t.Fatal("expected reply cache hit")
+	}
+	if cached.Article.Tags["platform.module"] != "llmchat" {
+		t.Fatalf("reply tags = %+v, want platform.module=llmchat", cached.Article.Tags)
+	}
+	if cached.Article.Tags["llmchat.agent"] != "Otogi" {
+		t.Fatalf("reply tags = %+v, want llmchat.agent=Otogi", cached.Article.Tags)
+	}
+}
+
 func TestModuleGetReplyChain(t *testing.T) {
 	tests := []struct {
 		name               string
