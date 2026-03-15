@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -27,6 +28,74 @@ type LLMProvider interface {
 	GenerateStream(ctx context.Context, req LLMGenerateRequest) (LLMStream, error)
 }
 
+// LLMToolDefinition describes one function tool the model may call.
+type LLMToolDefinition struct {
+	// Name identifies the tool. Names must match [a-zA-Z0-9_.-]{1,64}.
+	Name string
+	// Description explains when and how the model should use the tool.
+	Description string
+	// Parameters contains the tool input JSON Schema.
+	Parameters json.RawMessage
+}
+
+// Validate checks one tool definition contract.
+func (d LLMToolDefinition) Validate() error {
+	name := strings.TrimSpace(d.Name)
+	if !isValidToolIdentifier(name) {
+		return fmt.Errorf("validate llm tool definition: invalid name %q", d.Name)
+	}
+	if strings.TrimSpace(d.Description) == "" {
+		return fmt.Errorf("validate llm tool definition: missing description")
+	}
+	if len(d.Parameters) == 0 {
+		return fmt.Errorf("validate llm tool definition: missing parameters")
+	}
+	if !json.Valid(d.Parameters) {
+		return fmt.Errorf("validate llm tool definition: parameters must be valid json")
+	}
+	if !isJSONObjectBytes(d.Parameters) {
+		return fmt.Errorf("validate llm tool definition: parameters must be a json object")
+	}
+
+	return nil
+}
+
+// LLMToolCall records one assistant-requested tool call.
+type LLMToolCall struct {
+	// ID identifies this tool call instance.
+	ID string
+	// Name identifies which tool should be invoked.
+	Name string
+	// Arguments contains one complete JSON object encoded as text.
+	Arguments string
+	// ThoughtSignature carries an opaque provider signature linking this call
+	// to a preceding thought turn. Providers that require thought signatures
+	// (e.g. Gemini with thinking enabled) populate this field so callers can
+	// echo it back in follow-up requests.
+	ThoughtSignature []byte
+}
+
+// Validate checks one assistant tool-call record.
+func (c LLMToolCall) Validate() error {
+	if strings.TrimSpace(c.ID) == "" {
+		return fmt.Errorf("validate llm tool call: missing id")
+	}
+	if !isValidToolIdentifier(strings.TrimSpace(c.Name)) {
+		return fmt.Errorf("validate llm tool call: invalid name %q", c.Name)
+	}
+	if strings.TrimSpace(c.Arguments) == "" {
+		return fmt.Errorf("validate llm tool call: missing arguments")
+	}
+	if !json.Valid([]byte(c.Arguments)) {
+		return fmt.Errorf("validate llm tool call: arguments must be valid json")
+	}
+	if !isJSONObjectBytes([]byte(c.Arguments)) {
+		return fmt.Errorf("validate llm tool call: arguments must be a json object")
+	}
+
+	return nil
+}
+
 // LLMStream is a pull-based stream of generated text chunks.
 type LLMStream interface {
 	// Recv returns the next generated chunk.
@@ -47,12 +116,14 @@ const (
 	LLMMessageRoleUser LLMMessageRole = "user"
 	// LLMMessageRoleAssistant identifies assistant-authored conversational turns.
 	LLMMessageRoleAssistant LLMMessageRole = "assistant"
+	// LLMMessageRoleTool identifies one tool result returned to the model.
+	LLMMessageRoleTool LLMMessageRole = "tool"
 )
 
 // Validate checks whether this role value is supported.
 func (r LLMMessageRole) Validate() error {
 	switch r {
-	case LLMMessageRoleSystem, LLMMessageRoleUser, LLMMessageRoleAssistant:
+	case LLMMessageRoleSystem, LLMMessageRoleUser, LLMMessageRoleAssistant, LLMMessageRoleTool:
 		return nil
 	default:
 		return fmt.Errorf("validate llm message role: unsupported role %q", r)
@@ -73,12 +144,49 @@ type LLMMessage struct {
 	// Text-only callers can continue using Content. Multimodal callers should
 	// prefer Parts so providers can preserve input ordering.
 	Parts []LLMMessagePart
+	// ToolCallID identifies which tool call this message responds to.
+	//
+	// Required only when Role is tool.
+	ToolCallID string
+	// ToolCalls records tool calls requested by an assistant message.
+	//
+	// Only assistant messages may populate ToolCalls.
+	ToolCalls []LLMToolCall
 }
 
 // Validate checks one message contract.
 func (m LLMMessage) Validate() error {
 	if err := m.Role.Validate(); err != nil {
 		return fmt.Errorf("validate llm message: %w", err)
+	}
+	if m.Role == LLMMessageRoleTool {
+		if len(m.ToolCalls) > 0 {
+			return fmt.Errorf("validate llm message: tool role must not include tool_calls")
+		}
+		if strings.TrimSpace(m.ToolCallID) == "" {
+			return fmt.Errorf("validate llm message: tool role requires tool_call_id")
+		}
+		if strings.TrimSpace(m.Content) == "" {
+			return fmt.Errorf("validate llm message: tool role requires content")
+		}
+		if len(m.Parts) > 0 {
+			return fmt.Errorf("validate llm message: tool role does not support parts")
+		}
+
+		return nil
+	}
+	if strings.TrimSpace(m.ToolCallID) != "" {
+		return fmt.Errorf("validate llm message: tool_call_id is only allowed for tool role")
+	}
+	if len(m.ToolCalls) > 0 {
+		if m.Role != LLMMessageRoleAssistant {
+			return fmt.Errorf("validate llm message: tool_calls are only allowed for assistant role")
+		}
+		for index, toolCall := range m.ToolCalls {
+			if err := toolCall.Validate(); err != nil {
+				return fmt.Errorf("validate llm message tool_calls[%d]: %w", index, err)
+			}
+		}
 	}
 	if len(m.Parts) > 0 {
 		if strings.TrimSpace(m.Content) != "" {
@@ -91,7 +199,7 @@ func (m LLMMessage) Validate() error {
 		}
 		return nil
 	}
-	if strings.TrimSpace(m.Content) == "" {
+	if strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) == 0 {
 		return fmt.Errorf("validate llm message: missing content")
 	}
 
@@ -236,6 +344,8 @@ type LLMGenerateRequest struct {
 	Temperature float64
 	// Metadata carries optional provider-agnostic context.
 	Metadata map[string]string
+	// Tools optionally declares function tools the model may call.
+	Tools []LLMToolDefinition
 }
 
 // Validate checks one generation request contract.
@@ -251,6 +361,11 @@ func (r LLMGenerateRequest) Validate() error {
 			return fmt.Errorf("validate llm generate request messages[%d]: %w", index, err)
 		}
 	}
+	for index, tool := range r.Tools {
+		if err := tool.Validate(); err != nil {
+			return fmt.Errorf("validate llm generate request tools[%d]: %w", index, err)
+		}
+	}
 	if r.MaxOutputTokens < 0 {
 		return fmt.Errorf("validate llm generate request: max_output_tokens must be >= 0")
 	}
@@ -261,7 +376,7 @@ func (r LLMGenerateRequest) Validate() error {
 	return nil
 }
 
-// LLMGenerateChunk carries incremental text from one stream.
+// LLMGenerateChunk carries incremental output from one stream.
 type LLMGenerateChunk struct {
 	// Kind identifies the semantic category of this chunk.
 	//
@@ -270,6 +385,16 @@ type LLMGenerateChunk struct {
 	Kind LLMGenerateChunkKind
 	// Delta is the newly generated text segment.
 	Delta string
+	// ToolCallID identifies the provider-assigned tool call instance.
+	ToolCallID string
+	// ToolCallName identifies the tool being called.
+	ToolCallName string
+	// ToolCallArguments carries incremental JSON argument data.
+	ToolCallArguments string
+	// ToolCallThoughtSignature carries an opaque provider signature for this
+	// tool call. Populated only for providers that attach thought signatures
+	// to function call parts (e.g. Gemini with thinking enabled).
+	ToolCallThoughtSignature []byte
 }
 
 // LLMGenerateChunkKind identifies the semantic category of one stream chunk.
@@ -280,6 +405,8 @@ const (
 	LLMGenerateChunkKindOutputText LLMGenerateChunkKind = "output_text"
 	// LLMGenerateChunkKindThinkingSummary identifies short model thinking summary text.
 	LLMGenerateChunkKindThinkingSummary LLMGenerateChunkKind = "thinking_summary"
+	// LLMGenerateChunkKindToolCall identifies one streamed tool call.
+	LLMGenerateChunkKindToolCall LLMGenerateChunkKind = "tool_call"
 )
 
 // Normalize returns one supported chunk kind.
@@ -290,9 +417,35 @@ func (k LLMGenerateChunkKind) Normalize() LLMGenerateChunkKind {
 	switch k {
 	case LLMGenerateChunkKindThinkingSummary:
 		return LLMGenerateChunkKindThinkingSummary
+	case LLMGenerateChunkKindToolCall:
+		return LLMGenerateChunkKindToolCall
 	case LLMGenerateChunkKindOutputText:
 		return LLMGenerateChunkKindOutputText
 	default:
 		return LLMGenerateChunkKindOutputText
 	}
+}
+
+func isValidToolIdentifier(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '.' || r == '-':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+func isJSONObjectBytes(raw []byte) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")
 }

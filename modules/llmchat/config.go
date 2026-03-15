@@ -20,6 +20,9 @@ const (
 	defaultMaxContextRunes         = 12000
 	defaultMaxMessageRunes         = 1600
 	defaultQuoteReplyDepth         = 2
+	defaultMaxRetrievedMemories    = 5
+	defaultMinMemorySimilarity     = 0.3
+	defaultMaxMemoryRunes          = 2000
 	defaultImageInputMaxImages     = 3
 	defaultImageInputMaxBytes      = 10 << 20
 	defaultImageInputMaxTotalBytes = 20 << 20
@@ -43,6 +46,8 @@ type Agent struct {
 	Description string
 	// Provider identifies which LLM provider profile to resolve.
 	Provider string
+	// EmbeddingProvider identifies which embedding provider profile to resolve.
+	EmbeddingProvider string
 	// Model identifies which provider model name to call.
 	Model string
 	// SystemPromptTemplate is the system prompt template for this agent.
@@ -60,6 +65,8 @@ type Agent struct {
 	// ContextPolicy controls how llmchat reconstructs and trims conversation
 	// context before sending it to one provider.
 	ContextPolicy ContextPolicy
+	// SemanticMemory controls semantic retrieval and memory tools for this agent.
+	SemanticMemory *SemanticMemoryPolicy
 	// ImageInputs controls whether llmchat downloads current-event images and
 	// includes them as multimodal user input.
 	//
@@ -91,6 +98,18 @@ type ContextPolicy struct {
 	// resolved and inlined as quoted context when the referenced article is not
 	// already present in the conversation context. 0 disables quoting.
 	QuoteReplyDepth int
+}
+
+// SemanticMemoryPolicy controls semantic memory retrieval and tool use for one agent.
+type SemanticMemoryPolicy struct {
+	// Enabled turns on semantic retrieval and tool execution.
+	Enabled bool
+	// MaxRetrievedMemories caps how many memories are injected into context.
+	MaxRetrievedMemories int
+	// MinMemorySimilarity filters retrieved memories by similarity score.
+	MinMemorySimilarity float32
+	// MaxMemoryRunes caps serialized semantic memory context size.
+	MaxMemoryRunes int
 }
 
 // ImageInputPolicy controls how one agent reads current-event image attachments.
@@ -155,6 +174,9 @@ func validateAgent(agent Agent) error {
 	if strings.TrimSpace(agent.Provider) == "" {
 		return fmt.Errorf("missing provider")
 	}
+	if strings.TrimSpace(agent.EmbeddingProvider) == "" && agent.SemanticMemory != nil && agent.SemanticMemory.Enabled {
+		return fmt.Errorf("embedding_provider is required when semantic_memory.enabled=true")
+	}
 	if strings.TrimSpace(agent.Model) == "" {
 		return fmt.Errorf("missing model")
 	}
@@ -175,6 +197,9 @@ func validateAgent(agent Agent) error {
 	}
 	if err := validateContextPolicy(resolveContextPolicy(agent.ContextPolicy)); err != nil {
 		return fmt.Errorf("context_policy: %w", err)
+	}
+	if err := validateSemanticMemoryPolicy(agent.SemanticMemory); err != nil {
+		return fmt.Errorf("semantic_memory: %w", err)
 	}
 	if err := validateImageInputPolicy(resolveImageInputPolicy(agent.ImageInputs)); err != nil {
 		return fmt.Errorf("image_inputs: %w", err)
@@ -224,6 +249,48 @@ func validateContextPolicy(policy ContextPolicy) error {
 	}
 	if policy.QuoteReplyDepth < 0 {
 		return fmt.Errorf("quote_reply_depth must be >= 0")
+	}
+
+	return nil
+}
+
+func resolveSemanticMemoryPolicy(policy *SemanticMemoryPolicy) *SemanticMemoryPolicy {
+	if policy == nil {
+		return nil
+	}
+
+	resolved := *policy
+	if !resolved.Enabled {
+		return &resolved
+	}
+	if resolved.MaxRetrievedMemories == 0 {
+		resolved.MaxRetrievedMemories = defaultMaxRetrievedMemories
+	}
+	if resolved.MinMemorySimilarity == 0 {
+		resolved.MinMemorySimilarity = defaultMinMemorySimilarity
+	}
+	if resolved.MaxMemoryRunes == 0 {
+		resolved.MaxMemoryRunes = defaultMaxMemoryRunes
+	}
+
+	return &resolved
+}
+
+func validateSemanticMemoryPolicy(policy *SemanticMemoryPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if !policy.Enabled {
+		return nil
+	}
+	if policy.MaxRetrievedMemories <= 0 {
+		return fmt.Errorf("max_retrieved_memories must be > 0")
+	}
+	if policy.MinMemorySimilarity < 0 || policy.MinMemorySimilarity > 1 {
+		return fmt.Errorf("min_memory_similarity must be between 0 and 1")
+	}
+	if policy.MaxMemoryRunes <= 0 {
+		return fmt.Errorf("max_memory_runes must be > 0")
 	}
 
 	return nil
@@ -333,6 +400,7 @@ func cloneConfig(cfg Config) Config {
 				Aliases:              cloneStringSlice(agent.Aliases),
 				Description:          agent.Description,
 				Provider:             agent.Provider,
+				EmbeddingProvider:    agent.EmbeddingProvider,
 				Model:                agent.Model,
 				SystemPromptTemplate: agent.SystemPromptTemplate,
 				TemplateVariables:    cloneStringMap(agent.TemplateVariables),
@@ -341,6 +409,7 @@ func cloneConfig(cfg Config) Config {
 				RequestTimeout:       agent.RequestTimeout,
 				RequestMetadata:      cloneStringMap(agent.RequestMetadata),
 				ContextPolicy:        resolveContextPolicy(agent.ContextPolicy),
+				SemanticMemory:       cloneSemanticMemoryPolicy(resolveSemanticMemoryPolicy(agent.SemanticMemory)),
 				ImageInputs:          resolveImageInputPolicy(agent.ImageInputs),
 			})
 		}
@@ -391,6 +460,15 @@ func cloneStringMap(values map[string]string) map[string]string {
 	}
 
 	return cloned
+}
+
+func cloneSemanticMemoryPolicy(policy *SemanticMemoryPolicy) *SemanticMemoryPolicy {
+	if policy == nil {
+		return nil
+	}
+
+	cloned := *policy
+	return &cloned
 }
 
 func cloneStringSlice(values []string) []string {

@@ -82,6 +82,26 @@ func TestConfigValidate(t *testing.T) {
 			wantErrSubstring: "missing provider",
 		},
 		{
+			name: "semantic memory enabled requires embedding provider",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].SemanticMemory = &SemanticMemoryPolicy{Enabled: true}
+			},
+			wantErrSubstring: "embedding_provider is required when semantic_memory.enabled=true",
+		},
+		{
+			name: "semantic memory invalid similarity fails",
+			mutate: func(cfg *Config) {
+				cfg.Agents[0].EmbeddingProvider = "embed-main"
+				cfg.Agents[0].SemanticMemory = &SemanticMemoryPolicy{
+					Enabled:              true,
+					MaxRetrievedMemories: 5,
+					MinMemorySimilarity:  1.5,
+					MaxMemoryRunes:       2000,
+				}
+			},
+			wantErrSubstring: "semantic_memory: min_memory_similarity must be between 0 and 1",
+		},
+		{
 			name: "invalid system prompt template fails",
 			mutate: func(cfg *Config) {
 				cfg.Agents[0].SystemPromptTemplate = "{{.Missing"
@@ -270,6 +290,24 @@ func TestResolveImageInputPolicyDefaults(t *testing.T) {
 	}
 }
 
+func TestResolveSemanticMemoryPolicyDefaults(t *testing.T) {
+	t.Parallel()
+
+	policy := resolveSemanticMemoryPolicy(&SemanticMemoryPolicy{Enabled: true})
+	if policy == nil {
+		t.Fatal("policy = nil, want defaults")
+	}
+	if policy.MaxRetrievedMemories != defaultMaxRetrievedMemories {
+		t.Fatalf("max_retrieved_memories = %d, want %d", policy.MaxRetrievedMemories, defaultMaxRetrievedMemories)
+	}
+	if policy.MinMemorySimilarity != defaultMinMemorySimilarity {
+		t.Fatalf("min_memory_similarity = %f, want %f", policy.MinMemorySimilarity, defaultMinMemorySimilarity)
+	}
+	if policy.MaxMemoryRunes != defaultMaxMemoryRunes {
+		t.Fatalf("max_memory_runes = %d, want %d", policy.MaxMemoryRunes, defaultMaxMemoryRunes)
+	}
+}
+
 func validModuleConfig() Config {
 	return Config{
 		RequestTimeout: time.Second,
@@ -279,6 +317,7 @@ func validModuleConfig() Config {
 				Aliases:              []string{"Oto"},
 				Description:          "primary assistant",
 				Provider:             "provider-main",
+				EmbeddingProvider:    "",
 				Model:                "model-main",
 				SystemPromptTemplate: "You are {{.AgentName}}",
 				TemplateVariables: map[string]string{

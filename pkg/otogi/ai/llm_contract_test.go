@@ -26,6 +26,11 @@ func TestLLMGenerateChunkKindNormalize(t *testing.T) {
 			want: LLMGenerateChunkKindThinkingSummary,
 		},
 		{
+			name: "tool call remains tool call",
+			kind: LLMGenerateChunkKindToolCall,
+			want: LLMGenerateChunkKindToolCall,
+		},
+		{
 			name: "unknown kind defaults to output text",
 			kind: "custom",
 			want: LLMGenerateChunkKindOutputText,
@@ -53,7 +58,8 @@ func TestLLMMessageRoleValidate(t *testing.T) {
 		{name: "system role", role: LLMMessageRoleSystem},
 		{name: "user role", role: LLMMessageRoleUser},
 		{name: "assistant role", role: LLMMessageRoleAssistant},
-		{name: "invalid role", role: "tool", wantErr: true},
+		{name: "tool role", role: LLMMessageRoleTool},
+		{name: "invalid role", role: "admin", wantErr: true},
 	}
 
 	for _, testCase := range tests {
@@ -72,6 +78,126 @@ func TestLLMMessageRoleValidate(t *testing.T) {
 	}
 }
 
+func TestLLMToolDefinitionValidate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		def     LLMToolDefinition
+		wantErr bool
+	}{
+		{
+			name: "valid tool",
+			def: LLMToolDefinition{
+				Name:        "remember",
+				Description: "Store a fact for later use.",
+				Parameters:  []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`),
+			},
+		},
+		{
+			name: "invalid name",
+			def: LLMToolDefinition{
+				Name:        "remember fact",
+				Description: "Store a fact for later use.",
+				Parameters:  []byte(`{"type":"object"}`),
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing description",
+			def: LLMToolDefinition{
+				Name:       "remember",
+				Parameters: []byte(`{"type":"object"}`),
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid json schema",
+			def: LLMToolDefinition{
+				Name:        "remember",
+				Description: "Store a fact for later use.",
+				Parameters:  []byte(`{`),
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := testCase.def.Validate()
+			if testCase.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestLLMToolCallValidate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		call    LLMToolCall
+		wantErr bool
+	}{
+		{
+			name: "valid tool call",
+			call: LLMToolCall{
+				ID:        "call-1",
+				Name:      "remember",
+				Arguments: `{"content":"hello"}`,
+			},
+		},
+		{
+			name: "missing id",
+			call: LLMToolCall{
+				Name:      "remember",
+				Arguments: `{"content":"hello"}`,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid name",
+			call: LLMToolCall{
+				ID:        "call-1",
+				Name:      "remember fact",
+				Arguments: `{"content":"hello"}`,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid json arguments",
+			call: LLMToolCall{
+				ID:        "call-1",
+				Name:      "remember",
+				Arguments: `{`,
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := testCase.call.Validate()
+			if testCase.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestLLMMessageValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -79,19 +205,11 @@ func TestLLMMessageValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid message",
+			name: "valid user message",
 			message: LLMMessage{
 				Role:    LLMMessageRoleUser,
 				Content: "hello",
 			},
-		},
-		{
-			name: "invalid role",
-			message: LLMMessage{
-				Role:    "tool",
-				Content: "hello",
-			},
-			wantErr: true,
 		},
 		{
 			name: "empty content",
@@ -139,6 +257,58 @@ func TestLLMMessageValidate(t *testing.T) {
 						Image: &LLMInputImage{},
 					},
 				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid tool message",
+			message: LLMMessage{
+				Role:       LLMMessageRoleTool,
+				Content:    `{"result":"ok"}`,
+				ToolCallID: "call-1",
+			},
+		},
+		{
+			name: "tool message missing tool call id",
+			message: LLMMessage{
+				Role:    LLMMessageRoleTool,
+				Content: `{"result":"ok"}`,
+			},
+			wantErr: true,
+		},
+		{
+			name: "assistant message with tool calls",
+			message: LLMMessage{
+				Role: LLMMessageRoleAssistant,
+				ToolCalls: []LLMToolCall{
+					{
+						ID:        "call-1",
+						Name:      "remember",
+						Arguments: `{"content":"hello"}`,
+					},
+				},
+			},
+		},
+		{
+			name: "user message with tool calls rejected",
+			message: LLMMessage{
+				Role: LLMMessageRoleUser,
+				ToolCalls: []LLMToolCall{
+					{
+						ID:        "call-1",
+						Name:      "remember",
+						Arguments: `{"content":"hello"}`,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "non-tool message with tool call id rejected",
+			message: LLMMessage{
+				Role:       LLMMessageRoleAssistant,
+				Content:    "hello",
+				ToolCallID: "call-1",
 			},
 			wantErr: true,
 		},
@@ -221,6 +391,13 @@ func TestLLMGenerateRequestValidate(t *testing.T) {
 				Metadata: map[string]string{
 					"agent": "otogi",
 				},
+				Tools: []LLMToolDefinition{
+					{
+						Name:        "remember",
+						Description: "Store a fact.",
+						Parameters:  []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`),
+					},
+				},
 			},
 		},
 		{
@@ -242,7 +419,20 @@ func TestLLMGenerateRequestValidate(t *testing.T) {
 			req: LLMGenerateRequest{
 				Model: "gpt-5-mini",
 				Messages: []LLMMessage{
-					{Role: "tool", Content: "hello"},
+					{Role: LLMMessageRoleTool, Content: "hello"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid tool definition",
+			req: LLMGenerateRequest{
+				Model: "gpt-5-mini",
+				Messages: []LLMMessage{
+					{Role: LLMMessageRoleUser, Content: "hello"},
+				},
+				Tools: []LLMToolDefinition{
+					{Name: "remember fact", Description: "bad", Parameters: []byte(`{"type":"object"}`)},
 				},
 			},
 			wantErr: true,

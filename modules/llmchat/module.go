@@ -41,10 +41,12 @@ type Module struct {
 	parser          platform.MarkdownParser
 	mediaDownloader platform.MediaDownloader
 
-	providerRegistry ai.LLMProviderRegistry
-	logger           *slog.Logger
-	clock            func() time.Time
-	sleep            func(context.Context, time.Duration) error
+	providerRegistry  ai.LLMProviderRegistry
+	embeddingRegistry ai.EmbeddingProviderRegistry
+	llmMemory         ai.LLMMemoryService
+	logger            *slog.Logger
+	clock             func() time.Time
+	sleep             func(context.Context, time.Duration) error
 }
 
 // Option mutates one llmchat module construction input.
@@ -106,7 +108,7 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 		return fmt.Errorf("llmchat resolve logger: %w", err)
 	}
 
-	cfg, registry, err := m.loadConfig(ctx, runtime)
+	cfg, registry, embeddingRegistry, err := m.loadConfig(ctx, runtime)
 	if err != nil {
 		return fmt.Errorf("llmchat load config: %w", err)
 	}
@@ -146,6 +148,14 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	default:
 		return fmt.Errorf("llmchat resolve media downloader: %w", err)
 	}
+	llmMemoryService, err := core.ResolveAs[ai.LLMMemoryService](runtime.Services(), ai.ServiceLLMMemory)
+	switch {
+	case err == nil:
+	case errors.Is(err, core.ErrServiceNotFound):
+		llmMemoryService = nil
+	default:
+		return fmt.Errorf("llmchat resolve llm memory: %w", err)
+	}
 
 	resolvedProviders := make(map[string]ai.LLMProvider)
 	for _, agent := range m.cfg.Agents {
@@ -169,6 +179,8 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	m.parser = markdownParser
 	m.mediaDownloader = mediaDownloader
 	m.providerRegistry = registry
+	m.embeddingRegistry = embeddingRegistry
+	m.llmMemory = llmMemoryService
 	m.providers = resolvedProviders
 
 	handlerTimeout := m.cfg.RequestTimeout + llmchatHandlerTimeoutGrace
@@ -184,6 +196,9 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	if err := runtime.Services().Register(ai.ServiceLLMProviderRegistry, registry); err != nil {
 		return fmt.Errorf("llmchat register provider registry service: %w", err)
 	}
+	if err := runtime.Services().Register(ai.ServiceEmbeddingProviderRegistry, embeddingRegistry); err != nil {
+		return fmt.Errorf("llmchat register embedding provider registry service: %w", err)
+	}
 
 	return nil
 }
@@ -192,10 +207,10 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 func (m *Module) loadConfig(
 	ctx context.Context,
 	runtime core.ModuleRuntime,
-) (Config, ai.LLMProviderRegistry, error) {
+) (Config, ai.LLMProviderRegistry, ai.EmbeddingProviderRegistry, error) {
 	moduleCfg, err := core.ParseModuleConfig[fileModuleConfig](runtime.Config(), "llmchat")
 	if err != nil {
-		return Config{}, nil, fmt.Errorf("parse module config: %w", err)
+		return Config{}, nil, nil, fmt.Errorf("parse module config: %w", err)
 	}
 
 	configFile := strings.TrimSpace(moduleCfg.ConfigFile)
@@ -203,25 +218,29 @@ func (m *Module) loadConfig(
 		configFile = envPath
 	}
 	if configFile == "" {
-		return Config{}, nil, fmt.Errorf("config_file is required")
+		return Config{}, nil, nil, fmt.Errorf("config_file is required")
 	}
 
 	llmCfg, err := llmconfig.LoadFile(configFile)
 	if err != nil {
-		return Config{}, nil, fmt.Errorf("load llm config file %s: %w", configFile, err)
+		return Config{}, nil, nil, fmt.Errorf("load llm config file %s: %w", configFile, err)
 	}
 
 	registry, err := buildProviderRegistry(ctx, llmCfg, m.logger)
 	if err != nil {
-		return Config{}, nil, err
+		return Config{}, nil, nil, err
+	}
+	embeddingRegistry, err := buildEmbeddingProviderRegistry(ctx, llmCfg, m.logger)
+	if err != nil {
+		return Config{}, nil, nil, err
 	}
 
 	chatCfg := toLLMChatConfig(llmCfg)
 	if err := chatCfg.Validate(); err != nil {
-		return Config{}, nil, fmt.Errorf("validate config: %w", err)
+		return Config{}, nil, nil, fmt.Errorf("validate config: %w", err)
 	}
 
-	return chatCfg, registry, nil
+	return chatCfg, registry, embeddingRegistry, nil
 }
 
 // buildProviderRegistry builds the provider registry from one runtime LLM config file.
@@ -285,6 +304,63 @@ func buildProviderRegistry(
 	return registry, nil
 }
 
+func buildEmbeddingProviderRegistry(
+	ctx context.Context,
+	cfg llmconfig.Config,
+	logger *slog.Logger,
+) (ai.EmbeddingProviderRegistry, error) {
+	providers := make(map[string]ai.EmbeddingProvider, len(cfg.Providers))
+	for profileKey, profile := range cfg.Providers {
+		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
+		switch providerType {
+		case "openai":
+			embeddingCfg := openai.EmbeddingProviderConfig{
+				APIKey:            profile.APIKey,
+				BaseURL:           profile.BaseURL,
+				DefaultModel:      profile.EmbeddingModel,
+				DefaultDimensions: profile.EmbeddingDimensions,
+			}
+			if profile.OpenAI != nil {
+				embeddingCfg.Organization = profile.OpenAI.Organization
+				embeddingCfg.Project = profile.OpenAI.Project
+				embeddingCfg.MaxRetries = cloneOptionalInt(profile.OpenAI.MaxRetries)
+			}
+
+			provider, err := openai.NewEmbeddingProvider(embeddingCfg)
+			if err != nil {
+				return nil, fmt.Errorf("embedding provider profile %s: %w", profileKey, err)
+			}
+			providers[profileKey] = provider
+		case "gemini":
+			embeddingCfg := gemini.EmbeddingProviderConfig{
+				APIKey:            profile.APIKey,
+				BaseURL:           profile.BaseURL,
+				DefaultModel:      profile.EmbeddingModel,
+				DefaultDimensions: profile.EmbeddingDimensions,
+				Logger:            logger,
+			}
+			if profile.Gemini != nil {
+				embeddingCfg.APIVersion = profile.Gemini.APIVersion
+			}
+
+			provider, err := gemini.NewEmbeddingProvider(ctx, embeddingCfg)
+			if err != nil {
+				return nil, fmt.Errorf("embedding provider profile %s: %w", profileKey, err)
+			}
+			providers[profileKey] = provider
+		default:
+			return nil, fmt.Errorf("embedding provider profile %s: unsupported type %q", profileKey, profile.Type)
+		}
+	}
+
+	registry, err := llm.NewEmbeddingRegistry(providers)
+	if err != nil {
+		return nil, fmt.Errorf("new embedding provider registry: %w", err)
+	}
+
+	return registry, nil
+}
+
 func toLLMChatConfig(cfg llmconfig.Config) Config {
 	agents := make([]Agent, 0, len(cfg.Agents))
 	for _, agent := range cfg.Agents {
@@ -293,6 +369,7 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 			Aliases:              cloneStringSlice(agent.Aliases),
 			Description:          agent.Description,
 			Provider:             agent.Provider,
+			EmbeddingProvider:    agent.EmbeddingProvider,
 			Model:                agent.Model,
 			SystemPromptTemplate: agent.SystemPromptTemplate,
 			TemplateVariables:    cloneStringMap(agent.TemplateVariables),
@@ -308,6 +385,7 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 				MaxMessageRunes:        agent.ContextPolicy.MaxMessageRunes,
 				QuoteReplyDepth:        agent.ContextPolicy.QuoteReplyDepth,
 			},
+			SemanticMemory: toSemanticMemoryPolicy(agent.SemanticMemory),
 			ImageInputs: ImageInputPolicy{
 				Enabled:       agent.ImageInputs.Enabled,
 				MaxImages:     agent.ImageInputs.MaxImages,
@@ -322,6 +400,19 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 		RequestTimeout: cfg.RequestTimeout,
 		Agents:         agents,
 	}
+}
+
+func toSemanticMemoryPolicy(policy *llmconfig.SemanticMemoryPolicy) *SemanticMemoryPolicy {
+	if policy == nil {
+		return nil
+	}
+
+	return cloneSemanticMemoryPolicy(resolveSemanticMemoryPolicy(&SemanticMemoryPolicy{
+		Enabled:              policy.Enabled,
+		MaxRetrievedMemories: policy.MaxRetrievedMemories,
+		MinMemorySimilarity:  policy.MinMemorySimilarity,
+		MaxMemoryRunes:       policy.MaxMemoryRunes,
+	}))
 }
 
 func cloneOptionalInt(value *int) *int {
@@ -411,13 +502,19 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 	}
 	defer cancel()
 
-	req, err := m.buildGenerateRequest(reqCtx, event, agent, prompt)
+	toolRegistry, err := m.buildSemanticMemoryToolRegistry(event, agent)
+	if err != nil {
+		buildErr := fmt.Errorf("llmchat build tools for agent %s: %w", agent.Name, err)
+		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, buildErr)
+	}
+
+	req, err := m.buildGenerateRequestWithTools(reqCtx, event, agent, prompt, toolRegistry)
 	if err != nil {
 		buildErr := fmt.Errorf("llmchat build request for agent %s: %w", agent.Name, err)
 		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, buildErr)
 	}
 
-	if err := m.streamProviderReply(reqCtx, ctx, target, placeholder.ID, provider, req); err != nil {
+	if err := m.streamProviderReplyWithTools(reqCtx, ctx, target, placeholder.ID, provider, req, toolRegistry); err != nil {
 		streamErr := fmt.Errorf("llmchat stream response for agent %s: %w", agent.Name, err)
 		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, streamErr)
 	}

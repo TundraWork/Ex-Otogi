@@ -55,6 +55,11 @@
     "sleep": {
       "signing_key": "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY"
     },
+    "llmmemory": {
+      "persistence_file": "data/llm_memory.json",
+      "flush_interval": "5m",
+      "max_entries": 1000
+    },
     "llmchat": {
       "config_file": "config/llm.json"
     }

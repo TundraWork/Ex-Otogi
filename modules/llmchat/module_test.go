@@ -3488,9 +3488,11 @@ func (m *memoryStub) ListConversationContextBefore(
 
 type providerStub struct {
 	stream           ai.LLMStream
+	streams          []ai.LLMStream
 	streamErr        error
 	onGenerateStream func()
 	lastRequest      ai.LLMGenerateRequest
+	requests         []ai.LLMGenerateRequest
 }
 
 type markdownParserStub struct{}
@@ -3559,11 +3561,23 @@ func (p *providerStub) GenerateStream(
 	if p.streamErr != nil {
 		return nil, p.streamErr
 	}
+	if len(p.streams) > 0 {
+		stream := p.streams[0]
+		p.streams = p.streams[1:]
+		if stream == nil {
+			return nil, fmt.Errorf("nil stream")
+		}
+
+		p.lastRequest = cloneGenerateRequestForTest(req)
+		p.requests = append(p.requests, cloneGenerateRequestForTest(req))
+		return stream, nil
+	}
 	if p.stream == nil {
 		return nil, fmt.Errorf("nil stream")
 	}
 
-	p.lastRequest = req
+	p.lastRequest = cloneGenerateRequestForTest(req)
+	p.requests = append(p.requests, cloneGenerateRequestForTest(req))
 	return p.stream, nil
 }
 
@@ -3686,6 +3700,47 @@ func newTestModule(cfg Config) *Module {
 	module := New()
 	module.cfg = cfg
 	return module
+}
+
+func cloneGenerateRequestForTest(req ai.LLMGenerateRequest) ai.LLMGenerateRequest {
+	cloned := req
+	if len(req.Messages) > 0 {
+		cloned.Messages = make([]ai.LLMMessage, 0, len(req.Messages))
+		for _, message := range req.Messages {
+			messageClone := message
+			if len(message.Parts) > 0 {
+				messageClone.Parts = make([]ai.LLMMessagePart, 0, len(message.Parts))
+				for _, part := range message.Parts {
+					partClone := part
+					if part.Image != nil {
+						imageClone := *part.Image
+						if len(part.Image.Data) > 0 {
+							imageClone.Data = append([]byte(nil), part.Image.Data...)
+						}
+						partClone.Image = &imageClone
+					}
+					messageClone.Parts = append(messageClone.Parts, partClone)
+				}
+			}
+			if len(message.ToolCalls) > 0 {
+				messageClone.ToolCalls = append([]ai.LLMToolCall(nil), message.ToolCalls...)
+			}
+			cloned.Messages = append(cloned.Messages, messageClone)
+		}
+	}
+	if len(req.Tools) > 0 {
+		cloned.Tools = make([]ai.LLMToolDefinition, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			toolClone := tool
+			if len(tool.Parameters) > 0 {
+				toolClone.Parameters = append([]byte(nil), tool.Parameters...)
+			}
+			cloned.Tools = append(cloned.Tools, toolClone)
+		}
+	}
+	cloned.Metadata = cloneStringMap(req.Metadata)
+
+	return cloned
 }
 
 func allMessageContents(messages []ai.LLMMessage) []string {

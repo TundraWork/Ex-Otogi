@@ -29,7 +29,7 @@ func TestModuleHandleCommand(t *testing.T) {
 			event: newCommandEvent("/help"),
 			catalogCommands: []core.RegisteredCommand{
 				{
-					ModuleName: "memory",
+					ModuleName: "eventcache",
 					Command: platform.CommandSpec{
 						Prefix:      platform.CommandPrefixSystem,
 						Name:        "raw",
@@ -68,7 +68,7 @@ func TestModuleHandleCommand(t *testing.T) {
 				"~raw",
 				"usage: --article|-a <value>",
 				"raw projection",
-				"(memory)",
+				"(eventcache)",
 			},
 		},
 		{

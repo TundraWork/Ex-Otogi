@@ -21,14 +21,23 @@ type openAIResponseStream interface {
 }
 
 type openAIStream struct {
-	mu       sync.Mutex
-	stream   openAIResponseStream
-	closed   bool
-	finished bool
+	mu        sync.Mutex
+	stream    openAIResponseStream
+	closed    bool
+	finished  bool
+	toolCalls map[string]openAIToolCallMeta
+}
+
+type openAIToolCallMeta struct {
+	callID string
+	name   string
 }
 
 func newOpenAIStream(stream openAIResponseStream) *openAIStream {
-	return &openAIStream{stream: stream}
+	return &openAIStream{
+		stream:    stream,
+		toolCalls: make(map[string]openAIToolCallMeta),
+	}
 }
 
 func (s *openAIStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, error) {
@@ -55,7 +64,8 @@ func (s *openAIStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, error) {
 			s.markFinished()
 			return ai.LLMGenerateChunk{}, io.EOF
 		}
-		if chunk.Delta == "" {
+		chunk = s.resolveToolCallChunk(event, chunk)
+		if chunk.Kind.Normalize() != ai.LLMGenerateChunkKindToolCall && chunk.Delta == "" {
 			continue
 		}
 
@@ -135,6 +145,41 @@ func (s *openAIStream) markFinished() {
 	s.mu.Unlock()
 }
 
+func (s *openAIStream) resolveToolCallChunk(
+	event responses.ResponseStreamEventUnion,
+	chunk ai.LLMGenerateChunk,
+) ai.LLMGenerateChunk {
+	if chunk.Kind.Normalize() != ai.LLMGenerateChunkKindToolCall {
+		return chunk
+	}
+
+	switch strings.TrimSpace(event.Type) {
+	case openAIEventOutputItemAdded:
+		itemID := strings.TrimSpace(event.Item.ID)
+		callID := strings.TrimSpace(event.Item.CallID)
+		name := strings.TrimSpace(event.Item.Name)
+		if itemID != "" && callID != "" {
+			s.mu.Lock()
+			s.toolCalls[itemID] = openAIToolCallMeta{callID: callID, name: name}
+			s.mu.Unlock()
+		}
+	case openAIEventFunctionCallArgumentsDelta, openAIEventFunctionCallArgumentsDone:
+		s.mu.Lock()
+		meta, exists := s.toolCalls[strings.TrimSpace(event.ItemID)]
+		s.mu.Unlock()
+		if exists {
+			if chunk.ToolCallID == "" {
+				chunk.ToolCallID = meta.callID
+			}
+			if chunk.ToolCallName == "" {
+				chunk.ToolCallName = meta.name
+			}
+		}
+	}
+
+	return chunk
+}
+
 func mapOpenAIStreamEvent(
 	event responses.ResponseStreamEventUnion,
 ) (ai.LLMGenerateChunk, bool, error) {
@@ -162,6 +207,37 @@ func mapOpenAIStreamEvent(
 		}, false, nil
 	case openAIEventReasoningTextDelta:
 		// Ignore raw reasoning content. llmchat only surfaces short summaries.
+		return ai.LLMGenerateChunk{}, false, nil
+	case openAIEventOutputItemAdded:
+		if !event.JSON.Item.Valid() {
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing item")
+		}
+		if strings.TrimSpace(event.Item.Type) != "function_call" {
+			return ai.LLMGenerateChunk{}, false, nil
+		}
+		if !event.Item.JSON.CallID.Valid() {
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing call_id")
+		}
+		if !event.Item.JSON.Name.Valid() {
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing name")
+		}
+		return ai.LLMGenerateChunk{
+			Kind:         ai.LLMGenerateChunkKindToolCall,
+			ToolCallID:   event.Item.CallID,
+			ToolCallName: event.Item.Name,
+		}, false, nil
+	case openAIEventFunctionCallArgumentsDelta:
+		if !event.JSON.Delta.Valid() {
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing delta")
+		}
+		if !event.JSON.ItemID.Valid() {
+			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing item_id")
+		}
+		return ai.LLMGenerateChunk{
+			Kind:              ai.LLMGenerateChunkKindToolCall,
+			ToolCallArguments: event.Delta,
+		}, false, nil
+	case openAIEventFunctionCallArgumentsDone:
 		return ai.LLMGenerateChunk{}, false, nil
 	case openAIEventCompleted:
 		if !event.JSON.Response.Valid() {

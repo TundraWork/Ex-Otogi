@@ -220,6 +220,92 @@ func TestOpenAIProviderGenerateStreamMapsRequest(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderGenerateStreamMapsToolsAndToolMessages(t *testing.T) {
+	t.Parallel()
+
+	client := &openAIResponsesClientStub{
+		stream: &openAIResponseStreamStub{
+			events: []responses.ResponseStreamEventUnion{
+				mustUnmarshalEvent(t, `{
+					"type":"response.completed",
+					"sequence_number":1,
+					"response":{}
+				}`),
+			},
+		},
+	}
+	provider := &Provider{responses: client}
+
+	req := ai.LLMGenerateRequest{
+		Model: "gpt-5-mini",
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleUser, Content: "remember this"},
+			{
+				Role: ai.LLMMessageRoleAssistant,
+				ToolCalls: []ai.LLMToolCall{
+					{
+						ID:        "call-1",
+						Name:      "remember",
+						Arguments: `{"content":"hello"}`,
+					},
+				},
+			},
+			{
+				Role:       ai.LLMMessageRoleTool,
+				ToolCallID: "call-1",
+				Content:    `{"result":"stored"}`,
+			},
+		},
+		Tools: []ai.LLMToolDefinition{
+			{
+				Name:        "remember",
+				Description: "Store a fact.",
+				Parameters:  []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`),
+			},
+		},
+	}
+
+	stream, err := provider.GenerateStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if stream == nil {
+		t.Fatal("expected stream")
+	}
+
+	got := client.params[0]
+	if len(got.Tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(got.Tools))
+	}
+	if got.Tools[0].OfFunction == nil {
+		t.Fatal("expected function tool definition")
+	}
+	if got.Tools[0].OfFunction.Name != "remember" {
+		t.Fatalf("tool name = %q, want remember", got.Tools[0].OfFunction.Name)
+	}
+	if !got.Tools[0].OfFunction.Strict.Valid() || !got.Tools[0].OfFunction.Strict.Value {
+		t.Fatalf("tool strict = %+v, want true", got.Tools[0].OfFunction.Strict)
+	}
+	if len(got.Input.OfInputItemList) != 3 {
+		t.Fatalf("input items len = %d, want 3", len(got.Input.OfInputItemList))
+	}
+	if got.Input.OfInputItemList[1].OfFunctionCall == nil {
+		t.Fatal("input[1] is not a function call item")
+	}
+	if callID := got.Input.OfInputItemList[1].GetCallID(); callID == nil || *callID != "call-1" {
+		t.Fatalf("input[1] call_id = %v, want call-1", callID)
+	}
+	if arguments := got.Input.OfInputItemList[1].GetArguments(); arguments == nil || *arguments != `{"content":"hello"}` {
+		t.Fatalf("input[1] arguments = %v, want JSON arguments", arguments)
+	}
+	if got.Input.OfInputItemList[2].OfFunctionCallOutput == nil {
+		t.Fatal("input[2] is not a function call output item")
+	}
+	if callID := got.Input.OfInputItemList[2].GetCallID(); callID == nil || *callID != "call-1" {
+		t.Fatalf("input[2] call_id = %v, want call-1", callID)
+	}
+}
+
 func TestOpenAIProviderGenerateStreamInvalidReasoningMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -282,8 +368,34 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 		preCancelContext bool
 		wantDelta        string
 		wantKind         ai.LLMGenerateChunkKind
+		wantToolCallID   string
+		wantToolName     string
 		wantErrCheck     func(error) bool
 	}{
+		{
+			name: "tool call added event",
+			events: []responses.ResponseStreamEventUnion{
+				mustUnmarshalEvent(t, `{
+					"type":"response.output_item.added",
+					"sequence_number":1,
+					"output_index":0,
+					"item":{
+						"type":"function_call",
+						"id":"item-1",
+						"call_id":"call-1",
+						"name":"remember",
+						"arguments":"",
+						"status":"in_progress"
+					}
+				}`),
+			},
+			wantKind:       ai.LLMGenerateChunkKindToolCall,
+			wantToolCallID: "call-1",
+			wantToolName:   "remember",
+			wantErrCheck: func(err error) bool {
+				return err == nil
+			},
+		},
 		{
 			name: "delta then completion",
 			events: []responses.ResponseStreamEventUnion{
@@ -475,7 +587,67 @@ func TestOpenAIStreamEventsAndLifecycle(t *testing.T) {
 			if err == nil && testCase.wantKind != "" && chunk.Kind.Normalize() != testCase.wantKind {
 				t.Fatalf("chunk kind = %q, want %q", chunk.Kind.Normalize(), testCase.wantKind)
 			}
+			if err == nil && testCase.wantToolCallID != "" && chunk.ToolCallID != testCase.wantToolCallID {
+				t.Fatalf("chunk tool_call_id = %q, want %q", chunk.ToolCallID, testCase.wantToolCallID)
+			}
+			if err == nil && testCase.wantToolName != "" && chunk.ToolCallName != testCase.wantToolName {
+				t.Fatalf("chunk tool_call_name = %q, want %q", chunk.ToolCallName, testCase.wantToolName)
+			}
 		})
+	}
+}
+
+func TestOpenAIStreamToolCallArgumentsDeltaUsesCallID(t *testing.T) {
+	t.Parallel()
+
+	stream := newOpenAIStream(&openAIResponseStreamStub{
+		events: []responses.ResponseStreamEventUnion{
+			mustUnmarshalEvent(t, `{
+				"type":"response.output_item.added",
+				"sequence_number":1,
+				"output_index":0,
+				"item":{
+					"type":"function_call",
+					"id":"item-1",
+					"call_id":"call-1",
+					"name":"remember",
+					"arguments":"",
+					"status":"in_progress"
+				}
+			}`),
+			mustUnmarshalEvent(t, `{
+				"type":"response.function_call_arguments.delta",
+				"sequence_number":2,
+				"item_id":"item-1",
+				"output_index":0,
+				"delta":"{\"content\":\"hello\"}"
+			}`),
+		},
+	})
+
+	chunk, err := stream.Recv(context.Background())
+	if err != nil {
+		t.Fatalf("Recv failed: %v", err)
+	}
+	if chunk.Kind != ai.LLMGenerateChunkKindToolCall || chunk.ToolCallID != "call-1" || chunk.ToolCallName != "remember" {
+		t.Fatalf("first chunk = %+v, want tool call metadata", chunk)
+	}
+
+	chunk, err = stream.Recv(context.Background())
+	if err != nil {
+		t.Fatalf("Recv failed: %v", err)
+	}
+	if chunk.Kind != ai.LLMGenerateChunkKindToolCall {
+		t.Fatalf("second chunk kind = %q, want tool_call", chunk.Kind)
+	}
+	if chunk.ToolCallID != "call-1" {
+		t.Fatalf("second chunk tool_call_id = %q, want call-1", chunk.ToolCallID)
+	}
+	if chunk.ToolCallName != "remember" {
+		t.Fatalf("second chunk tool_call_name = %q, want remember", chunk.ToolCallName)
+	}
+	if chunk.ToolCallArguments != `{"content":"hello"}` {
+		t.Fatalf("second chunk arguments = %q, want JSON delta", chunk.ToolCallArguments)
 	}
 }
 

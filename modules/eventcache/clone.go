@@ -1,4 +1,4 @@
-package memory
+package eventcache
 
 import "ex-otogi/pkg/otogi/platform"
 

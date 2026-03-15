@@ -1,4 +1,4 @@
-package memory
+package eventcache
 
 import (
 	"context"
@@ -35,7 +35,7 @@ func TestModuleOnRegister(t *testing.T) {
 				platform.ServiceSinkDispatcher: &captureDispatcher{},
 			},
 			wantErr:          true,
-			wantErrSubstring: "memory resolve logger",
+			wantErrSubstring: "eventcache resolve logger",
 		},
 		{
 			name: "missing outbound dispatcher fails",
@@ -43,7 +43,7 @@ func TestModuleOnRegister(t *testing.T) {
 				ServiceLogger: slog.Default(),
 			},
 			wantErr:          true,
-			wantErrSubstring: "memory resolve outbound dispatcher",
+			wantErrSubstring: "eventcache resolve outbound dispatcher",
 		},
 	}
 

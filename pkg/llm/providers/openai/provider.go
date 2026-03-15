@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -17,12 +18,15 @@ import (
 )
 
 const (
-	openAIEventOutputTextDelta           = "response.output_text.delta"
-	openAIEventReasoningSummaryTextDelta = "response.reasoning_summary_text.delta"
-	openAIEventReasoningTextDelta        = "response.reasoning_text.delta"
-	openAIEventCompleted                 = "response.completed"
-	openAIEventFailed                    = "response.failed"
-	openAIEventError                     = "error"
+	openAIEventOutputTextDelta            = "response.output_text.delta"
+	openAIEventReasoningSummaryTextDelta  = "response.reasoning_summary_text.delta"
+	openAIEventReasoningTextDelta         = "response.reasoning_text.delta"
+	openAIEventOutputItemAdded            = "response.output_item.added"
+	openAIEventFunctionCallArgumentsDelta = "response.function_call_arguments.delta"
+	openAIEventFunctionCallArgumentsDone  = "response.function_call_arguments.done"
+	openAIEventCompleted                  = "response.completed"
+	openAIEventFailed                     = "response.failed"
+	openAIEventError                      = "error"
 
 	metadataOpenAIReasoningSummary = "openai.reasoning_summary"
 	metadataOpenAIReasoningEffort  = "openai.reasoning_effort"
@@ -126,17 +130,9 @@ func (p *Provider) GenerateStream(
 }
 
 func mapGenerateRequest(req ai.LLMGenerateRequest) (responses.ResponseNewParams, error) {
-	items := make(responses.ResponseInputParam, 0, len(req.Messages))
-	for index, message := range req.Messages {
-		role, err := mapMessageRole(message.Role)
-		if err != nil {
-			return responses.ResponseNewParams{}, fmt.Errorf("messages[%d] role: %w", index, err)
-		}
-		content, err := mapMessageContent(message)
-		if err != nil {
-			return responses.ResponseNewParams{}, fmt.Errorf("messages[%d] content: %w", index, err)
-		}
-		items = append(items, responses.ResponseInputItemParamOfMessage(content, role))
+	items, err := mapInputItems(req.Messages)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
 	}
 
 	params := responses.ResponseNewParams{
@@ -173,8 +169,96 @@ func mapGenerateRequest(req ai.LLMGenerateRequest) (responses.ResponseNewParams,
 		}
 		params.Metadata = requestMetadata
 	}
+	if len(req.Tools) > 0 {
+		tools, err := mapToolDefinitions(req.Tools)
+		if err != nil {
+			return responses.ResponseNewParams{}, err
+		}
+		params.Tools = tools
+	}
 
 	return params, nil
+}
+
+func mapInputItems(messages []ai.LLMMessage) (responses.ResponseInputParam, error) {
+	items := make(responses.ResponseInputParam, 0, len(messages))
+	for index, message := range messages {
+		mapped, err := mapMessage(message)
+		if err != nil {
+			return nil, fmt.Errorf("messages[%d]: %w", index, err)
+		}
+		items = append(items, mapped...)
+	}
+
+	return items, nil
+}
+
+func mapMessage(message ai.LLMMessage) ([]responses.ResponseInputItemUnionParam, error) {
+	switch message.Role {
+	case ai.LLMMessageRoleTool:
+		return []responses.ResponseInputItemUnionParam{
+			responses.ResponseInputItemParamOfFunctionCallOutput(message.ToolCallID, message.Content),
+		}, nil
+	case ai.LLMMessageRoleAssistant:
+		items := make([]responses.ResponseInputItemUnionParam, 0, 1+len(message.ToolCalls))
+		if strings.TrimSpace(message.Content) != "" || len(message.Parts) > 0 {
+			role, err := mapMessageRole(message.Role)
+			if err != nil {
+				return nil, fmt.Errorf("role: %w", err)
+			}
+			content, err := mapMessageContent(message)
+			if err != nil {
+				return nil, fmt.Errorf("content: %w", err)
+			}
+			items = append(items, responses.ResponseInputItemParamOfMessage(content, role))
+		}
+		for toolIndex, toolCall := range message.ToolCalls {
+			if err := toolCall.Validate(); err != nil {
+				return nil, fmt.Errorf("tool_calls[%d]: %w", toolIndex, err)
+			}
+			items = append(items, responses.ResponseInputItemParamOfFunctionCall(
+				toolCall.Arguments,
+				toolCall.ID,
+				toolCall.Name,
+			))
+		}
+		return items, nil
+	default:
+		role, err := mapMessageRole(message.Role)
+		if err != nil {
+			return nil, fmt.Errorf("role: %w", err)
+		}
+		content, err := mapMessageContent(message)
+		if err != nil {
+			return nil, fmt.Errorf("content: %w", err)
+		}
+		return []responses.ResponseInputItemUnionParam{
+			responses.ResponseInputItemParamOfMessage(content, role),
+		}, nil
+	}
+}
+
+func mapToolDefinitions(definitions []ai.LLMToolDefinition) ([]responses.ToolUnionParam, error) {
+	tools := make([]responses.ToolUnionParam, 0, len(definitions))
+	for index, tool := range definitions {
+		if err := tool.Validate(); err != nil {
+			return nil, fmt.Errorf("tools[%d]: %w", index, err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(tool.Parameters, &schema); err != nil {
+			return nil, fmt.Errorf("tools[%d] parameters: %w", index, err)
+		}
+		tools = append(tools, responses.ToolUnionParam{
+			OfFunction: &responses.FunctionToolParam{
+				Name:        tool.Name,
+				Description: param.NewOpt(tool.Description),
+				Parameters:  schema,
+				Strict:      param.NewOpt(true),
+			},
+		})
+	}
+
+	return tools, nil
 }
 
 func mapMessageContent(message ai.LLMMessage) (responses.ResponseInputMessageContentListParam, error) {

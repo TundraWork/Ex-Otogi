@@ -1,4 +1,4 @@
-package memory
+package eventcache
 
 import (
 	"container/list"
@@ -21,7 +21,7 @@ const (
 // ServiceLogger is the optional service registry key for structured logging.
 const ServiceLogger = "logger"
 
-// Option mutates memory module configuration.
+// Option mutates eventcache module configuration.
 type Option func(*Module)
 
 // WithLogger injects a logger directly, bypassing service lookup.
@@ -110,7 +110,7 @@ type memorySnapshot struct {
 	UpdatedAt    time.Time
 }
 
-// New creates a memory module with bounded in-memory storage.
+// New creates an eventcache module with bounded in-memory storage.
 func New(options ...Option) *Module {
 	module := &Module{
 		logger:         slog.Default(),
@@ -134,7 +134,7 @@ func New(options ...Option) *Module {
 
 // Name returns the stable module identifier.
 func (m *Module) Name() string {
-	return "memory"
+	return "eventcache"
 }
 
 // Spec declares which events mutate memory.
@@ -200,7 +200,7 @@ func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error
 		m.logger = logger
 	case errors.Is(err, core.ErrServiceNotFound):
 	default:
-		return fmt.Errorf("memory resolve logger: %w", err)
+		return fmt.Errorf("eventcache resolve logger: %w", err)
 	}
 
 	dispatcher, err := core.ResolveAs[platform.SinkDispatcher](
@@ -208,12 +208,12 @@ func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error
 		platform.ServiceSinkDispatcher,
 	)
 	if err != nil {
-		return fmt.Errorf("memory resolve outbound dispatcher: %w", err)
+		return fmt.Errorf("eventcache resolve outbound dispatcher: %w", err)
 	}
 	m.dispatcher = dispatcher
 
 	if err := runtime.Services().Register(core.ServiceMemory, m); err != nil {
-		return fmt.Errorf("memory register service %s: %w", core.ServiceMemory, err)
+		return fmt.Errorf("eventcache register service %s: %w", core.ServiceMemory, err)
 	}
 
 	return nil
@@ -222,7 +222,7 @@ func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error
 // OnStart starts the module lifecycle.
 func (m *Module) OnStart(ctx context.Context) error {
 	m.logger.InfoContext(ctx,
-		"memory module started",
+		"eventcache module started",
 		"module", m.Name(),
 		"max_entries", m.maxEntries,
 		"ttl", m.ttl,
@@ -246,7 +246,7 @@ func (m *Module) OnShutdown(ctx context.Context) error {
 	m.mu.Unlock()
 
 	m.logger.InfoContext(ctx,
-		"memory module shutdown",
+		"eventcache module shutdown",
 		"module", m.Name(),
 		"entries", recordCount,
 	)

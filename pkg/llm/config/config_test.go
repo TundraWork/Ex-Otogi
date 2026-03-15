@@ -37,6 +37,8 @@ func TestLoadFile(t *testing.T) {
 							"type":"openai",
 							"api_key":"sk-test",
 							"base_url":"https://api.openai.com/v1",
+							"embedding_model":"text-embedding-3-small",
+							"embedding_dimensions":512,
 							"openai":{
 								"organization":"org-test",
 								"project":"project-test",
@@ -63,10 +65,17 @@ func TestLoadFile(t *testing.T) {
 							"aliases":["Oto"],
 							"description":"OpenAI agent",
 							"provider":"openai-main",
+							"embedding_provider":"openai-main",
 							"model":"gpt-5-mini",
 							"system_prompt_template":"You are {{.AgentName}}",
 							"request_timeout":"30s",
 							"request_metadata":{"trace_id":"main"},
+							"semantic_memory":{
+								"enabled":true,
+								"max_retrieved_memories":4,
+								"min_memory_similarity":0.45,
+								"max_memory_runes":1500
+							},
 							"context":{
 								"reply_chain_max_messages":8,
 								"leading_context_messages":2,
@@ -110,6 +119,12 @@ func TestLoadFile(t *testing.T) {
 				}
 				if openaiProfile.OpenAI == nil {
 					t.Fatal("expected openai options")
+				}
+				if openaiProfile.EmbeddingModel != "text-embedding-3-small" {
+					t.Fatalf("openai embedding_model = %q, want text-embedding-3-small", openaiProfile.EmbeddingModel)
+				}
+				if openaiProfile.EmbeddingDimensions != 512 {
+					t.Fatalf("openai embedding_dimensions = %d, want 512", openaiProfile.EmbeddingDimensions)
 				}
 				if openaiProfile.OpenAI.MaxRetries == nil || *openaiProfile.OpenAI.MaxRetries != 3 {
 					t.Fatalf("openai max retries = %v, want 3", openaiProfile.OpenAI.MaxRetries)
@@ -159,6 +174,30 @@ func TestLoadFile(t *testing.T) {
 				}
 				if cfg.Agents[0].RequestTimeout != 30*time.Second {
 					t.Fatalf("agent[0] request_timeout = %s, want 30s", cfg.Agents[0].RequestTimeout)
+				}
+				if cfg.Agents[0].EmbeddingProvider != "openai-main" {
+					t.Fatalf("agent[0] embedding_provider = %q, want openai-main", cfg.Agents[0].EmbeddingProvider)
+				}
+				if cfg.Agents[0].SemanticMemory == nil || !cfg.Agents[0].SemanticMemory.Enabled {
+					t.Fatal("agent[0] semantic_memory = nil/disabled, want enabled")
+				}
+				if cfg.Agents[0].SemanticMemory.MaxRetrievedMemories != 4 {
+					t.Fatalf(
+						"agent[0] max_retrieved_memories = %d, want 4",
+						cfg.Agents[0].SemanticMemory.MaxRetrievedMemories,
+					)
+				}
+				if cfg.Agents[0].SemanticMemory.MinMemorySimilarity != 0.45 {
+					t.Fatalf(
+						"agent[0] min_memory_similarity = %f, want 0.45",
+						cfg.Agents[0].SemanticMemory.MinMemorySimilarity,
+					)
+				}
+				if cfg.Agents[0].SemanticMemory.MaxMemoryRunes != 1500 {
+					t.Fatalf(
+						"agent[0] max_memory_runes = %d, want 1500",
+						cfg.Agents[0].SemanticMemory.MaxMemoryRunes,
+					)
 				}
 				if cfg.Agents[0].ContextPolicy.ReplyChainMaxMessages != 8 {
 					t.Fatalf(
@@ -228,6 +267,24 @@ func TestLoadFile(t *testing.T) {
 					)
 				}
 			},
+		},
+		{
+			name: "semantic memory requires embedding provider",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"semantic_memory":{"enabled":true}
+					}
+				]
+			}`,
+			wantErrSubstring: "embedding_provider is required when semantic_memory.enabled=true",
 		},
 		{
 			name: "invalid context max age",

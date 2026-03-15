@@ -73,6 +73,9 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	if module.providerRegistry == nil {
 		t.Fatal("expected provider registry to be configured")
 	}
+	if module.embeddingRegistry == nil {
+		t.Fatal("expected embedding registry to be configured")
+	}
 	if module.mediaDownloader == nil {
 		t.Fatal("expected media downloader to be configured")
 	}
@@ -107,6 +110,18 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	}
 	if _, err := registry.Resolve("openai-main"); err != nil {
 		t.Fatalf("resolve openai-main failed: %v", err)
+	}
+
+	resolvedEmbedding, err := services.Resolve(ai.ServiceEmbeddingProviderRegistry)
+	if err != nil {
+		t.Fatalf("resolve embedding registry failed: %v", err)
+	}
+	embeddingRegistry, ok := resolvedEmbedding.(ai.EmbeddingProviderRegistry)
+	if !ok {
+		t.Fatalf("resolved embedding registry type = %T, want ai.EmbeddingProviderRegistry", resolvedEmbedding)
+	}
+	if _, err := embeddingRegistry.Resolve("openai-main"); err != nil {
+		t.Fatalf("resolve embedding provider openai-main failed: %v", err)
 	}
 }
 

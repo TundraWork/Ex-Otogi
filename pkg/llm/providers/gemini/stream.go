@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,7 +61,7 @@ func (s *geminiStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, error) {
 			return ai.LLMGenerateChunk{}, fmt.Errorf("gemini stream recv context: %w", err)
 		}
 		if chunk, ok := s.dequeuePending(); ok {
-			if chunk.Delta == "" {
+			if chunk.Kind.Normalize() != ai.LLMGenerateChunkKindToolCall && chunk.Delta == "" {
 				continue
 			}
 			return chunk, nil
@@ -86,7 +87,7 @@ func (s *geminiStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, error) {
 			s.enqueuePending(chunks[1:])
 		}
 
-		if chunks[0].Delta == "" {
+		if chunks[0].Kind.Normalize() != ai.LLMGenerateChunkKindToolCall && chunks[0].Delta == "" {
 			continue
 		}
 		return chunks[0], nil
@@ -443,7 +444,27 @@ func mapGenerateContentResponse(
 
 	chunks := make([]ai.LLMGenerateChunk, 0, len(content.Parts))
 	for _, part := range content.Parts {
-		if part == nil || part.Text == "" {
+		if part == nil {
+			continue
+		}
+		if part.FunctionCall != nil {
+			arguments, err := json.Marshal(part.FunctionCall.Args)
+			if err != nil {
+				return nil, fmt.Errorf("gemini stream parse function call args: %w", err)
+			}
+			chunk := ai.LLMGenerateChunk{
+				Kind:              ai.LLMGenerateChunkKindToolCall,
+				ToolCallID:        part.FunctionCall.ID,
+				ToolCallName:      part.FunctionCall.Name,
+				ToolCallArguments: string(arguments),
+			}
+			if len(part.ThoughtSignature) > 0 {
+				chunk.ToolCallThoughtSignature = append([]byte(nil), part.ThoughtSignature...)
+			}
+			chunks = append(chunks, chunk)
+			continue
+		}
+		if part.Text == "" {
 			continue
 		}
 		if part.Thought {

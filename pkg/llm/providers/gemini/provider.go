@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -194,25 +195,45 @@ func mapGenerateRequest(
 
 	systemParts := make([]string, 0, len(req.Messages))
 	contents := make([]*genai.Content, 0, len(req.Messages))
+	toolCallNames := make(map[string]string)
 	for index, message := range req.Messages {
-		parts, err := mapMessageParts(message)
-		if err != nil {
-			return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] content: %w", index, err)
-		}
-
 		switch message.Role {
 		case ai.LLMMessageRoleSystem:
+			parts, err := mapMessageParts(message)
+			if err != nil {
+				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] content: %w", index, err)
+			}
 			textParts, err := mapSystemParts(parts)
 			if err != nil {
 				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] system content: %w", index, err)
 			}
 			systemParts = append(systemParts, textParts...)
-		case ai.LLMMessageRoleUser, ai.LLMMessageRoleAssistant:
+		case ai.LLMMessageRoleUser:
+			parts, err := mapMessageParts(message)
+			if err != nil {
+				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] content: %w", index, err)
+			}
 			role, roleErr := mapMessageRole(message.Role)
 			if roleErr != nil {
 				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] role: %w", index, roleErr)
 			}
 			contents = append(contents, genai.NewContentFromParts(parts, genai.Role(role)))
+		case ai.LLMMessageRoleAssistant:
+			parts, err := mapAssistantMessageParts(message, toolCallNames)
+			if err != nil {
+				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] content: %w", index, err)
+			}
+			role, roleErr := mapMessageRole(message.Role)
+			if roleErr != nil {
+				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] role: %w", index, roleErr)
+			}
+			contents = append(contents, genai.NewContentFromParts(parts, genai.Role(role)))
+		case ai.LLMMessageRoleTool:
+			content, err := mapToolMessageContent(message, toolCallNames)
+			if err != nil {
+				return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] tool content: %w", index, err)
+			}
+			contents = append(contents, content)
 		default:
 			return nil, nil, requestOptions{}, fmt.Errorf("messages[%d] role: unsupported role %q", index, message.Role)
 		}
@@ -247,6 +268,13 @@ func mapGenerateRequest(
 	if isTrue(effective.urlContext) {
 		tools = append(tools, &genai.Tool{URLContext: &genai.URLContext{}})
 	}
+	if len(req.Tools) > 0 {
+		functionTool, err := mapFunctionTool(req.Tools)
+		if err != nil {
+			return nil, nil, requestOptions{}, err
+		}
+		tools = append(tools, functionTool)
+	}
 	if len(tools) > 0 {
 		config.Tools = tools
 	}
@@ -273,6 +301,89 @@ func mapGenerateRequest(
 	}
 
 	return contents, config, effective, nil
+}
+
+func mapAssistantMessageParts(
+	message ai.LLMMessage,
+	toolCallNames map[string]string,
+) ([]*genai.Part, error) {
+	parts, err := mapMessageParts(message)
+	if err != nil {
+		return nil, err
+	}
+	for index, toolCall := range message.ToolCalls {
+		if err := toolCall.Validate(); err != nil {
+			return nil, fmt.Errorf("tool_calls[%d]: %w", index, err)
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+			return nil, fmt.Errorf("tool_calls[%d] arguments: %w", index, err)
+		}
+		part := &genai.Part{
+			FunctionCall: &genai.FunctionCall{
+				ID:   toolCall.ID,
+				Name: toolCall.Name,
+				Args: args,
+			},
+		}
+		if len(toolCall.ThoughtSignature) > 0 {
+			part.ThoughtSignature = append([]byte(nil), toolCall.ThoughtSignature...)
+		}
+		parts = append(parts, part)
+		if toolCallNames != nil {
+			toolCallNames[toolCall.ID] = toolCall.Name
+		}
+	}
+
+	return parts, nil
+}
+
+func mapToolMessageContent(
+	message ai.LLMMessage,
+	toolCallNames map[string]string,
+) (*genai.Content, error) {
+	name := toolCallNames[message.ToolCallID]
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("missing assistant tool call for id %s", message.ToolCallID)
+	}
+	response := mapToolResponse(message.Content)
+
+	return genai.NewContentFromParts([]*genai.Part{{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       message.ToolCallID,
+			Name:     name,
+			Response: response,
+		},
+	}}, genai.RoleUser), nil
+}
+
+func mapToolResponse(raw string) map[string]any {
+	var response map[string]any
+	if err := json.Unmarshal([]byte(raw), &response); err == nil && response != nil {
+		return response
+	}
+
+	return map[string]any{"result": raw}
+}
+
+func mapFunctionTool(definitions []ai.LLMToolDefinition) (*genai.Tool, error) {
+	declarations := make([]*genai.FunctionDeclaration, 0, len(definitions))
+	for index, tool := range definitions {
+		if err := tool.Validate(); err != nil {
+			return nil, fmt.Errorf("tools[%d]: %w", index, err)
+		}
+		var schema any
+		if err := json.Unmarshal(tool.Parameters, &schema); err != nil {
+			return nil, fmt.Errorf("tools[%d] parameters: %w", index, err)
+		}
+		declarations = append(declarations, &genai.FunctionDeclaration{
+			Name:                 tool.Name,
+			Description:          tool.Description,
+			ParametersJsonSchema: schema,
+		})
+	}
+
+	return &genai.Tool{FunctionDeclarations: declarations}, nil
 }
 
 func mapMessageParts(message ai.LLMMessage) ([]*genai.Part, error) {

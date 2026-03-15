@@ -5,6 +5,8 @@
       "type": "openai",
       "api_key": "sk-REPLACE_ME",
       "base_url": "https://api.openai.com/v1",
+      "embedding_model": "text-embedding-3-small",
+      "embedding_dimensions": 512,
       "openai": {
         "organization": "",
         "project": "",
@@ -15,6 +17,8 @@
       "type": "gemini",
       "api_key": "gm-REPLACE_ME",
       "base_url": "https://generativelanguage.googleapis.com",
+      "embedding_model": "gemini-embedding-001",
+      "embedding_dimensions": 512,
       "gemini": {
         "api_version": "v1beta",
         "google_search": true,
@@ -32,8 +36,15 @@
       "aliases": ["Oto"],
       "description": "General assistant persona",
       "provider": "openai-main",
+      "embedding_provider": "openai-main",
       "model": "gpt-5-mini",
       "system_prompt_template": "You are {{.AgentName}}. Current UTC time: {{.DateTimeUTC}}.",
+      "semantic_memory": {
+        "enabled": true,
+        "max_retrieved_memories": 5,
+        "min_memory_similarity": 0.3,
+        "max_memory_runes": 2000
+      },
       "template_variables": {
         "locale": "en-US"
       },
@@ -61,8 +72,15 @@
       "aliases": ["OtoGemini"],
       "description": "Gemini assistant persona",
       "provider": "gemini-main",
+      "embedding_provider": "gemini-main",
       "model": "gemini-2.5-flash",
       "system_prompt_template": "You are {{.AgentName}}. Current UTC time: {{.DateTimeUTC}}.",
+      "semantic_memory": {
+        "enabled": true,
+        "max_retrieved_memories": 5,
+        "min_memory_similarity": 0.3,
+        "max_memory_runes": 2000
+      },
       "context": {
         "reply_chain_max_messages": 12,
         "leading_context_messages": 4,

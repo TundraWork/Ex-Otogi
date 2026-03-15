@@ -332,6 +332,100 @@ func TestGeminiProviderGenerateStreamMapsRequest(t *testing.T) {
 	}
 }
 
+func TestGeminiProviderGenerateStreamMapsFunctionToolsAndToolMessages(t *testing.T) {
+	t.Parallel()
+
+	client := &modelsClientStub{
+		stream: seqFromSteps([]streamStep{
+			{
+				response: textResponse([]*genai.Part{{Text: "done"}}),
+			},
+		}),
+	}
+	provider := &Provider{
+		models: client,
+		defaults: requestOptions{
+			googleSearch: ptrBool(false),
+			urlContext:   ptrBool(false),
+		},
+	}
+
+	req := ai.LLMGenerateRequest{
+		Model: "gemini-2.5-flash",
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleUser, Content: "remember this"},
+			{
+				Role: ai.LLMMessageRoleAssistant,
+				ToolCalls: []ai.LLMToolCall{
+					{
+						ID:        "call-1",
+						Name:      "remember",
+						Arguments: `{"content":"hello"}`,
+					},
+				},
+			},
+			{
+				Role:       ai.LLMMessageRoleTool,
+				ToolCallID: "call-1",
+				Content:    `{"result":"stored"}`,
+			},
+		},
+		Tools: []ai.LLMToolDefinition{
+			{
+				Name:        "remember",
+				Description: "Store a fact.",
+				Parameters:  []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`),
+			},
+		},
+	}
+
+	stream, err := provider.GenerateStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if stream == nil {
+		t.Fatal("expected stream")
+	}
+
+	call := client.calls[0]
+	if len(call.config.Tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(call.config.Tools))
+	}
+	if len(call.config.Tools[0].FunctionDeclarations) != 1 {
+		t.Fatalf("function declarations len = %d, want 1", len(call.config.Tools[0].FunctionDeclarations))
+	}
+	if call.config.Tools[0].FunctionDeclarations[0].Name != "remember" {
+		t.Fatalf("tool name = %q, want remember", call.config.Tools[0].FunctionDeclarations[0].Name)
+	}
+	if call.config.Tools[0].FunctionDeclarations[0].ParametersJsonSchema == nil {
+		t.Fatal("expected parameters json schema")
+	}
+	if len(call.contents) != 3 {
+		t.Fatalf("contents len = %d, want 3", len(call.contents))
+	}
+	if call.contents[1].Role != string(genai.RoleModel) {
+		t.Fatalf("contents[1] role = %q, want model", call.contents[1].Role)
+	}
+	if len(call.contents[1].Parts) != 1 || call.contents[1].Parts[0].FunctionCall == nil {
+		t.Fatalf("contents[1] = %+v, want function call part", call.contents[1].Parts)
+	}
+	if call.contents[1].Parts[0].FunctionCall.ID != "call-1" {
+		t.Fatalf("function call id = %q, want call-1", call.contents[1].Parts[0].FunctionCall.ID)
+	}
+	if call.contents[2].Role != string(genai.RoleUser) {
+		t.Fatalf("contents[2] role = %q, want user", call.contents[2].Role)
+	}
+	if len(call.contents[2].Parts) != 1 || call.contents[2].Parts[0].FunctionResponse == nil {
+		t.Fatalf("contents[2] = %+v, want function response part", call.contents[2].Parts)
+	}
+	if call.contents[2].Parts[0].FunctionResponse.ID != "call-1" {
+		t.Fatalf("function response id = %q, want call-1", call.contents[2].Parts[0].FunctionResponse.ID)
+	}
+	if call.contents[2].Parts[0].FunctionResponse.Name != "remember" {
+		t.Fatalf("function response name = %q, want remember", call.contents[2].Parts[0].FunctionResponse.Name)
+	}
+}
+
 func TestGeminiProviderGenerateStreamRejectsSystemImages(t *testing.T) {
 	t.Parallel()
 
@@ -751,6 +845,202 @@ func TestGeminiStreamLogsCompletionWithoutOutputText(t *testing.T) {
 	}
 	if record.attrs["candidate_thought_parts"] != "1" {
 		t.Fatalf("candidate_thought_parts = %q, want 1", record.attrs["candidate_thought_parts"])
+	}
+}
+
+func TestGeminiStreamFunctionCallChunk(t *testing.T) {
+	t.Parallel()
+
+	stream := newGeminiStream(seqFromSteps([]streamStep{
+		{
+			response: textResponse([]*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "call-1",
+					Name: "remember",
+					Args: map[string]any{"content": "hello"},
+				},
+			}}),
+		},
+	}), false, nil, geminiRequestDiagnostics{})
+
+	chunk, err := stream.Recv(context.Background())
+	if err != nil {
+		t.Fatalf("Recv failed: %v", err)
+	}
+	if chunk.Kind != ai.LLMGenerateChunkKindToolCall {
+		t.Fatalf("chunk kind = %q, want tool_call", chunk.Kind)
+	}
+	if chunk.ToolCallID != "call-1" {
+		t.Fatalf("chunk tool_call_id = %q, want call-1", chunk.ToolCallID)
+	}
+	if chunk.ToolCallName != "remember" {
+		t.Fatalf("chunk tool_call_name = %q, want remember", chunk.ToolCallName)
+	}
+	if chunk.ToolCallArguments != `{"content":"hello"}` {
+		t.Fatalf("chunk tool_call_arguments = %q, want json args", chunk.ToolCallArguments)
+	}
+}
+
+func TestGeminiStreamFunctionCallChunkCapturesThoughtSignature(t *testing.T) {
+	t.Parallel()
+
+	signature := []byte("opaque-thought-sig-abc123")
+	stream := newGeminiStream(seqFromSteps([]streamStep{
+		{
+			response: textResponse([]*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					ID:   "call-1",
+					Name: "remember",
+					Args: map[string]any{"content": "hello"},
+				},
+				ThoughtSignature: signature,
+			}}),
+		},
+	}), false, nil, geminiRequestDiagnostics{})
+
+	chunk, err := stream.Recv(context.Background())
+	if err != nil {
+		t.Fatalf("Recv failed: %v", err)
+	}
+	if chunk.Kind != ai.LLMGenerateChunkKindToolCall {
+		t.Fatalf("chunk kind = %q, want tool_call", chunk.Kind)
+	}
+	if len(chunk.ToolCallThoughtSignature) == 0 {
+		t.Fatal("expected thought signature on function call chunk")
+	}
+	if string(chunk.ToolCallThoughtSignature) != string(signature) {
+		t.Fatalf("thought signature = %q, want %q", chunk.ToolCallThoughtSignature, signature)
+	}
+	// Verify it is a defensive copy.
+	signature[0] = 0xFF
+	if chunk.ToolCallThoughtSignature[0] == 0xFF {
+		t.Fatal("thought signature shares backing array with source")
+	}
+}
+
+func TestGeminiProviderMapsFunctionCallThoughtSignature(t *testing.T) {
+	t.Parallel()
+
+	signature := []byte("opaque-thought-sig-xyz789")
+	client := &modelsClientStub{
+		stream: seqFromSteps([]streamStep{
+			{response: textResponse([]*genai.Part{{Text: "done"}})},
+		}),
+	}
+	provider := &Provider{
+		models:   client,
+		defaults: requestOptions{},
+	}
+
+	req := ai.LLMGenerateRequest{
+		Model: "gemini-2.5-flash",
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleUser, Content: "remember this"},
+			{
+				Role: ai.LLMMessageRoleAssistant,
+				ToolCalls: []ai.LLMToolCall{
+					{
+						ID:               "call-1",
+						Name:             "remember",
+						Arguments:        `{"content":"hello"}`,
+						ThoughtSignature: signature,
+					},
+				},
+			},
+			{
+				Role:       ai.LLMMessageRoleTool,
+				ToolCallID: "call-1",
+				Content:    `{"result":"stored"}`,
+			},
+		},
+		Tools: []ai.LLMToolDefinition{
+			{
+				Name:        "remember",
+				Description: "Store a fact.",
+				Parameters:  []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`),
+			},
+		},
+	}
+
+	stream, err := provider.GenerateStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if stream == nil {
+		t.Fatal("expected stream")
+	}
+
+	call := client.calls[0]
+	assistantContent := call.contents[1]
+	if len(assistantContent.Parts) != 1 || assistantContent.Parts[0].FunctionCall == nil {
+		t.Fatalf("contents[1] = %+v, want function call part", assistantContent.Parts)
+	}
+	if len(assistantContent.Parts[0].ThoughtSignature) == 0 {
+		t.Fatal("expected thought signature on outgoing function call part")
+	}
+	if string(assistantContent.Parts[0].ThoughtSignature) != string(signature) {
+		t.Fatalf("thought signature = %q, want %q", assistantContent.Parts[0].ThoughtSignature, signature)
+	}
+	// Verify defensive copy.
+	signature[0] = 0xFF
+	if assistantContent.Parts[0].ThoughtSignature[0] == 0xFF {
+		t.Fatal("outgoing thought signature shares backing array with source")
+	}
+}
+
+func TestGeminiProviderOmitsThoughtSignatureWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	client := &modelsClientStub{
+		stream: seqFromSteps([]streamStep{
+			{response: textResponse([]*genai.Part{{Text: "done"}})},
+		}),
+	}
+	provider := &Provider{
+		models:   client,
+		defaults: requestOptions{},
+	}
+
+	req := ai.LLMGenerateRequest{
+		Model: "gemini-2.5-flash",
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleUser, Content: "remember this"},
+			{
+				Role: ai.LLMMessageRoleAssistant,
+				ToolCalls: []ai.LLMToolCall{
+					{
+						ID:        "call-1",
+						Name:      "remember",
+						Arguments: `{"content":"hello"}`,
+					},
+				},
+			},
+			{
+				Role:       ai.LLMMessageRoleTool,
+				ToolCallID: "call-1",
+				Content:    `{"result":"stored"}`,
+			},
+		},
+		Tools: []ai.LLMToolDefinition{
+			{
+				Name:        "remember",
+				Description: "Store a fact.",
+				Parameters:  []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`),
+			},
+		},
+	}
+
+	stream, err := provider.GenerateStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if stream == nil {
+		t.Fatal("expected stream")
+	}
+
+	call := client.calls[0]
+	if len(call.contents[1].Parts[0].ThoughtSignature) != 0 {
+		t.Fatalf("expected no thought signature, got %q", call.contents[1].Parts[0].ThoughtSignature)
 	}
 }
 

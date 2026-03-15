@@ -42,6 +42,9 @@ const (
 	defaultMaxContextRunes         = 12000
 	defaultMaxMessageRunes         = 1600
 	defaultQuoteReplyDepth         = 2
+	defaultMaxRetrievedMemories    = 5
+	defaultMinMemorySimilarity     = 0.3
+	defaultMaxMemoryRunes          = 2000
 	defaultImageInputMaxImages     = 3
 	defaultImageInputMaxBytes      = 10 << 20
 	defaultImageInputMaxTotalBytes = 20 << 20
@@ -65,6 +68,10 @@ type ProviderProfile struct {
 	APIKey string
 	// BaseURL optionally overrides provider API endpoint.
 	BaseURL string
+	// EmbeddingModel is the default model used for embedding requests.
+	EmbeddingModel string
+	// EmbeddingDimensions is the default embedding dimension count.
+	EmbeddingDimensions int
 	// OpenAI carries OpenAI-specific options.
 	OpenAI *OpenAIOptions
 	// Gemini carries Gemini-specific options.
@@ -121,6 +128,8 @@ type Agent struct {
 	Description string
 	// Provider identifies which provider profile to resolve.
 	Provider string
+	// EmbeddingProvider identifies which provider profile to use for embeddings.
+	EmbeddingProvider string
 	// Model identifies which provider model name to call.
 	Model string
 	// SystemPromptTemplate is the system prompt template for this agent.
@@ -138,9 +147,23 @@ type Agent struct {
 	// ContextPolicy controls how llmchat reconstructs and trims conversation
 	// context before sending one request.
 	ContextPolicy ContextPolicy
+	// SemanticMemory controls semantic retrieval/tool behavior for this agent.
+	SemanticMemory *SemanticMemoryPolicy
 	// ImageInputs controls whether llmchat downloads current-event images and
 	// includes them as multimodal user input.
 	ImageInputs ImageInputPolicy
+}
+
+// SemanticMemoryPolicy configures semantic memory for one agent.
+type SemanticMemoryPolicy struct {
+	// Enabled turns on semantic retrieval and memory tools.
+	Enabled bool
+	// MaxRetrievedMemories caps how many memories are injected into context.
+	MaxRetrievedMemories int
+	// MinMemorySimilarity filters retrieved memories by similarity score.
+	MinMemorySimilarity float32
+	// MaxMemoryRunes caps serialized semantic memory context size.
+	MaxMemoryRunes int
 }
 
 // ContextPolicy controls how one agent builds structured conversation context.
@@ -187,11 +210,13 @@ type fileConfig struct {
 }
 
 type fileProviderEntry struct {
-	Type    string           `json:"type"`
-	APIKey  string           `json:"api_key"`
-	BaseURL string           `json:"base_url"`
-	OpenAI  *fileOpenAIEntry `json:"openai"`
-	Gemini  *fileGeminiEntry `json:"gemini"`
+	Type                string           `json:"type"`
+	APIKey              string           `json:"api_key"`
+	BaseURL             string           `json:"base_url"`
+	EmbeddingModel      string           `json:"embedding_model"`
+	EmbeddingDimensions *int             `json:"embedding_dimensions"`
+	OpenAI              *fileOpenAIEntry `json:"openai"`
+	Gemini              *fileGeminiEntry `json:"gemini"`
 }
 
 type fileOpenAIEntry struct {
@@ -216,6 +241,7 @@ type fileAgent struct {
 	Aliases              []string              `json:"aliases"`
 	Description          string                `json:"description"`
 	Provider             string                `json:"provider"`
+	EmbeddingProvider    string                `json:"embedding_provider"`
 	Model                string                `json:"model"`
 	SystemPromptTemplate string                `json:"system_prompt_template"`
 	TemplateVariables    map[string]string     `json:"template_variables"`
@@ -224,7 +250,15 @@ type fileAgent struct {
 	RequestTimeout       string                `json:"request_timeout"`
 	RequestMetadata      map[string]string     `json:"request_metadata"`
 	Context              *fileAgentContext     `json:"context"`
+	SemanticMemory       *fileSemanticMemory   `json:"semantic_memory"`
 	ImageInputs          *fileAgentImageInputs `json:"image_inputs"`
+}
+
+type fileSemanticMemory struct {
+	Enabled              bool     `json:"enabled"`
+	MaxRetrievedMemories *int     `json:"max_retrieved_memories"`
+	MinMemorySimilarity  *float64 `json:"min_memory_similarity"`
+	MaxMemoryRunes       *int     `json:"max_memory_runes"`
 }
 
 type fileAgentContext struct {
@@ -322,6 +356,10 @@ func LoadFile(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: parse context: %w", index, err)
 		}
+		semanticMemory, err := parseSemanticMemoryPolicy(rawAgent.SemanticMemory)
+		if err != nil {
+			return Config{}, fmt.Errorf("load llm config agents[%d]: parse semantic_memory: %w", index, err)
+		}
 		imageInputs, err := parseImageInputPolicy(rawAgent.ImageInputs)
 		if err != nil {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: parse image_inputs: %w", index, err)
@@ -332,6 +370,7 @@ func LoadFile(path string) (Config, error) {
 			Aliases:              normalizeAgentAliases(rawAgent.Aliases),
 			Description:          strings.TrimSpace(rawAgent.Description),
 			Provider:             strings.TrimSpace(rawAgent.Provider),
+			EmbeddingProvider:    strings.TrimSpace(rawAgent.EmbeddingProvider),
 			Model:                strings.TrimSpace(rawAgent.Model),
 			SystemPromptTemplate: strings.TrimSpace(rawAgent.SystemPromptTemplate),
 			TemplateVariables:    cloneStringMap(rawAgent.TemplateVariables),
@@ -340,6 +379,7 @@ func LoadFile(path string) (Config, error) {
 			RequestTimeout:       agentRequestTimeout,
 			RequestMetadata:      cloneStringMap(rawAgent.RequestMetadata),
 			ContextPolicy:        contextPolicy,
+			SemanticMemory:       semanticMemory,
 			ImageInputs:          imageInputs,
 		}
 		if err := validateAgent(agent); err != nil {
@@ -407,6 +447,20 @@ func (cfg Config) Validate() error {
 				return fmt.Errorf("validate llm config agents[%d]: %w", index, err)
 			}
 		}
+		if strings.TrimSpace(agent.EmbeddingProvider) != "" {
+			if _, exists := cfg.Providers[strings.TrimSpace(agent.EmbeddingProvider)]; !exists {
+				return fmt.Errorf(
+					"validate llm config agents[%d]: embedding_provider %s is not configured",
+					index,
+					strings.TrimSpace(agent.EmbeddingProvider),
+				)
+			}
+		}
+		if agent.SemanticMemory != nil && agent.SemanticMemory.Enabled {
+			if strings.TrimSpace(agent.EmbeddingProvider) == "" {
+				return fmt.Errorf("validate llm config agents[%d]: embedding_provider is required when semantic_memory.enabled=true", index)
+			}
+		}
 		if agent.RequestTimeout > cfg.RequestTimeout {
 			return fmt.Errorf(
 				"validate llm config agents[%d]: request_timeout %s exceeds global request_timeout %s",
@@ -422,11 +476,15 @@ func (cfg Config) Validate() error {
 
 func parseProviderProfile(raw fileProviderEntry) (ProviderProfile, error) {
 	profile := ProviderProfile{
-		Type:    strings.ToLower(strings.TrimSpace(raw.Type)),
-		APIKey:  strings.TrimSpace(raw.APIKey),
-		BaseURL: strings.TrimSpace(raw.BaseURL),
-		OpenAI:  parseOpenAIOptions(raw.OpenAI),
-		Gemini:  parseGeminiOptions(raw.Gemini),
+		Type:           strings.ToLower(strings.TrimSpace(raw.Type)),
+		APIKey:         strings.TrimSpace(raw.APIKey),
+		BaseURL:        strings.TrimSpace(raw.BaseURL),
+		EmbeddingModel: strings.TrimSpace(raw.EmbeddingModel),
+		OpenAI:         parseOpenAIOptions(raw.OpenAI),
+		Gemini:         parseGeminiOptions(raw.Gemini),
+	}
+	if raw.EmbeddingDimensions != nil {
+		profile.EmbeddingDimensions = *raw.EmbeddingDimensions
 	}
 
 	if profile.Type == providerTypeGemini {
@@ -517,6 +575,9 @@ func validateProviderProfile(profileKey string, profile ProviderProfile) error {
 		if parsed.Scheme == "" || parsed.Host == "" {
 			return fmt.Errorf("invalid base_url: must include scheme and host")
 		}
+	}
+	if profile.EmbeddingDimensions < 0 {
+		return fmt.Errorf("embedding_dimensions must be >= 0")
 	}
 
 	return nil
@@ -621,6 +682,9 @@ func validateAgent(agent Agent) error {
 	if strings.TrimSpace(agent.Provider) == "" {
 		return fmt.Errorf("missing provider")
 	}
+	if strings.TrimSpace(agent.EmbeddingProvider) == "" && agent.SemanticMemory != nil && agent.SemanticMemory.Enabled {
+		return fmt.Errorf("embedding_provider is required when semantic_memory.enabled=true")
+	}
 	if strings.TrimSpace(agent.Model) == "" {
 		return fmt.Errorf("missing model")
 	}
@@ -641,6 +705,9 @@ func validateAgent(agent Agent) error {
 	}
 	if err := validateContextPolicy(resolveContextPolicy(agent.ContextPolicy)); err != nil {
 		return fmt.Errorf("context_policy: %w", err)
+	}
+	if err := validateSemanticMemoryPolicy(agent.SemanticMemory); err != nil {
+		return fmt.Errorf("semantic_memory: %w", err)
 	}
 	if err := validateImageInputPolicy(resolveImageInputPolicy(agent.ImageInputs)); err != nil {
 		return fmt.Errorf("image_inputs: %w", err)
@@ -703,6 +770,49 @@ func resolveContextPolicy(policy ContextPolicy) ContextPolicy {
 	}
 
 	return resolved
+}
+
+func parseSemanticMemoryPolicy(raw *fileSemanticMemory) (*SemanticMemoryPolicy, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	policy := &SemanticMemoryPolicy{
+		Enabled: raw.Enabled,
+	}
+	if raw.MaxRetrievedMemories != nil {
+		policy.MaxRetrievedMemories = *raw.MaxRetrievedMemories
+	}
+	if raw.MinMemorySimilarity != nil {
+		policy.MinMemorySimilarity = float32(*raw.MinMemorySimilarity)
+	}
+	if raw.MaxMemoryRunes != nil {
+		policy.MaxMemoryRunes = *raw.MaxMemoryRunes
+	}
+
+	return resolveSemanticMemoryPolicy(policy), nil
+}
+
+func resolveSemanticMemoryPolicy(policy *SemanticMemoryPolicy) *SemanticMemoryPolicy {
+	if policy == nil {
+		return nil
+	}
+
+	resolved := *policy
+	if !resolved.Enabled {
+		return &resolved
+	}
+	if resolved.MaxRetrievedMemories == 0 {
+		resolved.MaxRetrievedMemories = defaultMaxRetrievedMemories
+	}
+	if resolved.MinMemorySimilarity == 0 {
+		resolved.MinMemorySimilarity = defaultMinMemorySimilarity
+	}
+	if resolved.MaxMemoryRunes == 0 {
+		resolved.MaxMemoryRunes = defaultMaxMemoryRunes
+	}
+
+	return &resolved
 }
 
 func parseImageInputPolicy(raw *fileAgentImageInputs) (ImageInputPolicy, error) {
@@ -769,6 +879,26 @@ func validateContextPolicy(policy ContextPolicy) error {
 	}
 	if policy.QuoteReplyDepth < 0 {
 		return fmt.Errorf("quote_reply_depth must be >= 0")
+	}
+
+	return nil
+}
+
+func validateSemanticMemoryPolicy(policy *SemanticMemoryPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if !policy.Enabled {
+		return nil
+	}
+	if policy.MaxRetrievedMemories <= 0 {
+		return fmt.Errorf("max_retrieved_memories must be > 0")
+	}
+	if policy.MinMemorySimilarity < 0 || policy.MinMemorySimilarity > 1 {
+		return fmt.Errorf("min_memory_similarity must be between 0 and 1")
+	}
+	if policy.MaxMemoryRunes <= 0 {
+		return fmt.Errorf("max_memory_runes must be > 0")
 	}
 
 	return nil
