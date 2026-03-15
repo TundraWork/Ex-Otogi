@@ -1,6 +1,7 @@
 package llmchat
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"text/template"
@@ -75,6 +76,34 @@ type Agent struct {
 	// Historical memory-only lookups remain out of scope until memory identity
 	// carries Source.ID.
 	ImageInputs ImageInputPolicy
+	// SubAgents declares sub-agent tools available to this agent. Each sub-agent
+	// is exposed as a tool the model can call; the tool handler makes its own LLM
+	// call with provider-native tools enabled but no function tools.
+	SubAgents []SubAgentConfig
+}
+
+// SubAgentConfig describes one sub-agent tool available to a parent agent.
+type SubAgentConfig struct {
+	// Name identifies this sub-agent tool. Must be a valid tool identifier.
+	Name string
+	// Description explains when the parent agent should invoke this tool.
+	Description string
+	// Provider identifies which LLM provider profile to use.
+	Provider string
+	// Model identifies which provider model to call.
+	Model string
+	// SystemPrompt is the system-level instruction for this sub-agent.
+	SystemPrompt string
+	// MaxOutputTokens optionally limits generated token count.
+	MaxOutputTokens int
+	// Temperature optionally controls output randomness.
+	Temperature float64
+	// RequestMetadata carries provider-specific metadata overrides.
+	RequestMetadata map[string]string
+	// Parameters contains the JSON Schema for this tool's input parameters.
+	Parameters json.RawMessage
+	// PromptTemplate is a Go text/template rendering the user prompt from args.
+	PromptTemplate string
 }
 
 // ContextPolicy controls how one agent builds structured conversation context.
@@ -411,6 +440,7 @@ func cloneConfig(cfg Config) Config {
 				ContextPolicy:        resolveContextPolicy(agent.ContextPolicy),
 				SemanticMemory:       cloneSemanticMemoryPolicy(resolveSemanticMemoryPolicy(agent.SemanticMemory)),
 				ImageInputs:          resolveImageInputPolicy(agent.ImageInputs),
+				SubAgents:            cloneSubAgentConfigs(agent.SubAgents),
 			})
 		}
 	}
@@ -478,6 +508,30 @@ func cloneStringSlice(values []string) []string {
 
 	cloned := make([]string, len(values))
 	copy(cloned, values)
+
+	return cloned
+}
+
+func cloneSubAgentConfigs(configs []SubAgentConfig) []SubAgentConfig {
+	if len(configs) == 0 {
+		return nil
+	}
+
+	cloned := make([]SubAgentConfig, 0, len(configs))
+	for _, cfg := range configs {
+		cloned = append(cloned, SubAgentConfig{
+			Name:            cfg.Name,
+			Description:     cfg.Description,
+			Provider:        cfg.Provider,
+			Model:           cfg.Model,
+			SystemPrompt:    cfg.SystemPrompt,
+			MaxOutputTokens: cfg.MaxOutputTokens,
+			Temperature:     cfg.Temperature,
+			RequestMetadata: cloneStringMap(cfg.RequestMetadata),
+			Parameters:      append(json.RawMessage(nil), cfg.Parameters...),
+			PromptTemplate:  cfg.PromptTemplate,
+		})
+	}
 
 	return cloned
 }

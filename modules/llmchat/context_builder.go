@@ -42,7 +42,12 @@ Use remember actively when:
 - Important decisions or agreements are made in the conversation
 - The user explicitly asks you to remember something
 
-Do not store ephemeral or trivial information.`
+Do not store ephemeral or trivial information.
+
+When sub-agent tools are available (such as web_search or read_url), use them to access
+external data sources. Each sub-agent is a specialized assistant that can leverage provider
+capabilities like web search or URL reading. Call them like any other tool with the
+parameters described in their definitions.`
 
 type serializedContextMessage struct {
 	role        ai.LLMMessageRole

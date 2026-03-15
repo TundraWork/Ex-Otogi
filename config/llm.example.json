@@ -100,12 +100,66 @@
       "max_output_tokens": 512,
       "temperature": 0.4,
       "request_metadata": {
-        "gemini.google_search": "true",
-        "gemini.url_context": "true",
+        "gemini.google_search": "false",
+        "gemini.url_context": "false",
         "gemini.include_thoughts": "false",
         "gemini.thinking_level": "high",
         "gemini.response_mime_type": "text/plain"
-      }
+      },
+      "sub_agents": [
+        {
+          "name": "web_search",
+          "description": "Search the web for current information using Google Search. Use this when you need up-to-date facts, news, or real-time data.",
+          "provider": "gemini-main",
+          "model": "gemini-2.5-flash",
+          "system_prompt": "You are a web search assistant. Search for the requested information and provide a concise, factual summary of what you find. Include relevant sources when available.",
+          "max_output_tokens": 4096,
+          "temperature": 0.3,
+          "request_metadata": {
+            "gemini.google_search": "true"
+          },
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "The search query to look up"
+              }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+          },
+          "prompt_template": "{{.query}}"
+        },
+        {
+          "name": "read_url",
+          "description": "Read and analyze the content of a specific URL. Use this when you need to examine a webpage or document at a known URL.",
+          "provider": "gemini-main",
+          "model": "gemini-2.5-flash",
+          "system_prompt": "You are a URL content reader. Fetch and analyze the content at the given URL. Provide a clear summary of the page content, focusing on the most relevant information.",
+          "max_output_tokens": 4096,
+          "temperature": 0.2,
+          "request_metadata": {
+            "gemini.url_context": "true"
+          },
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "The URL to read and analyze"
+              },
+              "question": {
+                "type": "string",
+                "description": "Optional specific question about the URL content"
+              }
+            },
+            "required": ["url"],
+            "additionalProperties": false
+          },
+          "prompt_template": "Read this URL: {{.url}}{{if .question}}\n\nSpecifically answer: {{.question}}{{end}}"
+        }
+      ]
     }
   ]
 }

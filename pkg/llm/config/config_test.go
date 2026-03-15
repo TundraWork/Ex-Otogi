@@ -712,6 +712,253 @@ func TestLoadFile(t *testing.T) {
 			}`,
 			wantErrSubstring: "unknown field \"organization\"",
 		},
+		{
+			name: "valid sub-agent config",
+			fileBody: `{
+				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"gemini-main",
+						"model":"gemini-2.5-flash",
+						"system_prompt_template":"You are {{.AgentName}}",
+						"request_timeout":"30s",
+						"sub_agents":[
+							{
+								"name":"web_search",
+								"description":"Search the web",
+								"provider":"gemini-main",
+								"model":"gemini-2.5-flash",
+								"system_prompt":"You are a search assistant.",
+								"max_output_tokens":4096,
+								"temperature":0.3,
+								"request_metadata":{"gemini.google_search":"true"},
+								"parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false},
+								"prompt_template":"{{.query}}"
+							},
+							{
+								"name":"read_url",
+								"description":"Read a URL",
+								"provider":"gemini-main",
+								"model":"gemini-2.5-flash",
+								"system_prompt":"You are a URL reader.",
+								"request_metadata":{"gemini.url_context":"true"},
+								"parameters":{"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false},
+								"prompt_template":"{{.url}}"
+							}
+						]
+					}
+				]
+			}`,
+			assert: func(t *testing.T, cfg Config) {
+				t.Helper()
+
+				if len(cfg.Agents[0].SubAgents) != 2 {
+					t.Fatalf("sub_agents len = %d, want 2", len(cfg.Agents[0].SubAgents))
+				}
+				sa := cfg.Agents[0].SubAgents[0]
+				if sa.Name != "web_search" {
+					t.Fatalf("sub_agent[0] name = %q, want web_search", sa.Name)
+				}
+				if sa.Provider != "gemini-main" {
+					t.Fatalf("sub_agent[0] provider = %q, want gemini-main", sa.Provider)
+				}
+				if sa.MaxOutputTokens != 4096 {
+					t.Fatalf("sub_agent[0] max_output_tokens = %d, want 4096", sa.MaxOutputTokens)
+				}
+				if sa.Temperature != 0.3 {
+					t.Fatalf("sub_agent[0] temperature = %f, want 0.3", sa.Temperature)
+				}
+				if sa.RequestMetadata["gemini.google_search"] != "true" {
+					t.Fatalf("sub_agent[0] metadata = %v, want google_search=true", sa.RequestMetadata)
+				}
+				if sa.PromptTemplate != "{{.query}}" {
+					t.Fatalf("sub_agent[0] prompt_template = %q, want {{.query}}", sa.PromptTemplate)
+				}
+
+				sa1 := cfg.Agents[0].SubAgents[1]
+				if sa1.Name != "read_url" {
+					t.Fatalf("sub_agent[1] name = %q, want read_url", sa1.Name)
+				}
+			},
+		},
+		{
+			name: "sub-agent missing name",
+			fileBody: `{
+				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"gemini-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"sub_agents":[
+							{
+								"description":"d",
+								"provider":"gemini-main",
+								"model":"m",
+								"system_prompt":"s",
+								"parameters":{"type":"object"},
+								"prompt_template":"t"
+							}
+						]
+					}
+				]
+			}`,
+			wantErrSubstring: "invalid name",
+		},
+		{
+			name: "sub-agent reserved name",
+			fileBody: `{
+				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"gemini-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"sub_agents":[
+							{
+								"name":"remember",
+								"description":"d",
+								"provider":"gemini-main",
+								"model":"m",
+								"system_prompt":"s",
+								"parameters":{"type":"object"},
+								"prompt_template":"t"
+							}
+						]
+					}
+				]
+			}`,
+			wantErrSubstring: "reserved name",
+		},
+		{
+			name: "sub-agent duplicate names",
+			fileBody: `{
+				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"gemini-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"sub_agents":[
+							{
+								"name":"web_search",
+								"description":"d1",
+								"provider":"gemini-main",
+								"model":"m",
+								"system_prompt":"s",
+								"parameters":{"type":"object"},
+								"prompt_template":"t"
+							},
+							{
+								"name":"Web_Search",
+								"description":"d2",
+								"provider":"gemini-main",
+								"model":"m",
+								"system_prompt":"s",
+								"parameters":{"type":"object"},
+								"prompt_template":"t"
+							}
+						]
+					}
+				]
+			}`,
+			wantErrSubstring: "duplicate sub-agent name",
+		},
+		{
+			name: "sub-agent unknown provider",
+			fileBody: `{
+				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"gemini-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"sub_agents":[
+							{
+								"name":"web_search",
+								"description":"d",
+								"provider":"missing",
+								"model":"m",
+								"system_prompt":"s",
+								"parameters":{"type":"object"},
+								"prompt_template":"t"
+							}
+						]
+					}
+				]
+			}`,
+			wantErrSubstring: "provider missing is not configured",
+		},
+		{
+			name: "sub-agent parameters not an object",
+			fileBody: `{
+				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"gemini-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"sub_agents":[
+							{
+								"name":"web_search",
+								"description":"d",
+								"provider":"gemini-main",
+								"model":"m",
+								"system_prompt":"s",
+								"parameters":"not-json-object",
+								"prompt_template":"t"
+							}
+						]
+					}
+				]
+			}`,
+			wantErrSubstring: "parameters must be a json object",
+		},
+		{
+			name: "sub-agent invalid prompt template",
+			fileBody: `{
+				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"gemini-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s",
+						"sub_agents":[
+							{
+								"name":"web_search",
+								"description":"d",
+								"provider":"gemini-main",
+								"model":"m",
+								"system_prompt":"s",
+								"parameters":{"type":"object"},
+								"prompt_template":"{{.bad"
+							}
+						]
+					}
+				]
+			}`,
+			wantErrSubstring: "invalid prompt_template",
+		},
 	}
 
 	for _, testCase := range tests {

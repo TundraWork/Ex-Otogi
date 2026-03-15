@@ -152,6 +152,8 @@ type Agent struct {
 	// ImageInputs controls whether llmchat downloads current-event images and
 	// includes them as multimodal user input.
 	ImageInputs ImageInputPolicy
+	// SubAgents declares sub-agent tools available to this agent.
+	SubAgents []SubAgentConfig
 }
 
 // SemanticMemoryPolicy configures semantic memory for one agent.
@@ -203,6 +205,35 @@ type ImageInputPolicy struct {
 	Detail ai.LLMInputImageDetail
 }
 
+// SubAgentConfig describes one sub-agent that can be invoked as a tool by its
+// parent agent. Sub-agents make their own LLM calls with provider-native tools
+// enabled (e.g. Google Search, URL Context) but no function tools, working
+// around the provider limitation that forbids tool_use alongside internal tools.
+type SubAgentConfig struct {
+	// Name identifies this sub-agent tool. Must be a valid tool identifier.
+	Name string
+	// Description explains when and how the parent agent should invoke this tool.
+	Description string
+	// Provider identifies which provider profile to use for this sub-agent.
+	Provider string
+	// Model identifies which provider model to call.
+	Model string
+	// SystemPrompt is the system-level instruction for this sub-agent.
+	SystemPrompt string
+	// MaxOutputTokens optionally limits generated token count.
+	MaxOutputTokens int
+	// Temperature optionally controls output randomness.
+	Temperature float64
+	// RequestMetadata carries provider-specific metadata overrides that enable
+	// internal tools (e.g. "gemini.google_search": "true").
+	RequestMetadata map[string]string
+	// Parameters contains the JSON Schema describing this tool's input parameters.
+	Parameters json.RawMessage
+	// PromptTemplate is a Go text/template that renders the user prompt from
+	// the tool call arguments.
+	PromptTemplate string
+}
+
 type fileConfig struct {
 	RequestTimeout string                       `json:"request_timeout"`
 	Providers      map[string]fileProviderEntry `json:"providers"`
@@ -252,6 +283,7 @@ type fileAgent struct {
 	Context              *fileAgentContext     `json:"context"`
 	SemanticMemory       *fileSemanticMemory   `json:"semantic_memory"`
 	ImageInputs          *fileAgentImageInputs `json:"image_inputs"`
+	SubAgents            []fileSubAgent        `json:"sub_agents"`
 }
 
 type fileSemanticMemory struct {
@@ -276,6 +308,19 @@ type fileAgentImageInputs struct {
 	MaxImageBytes *int64 `json:"max_image_bytes"`
 	MaxTotalBytes *int64 `json:"max_total_bytes"`
 	Detail        string `json:"detail"`
+}
+
+type fileSubAgent struct {
+	Name            string            `json:"name"`
+	Description     string            `json:"description"`
+	Provider        string            `json:"provider"`
+	Model           string            `json:"model"`
+	SystemPrompt    string            `json:"system_prompt"`
+	MaxOutputTokens int               `json:"max_output_tokens"`
+	Temperature     float64           `json:"temperature"`
+	RequestMetadata map[string]string `json:"request_metadata"`
+	Parameters      json.RawMessage   `json:"parameters"`
+	PromptTemplate  string            `json:"prompt_template"`
 }
 
 type rootRaw struct {
@@ -365,6 +410,11 @@ func LoadFile(path string) (Config, error) {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: parse image_inputs: %w", index, err)
 		}
 
+		subAgents, err := parseSubAgents(rawAgent.SubAgents)
+		if err != nil {
+			return Config{}, fmt.Errorf("load llm config agents[%d]: parse sub_agents: %w", index, err)
+		}
+
 		agent := Agent{
 			Name:                 strings.TrimSpace(rawAgent.Name),
 			Aliases:              normalizeAgentAliases(rawAgent.Aliases),
@@ -381,6 +431,7 @@ func LoadFile(path string) (Config, error) {
 			ContextPolicy:        contextPolicy,
 			SemanticMemory:       semanticMemory,
 			ImageInputs:          imageInputs,
+			SubAgents:            subAgents,
 		}
 		if err := validateAgent(agent); err != nil {
 			return Config{}, fmt.Errorf("load llm config agents[%d]: %w", index, err)
@@ -468,6 +519,18 @@ func (cfg Config) Validate() error {
 				agent.RequestTimeout,
 				cfg.RequestTimeout,
 			)
+		}
+
+		for subIndex, subAgent := range agent.SubAgents {
+			subProviderKey := strings.TrimSpace(subAgent.Provider)
+			if _, exists := cfg.Providers[subProviderKey]; !exists {
+				return fmt.Errorf(
+					"validate llm config agents[%d] sub_agents[%d]: provider %s is not configured",
+					index,
+					subIndex,
+					subProviderKey,
+				)
+			}
 		}
 	}
 
@@ -938,6 +1001,122 @@ func validateImageInputPolicy(policy ImageInputPolicy) error {
 	}
 
 	return nil
+}
+
+func parseSubAgents(raw []fileSubAgent) ([]SubAgentConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(raw))
+	configs := make([]SubAgentConfig, 0, len(raw))
+	for index, entry := range raw {
+		cfg := SubAgentConfig{
+			Name:            strings.TrimSpace(entry.Name),
+			Description:     strings.TrimSpace(entry.Description),
+			Provider:        strings.TrimSpace(entry.Provider),
+			Model:           strings.TrimSpace(entry.Model),
+			SystemPrompt:    strings.TrimSpace(entry.SystemPrompt),
+			MaxOutputTokens: entry.MaxOutputTokens,
+			Temperature:     entry.Temperature,
+			RequestMetadata: cloneStringMap(entry.RequestMetadata),
+			Parameters:      append(json.RawMessage(nil), entry.Parameters...),
+			PromptTemplate:  strings.TrimSpace(entry.PromptTemplate),
+		}
+		if err := validateSubAgent(cfg); err != nil {
+			return nil, fmt.Errorf("sub_agents[%d]: %w", index, err)
+		}
+
+		normalized := strings.ToLower(cfg.Name)
+		if _, exists := seen[normalized]; exists {
+			return nil, fmt.Errorf("sub_agents[%d]: duplicate sub-agent name %q", index, cfg.Name)
+		}
+		seen[normalized] = struct{}{}
+
+		configs = append(configs, cfg)
+	}
+
+	return configs, nil
+}
+
+func validateSubAgent(cfg SubAgentConfig) error {
+	if !isValidSubAgentName(cfg.Name) {
+		return fmt.Errorf("invalid name %q: must match [a-zA-Z0-9_.-]{1,64}", cfg.Name)
+	}
+	if isReservedSubAgentName(cfg.Name) {
+		return fmt.Errorf("reserved name %q: conflicts with built-in tool", cfg.Name)
+	}
+	if cfg.Description == "" {
+		return fmt.Errorf("missing description")
+	}
+	if cfg.Provider == "" {
+		return fmt.Errorf("missing provider")
+	}
+	if cfg.Model == "" {
+		return fmt.Errorf("missing model")
+	}
+	if cfg.SystemPrompt == "" {
+		return fmt.Errorf("missing system_prompt")
+	}
+	if cfg.MaxOutputTokens < 0 {
+		return fmt.Errorf("max_output_tokens must be >= 0")
+	}
+	if cfg.Temperature < 0 {
+		return fmt.Errorf("temperature must be >= 0")
+	}
+	if len(cfg.Parameters) == 0 {
+		return fmt.Errorf("missing parameters")
+	}
+	if !json.Valid(cfg.Parameters) {
+		return fmt.Errorf("parameters must be valid json")
+	}
+	if !isJSONObjectBytes(cfg.Parameters) {
+		return fmt.Errorf("parameters must be a json object")
+	}
+	if cfg.PromptTemplate == "" {
+		return fmt.Errorf("missing prompt_template")
+	}
+	if _, err := template.New("sub-agent-prompt").Option("missingkey=error").Parse(cfg.PromptTemplate); err != nil {
+		return fmt.Errorf("invalid prompt_template: %w", err)
+	}
+	if err := validateRequestMetadata(cfg.RequestMetadata); err != nil {
+		return fmt.Errorf("request_metadata: %w", err)
+	}
+
+	return nil
+}
+
+func isValidSubAgentName(name string) bool {
+	if name == "" || len(name) > 64 {
+		return false
+	}
+
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '_' || r == '.' || r == '-':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+func isReservedSubAgentName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "remember", "recall", "forget":
+		return true
+	default:
+		return false
+	}
+}
+
+func isJSONObjectBytes(raw []byte) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")
 }
 
 func validateRequestMetadata(metadata map[string]string) error {

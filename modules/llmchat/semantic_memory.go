@@ -62,10 +62,10 @@ func (m *Module) retrieveSemanticMemories(
 	return serialized, nil
 }
 
-func (m *Module) buildSemanticMemoryToolRegistry(
+func (m *Module) buildSemanticMemoryToolHandlers(
 	event *platform.Event,
 	agent Agent,
-) (*ToolRegistry, error) {
+) ([]ToolHandler, error) {
 	policy := resolveSemanticMemoryPolicy(agent.SemanticMemory)
 	if policy == nil || !policy.Enabled {
 		return nil, nil
@@ -85,11 +85,16 @@ func (m *Module) buildSemanticMemoryToolRegistry(
 		return nil, nil
 	}
 
-	return buildSemanticMemoryToolRegistry(
-		semanticMemoryScope(event),
-		embeddingProvider,
-		m.llmMemory,
-	), nil
+	scope := semanticMemoryScope(event)
+	if embeddingProvider == nil || m.llmMemory == nil {
+		return nil, nil
+	}
+
+	return []ToolHandler{
+		newRememberTool(scope, embeddingProvider, m.llmMemory),
+		newRecallTool(scope, embeddingProvider, m.llmMemory),
+		newForgetTool(m.llmMemory),
+	}, nil
 }
 
 func (m *Module) resolveSemanticMemoryEmbeddingProvider(agent Agent) (ai.EmbeddingProvider, bool, error) {

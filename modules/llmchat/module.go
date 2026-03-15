@@ -2,6 +2,7 @@ package llmchat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -172,6 +173,21 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 			return fmt.Errorf("llmchat resolve provider %s for agent %s: %w", providerName, agent.Name, err)
 		}
 		resolvedProviders[providerName] = provider
+	}
+	for _, agent := range m.cfg.Agents {
+		for _, subAgent := range agent.SubAgents {
+			subProviderName := strings.TrimSpace(subAgent.Provider)
+			if subProviderName == "" || resolvedProviders[subProviderName] != nil {
+				continue
+			}
+
+			provider, err := registry.Resolve(subProviderName)
+			if err != nil {
+				return fmt.Errorf("llmchat resolve provider %s for sub-agent %s (agent %s): %w",
+					subProviderName, subAgent.Name, agent.Name, err)
+			}
+			resolvedProviders[subProviderName] = provider
+		}
 	}
 
 	m.dispatcher = dispatcher
@@ -393,6 +409,7 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 				MaxTotalBytes: agent.ImageInputs.MaxTotalBytes,
 				Detail:        agent.ImageInputs.Detail,
 			},
+			SubAgents: toSubAgentConfigs(agent.SubAgents),
 		})
 	}
 
@@ -413,6 +430,30 @@ func toSemanticMemoryPolicy(policy *llmconfig.SemanticMemoryPolicy) *SemanticMem
 		MinMemorySimilarity:  policy.MinMemorySimilarity,
 		MaxMemoryRunes:       policy.MaxMemoryRunes,
 	}))
+}
+
+func toSubAgentConfigs(configs []llmconfig.SubAgentConfig) []SubAgentConfig {
+	if len(configs) == 0 {
+		return nil
+	}
+
+	result := make([]SubAgentConfig, 0, len(configs))
+	for _, cfg := range configs {
+		result = append(result, SubAgentConfig{
+			Name:            cfg.Name,
+			Description:     cfg.Description,
+			Provider:        cfg.Provider,
+			Model:           cfg.Model,
+			SystemPrompt:    cfg.SystemPrompt,
+			MaxOutputTokens: cfg.MaxOutputTokens,
+			Temperature:     cfg.Temperature,
+			RequestMetadata: cloneStringMap(cfg.RequestMetadata),
+			Parameters:      append(json.RawMessage(nil), cfg.Parameters...),
+			PromptTemplate:  cfg.PromptTemplate,
+		})
+	}
+
+	return result
 }
 
 func cloneOptionalInt(value *int) *int {
@@ -502,7 +543,7 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 	}
 	defer cancel()
 
-	toolRegistry, err := m.buildSemanticMemoryToolRegistry(event, agent)
+	toolRegistry, err := m.buildToolRegistry(event, agent)
 	if err != nil {
 		buildErr := fmt.Errorf("llmchat build tools for agent %s: %w", agent.Name, err)
 		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, buildErr)
@@ -520,6 +561,38 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 	}
 
 	return nil
+}
+
+// buildToolRegistry combines semantic memory tool handlers and sub-agent tool
+// handlers into one request-scoped ToolRegistry.
+func (m *Module) buildToolRegistry(event *platform.Event, agent Agent) (*ToolRegistry, error) {
+	var handlers []ToolHandler
+
+	memoryHandlers, err := m.buildSemanticMemoryToolHandlers(event, agent)
+	if err != nil {
+		return nil, fmt.Errorf("build tool registry memory tools: %w", err)
+	}
+	handlers = append(handlers, memoryHandlers...)
+
+	for _, subAgentCfg := range agent.SubAgents {
+		provider, exists := m.providers[strings.TrimSpace(subAgentCfg.Provider)]
+		if !exists || provider == nil {
+			return nil, fmt.Errorf("build tool registry sub-agent %s: provider %s not available",
+				subAgentCfg.Name, subAgentCfg.Provider)
+		}
+
+		tool, err := newSubAgentTool(subAgentCfg, provider, m.logger)
+		if err != nil {
+			return nil, fmt.Errorf("build tool registry sub-agent %s: %w", subAgentCfg.Name, err)
+		}
+		handlers = append(handlers, tool)
+	}
+
+	if len(handlers) == 0 {
+		return nil, nil
+	}
+
+	return NewToolRegistry(handlers), nil
 }
 
 func validateHandlerDeadlineBudget(ctx context.Context, requestTimeout time.Duration) error {
