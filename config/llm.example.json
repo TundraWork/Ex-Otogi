@@ -1,5 +1,28 @@
 {
   "request_timeout": "90s",
+  "natural_memory": {
+    "enabled": true,
+    "extraction_provider": "openai-main",
+    "extraction_model": "gpt-4.1-mini",
+    "embedding_provider": "openai-main",
+    "extraction_timeout": "30s",
+    "extraction_max_input_runes": 4000,
+    "context_window_size": 5,
+    "synthesis_match_limit": 5,
+    "consolidation_interval": "1h",
+    "consolidation_provider": "openai-main",
+    "consolidation_model": "gpt-4.1-mini",
+    "consolidation_timeout": "60s",
+    "max_memories_per_scope": 200,
+    "decay_factor": 0.995,
+    "min_importance": 3,
+    "duplicate_similarity_threshold": 0.85,
+    "reflection_min_source_memories": 8,
+    "reflection_source_limit": 20,
+    "reflection_max_generated": 3,
+    "retrieval_planning_enabled": true,
+    "retrieval_planning_timeout": "10s"
+  },
   "providers": {
     "openai-main": {
       "type": "openai",

@@ -65,14 +65,16 @@ func (m *Module) debugSearchResult(ctx context.Context, query ai.LLMMemoryQuery,
 	)
 }
 
-func (m *Module) debugUpdate(ctx context.Context, id string, content string) {
+func (m *Module) debugUpdate(ctx context.Context, update ai.LLMMemoryUpdate) {
 	if m == nil || m.logger == nil {
 		return
 	}
 
 	m.logger.DebugContext(ctx, "llmmemory update",
-		"record_id", id,
-		"content_runes", len([]rune(content)),
+		"record_id", update.ID,
+		"category", update.Category,
+		"kind", update.Profile.Kind,
+		"content_runes", len([]rune(update.Content)),
 	)
 }
 

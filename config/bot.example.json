@@ -62,6 +62,9 @@
     },
     "llmchat": {
       "config_file": "config/llm.json"
+    },
+    "naturalmemory": {
+      "config_file": "config/llm.json"
     }
   }
 }
