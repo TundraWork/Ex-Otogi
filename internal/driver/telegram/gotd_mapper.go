@@ -1731,7 +1731,7 @@ func mapArticlePayload(message *tg.Message) *ArticlePayload {
 	payload := &ArticlePayload{
 		ID:        strconv.Itoa(message.ID),
 		Text:      message.Message,
-		Entities:  mapTextEntities(message.Entities),
+		Entities:  mapTextEntities(message.Message, message.Entities),
 		Media:     mapMessageMedia(message.Media),
 		Reactions: mapArticleReactions(message),
 	}
@@ -1794,7 +1794,7 @@ func articleSnapshotPayloadFromMessage(message *tg.Message) *ArticleSnapshotPayl
 
 	snapshot := ArticleSnapshotPayload{
 		Text:     message.Message,
-		Entities: mapTextEntities(message.Entities),
+		Entities: mapTextEntities(message.Message, message.Entities),
 		Media:    mapMessageMedia(message.Media),
 	}
 
@@ -2142,10 +2142,12 @@ func lookupChatTitle(chatID int64, envelope gotdUpdateEnvelope) string {
 	return info.title
 }
 
-func mapTextEntities(entities []tg.MessageEntityClass) []platform.TextEntity {
+func mapTextEntities(text string, entities []tg.MessageEntityClass) []platform.TextEntity {
 	if len(entities) == 0 {
 		return nil
 	}
+
+	runeFromUTF16 := buildRuneFromUTF16(text)
 
 	out := make([]platform.TextEntity, 0, len(entities))
 	for _, entity := range entities {
@@ -2153,10 +2155,15 @@ func mapTextEntities(entities []tg.MessageEntityClass) []platform.TextEntity {
 			continue
 		}
 
+		utf16Off := entity.GetOffset()
+		utf16Len := entity.GetLength()
+		runeOff := utf16ToRuneIndex(runeFromUTF16, utf16Off)
+		runeEnd := utf16ToRuneIndex(runeFromUTF16, utf16Off+utf16Len)
+
 		mapped := platform.TextEntity{
 			Type:   mapTextEntityTypeFromTelegram(entity),
-			Offset: entity.GetOffset(),
-			Length: entity.GetLength(),
+			Offset: runeOff,
+			Length: runeEnd - runeOff,
 		}
 
 		switch typed := entity.(type) {
@@ -2181,6 +2188,42 @@ func mapTextEntities(entities []tg.MessageEntityClass) []platform.TextEntity {
 	}
 
 	return out
+}
+
+// buildRuneFromUTF16 builds a mapping from UTF-16 code-unit offsets to
+// Unicode code-point (rune) indices for the given text. Telegram encodes
+// entity offsets and lengths as UTF-16 code-unit counts, while Go strings
+// are UTF-8 and the platform layer uses rune indices.
+func buildRuneFromUTF16(text string) []int {
+	// Index i holds the rune index that corresponds to UTF-16 offset i.
+	// A supplementary-plane rune occupies two UTF-16 code units (a surrogate
+	// pair), so we map both units to the same rune index.
+	mapping := make([]int, 0, len(text)+1)
+	runeIdx := 0
+	for _, r := range text {
+		mapping = append(mapping, runeIdx)
+		if r >= 0x10000 && r <= 0x10FFFF {
+			// Surrogate pair: two UTF-16 code units map to one rune.
+			mapping = append(mapping, runeIdx)
+		}
+		runeIdx++
+	}
+	// Sentinel for end-of-string so that offset == utf16Len is valid.
+	mapping = append(mapping, runeIdx)
+	return mapping
+}
+
+// utf16ToRuneIndex converts a UTF-16 code-unit offset to a rune index
+// using the precomputed mapping. Out-of-range offsets are clamped to the
+// text length so that downstream validation can still report a clear error.
+func utf16ToRuneIndex(mapping []int, utf16Offset int) int {
+	if utf16Offset <= 0 {
+		return 0
+	}
+	if utf16Offset >= len(mapping) {
+		return mapping[len(mapping)-1]
+	}
+	return mapping[utf16Offset]
 }
 
 func mapTextEntityTypeFromTelegram(entity tg.MessageEntityClass) platform.TextEntityType {
