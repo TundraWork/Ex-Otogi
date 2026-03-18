@@ -39,7 +39,7 @@ func newSubAgentTool(cfg SubAgentConfig, provider ai.LLMProvider, logger *slog.L
 		return nil, fmt.Errorf("new sub-agent tool %s: empty prompt template", cfg.Name)
 	}
 
-	tmpl, err := template.New("sub-agent-prompt").Option("missingkey=error").Parse(cfg.PromptTemplate)
+	tmpl, err := template.New("sub-agent-prompt").Option("missingkey=zero").Parse(cfg.PromptTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("new sub-agent tool %s: parse prompt template: %w", cfg.Name, err)
 	}

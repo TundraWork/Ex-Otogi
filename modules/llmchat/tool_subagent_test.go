@@ -201,6 +201,29 @@ func TestSubAgentToolExecute(t *testing.T) {
 			wantResult: "content",
 		},
 		{
+			name: "template with optional arg omitted renders without conditional block",
+			cfg: func() SubAgentConfig {
+				cfg := validSubAgentConfig()
+				cfg.PromptTemplate = "Read: {{.url}}{{if .question}} Q: {{.question}}{{end}}"
+				cfg.Parameters = json.RawMessage(`{"type":"object","properties":{"url":{"type":"string"},"question":{"type":"string"}},"required":["url"]}`)
+				return cfg
+			}(),
+			provider: &providerStub{
+				stream: &streamStub{chunks: []ai.LLMGenerateChunk{
+					{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "content"},
+				}},
+			},
+			args: json.RawMessage(`{"url":"https://example.com"}`),
+			assertRequest: func(t *testing.T, req ai.LLMGenerateRequest) {
+				t.Helper()
+				want := "Read: https://example.com"
+				if req.Messages[1].Content != want {
+					t.Fatalf("rendered prompt = %q, want %q", req.Messages[1].Content, want)
+				}
+			},
+			wantResult: "content",
+		},
+		{
 			name: "context cancellation propagates",
 			cfg:  validSubAgentConfig(),
 			provider: &providerStub{
