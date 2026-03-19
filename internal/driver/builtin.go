@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"ex-otogi/internal/driver/discord"
 	"ex-otogi/internal/driver/telegram"
 )
 
@@ -34,6 +35,32 @@ func NewBuiltinRegistry() (*Registry, error) {
 					MediaDownloader:      mediaDownloader,
 					SinkDispatcher:       outbound,
 					ModerationDispatcher: outbound,
+				}, nil
+			},
+		},
+		{
+			Type:     discord.DriverType,
+			Platform: discord.DriverPlatform,
+			Builder: func(
+				_ context.Context,
+				definition Definition,
+				builderLogger *slog.Logger,
+			) (Runtime, error) {
+				source, runtimeDriver, mediaDownloader, sink, moderation, err := discord.BuildRuntimeFromConfig(
+					definition.Name,
+					builderLogger,
+					definition.Config,
+				)
+				if err != nil {
+					return Runtime{}, fmt.Errorf("build discord runtime from config: %w", err)
+				}
+
+				return Runtime{
+					Source:               source,
+					Driver:               runtimeDriver,
+					MediaDownloader:      mediaDownloader,
+					SinkDispatcher:       sink,
+					ModerationDispatcher: moderation,
 				}, nil
 			},
 		},

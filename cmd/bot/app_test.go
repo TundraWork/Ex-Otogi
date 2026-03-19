@@ -234,8 +234,8 @@ func TestLoadConfig(t *testing.T) {
 			},
 			{
 				name:       "unsupported driver type",
-				fileJSON:   `{"drivers":[{"name":"legacy","type":"discord","config":{"token":"x"}}]}`,
-				wantErrSub: "unsupported type discord",
+				fileJSON:   `{"drivers":[{"name":"legacy","type":"irc","config":{}}]}`,
+				wantErrSub: "unsupported type irc",
 			},
 		}
 

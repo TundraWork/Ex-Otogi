@@ -31,6 +31,17 @@
         "password": "",
         "session_file": ".cache/telegram/session.json"
       }
+    },
+    {
+      "name": "discord-main",
+      "type": "discord",
+      "enabled": false,
+      "config": {
+        "bot_token": "",
+        "publish_timeout": "10s",
+        "update_buffer": 256,
+        "download_timeout": "30s"
+      }
     }
   ],
   "routing": {
