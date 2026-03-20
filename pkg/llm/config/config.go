@@ -48,6 +48,22 @@ const (
 	defaultImageInputMaxImages     = 3
 	defaultImageInputMaxBytes      = 10 << 20
 	defaultImageInputMaxTotalBytes = 20 << 20
+
+	defaultNaturalMemoryExtractionTimeout            = 30 * time.Second
+	defaultNaturalMemoryExtractionMaxInputRunes      = 4000
+	defaultNaturalMemoryConsolidationInterval        = time.Hour
+	defaultNaturalMemoryConsolidationTimeout         = 60 * time.Second
+	defaultNaturalMemoryMaxMemoriesPerScope          = 200
+	defaultNaturalMemoryDecayFactor                  = 0.995
+	defaultNaturalMemoryMinImportance                = 3
+	defaultNaturalMemoryDuplicateSimilarityThreshold = 0.85
+	defaultNaturalMemoryContextWindowSize            = 5
+	defaultNaturalMemorySynthesisMatchLimit          = 5
+	defaultNaturalMemoryReflectionMinSourceMemories  = 8
+	defaultNaturalMemoryReflectionSourceLimit        = 20
+	defaultNaturalMemoryReflectionMaxGenerated       = 3
+	defaultNaturalMemoryRetrievalPlanningEnabled     = true
+	defaultNaturalMemoryRetrievalPlanningTimeout     = 10 * time.Second
 )
 
 // Config is the full runtime LLM configuration model loaded from JSON.
@@ -58,6 +74,9 @@ type Config struct {
 	Providers map[string]ProviderProfile
 	// Agents contains triggerable llmchat agents.
 	Agents []Agent
+	// NaturalMemory controls automatic long-term memory formation from
+	// conversation activity when configured.
+	NaturalMemory *NaturalMemoryConfig
 }
 
 // ProviderProfile describes one named provider profile.
@@ -147,7 +166,7 @@ type Agent struct {
 	// ContextPolicy controls how llmchat reconstructs and trims conversation
 	// context before sending one request.
 	ContextPolicy ContextPolicy
-	// SemanticMemory controls semantic retrieval/tool behavior for this agent.
+	// SemanticMemory controls semantic retrieval behavior for this agent.
 	SemanticMemory *SemanticMemoryPolicy
 	// ImageInputs controls whether llmchat downloads current-event images and
 	// includes them as multimodal user input.
@@ -156,9 +175,9 @@ type Agent struct {
 	SubAgents []SubAgentConfig
 }
 
-// SemanticMemoryPolicy configures semantic memory for one agent.
+// SemanticMemoryPolicy configures semantic retrieval for one agent.
 type SemanticMemoryPolicy struct {
-	// Enabled turns on semantic retrieval and memory tools.
+	// Enabled turns on semantic retrieval.
 	Enabled bool
 	// MaxRetrievedMemories caps how many memories are injected into context.
 	MaxRetrievedMemories int
@@ -234,10 +253,70 @@ type SubAgentConfig struct {
 	PromptTemplate string
 }
 
+// NaturalMemoryConfig controls automatic memory extraction and consolidation
+// driven by conversation activity.
+type NaturalMemoryConfig struct {
+	// Enabled turns on natural memory formation.
+	Enabled bool
+	// ExtractionProvider identifies which provider profile to use for
+	// extraction requests.
+	ExtractionProvider string
+	// ExtractionModel identifies which model to call for extraction.
+	ExtractionModel string
+	// EmbeddingProvider identifies which provider profile to use for memory
+	// embeddings.
+	EmbeddingProvider string
+	// ExtractionTimeout bounds one extraction request lifecycle.
+	ExtractionTimeout time.Duration
+	// ExtractionMaxInputRunes caps the serialized conversation window sent to
+	// the extractor.
+	ExtractionMaxInputRunes int
+	// ConsolidationInterval controls how often consolidation runs. Zero
+	// disables the background consolidator.
+	ConsolidationInterval time.Duration
+	// ConsolidationProvider identifies which provider profile to use for
+	// consolidation requests.
+	ConsolidationProvider string
+	// ConsolidationModel identifies which model to call for consolidation.
+	ConsolidationModel string
+	// ConsolidationTimeout bounds one consolidation request lifecycle.
+	ConsolidationTimeout time.Duration
+	// MaxMemoriesPerScope caps the number of natural memories retained per
+	// conversation scope.
+	MaxMemoriesPerScope int
+	// DecayFactor controls exponential recency decay and must be in (0, 1].
+	DecayFactor float64
+	// MinImportance is the minimum importance score kept during pruning.
+	MinImportance int
+	// DuplicateSimilarityThreshold controls when two memories are treated as
+	// duplicates and must be in (0, 1].
+	DuplicateSimilarityThreshold float32
+	// ContextWindowSize controls how many earlier conversation entries are
+	// included before the current article during extraction.
+	ContextWindowSize int
+	// SynthesisMatchLimit caps how many candidate neighbor memories participate
+	// in write-time synthesis decisions.
+	SynthesisMatchLimit int
+	// ReflectionMinSourceMemories is the minimum surviving memory count required
+	// before reflection generation runs.
+	ReflectionMinSourceMemories int
+	// ReflectionSourceLimit caps how many memories are fed into one reflection
+	// generation request.
+	ReflectionSourceLimit int
+	// ReflectionMaxGenerated caps how many reflection memories can be generated
+	// per consolidation cycle.
+	ReflectionMaxGenerated int
+	// RetrievalPlanningEnabled turns on adaptive retrieval planning in llmchat.
+	RetrievalPlanningEnabled bool
+	// RetrievalPlanningTimeout bounds one retrieval planning request lifecycle.
+	RetrievalPlanningTimeout time.Duration
+}
+
 type fileConfig struct {
 	RequestTimeout string                       `json:"request_timeout"`
 	Providers      map[string]fileProviderEntry `json:"providers"`
 	Agents         []fileAgent                  `json:"agents"`
+	NaturalMemory  *fileNaturalMemory           `json:"natural_memory"`
 }
 
 type fileProviderEntry struct {
@@ -321,6 +400,30 @@ type fileSubAgent struct {
 	RequestMetadata map[string]string `json:"request_metadata"`
 	Parameters      json.RawMessage   `json:"parameters"`
 	PromptTemplate  string            `json:"prompt_template"`
+}
+
+type fileNaturalMemory struct {
+	Enabled                      bool     `json:"enabled"`
+	ExtractionProvider           string   `json:"extraction_provider"`
+	ExtractionModel              string   `json:"extraction_model"`
+	EmbeddingProvider            string   `json:"embedding_provider"`
+	ExtractionTimeout            string   `json:"extraction_timeout"`
+	ExtractionMaxInputRunes      *int     `json:"extraction_max_input_runes"`
+	ConsolidationInterval        string   `json:"consolidation_interval"`
+	ConsolidationProvider        string   `json:"consolidation_provider"`
+	ConsolidationModel           string   `json:"consolidation_model"`
+	ConsolidationTimeout         string   `json:"consolidation_timeout"`
+	MaxMemoriesPerScope          *int     `json:"max_memories_per_scope"`
+	DecayFactor                  *float64 `json:"decay_factor"`
+	MinImportance                *int     `json:"min_importance"`
+	DuplicateSimilarityThreshold *float64 `json:"duplicate_similarity_threshold"`
+	ContextWindowSize            *int     `json:"context_window_size"`
+	SynthesisMatchLimit          *int     `json:"synthesis_match_limit"`
+	ReflectionMinSourceMemories  *int     `json:"reflection_min_source_memories"`
+	ReflectionSourceLimit        *int     `json:"reflection_source_limit"`
+	ReflectionMaxGenerated       *int     `json:"reflection_max_generated"`
+	RetrievalPlanningEnabled     *bool    `json:"retrieval_planning_enabled"`
+	RetrievalPlanningTimeout     string   `json:"retrieval_planning_timeout"`
 }
 
 type rootRaw struct {
@@ -439,6 +542,14 @@ func LoadFile(path string) (Config, error) {
 		cfg.Agents = append(cfg.Agents, agent)
 	}
 
+	if parsed.NaturalMemory != nil {
+		naturalMemory, err := parseNaturalMemoryConfig(parsed.NaturalMemory)
+		if err != nil {
+			return Config{}, fmt.Errorf("load llm config natural_memory: %w", err)
+		}
+		cfg.NaturalMemory = naturalMemory
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -532,6 +643,10 @@ func (cfg Config) Validate() error {
 				)
 			}
 		}
+	}
+
+	if err := validateNaturalMemoryConfig(cfg.NaturalMemory, cfg.Providers); err != nil {
+		return fmt.Errorf("validate llm config natural_memory: %w", err)
 	}
 
 	return nil
@@ -878,6 +993,101 @@ func resolveSemanticMemoryPolicy(policy *SemanticMemoryPolicy) *SemanticMemoryPo
 	return &resolved
 }
 
+func parseNaturalMemoryConfig(raw *fileNaturalMemory) (*NaturalMemoryConfig, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	cfg := &NaturalMemoryConfig{
+		Enabled:                      raw.Enabled,
+		ExtractionProvider:           strings.TrimSpace(raw.ExtractionProvider),
+		ExtractionModel:              strings.TrimSpace(raw.ExtractionModel),
+		EmbeddingProvider:            strings.TrimSpace(raw.EmbeddingProvider),
+		ExtractionTimeout:            defaultNaturalMemoryExtractionTimeout,
+		ExtractionMaxInputRunes:      defaultNaturalMemoryExtractionMaxInputRunes,
+		ConsolidationInterval:        defaultNaturalMemoryConsolidationInterval,
+		ConsolidationProvider:        strings.TrimSpace(raw.ConsolidationProvider),
+		ConsolidationModel:           strings.TrimSpace(raw.ConsolidationModel),
+		ConsolidationTimeout:         defaultNaturalMemoryConsolidationTimeout,
+		MaxMemoriesPerScope:          defaultNaturalMemoryMaxMemoriesPerScope,
+		DecayFactor:                  defaultNaturalMemoryDecayFactor,
+		MinImportance:                defaultNaturalMemoryMinImportance,
+		DuplicateSimilarityThreshold: defaultNaturalMemoryDuplicateSimilarityThreshold,
+		ContextWindowSize:            defaultNaturalMemoryContextWindowSize,
+		SynthesisMatchLimit:          defaultNaturalMemorySynthesisMatchLimit,
+		ReflectionMinSourceMemories:  defaultNaturalMemoryReflectionMinSourceMemories,
+		ReflectionSourceLimit:        defaultNaturalMemoryReflectionSourceLimit,
+		ReflectionMaxGenerated:       defaultNaturalMemoryReflectionMaxGenerated,
+		RetrievalPlanningEnabled:     defaultNaturalMemoryRetrievalPlanningEnabled,
+		RetrievalPlanningTimeout:     defaultNaturalMemoryRetrievalPlanningTimeout,
+	}
+
+	if raw.ExtractionMaxInputRunes != nil {
+		cfg.ExtractionMaxInputRunes = *raw.ExtractionMaxInputRunes
+	}
+	if raw.MaxMemoriesPerScope != nil {
+		cfg.MaxMemoriesPerScope = *raw.MaxMemoriesPerScope
+	}
+	if raw.DecayFactor != nil {
+		cfg.DecayFactor = *raw.DecayFactor
+	}
+	if raw.MinImportance != nil {
+		cfg.MinImportance = *raw.MinImportance
+	}
+	if raw.DuplicateSimilarityThreshold != nil {
+		cfg.DuplicateSimilarityThreshold = float32(*raw.DuplicateSimilarityThreshold)
+	}
+	if raw.ContextWindowSize != nil {
+		cfg.ContextWindowSize = *raw.ContextWindowSize
+	}
+	if raw.SynthesisMatchLimit != nil {
+		cfg.SynthesisMatchLimit = *raw.SynthesisMatchLimit
+	}
+	if raw.ReflectionMinSourceMemories != nil {
+		cfg.ReflectionMinSourceMemories = *raw.ReflectionMinSourceMemories
+	}
+	if raw.ReflectionSourceLimit != nil {
+		cfg.ReflectionSourceLimit = *raw.ReflectionSourceLimit
+	}
+	if raw.ReflectionMaxGenerated != nil {
+		cfg.ReflectionMaxGenerated = *raw.ReflectionMaxGenerated
+	}
+	if raw.RetrievalPlanningEnabled != nil {
+		cfg.RetrievalPlanningEnabled = *raw.RetrievalPlanningEnabled
+	}
+
+	if rawTimeout := strings.TrimSpace(raw.ExtractionTimeout); rawTimeout != "" {
+		timeout, err := time.ParseDuration(rawTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("parse extraction_timeout: %w", err)
+		}
+		cfg.ExtractionTimeout = timeout
+	}
+	if rawInterval := strings.TrimSpace(raw.ConsolidationInterval); rawInterval != "" {
+		interval, err := time.ParseDuration(rawInterval)
+		if err != nil {
+			return nil, fmt.Errorf("parse consolidation_interval: %w", err)
+		}
+		cfg.ConsolidationInterval = interval
+	}
+	if rawTimeout := strings.TrimSpace(raw.ConsolidationTimeout); rawTimeout != "" {
+		timeout, err := time.ParseDuration(rawTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("parse consolidation_timeout: %w", err)
+		}
+		cfg.ConsolidationTimeout = timeout
+	}
+	if rawTimeout := strings.TrimSpace(raw.RetrievalPlanningTimeout); rawTimeout != "" {
+		timeout, err := time.ParseDuration(rawTimeout)
+		if err != nil {
+			return nil, fmt.Errorf("parse retrieval_planning_timeout: %w", err)
+		}
+		cfg.RetrievalPlanningTimeout = timeout
+	}
+
+	return cfg, nil
+}
+
 func parseImageInputPolicy(raw *fileAgentImageInputs) (ImageInputPolicy, error) {
 	if raw == nil {
 		return ImageInputPolicy{}, nil
@@ -967,6 +1177,91 @@ func validateSemanticMemoryPolicy(policy *SemanticMemoryPolicy) error {
 	return nil
 }
 
+func validateNaturalMemoryConfig(
+	cfg *NaturalMemoryConfig,
+	providers map[string]ProviderProfile,
+) error {
+	if cfg == nil {
+		return nil
+	}
+	if cfg.ExtractionTimeout <= 0 {
+		return fmt.Errorf("extraction_timeout must be > 0")
+	}
+	if cfg.ExtractionMaxInputRunes <= 0 {
+		return fmt.Errorf("extraction_max_input_runes must be > 0")
+	}
+	if cfg.ConsolidationInterval < 0 {
+		return fmt.Errorf("consolidation_interval must be >= 0")
+	}
+	if cfg.ConsolidationTimeout <= 0 {
+		return fmt.Errorf("consolidation_timeout must be > 0")
+	}
+	if cfg.MaxMemoriesPerScope <= 0 {
+		return fmt.Errorf("max_memories_per_scope must be > 0")
+	}
+	if cfg.DecayFactor <= 0 || cfg.DecayFactor > 1 {
+		return fmt.Errorf("decay_factor must be between 0 and 1")
+	}
+	if cfg.MinImportance < 1 || cfg.MinImportance > 10 {
+		return fmt.Errorf("min_importance must be between 1 and 10")
+	}
+	if cfg.DuplicateSimilarityThreshold <= 0 || cfg.DuplicateSimilarityThreshold > 1 {
+		return fmt.Errorf("duplicate_similarity_threshold must be between 0 and 1")
+	}
+	if cfg.ContextWindowSize <= 0 {
+		return fmt.Errorf("context_window_size must be > 0")
+	}
+	if cfg.SynthesisMatchLimit <= 0 {
+		return fmt.Errorf("synthesis_match_limit must be > 0")
+	}
+	if cfg.ReflectionMinSourceMemories <= 0 {
+		return fmt.Errorf("reflection_min_source_memories must be > 0")
+	}
+	if cfg.ReflectionSourceLimit <= 0 {
+		return fmt.Errorf("reflection_source_limit must be > 0")
+	}
+	if cfg.ReflectionMaxGenerated <= 0 {
+		return fmt.Errorf("reflection_max_generated must be > 0")
+	}
+	if cfg.RetrievalPlanningTimeout <= 0 {
+		return fmt.Errorf("retrieval_planning_timeout must be > 0")
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.ExtractionProvider) == "" {
+		return fmt.Errorf("extraction_provider is required when enabled=true")
+	}
+	if strings.TrimSpace(cfg.ExtractionModel) == "" {
+		return fmt.Errorf("extraction_model is required when enabled=true")
+	}
+	if strings.TrimSpace(cfg.EmbeddingProvider) == "" {
+		return fmt.Errorf("embedding_provider is required when enabled=true")
+	}
+	if _, exists := providers[strings.TrimSpace(cfg.ExtractionProvider)]; !exists {
+		return fmt.Errorf("extraction_provider %s is not configured", strings.TrimSpace(cfg.ExtractionProvider))
+	}
+	if _, exists := providers[strings.TrimSpace(cfg.EmbeddingProvider)]; !exists {
+		return fmt.Errorf("embedding_provider %s is not configured", strings.TrimSpace(cfg.EmbeddingProvider))
+	}
+	if cfg.ConsolidationInterval > 0 {
+		if strings.TrimSpace(cfg.ConsolidationProvider) == "" {
+			return fmt.Errorf("consolidation_provider is required when consolidation_interval > 0")
+		}
+		if strings.TrimSpace(cfg.ConsolidationModel) == "" {
+			return fmt.Errorf("consolidation_model is required when consolidation_interval > 0")
+		}
+		if _, exists := providers[strings.TrimSpace(cfg.ConsolidationProvider)]; !exists {
+			return fmt.Errorf(
+				"consolidation_provider %s is not configured",
+				strings.TrimSpace(cfg.ConsolidationProvider),
+			)
+		}
+	}
+
+	return nil
+}
+
 func validateImageInputPolicy(policy ImageInputPolicy) error {
 	if !policy.Enabled {
 		if policy.MaxImages != 0 {
@@ -1043,9 +1338,6 @@ func validateSubAgent(cfg SubAgentConfig) error {
 	if !isValidSubAgentName(cfg.Name) {
 		return fmt.Errorf("invalid name %q: must match [a-zA-Z0-9_.-]{1,64}", cfg.Name)
 	}
-	if isReservedSubAgentName(cfg.Name) {
-		return fmt.Errorf("reserved name %q: conflicts with built-in tool", cfg.Name)
-	}
 	if cfg.Description == "" {
 		return fmt.Errorf("missing description")
 	}
@@ -1103,15 +1395,6 @@ func isValidSubAgentName(name string) bool {
 	}
 
 	return true
-}
-
-func isReservedSubAgentName(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "remember", "recall", "forget":
-		return true
-	default:
-		return false
-	}
 }
 
 func isJSONObjectBytes(raw []byte) bool {

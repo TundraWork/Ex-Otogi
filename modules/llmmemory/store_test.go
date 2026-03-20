@@ -20,7 +20,9 @@ func TestStoreStoreAndListByScope(t *testing.T) {
 		Content:   "User likes tea",
 		Category:  "preference",
 		Embedding: []float32{1, 0},
-		Metadata:  map[string]string{"source": "user"},
+		Metadata: map[string]string{
+			ai.LLMMemoryMetadataSource: "user",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Store failed: %v", err)
@@ -38,6 +40,12 @@ func TestStoreStoreAndListByScope(t *testing.T) {
 	}
 	if records[0].Metadata["source"] != "user" {
 		t.Fatalf("metadata[source] = %q, want user", records[0].Metadata["source"])
+	}
+	if records[0].Profile.Kind != ai.LLMMemoryKindUnit {
+		t.Fatalf("profile.kind = %q, want %q", records[0].Profile.Kind, ai.LLMMemoryKindUnit)
+	}
+	if records[0].Profile.Source != "user" {
+		t.Fatalf("profile.source = %q, want user", records[0].Profile.Source)
 	}
 }
 
@@ -157,7 +165,24 @@ func TestStoreUpdateAndDelete(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	if err := store.Update(context.Background(), record.ID, "New memory", []float32{0, 1}); err != nil {
+	updated, err := store.Update(context.Background(), ai.LLMMemoryUpdate{
+		ID:        record.ID,
+		Content:   "New memory",
+		Category:  "summary",
+		Embedding: []float32{0, 1},
+		Profile: ai.LLMMemoryProfile{
+			Kind:           ai.LLMMemoryKindSynthesized,
+			Importance:     7,
+			LastAccessedAt: time.Unix(150, 0).UTC(),
+			AccessCount:    2,
+			Source:         "naturalmemory",
+			EvidenceRecordIDs: []string{
+				"mem-legacy",
+			},
+		},
+		Metadata: map[string]string{"opaque": "value"},
+	})
+	if err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
 	records, err := store.ListByScope(context.Background(), testMemoryScope("chat-1"), 10)
@@ -166,6 +191,21 @@ func TestStoreUpdateAndDelete(t *testing.T) {
 	}
 	if records[0].Content != "New memory" {
 		t.Fatalf("content = %q, want New memory", records[0].Content)
+	}
+	if records[0].Category != "summary" {
+		t.Fatalf("category = %q, want summary", records[0].Category)
+	}
+	if records[0].Profile.Kind != ai.LLMMemoryKindSynthesized {
+		t.Fatalf("profile.kind = %q, want %q", records[0].Profile.Kind, ai.LLMMemoryKindSynthesized)
+	}
+	if records[0].Profile.AccessCount != 2 {
+		t.Fatalf("profile.access_count = %d, want 2", records[0].Profile.AccessCount)
+	}
+	if records[0].Metadata["opaque"] != "value" {
+		t.Fatalf("metadata[opaque] = %q, want value", records[0].Metadata["opaque"])
+	}
+	if updated.ID != record.ID {
+		t.Fatalf("updated id = %q, want %q", updated.ID, record.ID)
 	}
 	if !records[0].UpdatedAt.After(records[0].CreatedAt) {
 		t.Fatalf("updated_at = %s, want after created_at %s", records[0].UpdatedAt, records[0].CreatedAt)
@@ -180,6 +220,44 @@ func TestStoreUpdateAndDelete(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Fatalf("records len = %d, want 0", len(records))
+	}
+}
+
+func TestStoreNormalizesLegacyMetadataIntoProfile(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(10, fixedClock(time.Unix(300, 0).UTC()), sequenceIDs("mem-1"))
+	record, err := store.Store(context.Background(), ai.LLMMemoryEntry{
+		Scope:     testMemoryScope("chat-1"),
+		Content:   "Alice likes jasmine tea",
+		Category:  "preference",
+		Embedding: []float32{1, 0},
+		Metadata: map[string]string{
+			ai.LLMMemoryMetadataImportance:       "8",
+			ai.LLMMemoryMetadataAccessCount:      "3",
+			ai.LLMMemoryMetadataLastAccessed:     time.Unix(240, 0).UTC().Format(time.RFC3339),
+			ai.LLMMemoryMetadataSource:           "natural",
+			ai.LLMMemoryMetadataSourceActorID:    "user-1",
+			ai.LLMMemoryMetadataSourceActorName:  "Alice",
+			ai.LLMMemoryMetadataSubjectActorName: "Alice",
+			ai.LLMMemoryMetadataSourceRecordIDs:  "mem-a, mem-b",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	if record.Profile.Importance != 8 {
+		t.Fatalf("profile.importance = %d, want 8", record.Profile.Importance)
+	}
+	if record.Profile.AccessCount != 3 {
+		t.Fatalf("profile.access_count = %d, want 3", record.Profile.AccessCount)
+	}
+	if record.Profile.SourceActor == nil || record.Profile.SourceActor.Name != "Alice" {
+		t.Fatalf("profile.source_actor = %+v, want Alice", record.Profile.SourceActor)
+	}
+	if len(record.Profile.EvidenceRecordIDs) != 2 {
+		t.Fatalf("profile.evidence_record_ids = %v, want two ids", record.Profile.EvidenceRecordIDs)
 	}
 }
 

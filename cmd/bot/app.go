@@ -20,6 +20,7 @@ import (
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/llmchat"
 	"ex-otogi/modules/llmmemory"
+	"ex-otogi/modules/naturalmemory"
 	"ex-otogi/modules/nbnhhsh"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/modules/quotehelper"
@@ -53,6 +54,7 @@ var runtimeModules = []func() core.Module{
 	func() core.Module { return help.New() },
 	func() core.Module { return sleep.New() },
 	func() core.Module { return llmchat.New() },
+	func() core.Module { return naturalmemory.New() },
 	func() core.Module { return whoami.New() },
 }
 

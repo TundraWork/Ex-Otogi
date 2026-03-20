@@ -416,6 +416,13 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 	return Config{
 		RequestTimeout: cfg.RequestTimeout,
 		Agents:         agents,
+		NaturalMemory: NaturalMemorySettings{
+			ExtractionProvider:       stringValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) string { return value.ExtractionProvider }),
+			ExtractionModel:          stringValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) string { return value.ExtractionModel }),
+			DecayFactor:              float64Value(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) float64 { return value.DecayFactor }),
+			RetrievalPlanningEnabled: boolValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) bool { return value.RetrievalPlanningEnabled }),
+			RetrievalPlanningTimeout: durationValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) time.Duration { return value.RetrievalPlanningTimeout }),
+		},
 	}
 }
 
@@ -462,6 +469,38 @@ func cloneOptionalInt(value *int) *int {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func stringValue[T any](value *T, selector func(*T) string) string {
+	if value == nil {
+		return ""
+	}
+
+	return selector(value)
+}
+
+func float64Value[T any](value *T, selector func(*T) float64) float64 {
+	if value == nil {
+		return 0
+	}
+
+	return selector(value)
+}
+
+func boolValue[T any](value *T, selector func(*T) bool) bool {
+	if value == nil {
+		return false
+	}
+
+	return selector(value)
+}
+
+func durationValue[T any](value *T, selector func(*T) time.Duration) time.Duration {
+	if value == nil {
+		return 0
+	}
+
+	return selector(value)
 }
 
 func cloneOptionalBool(value *bool) *bool {
@@ -563,16 +602,10 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 	return nil
 }
 
-// buildToolRegistry combines semantic memory tool handlers and sub-agent tool
-// handlers into one request-scoped ToolRegistry.
-func (m *Module) buildToolRegistry(event *platform.Event, agent Agent) (*ToolRegistry, error) {
+// buildToolRegistry combines request-scoped sub-agent tool handlers into one
+// ToolRegistry.
+func (m *Module) buildToolRegistry(_ *platform.Event, agent Agent) (*ToolRegistry, error) {
 	var handlers []ToolHandler
-
-	memoryHandlers, err := m.buildSemanticMemoryToolHandlers(event, agent)
-	if err != nil {
-		return nil, fmt.Errorf("build tool registry memory tools: %w", err)
-	}
-	handlers = append(handlers, memoryHandlers...)
 
 	for _, subAgentCfg := range agent.SubAgents {
 		provider, exists := m.providers[strings.TrimSpace(subAgentCfg.Provider)]

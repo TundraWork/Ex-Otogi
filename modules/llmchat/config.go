@@ -15,18 +15,20 @@ const (
 	metadataKeyProvider       = "provider"
 	metadataKeyConversationID = "conversation_id"
 
-	defaultReplyChainMaxMessages   = 12
-	defaultLeadingContextMessages  = 4
-	defaultLeadingContextMaxAge    = 15 * time.Minute
-	defaultMaxContextRunes         = 12000
-	defaultMaxMessageRunes         = 1600
-	defaultQuoteReplyDepth         = 2
-	defaultMaxRetrievedMemories    = 5
-	defaultMinMemorySimilarity     = 0.3
-	defaultMaxMemoryRunes          = 2000
-	defaultImageInputMaxImages     = 3
-	defaultImageInputMaxBytes      = 10 << 20
-	defaultImageInputMaxTotalBytes = 20 << 20
+	defaultReplyChainMaxMessages    = 12
+	defaultLeadingContextMessages   = 4
+	defaultLeadingContextMaxAge     = 15 * time.Minute
+	defaultMaxContextRunes          = 12000
+	defaultMaxMessageRunes          = 1600
+	defaultQuoteReplyDepth          = 2
+	defaultMaxRetrievedMemories     = 5
+	defaultMinMemorySimilarity      = 0.3
+	defaultMaxMemoryRunes           = 2000
+	defaultImageInputMaxImages      = 3
+	defaultImageInputMaxBytes       = 10 << 20
+	defaultImageInputMaxTotalBytes  = 20 << 20
+	defaultNaturalMemoryDecayFactor = 0.995
+	defaultRetrievalPlanningTimeout = 10 * time.Second
 )
 
 // Config configures llmchat module behavior.
@@ -35,6 +37,24 @@ type Config struct {
 	RequestTimeout time.Duration
 	// Agents is the list of configured triggerable agents.
 	Agents []Agent
+	// NaturalMemory carries shared retrieval settings sourced from the natural
+	// memory facility configuration.
+	NaturalMemory NaturalMemorySettings
+}
+
+// NaturalMemorySettings carries shared retrieval settings sourced from the
+// natural memory facility.
+type NaturalMemorySettings struct {
+	// ExtractionProvider identifies which provider to use for retrieval planning.
+	ExtractionProvider string
+	// ExtractionModel identifies which model to use for retrieval planning.
+	ExtractionModel string
+	// DecayFactor controls recency weighting during semantic reranking.
+	DecayFactor float64
+	// RetrievalPlanningEnabled turns on adaptive retrieval planning.
+	RetrievalPlanningEnabled bool
+	// RetrievalPlanningTimeout bounds one retrieval planning request lifecycle.
+	RetrievalPlanningTimeout time.Duration
 }
 
 // Agent describes one configured chat persona and provider binding.
@@ -66,7 +86,7 @@ type Agent struct {
 	// ContextPolicy controls how llmchat reconstructs and trims conversation
 	// context before sending it to one provider.
 	ContextPolicy ContextPolicy
-	// SemanticMemory controls semantic retrieval and memory tools for this agent.
+	// SemanticMemory controls semantic retrieval for this agent.
 	SemanticMemory *SemanticMemoryPolicy
 	// ImageInputs controls whether llmchat downloads current-event images and
 	// includes them as multimodal user input.
@@ -129,9 +149,9 @@ type ContextPolicy struct {
 	QuoteReplyDepth int
 }
 
-// SemanticMemoryPolicy controls semantic memory retrieval and tool use for one agent.
+// SemanticMemoryPolicy controls semantic memory retrieval for one agent.
 type SemanticMemoryPolicy struct {
-	// Enabled turns on semantic retrieval and tool execution.
+	// Enabled turns on semantic retrieval.
 	Enabled bool
 	// MaxRetrievedMemories caps how many memories are injected into context.
 	MaxRetrievedMemories int
@@ -163,6 +183,9 @@ func (cfg Config) Validate() error {
 	if len(cfg.Agents) == 0 {
 		return fmt.Errorf("validate llmchat config: at least one agent is required")
 	}
+	if err := validateNaturalMemorySettings(resolveNaturalMemorySettings(cfg.NaturalMemory)); err != nil {
+		return fmt.Errorf("validate llmchat config: natural_memory: %w", err)
+	}
 
 	seenNames := make(map[string]struct{}, len(cfg.Agents))
 	for index, agent := range cfg.Agents {
@@ -185,6 +208,29 @@ func (cfg Config) Validate() error {
 			}
 			seenNames[normalized] = struct{}{}
 		}
+	}
+
+	return nil
+}
+
+func resolveNaturalMemorySettings(settings NaturalMemorySettings) NaturalMemorySettings {
+	resolved := settings
+	if resolved.DecayFactor == 0 {
+		resolved.DecayFactor = defaultNaturalMemoryDecayFactor
+	}
+	if resolved.RetrievalPlanningTimeout == 0 {
+		resolved.RetrievalPlanningTimeout = defaultRetrievalPlanningTimeout
+	}
+
+	return resolved
+}
+
+func validateNaturalMemorySettings(settings NaturalMemorySettings) error {
+	if settings.DecayFactor <= 0 || settings.DecayFactor > 1 {
+		return fmt.Errorf("decay_factor must be between 0 and 1")
+	}
+	if settings.RetrievalPlanningTimeout <= 0 {
+		return fmt.Errorf("retrieval_planning_timeout must be > 0")
 	}
 
 	return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,8 +15,9 @@ import (
 )
 
 const (
-	defaultSearchLimit   = 5
-	defaultMinSimilarity = 0.3
+	defaultSearchLimit       = 5
+	defaultMinSimilarity     = 0.3
+	defaultProfileImportance = 5
 )
 
 // Store is a concurrency-safe in-memory semantic memory store.
@@ -64,6 +66,7 @@ func (s *Store) Store(ctx context.Context, entry ai.LLMMemoryEntry) (ai.LLMMemor
 		Content:   strings.TrimSpace(entry.Content),
 		Category:  strings.TrimSpace(entry.Category),
 		Embedding: cloneEmbedding(entry.Embedding),
+		Profile:   normalizeProfile(entry.Profile, entry.Metadata, now),
 		Metadata:  cloneMetadata(entry.Metadata),
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -129,34 +132,34 @@ func (s *Store) Search(ctx context.Context, query ai.LLMMemoryQuery) ([]ai.LLMMe
 	return matches, nil
 }
 
-// Update replaces the content and embedding of one stored memory record.
-func (s *Store) Update(ctx context.Context, id string, content string, embedding []float32) error {
+// Update replaces the mutable fields of one stored memory record.
+func (s *Store) Update(ctx context.Context, update ai.LLMMemoryUpdate) (ai.LLMMemoryRecord, error) {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("llmmemory update: %w", err)
+		return ai.LLMMemoryRecord{}, fmt.Errorf("llmmemory update: %w", err)
 	}
-	if strings.TrimSpace(id) == "" {
-		return fmt.Errorf("llmmemory update: missing id")
-	}
-	if strings.TrimSpace(content) == "" {
-		return fmt.Errorf("llmmemory update: missing content")
-	}
-	if err := validateMemoryEmbedding(embedding); err != nil {
-		return fmt.Errorf("llmmemory update embedding: %w", err)
+	if err := update.Validate(); err != nil {
+		return ai.LLMMemoryRecord{}, fmt.Errorf("llmmemory update: %w", err)
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	record, exists := s.records[strings.TrimSpace(id)]
+	record, exists := s.records[strings.TrimSpace(update.ID)]
 	if !exists {
-		return fmt.Errorf("llmmemory update: record %s not found", strings.TrimSpace(id))
+		return ai.LLMMemoryRecord{}, fmt.Errorf(
+			"llmmemory update: record %s not found",
+			strings.TrimSpace(update.ID),
+		)
 	}
 
-	record.Content = strings.TrimSpace(content)
-	record.Embedding = cloneEmbedding(embedding)
+	record.Content = strings.TrimSpace(update.Content)
+	record.Category = strings.TrimSpace(update.Category)
+	record.Embedding = cloneEmbedding(update.Embedding)
+	record.Profile = normalizeProfile(update.Profile, update.Metadata, s.now())
+	record.Metadata = cloneMetadata(update.Metadata)
 	record.UpdatedAt = s.now()
 
-	return nil
+	return cloneRecord(*record), nil
 }
 
 // Delete removes one stored memory record by ID.
@@ -286,8 +289,31 @@ func dotProduct(a, b []float32) float32 {
 
 func cloneRecord(record ai.LLMMemoryRecord) ai.LLMMemoryRecord {
 	record.Embedding = cloneEmbedding(record.Embedding)
+	record.Profile = cloneProfile(record.Profile)
 	record.Metadata = cloneMetadata(record.Metadata)
 	return record
+}
+
+func cloneProfile(profile ai.LLMMemoryProfile) ai.LLMMemoryProfile {
+	profile.LastAccessedAt = profile.LastAccessedAt.UTC()
+	profile.SourceActor = cloneActorRef(profile.SourceActor)
+	profile.SubjectActor = cloneActorRef(profile.SubjectActor)
+	if len(profile.EvidenceRecordIDs) > 0 {
+		profile.EvidenceRecordIDs = append([]string(nil), profile.EvidenceRecordIDs...)
+	}
+	return profile
+}
+
+func cloneActorRef(actor *ai.LLMMemoryActorRef) *ai.LLMMemoryActorRef {
+	if actor == nil {
+		return nil
+	}
+
+	cloned := *actor
+	cloned.ID = strings.TrimSpace(cloned.ID)
+	cloned.Name = strings.TrimSpace(cloned.Name)
+
+	return &cloned
 }
 
 func cloneEmbedding(embedding []float32) []float32 {
@@ -309,6 +335,135 @@ func cloneMetadata(metadata map[string]string) map[string]string {
 	}
 
 	return cloned
+}
+
+func normalizeProfile(
+	profile ai.LLMMemoryProfile,
+	metadata map[string]string,
+	fallbackAccess time.Time,
+) ai.LLMMemoryProfile {
+	normalized := cloneProfile(profile)
+	if normalized.Kind == "" {
+		normalized.Kind = ai.LLMMemoryKindUnit
+	}
+	if normalized.Importance == 0 {
+		normalized.Importance = parseMetadataInt(metadata, ai.LLMMemoryMetadataImportance, defaultProfileImportance)
+	}
+	if normalized.LastAccessedAt.IsZero() {
+		normalized.LastAccessedAt = parseMetadataTime(metadata, ai.LLMMemoryMetadataLastAccessed, fallbackAccess)
+	}
+	normalized.LastAccessedAt = normalized.LastAccessedAt.UTC()
+	if normalized.AccessCount == 0 {
+		normalized.AccessCount = parseMetadataInt(metadata, ai.LLMMemoryMetadataAccessCount, 0)
+	}
+	if strings.TrimSpace(normalized.Source) == "" {
+		normalized.Source = strings.TrimSpace(metadata[ai.LLMMemoryMetadataSource])
+	}
+	if strings.TrimSpace(normalized.SourceArticleID) == "" {
+		normalized.SourceArticleID = strings.TrimSpace(metadata[ai.LLMMemoryMetadataSourceArticleID])
+	}
+	if normalized.SourceActor == nil {
+		normalized.SourceActor = parseActorRef(
+			metadata,
+			ai.LLMMemoryMetadataSourceActorID,
+			ai.LLMMemoryMetadataSourceActorName,
+			ai.LLMMemoryMetadataSourceActorIsBot,
+		)
+	}
+	if normalized.SubjectActor == nil {
+		normalized.SubjectActor = parseActorRef(
+			metadata,
+			ai.LLMMemoryMetadataSubjectActorID,
+			ai.LLMMemoryMetadataSubjectActorName,
+			ai.LLMMemoryMetadataSubjectActorIsBot,
+		)
+	}
+	if len(normalized.EvidenceRecordIDs) == 0 {
+		normalized.EvidenceRecordIDs = parseMetadataCSV(metadata, ai.LLMMemoryMetadataSourceRecordIDs)
+	}
+
+	return normalized
+}
+
+func parseMetadataInt(metadata map[string]string, key string, defaultValue int) int {
+	if len(metadata) == 0 {
+		return defaultValue
+	}
+
+	raw := strings.TrimSpace(metadata[key])
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultValue
+	}
+
+	return value
+}
+
+func parseMetadataTime(metadata map[string]string, key string, defaultValue time.Time) time.Time {
+	if len(metadata) == 0 {
+		return defaultValue.UTC()
+	}
+
+	raw := strings.TrimSpace(metadata[key])
+	if raw == "" {
+		return defaultValue.UTC()
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return defaultValue.UTC()
+	}
+
+	return parsed.UTC()
+}
+
+func parseMetadataCSV(metadata map[string]string, key string) []string {
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	raw := strings.TrimSpace(metadata[key])
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	ids := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		ids = append(ids, trimmed)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	return ids
+}
+
+func parseActorRef(metadata map[string]string, idKey string, nameKey string, isBotKey string) *ai.LLMMemoryActorRef {
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	actor := &ai.LLMMemoryActorRef{
+		ID:   strings.TrimSpace(metadata[idKey]),
+		Name: strings.TrimSpace(metadata[nameKey]),
+	}
+	if actor.ID == "" && actor.Name == "" {
+		return nil
+	}
+	if raw := strings.TrimSpace(metadata[isBotKey]); raw != "" {
+		if parsed, err := strconv.ParseBool(raw); err == nil {
+			actor.IsBot = parsed
+		}
+	}
+
+	return actor
 }
 
 func validateMemoryEmbedding(embedding []float32) error {

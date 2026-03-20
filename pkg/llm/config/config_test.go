@@ -32,6 +32,29 @@ func TestLoadFile(t *testing.T) {
 			name: "valid openai and gemini config",
 			fileBody: `{
 				"request_timeout":"45s",
+				"natural_memory":{
+					"enabled":true,
+					"extraction_provider":"openai-main",
+					"extraction_model":"gpt-4.1-mini",
+					"embedding_provider":"openai-main",
+					"extraction_timeout":"25s",
+					"extraction_max_input_runes":5000,
+					"context_window_size":7,
+					"synthesis_match_limit":6,
+					"consolidation_interval":"2h",
+					"consolidation_provider":"gemini-main",
+					"consolidation_model":"gemini-2.5-flash",
+					"consolidation_timeout":"75s",
+					"max_memories_per_scope":250,
+					"decay_factor":0.99,
+					"min_importance":4,
+					"duplicate_similarity_threshold":0.9,
+					"reflection_min_source_memories":10,
+					"reflection_source_limit":24,
+					"reflection_max_generated":4,
+					"retrieval_planning_enabled":false,
+					"retrieval_planning_timeout":"12s"
+				},
 					"providers":{
 						"openai-main":{
 							"type":"openai",
@@ -111,6 +134,123 @@ func TestLoadFile(t *testing.T) {
 				}
 				if len(cfg.Providers) != 2 {
 					t.Fatalf("providers len = %d, want 2", len(cfg.Providers))
+				}
+				if cfg.NaturalMemory == nil {
+					t.Fatal("natural_memory = nil, want populated config")
+				}
+				if !cfg.NaturalMemory.Enabled {
+					t.Fatal("natural_memory.enabled = false, want true")
+				}
+				if cfg.NaturalMemory.ExtractionProvider != "openai-main" {
+					t.Fatalf(
+						"natural_memory extraction_provider = %q, want openai-main",
+						cfg.NaturalMemory.ExtractionProvider,
+					)
+				}
+				if cfg.NaturalMemory.ExtractionModel != "gpt-4.1-mini" {
+					t.Fatalf(
+						"natural_memory extraction_model = %q, want gpt-4.1-mini",
+						cfg.NaturalMemory.ExtractionModel,
+					)
+				}
+				if cfg.NaturalMemory.EmbeddingProvider != "openai-main" {
+					t.Fatalf(
+						"natural_memory embedding_provider = %q, want openai-main",
+						cfg.NaturalMemory.EmbeddingProvider,
+					)
+				}
+				if cfg.NaturalMemory.ExtractionTimeout != 25*time.Second {
+					t.Fatalf(
+						"natural_memory extraction_timeout = %s, want 25s",
+						cfg.NaturalMemory.ExtractionTimeout,
+					)
+				}
+				if cfg.NaturalMemory.ExtractionMaxInputRunes != 5000 {
+					t.Fatalf(
+						"natural_memory extraction_max_input_runes = %d, want 5000",
+						cfg.NaturalMemory.ExtractionMaxInputRunes,
+					)
+				}
+				if cfg.NaturalMemory.ContextWindowSize != 7 {
+					t.Fatalf(
+						"natural_memory context_window_size = %d, want 7",
+						cfg.NaturalMemory.ContextWindowSize,
+					)
+				}
+				if cfg.NaturalMemory.SynthesisMatchLimit != 6 {
+					t.Fatalf(
+						"natural_memory synthesis_match_limit = %d, want 6",
+						cfg.NaturalMemory.SynthesisMatchLimit,
+					)
+				}
+				if cfg.NaturalMemory.ConsolidationInterval != 2*time.Hour {
+					t.Fatalf(
+						"natural_memory consolidation_interval = %s, want 2h",
+						cfg.NaturalMemory.ConsolidationInterval,
+					)
+				}
+				if cfg.NaturalMemory.ConsolidationProvider != "gemini-main" {
+					t.Fatalf(
+						"natural_memory consolidation_provider = %q, want gemini-main",
+						cfg.NaturalMemory.ConsolidationProvider,
+					)
+				}
+				if cfg.NaturalMemory.ConsolidationModel != "gemini-2.5-flash" {
+					t.Fatalf(
+						"natural_memory consolidation_model = %q, want gemini-2.5-flash",
+						cfg.NaturalMemory.ConsolidationModel,
+					)
+				}
+				if cfg.NaturalMemory.ConsolidationTimeout != 75*time.Second {
+					t.Fatalf(
+						"natural_memory consolidation_timeout = %s, want 75s",
+						cfg.NaturalMemory.ConsolidationTimeout,
+					)
+				}
+				if cfg.NaturalMemory.MaxMemoriesPerScope != 250 {
+					t.Fatalf(
+						"natural_memory max_memories_per_scope = %d, want 250",
+						cfg.NaturalMemory.MaxMemoriesPerScope,
+					)
+				}
+				if cfg.NaturalMemory.DecayFactor != 0.99 {
+					t.Fatalf("natural_memory decay_factor = %f, want 0.99", cfg.NaturalMemory.DecayFactor)
+				}
+				if cfg.NaturalMemory.MinImportance != 4 {
+					t.Fatalf("natural_memory min_importance = %d, want 4", cfg.NaturalMemory.MinImportance)
+				}
+				if cfg.NaturalMemory.DuplicateSimilarityThreshold != 0.9 {
+					t.Fatalf(
+						"natural_memory duplicate_similarity_threshold = %f, want 0.9",
+						cfg.NaturalMemory.DuplicateSimilarityThreshold,
+					)
+				}
+				if cfg.NaturalMemory.ReflectionMinSourceMemories != 10 {
+					t.Fatalf(
+						"natural_memory reflection_min_source_memories = %d, want 10",
+						cfg.NaturalMemory.ReflectionMinSourceMemories,
+					)
+				}
+				if cfg.NaturalMemory.ReflectionSourceLimit != 24 {
+					t.Fatalf(
+						"natural_memory reflection_source_limit = %d, want 24",
+						cfg.NaturalMemory.ReflectionSourceLimit,
+					)
+				}
+				if cfg.NaturalMemory.ReflectionMaxGenerated != 4 {
+					t.Fatalf(
+						"natural_memory reflection_max_generated = %d, want 4",
+						cfg.NaturalMemory.ReflectionMaxGenerated,
+					)
+				}
+				if cfg.NaturalMemory.RetrievalPlanningEnabled {
+					t.Fatal("natural_memory retrieval_planning_enabled = true, want false")
+				}
+				if cfg.NaturalMemory.RetrievalPlanningTimeout != 12*time.Second {
+					t.Fatalf(
+						"natural_memory retrieval_planning_timeout = %s, want 12s",
+						cfg.NaturalMemory.RetrievalPlanningTimeout,
+					)
 				}
 
 				openaiProfile := cfg.Providers["openai-main"]
@@ -267,6 +407,235 @@ func TestLoadFile(t *testing.T) {
 					)
 				}
 			},
+		},
+		{
+			name: "natural memory defaults are applied",
+			fileBody: `{
+				"providers":{
+					"openai-main":{"type":"openai","api_key":"sk-test"},
+					"gemini-main":{"type":"gemini","api_key":"gm-test"}
+				},
+				"natural_memory":{
+					"enabled":true,
+					"extraction_provider":"openai-main",
+					"extraction_model":"gpt-4.1-mini",
+					"embedding_provider":"openai-main",
+					"consolidation_provider":"gemini-main",
+					"consolidation_model":"gemini-2.5-flash"
+				},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s"
+					}
+				]
+			}`,
+			assert: func(t *testing.T, cfg Config) {
+				t.Helper()
+
+				if cfg.NaturalMemory == nil {
+					t.Fatal("natural_memory = nil, want defaults")
+				}
+				if cfg.NaturalMemory.ExtractionTimeout != defaultNaturalMemoryExtractionTimeout {
+					t.Fatalf(
+						"extraction_timeout = %s, want %s",
+						cfg.NaturalMemory.ExtractionTimeout,
+						defaultNaturalMemoryExtractionTimeout,
+					)
+				}
+				if cfg.NaturalMemory.ExtractionMaxInputRunes != defaultNaturalMemoryExtractionMaxInputRunes {
+					t.Fatalf(
+						"extraction_max_input_runes = %d, want %d",
+						cfg.NaturalMemory.ExtractionMaxInputRunes,
+						defaultNaturalMemoryExtractionMaxInputRunes,
+					)
+				}
+				if cfg.NaturalMemory.ContextWindowSize != defaultNaturalMemoryContextWindowSize {
+					t.Fatalf(
+						"context_window_size = %d, want %d",
+						cfg.NaturalMemory.ContextWindowSize,
+						defaultNaturalMemoryContextWindowSize,
+					)
+				}
+				if cfg.NaturalMemory.SynthesisMatchLimit != defaultNaturalMemorySynthesisMatchLimit {
+					t.Fatalf(
+						"synthesis_match_limit = %d, want %d",
+						cfg.NaturalMemory.SynthesisMatchLimit,
+						defaultNaturalMemorySynthesisMatchLimit,
+					)
+				}
+				if cfg.NaturalMemory.ConsolidationInterval != defaultNaturalMemoryConsolidationInterval {
+					t.Fatalf(
+						"consolidation_interval = %s, want %s",
+						cfg.NaturalMemory.ConsolidationInterval,
+						defaultNaturalMemoryConsolidationInterval,
+					)
+				}
+				if cfg.NaturalMemory.ConsolidationTimeout != defaultNaturalMemoryConsolidationTimeout {
+					t.Fatalf(
+						"consolidation_timeout = %s, want %s",
+						cfg.NaturalMemory.ConsolidationTimeout,
+						defaultNaturalMemoryConsolidationTimeout,
+					)
+				}
+				if cfg.NaturalMemory.MaxMemoriesPerScope != defaultNaturalMemoryMaxMemoriesPerScope {
+					t.Fatalf(
+						"max_memories_per_scope = %d, want %d",
+						cfg.NaturalMemory.MaxMemoriesPerScope,
+						defaultNaturalMemoryMaxMemoriesPerScope,
+					)
+				}
+				if cfg.NaturalMemory.DecayFactor != defaultNaturalMemoryDecayFactor {
+					t.Fatalf("decay_factor = %f, want %f", cfg.NaturalMemory.DecayFactor, defaultNaturalMemoryDecayFactor)
+				}
+				if cfg.NaturalMemory.MinImportance != defaultNaturalMemoryMinImportance {
+					t.Fatalf("min_importance = %d, want %d", cfg.NaturalMemory.MinImportance, defaultNaturalMemoryMinImportance)
+				}
+				if cfg.NaturalMemory.DuplicateSimilarityThreshold != defaultNaturalMemoryDuplicateSimilarityThreshold {
+					t.Fatalf(
+						"duplicate_similarity_threshold = %f, want %f",
+						cfg.NaturalMemory.DuplicateSimilarityThreshold,
+						defaultNaturalMemoryDuplicateSimilarityThreshold,
+					)
+				}
+				if cfg.NaturalMemory.ReflectionMinSourceMemories != defaultNaturalMemoryReflectionMinSourceMemories {
+					t.Fatalf(
+						"reflection_min_source_memories = %d, want %d",
+						cfg.NaturalMemory.ReflectionMinSourceMemories,
+						defaultNaturalMemoryReflectionMinSourceMemories,
+					)
+				}
+				if cfg.NaturalMemory.ReflectionSourceLimit != defaultNaturalMemoryReflectionSourceLimit {
+					t.Fatalf(
+						"reflection_source_limit = %d, want %d",
+						cfg.NaturalMemory.ReflectionSourceLimit,
+						defaultNaturalMemoryReflectionSourceLimit,
+					)
+				}
+				if cfg.NaturalMemory.ReflectionMaxGenerated != defaultNaturalMemoryReflectionMaxGenerated {
+					t.Fatalf(
+						"reflection_max_generated = %d, want %d",
+						cfg.NaturalMemory.ReflectionMaxGenerated,
+						defaultNaturalMemoryReflectionMaxGenerated,
+					)
+				}
+				if cfg.NaturalMemory.RetrievalPlanningEnabled != defaultNaturalMemoryRetrievalPlanningEnabled {
+					t.Fatalf(
+						"retrieval_planning_enabled = %t, want %t",
+						cfg.NaturalMemory.RetrievalPlanningEnabled,
+						defaultNaturalMemoryRetrievalPlanningEnabled,
+					)
+				}
+				if cfg.NaturalMemory.RetrievalPlanningTimeout != defaultNaturalMemoryRetrievalPlanningTimeout {
+					t.Fatalf(
+						"retrieval_planning_timeout = %s, want %s",
+						cfg.NaturalMemory.RetrievalPlanningTimeout,
+						defaultNaturalMemoryRetrievalPlanningTimeout,
+					)
+				}
+			},
+		},
+		{
+			name: "natural memory bad extraction timeout",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"natural_memory":{
+					"enabled":true,
+					"extraction_provider":"openai-main",
+					"extraction_model":"gpt-4.1-mini",
+					"embedding_provider":"openai-main",
+					"extraction_timeout":"soon"
+				},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s"
+					}
+				]
+			}`,
+			wantErrSubstring: "natural_memory: parse extraction_timeout",
+		},
+		{
+			name: "natural memory unknown extraction provider",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"natural_memory":{
+					"enabled":true,
+					"extraction_provider":"missing",
+					"extraction_model":"gpt-4.1-mini",
+					"embedding_provider":"openai-main",
+					"consolidation_interval":"0s"
+				},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s"
+					}
+				]
+			}`,
+			wantErrSubstring: "natural_memory: extraction_provider missing is not configured",
+		},
+		{
+			name: "natural memory unknown consolidation provider",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"natural_memory":{
+					"enabled":true,
+					"extraction_provider":"openai-main",
+					"extraction_model":"gpt-4.1-mini",
+					"embedding_provider":"openai-main",
+					"consolidation_provider":"missing",
+					"consolidation_model":"gpt-4.1-mini"
+				},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s"
+					}
+				]
+			}`,
+			wantErrSubstring: "natural_memory: consolidation_provider missing is not configured",
+		},
+		{
+			name: "natural memory bad retrieval planning timeout",
+			fileBody: `{
+				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
+				"natural_memory":{
+					"enabled":true,
+					"extraction_provider":"openai-main",
+					"extraction_model":"gpt-4.1-mini",
+					"embedding_provider":"openai-main",
+					"consolidation_interval":"0s",
+					"retrieval_planning_timeout":"never"
+				},
+				"agents":[
+					{
+						"name":"Otogi",
+						"description":"d",
+						"provider":"openai-main",
+						"model":"m",
+						"system_prompt_template":"ok",
+						"request_timeout":"10s"
+					}
+				]
+			}`,
+			wantErrSubstring: "natural_memory: parse retrieval_planning_timeout",
 		},
 		{
 			name: "semantic memory requires embedding provider",
@@ -811,7 +1180,7 @@ func TestLoadFile(t *testing.T) {
 			wantErrSubstring: "invalid name",
 		},
 		{
-			name: "sub-agent reserved name",
+			name: "sub-agent remember name is allowed",
 			fileBody: `{
 				"providers":{"gemini-main":{"type":"gemini","api_key":"gm"}},
 				"agents":[
@@ -836,7 +1205,16 @@ func TestLoadFile(t *testing.T) {
 					}
 				]
 			}`,
-			wantErrSubstring: "reserved name",
+			assert: func(t *testing.T, cfg Config) {
+				t.Helper()
+
+				if len(cfg.Agents) != 1 || len(cfg.Agents[0].SubAgents) != 1 {
+					t.Fatalf("sub_agents = %+v, want one remember sub-agent", cfg.Agents)
+				}
+				if cfg.Agents[0].SubAgents[0].Name != "remember" {
+					t.Fatalf("sub_agent name = %q, want remember", cfg.Agents[0].SubAgents[0].Name)
+				}
+			},
 		},
 		{
 			name: "sub-agent duplicate names",

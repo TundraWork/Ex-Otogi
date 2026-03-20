@@ -17,16 +17,18 @@ type persistedState struct {
 }
 
 type persistedRecord struct {
-	ID             string            `json:"id"`
-	TenantID       string            `json:"tenant_id"`
-	Platform       string            `json:"platform"`
-	ConversationID string            `json:"conversation_id"`
-	Content        string            `json:"content"`
-	Category       string            `json:"category"`
-	Embedding      []float32         `json:"embedding"`
-	Metadata       map[string]string `json:"metadata,omitempty"`
-	CreatedAt      string            `json:"created_at"`
-	UpdatedAt      string            `json:"updated_at"`
+	ID             string              `json:"id"`
+	TenantID       string              `json:"tenant_id"`
+	Platform       string              `json:"platform"`
+	ConversationID string              `json:"conversation_id"`
+	Content        string              `json:"content"`
+	Category       string              `json:"category"`
+	Kind           ai.LLMMemoryKind    `json:"kind,omitempty"`
+	Profile        ai.LLMMemoryProfile `json:"profile,omitempty"`
+	Embedding      []float32           `json:"embedding"`
+	Metadata       map[string]string   `json:"metadata,omitempty"`
+	CreatedAt      string              `json:"created_at"`
+	UpdatedAt      string              `json:"updated_at"`
 }
 
 // LoadFromFile restores store contents from one persisted JSON file.
@@ -168,6 +170,8 @@ func (s *Store) snapshotState() persistedState {
 			ConversationID: record.Scope.ConversationID,
 			Content:        record.Content,
 			Category:       record.Category,
+			Kind:           record.Profile.Kind,
+			Profile:        cloneProfile(record.Profile),
 			Embedding:      cloneEmbedding(record.Embedding),
 			Metadata:       cloneMetadata(record.Metadata),
 			CreatedAt:      record.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -198,10 +202,15 @@ func (r persistedRecord) toRecord() (ai.LLMMemoryRecord, error) {
 		Content:   strings.TrimSpace(r.Content),
 		Category:  strings.TrimSpace(r.Category),
 		Embedding: cloneEmbedding(r.Embedding),
+		Profile:   cloneProfile(r.Profile),
 		Metadata:  cloneMetadata(r.Metadata),
 		CreatedAt: createdAt.UTC(),
 		UpdatedAt: updatedAt.UTC(),
 	}
+	if record.Profile.Kind == "" && r.Kind != "" {
+		record.Profile.Kind = r.Kind
+	}
+	record.Profile = normalizeProfile(record.Profile, record.Metadata, record.CreatedAt)
 	if err := validatePersistedRecord(record); err != nil {
 		return ai.LLMMemoryRecord{}, err
 	}
@@ -224,6 +233,9 @@ func validatePersistedRecord(record ai.LLMMemoryRecord) error {
 	}
 	if err := validateMemoryEmbedding(record.Embedding); err != nil {
 		return fmt.Errorf("validate embedding: %w", err)
+	}
+	if err := record.Profile.Validate(); err != nil {
+		return fmt.Errorf("validate profile: %w", err)
 	}
 	if record.CreatedAt.IsZero() {
 		return fmt.Errorf("missing created_at")

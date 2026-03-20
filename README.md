@@ -8,7 +8,7 @@ The project name is inspired by "Ex-おとぎ話 (Ex-Otogibanashi)", the opening
 
 - `pkg/otogi`: stable public contracts, events, and interfaces.
 - `internal/kernel`: runtime lifecycle, orchestration, and dispatch.
-- `internal/driver`: platform adapters (Telegram implementation included).
+- `internal/driver`: platform adapters (Telegram and Discord implementations included).
 - `modules/*`: optional modules (for example, memory and LLM chat).
 - `pkg/llm`: LLM provider contracts and implementations.
 
@@ -21,10 +21,14 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
    cp config/bot.example.json config/bot.json
    ```
 2. Update `config/bot.json`:
-   - configure at least one entry in `drivers[]` (`type: "telegram"` is currently supported)
-   - set Telegram credentials in `drivers[].config`
+   - configure at least one entry in `drivers[]` (`type: "telegram"` or `type: "discord"`)
+   - set driver credentials in `drivers[].config` (see field descriptions below)
    - set routing defaults in `routing.default`
    - replace `modules.sleep.signing_key` with a unique base64url-encoded key
+
+   **Telegram** driver config fields: `app_id`, `app_hash`, `phone` (required); `code`, `password`, `session_file`, `publish_timeout`, `update_buffer`, `auth_timeout`, `download_timeout`, `download_threads`, `download_verify`, `attachment_cache_entries` (optional).
+
+   **Discord** driver config fields: `bot_token` (required); `publish_timeout`, `update_buffer`, `download_timeout` (optional). The bot must have the **Message Content Intent** and **Server Members Intent** enabled in the Discord Developer Portal.
 3. Create LLM configuration:
    ```sh
    cp config/llm.example.json config/llm.json

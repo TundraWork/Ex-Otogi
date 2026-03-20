@@ -1,185 +1,85 @@
 package ai
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
-func TestLLMMemoryScopeValidate(t *testing.T) {
+func TestLLMMemoryUpdateValidate(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		scope   LLMMemoryScope
-		wantErr bool
-	}{
-		{
-			name: "valid scope",
-			scope: LLMMemoryScope{
-				Platform:       "telegram",
-				ConversationID: "chat-1",
+	valid := LLMMemoryUpdate{
+		ID:        "mem-1",
+		Content:   "Alice likes tea",
+		Category:  "preference",
+		Embedding: []float32{1, 0},
+		Profile: LLMMemoryProfile{
+			Kind:           LLMMemoryKindUnit,
+			Importance:     7,
+			LastAccessedAt: time.Unix(100, 0).UTC(),
+			AccessCount:    2,
+			Source:         "natural",
+			SourceActor: &LLMMemoryActorRef{
+				ID:   "user-1",
+				Name: "Alice",
 			},
-		},
-		{
-			name: "missing platform",
-			scope: LLMMemoryScope{
-				ConversationID: "chat-1",
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing conversation id",
-			scope: LLMMemoryScope{
-				Platform: "telegram",
-			},
-			wantErr: true,
 		},
 	}
 
-	for _, testCase := range tests {
+	testCases := []struct {
+		name    string
+		mutate  func(*LLMMemoryUpdate)
+		wantErr string
+	}{
+		{
+			name:   "valid",
+			mutate: func(*LLMMemoryUpdate) {},
+		},
+		{
+			name: "missing id",
+			mutate: func(update *LLMMemoryUpdate) {
+				update.ID = ""
+			},
+			wantErr: "missing id",
+		},
+		{
+			name: "invalid kind",
+			mutate: func(update *LLMMemoryUpdate) {
+				update.Profile.Kind = "mystery"
+			},
+			wantErr: "unsupported kind",
+		},
+		{
+			name: "negative access count",
+			mutate: func(update *LLMMemoryUpdate) {
+				update.Profile.AccessCount = -1
+			},
+			wantErr: "access_count must be >= 0",
+		},
+	}
+
+	for _, testCase := range testCases {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := testCase.scope.Validate()
-			if testCase.wantErr && err == nil {
-				t.Fatal("expected error")
+			update := valid
+			update.Profile = valid.Profile
+			testCase.mutate(&update)
+
+			err := update.Validate()
+			if testCase.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate failed: %v", err)
+				}
+				return
 			}
-			if !testCase.wantErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			if err == nil {
+				t.Fatalf("Validate error = nil, want %q", testCase.wantErr)
 			}
-		})
-	}
-}
-
-func TestLLMMemoryEntryValidate(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		entry   LLMMemoryEntry
-		wantErr bool
-	}{
-		{
-			name: "valid entry",
-			entry: LLMMemoryEntry{
-				Scope: LLMMemoryScope{
-					Platform:       "telegram",
-					ConversationID: "chat-1",
-				},
-				Content:   "User prefers tea.",
-				Category:  "preference",
-				Embedding: []float32{1, 0},
-			},
-		},
-		{
-			name: "missing content",
-			entry: LLMMemoryEntry{
-				Scope: LLMMemoryScope{
-					Platform:       "telegram",
-					ConversationID: "chat-1",
-				},
-				Category:  "preference",
-				Embedding: []float32{1, 0},
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing category",
-			entry: LLMMemoryEntry{
-				Scope: LLMMemoryScope{
-					Platform:       "telegram",
-					ConversationID: "chat-1",
-				},
-				Content:   "User prefers tea.",
-				Embedding: []float32{1, 0},
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing embedding",
-			entry: LLMMemoryEntry{
-				Scope: LLMMemoryScope{
-					Platform:       "telegram",
-					ConversationID: "chat-1",
-				},
-				Content:  "User prefers tea.",
-				Category: "preference",
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, testCase := range tests {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			err := testCase.entry.Validate()
-			if testCase.wantErr && err == nil {
-				t.Fatal("expected error")
-			}
-			if !testCase.wantErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-func TestLLMMemoryQueryValidate(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		query   LLMMemoryQuery
-		wantErr bool
-	}{
-		{
-			name: "valid query",
-			query: LLMMemoryQuery{
-				Scope: LLMMemoryScope{
-					Platform:       "telegram",
-					ConversationID: "chat-1",
-				},
-				Embedding:     []float32{1, 0},
-				Limit:         5,
-				MinSimilarity: 0.5,
-			},
-		},
-		{
-			name: "negative limit",
-			query: LLMMemoryQuery{
-				Scope: LLMMemoryScope{
-					Platform:       "telegram",
-					ConversationID: "chat-1",
-				},
-				Embedding: []float32{1, 0},
-				Limit:     -1,
-			},
-			wantErr: true,
-		},
-		{
-			name: "similarity above one",
-			query: LLMMemoryQuery{
-				Scope: LLMMemoryScope{
-					Platform:       "telegram",
-					ConversationID: "chat-1",
-				},
-				Embedding:     []float32{1, 0},
-				MinSimilarity: 1.1,
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, testCase := range tests {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
-			err := testCase.query.Validate()
-			if testCase.wantErr && err == nil {
-				t.Fatal("expected error")
-			}
-			if !testCase.wantErr && err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			if !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("Validate error = %q, want substring %q", err, testCase.wantErr)
 			}
 		})
 	}

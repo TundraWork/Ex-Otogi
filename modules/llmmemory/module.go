@@ -202,15 +202,15 @@ func (m *Module) Search(ctx context.Context, query ai.LLMMemoryQuery) ([]ai.LLMM
 	return matches, nil
 }
 
-// Update replaces the content and embedding of one stored memory record.
-func (m *Module) Update(ctx context.Context, id string, content string, embedding []float32) error {
+// Update replaces the mutable fields of one stored memory record.
+func (m *Module) Update(ctx context.Context, update ai.LLMMemoryUpdate) (ai.LLMMemoryRecord, error) {
 	if m == nil || m.store == nil {
-		return fmt.Errorf("llmmemory update: store unavailable")
+		return ai.LLMMemoryRecord{}, fmt.Errorf("llmmemory update: store unavailable")
 	}
 
-	m.debugUpdate(ctx, id, content)
+	m.debugUpdate(ctx, update)
 
-	return m.store.Update(ctx, id, content, embedding)
+	return m.store.Update(ctx, update)
 }
 
 // Delete removes one stored memory record by ID.

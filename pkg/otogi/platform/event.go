@@ -40,6 +40,8 @@ type Platform string
 const (
 	// PlatformTelegram is Telegram.
 	PlatformTelegram Platform = "telegram"
+	// PlatformDiscord is Discord.
+	PlatformDiscord Platform = "discord"
 )
 
 // EventSource identifies which configured driver instance produced one inbound
