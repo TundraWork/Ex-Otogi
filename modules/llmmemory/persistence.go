@@ -27,6 +27,9 @@ type persistedRecord struct {
 	Profile        ai.LLMMemoryProfile `json:"profile,omitempty"`
 	Embedding      []float32           `json:"embedding"`
 	Metadata       map[string]string   `json:"metadata,omitempty"`
+	Keywords       []string            `json:"keywords,omitempty"`
+	Tags           []string            `json:"tags,omitempty"`
+	Links          []ai.LLMMemoryLink  `json:"links,omitempty"`
 	CreatedAt      string              `json:"created_at"`
 	UpdatedAt      string              `json:"updated_at"`
 }
@@ -174,6 +177,9 @@ func (s *Store) snapshotState() persistedState {
 			Profile:        cloneProfile(record.Profile),
 			Embedding:      cloneEmbedding(record.Embedding),
 			Metadata:       cloneMetadata(record.Metadata),
+			Keywords:       cloneStrings(record.Keywords),
+			Tags:           cloneStrings(record.Tags),
+			Links:          cloneLinks(record.Links),
 			CreatedAt:      record.CreatedAt.UTC().Format(time.RFC3339Nano),
 			UpdatedAt:      record.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		})
@@ -204,6 +210,9 @@ func (r persistedRecord) toRecord() (ai.LLMMemoryRecord, error) {
 		Embedding: cloneEmbedding(r.Embedding),
 		Profile:   cloneProfile(r.Profile),
 		Metadata:  cloneMetadata(r.Metadata),
+		Keywords:  cloneStrings(r.Keywords),
+		Tags:      cloneStrings(r.Tags),
+		Links:     cloneLinks(r.Links),
 		CreatedAt: createdAt.UTC(),
 		UpdatedAt: updatedAt.UTC(),
 	}

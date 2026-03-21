@@ -390,6 +390,249 @@ func TestStorePerScopeCapacityEviction(t *testing.T) {
 	}
 }
 
+func TestStoreKeywordsAndTagsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(10, fixedClock(time.Unix(100, 0).UTC()), sequenceIDs("mem-1"))
+	record, err := store.Store(context.Background(), ai.LLMMemoryEntry{
+		Scope:     testMemoryScope("chat-1"),
+		Content:   "Alice likes jasmine tea",
+		Category:  "preference",
+		Embedding: []float32{1, 0},
+		Keywords:  []string{"tea", "jasmine", "preference"},
+		Tags:      []string{"beverage", "personal"},
+	})
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+	if len(record.Keywords) != 3 || record.Keywords[0] != "tea" {
+		t.Fatalf("keywords = %v, want [tea jasmine preference]", record.Keywords)
+	}
+	if len(record.Tags) != 2 || record.Tags[0] != "beverage" {
+		t.Fatalf("tags = %v, want [beverage personal]", record.Tags)
+	}
+
+	records, err := store.ListByScope(context.Background(), testMemoryScope("chat-1"), 10)
+	if err != nil {
+		t.Fatalf("ListByScope failed: %v", err)
+	}
+	if len(records[0].Keywords) != 3 {
+		t.Fatalf("listed keywords = %v, want 3 keywords", records[0].Keywords)
+	}
+	if len(records[0].Tags) != 2 {
+		t.Fatalf("listed tags = %v, want 2 tags", records[0].Tags)
+	}
+
+	// Verify deep clone — mutating original should not affect stored.
+	record.Keywords[0] = "MUTATED"
+	records2, err2 := store.ListByScope(context.Background(), testMemoryScope("chat-1"), 10)
+	if err2 != nil {
+		t.Fatalf("ListByScope failed: %v", err2)
+	}
+	if records2[0].Keywords[0] == "MUTATED" {
+		t.Fatal("keywords were not deep cloned")
+	}
+}
+
+func TestStoreLinksRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(10, fixedClock(time.Unix(100, 0).UTC()), sequenceIDs("mem-1", "mem-2"))
+
+	record1, err := store.Store(context.Background(), ai.LLMMemoryEntry{
+		Scope:     testMemoryScope("chat-1"),
+		Content:   "Alice likes tea",
+		Category:  "preference",
+		Embedding: []float32{1, 0},
+	})
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+	record2, err := store.Store(context.Background(), ai.LLMMemoryEntry{
+		Scope:     testMemoryScope("chat-1"),
+		Content:   "Alice likes green tea",
+		Category:  "preference",
+		Embedding: []float32{0.8, 0.6},
+		Links: []ai.LLMMemoryLink{
+			{TargetID: record1.ID, Relation: "related"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+	if len(record2.Links) != 1 || record2.Links[0].TargetID != record1.ID {
+		t.Fatalf("links = %v, want one link to %s", record2.Links, record1.ID)
+	}
+
+	records, err := store.ListByScope(context.Background(), testMemoryScope("chat-1"), 10)
+	if err != nil {
+		t.Fatalf("ListByScope failed: %v", err)
+	}
+	var found bool
+	for _, rec := range records {
+		if rec.ID == record2.ID {
+			found = true
+			if len(rec.Links) != 1 || rec.Links[0].Relation != "related" {
+				t.Fatalf("listed links = %v, want one related link", rec.Links)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("record2 not found in listed records")
+	}
+
+	// Verify deep clone — mutating original should not affect stored.
+	record2.Links[0].Relation = "MUTATED"
+	records2, err := store.ListByScope(context.Background(), testMemoryScope("chat-1"), 10)
+	if err != nil {
+		t.Fatalf("ListByScope failed: %v", err)
+	}
+	for _, rec := range records2 {
+		if rec.ID == record2.ID && len(rec.Links) > 0 && rec.Links[0].Relation == "MUTATED" {
+			t.Fatal("links were not deep cloned")
+		}
+	}
+}
+
+func TestStoreUpdatePreservesLinks(t *testing.T) {
+	t.Parallel()
+
+	store := newStore(10, sequenceClock([]time.Time{
+		time.Unix(100, 0).UTC(),
+		time.Unix(200, 0).UTC(),
+	}), sequenceIDs("mem-1"))
+
+	record, err := store.Store(context.Background(), ai.LLMMemoryEntry{
+		Scope:     testMemoryScope("chat-1"),
+		Content:   "Old memory",
+		Category:  "knowledge",
+		Embedding: []float32{1, 0},
+		Links: []ai.LLMMemoryLink{
+			{TargetID: "mem-existing", Relation: "related"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	updated, err := store.Update(context.Background(), ai.LLMMemoryUpdate{
+		ID:        record.ID,
+		Content:   "New memory",
+		Category:  "knowledge",
+		Embedding: []float32{0, 1},
+		Links: []ai.LLMMemoryLink{
+			{TargetID: "mem-existing", Relation: "related"},
+			{TargetID: "mem-new", Relation: "refines"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if len(updated.Links) != 2 {
+		t.Fatalf("updated links len = %d, want 2", len(updated.Links))
+	}
+	if updated.Links[1].Relation != "refines" {
+		t.Fatalf("updated links[1].relation = %q, want refines", updated.Links[1].Relation)
+	}
+}
+
+func TestStoreSearchExcludesExpiredRecords(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-1 * time.Hour)
+	future := now.Add(24 * time.Hour)
+
+	store := newStore(10, fixedClock(now), sequenceIDs("mem-1", "mem-2", "mem-3"))
+	entries := []ai.LLMMemoryEntry{
+		{
+			Scope:     testMemoryScope("chat-1"),
+			Content:   "Active memory",
+			Category:  "knowledge",
+			Embedding: []float32{1, 0},
+		},
+		{
+			Scope:     testMemoryScope("chat-1"),
+			Content:   "Expired memory",
+			Category:  "knowledge",
+			Embedding: []float32{1, 0},
+			Profile:   ai.LLMMemoryProfile{ValidUntil: &past},
+		},
+		{
+			Scope:     testMemoryScope("chat-1"),
+			Content:   "Future expiry memory",
+			Category:  "knowledge",
+			Embedding: []float32{1, 0},
+			Profile:   ai.LLMMemoryProfile{ValidUntil: &future},
+		},
+	}
+	for _, entry := range entries {
+		if _, err := store.Store(context.Background(), entry); err != nil {
+			t.Fatalf("Store failed: %v", err)
+		}
+	}
+
+	matches, err := store.Search(context.Background(), ai.LLMMemoryQuery{
+		Scope:         testMemoryScope("chat-1"),
+		Embedding:     []float32{1, 0},
+		Limit:         10,
+		MinSimilarity: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matches len = %d, want 2 (expired should be excluded)", len(matches))
+	}
+	for _, match := range matches {
+		if match.Record.Content == "Expired memory" {
+			t.Fatalf("expired memory should not appear in search results")
+		}
+	}
+}
+
+func TestStoreSearchIncludesNonExpiredRecords(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
+	future := now.Add(24 * time.Hour)
+
+	store := newStore(10, fixedClock(now), sequenceIDs("mem-1", "mem-2"))
+	entries := []ai.LLMMemoryEntry{
+		{
+			Scope:     testMemoryScope("chat-1"),
+			Content:   "No expiry",
+			Category:  "knowledge",
+			Embedding: []float32{1, 0},
+		},
+		{
+			Scope:     testMemoryScope("chat-1"),
+			Content:   "Future expiry",
+			Category:  "knowledge",
+			Embedding: []float32{1, 0},
+			Profile:   ai.LLMMemoryProfile{ValidUntil: &future},
+		},
+	}
+	for _, entry := range entries {
+		if _, err := store.Store(context.Background(), entry); err != nil {
+			t.Fatalf("Store failed: %v", err)
+		}
+	}
+
+	matches, err := store.Search(context.Background(), ai.LLMMemoryQuery{
+		Scope:         testMemoryScope("chat-1"),
+		Embedding:     []float32{1, 0},
+		Limit:         10,
+		MinSimilarity: 0.1,
+	})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matches len = %d, want 2 (both should be included)", len(matches))
+	}
+}
+
 func testMemoryScope(conversationID string) ai.LLMMemoryScope {
 	return ai.LLMMemoryScope{
 		TenantID:       "tenant-1",

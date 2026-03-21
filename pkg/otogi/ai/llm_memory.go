@@ -87,6 +87,29 @@ func (k LLMMemoryKind) Validate() error {
 	}
 }
 
+// LLMMemoryLink describes one directional relationship from the owning
+// record to another record in the same scope.
+type LLMMemoryLink struct {
+	// TargetID identifies the linked record.
+	TargetID string `json:"target_id"`
+	// Relation classifies the link type: "related", "refines", or
+	// "supersedes".
+	Relation string `json:"relation,omitempty"`
+}
+
+// Validate checks whether the link reference is valid.
+func (l LLMMemoryLink) Validate() error {
+	if strings.TrimSpace(l.TargetID) == "" {
+		return fmt.Errorf("validate llm memory link: missing target_id")
+	}
+	switch strings.TrimSpace(l.Relation) {
+	case "", "related", "refines", "supersedes":
+		return nil
+	default:
+		return fmt.Errorf("validate llm memory link: unsupported relation %q", l.Relation)
+	}
+}
+
 // LLMMemoryActorRef identifies one actor referenced by a memory record.
 type LLMMemoryActorRef struct {
 	// ID is the stable upstream actor identifier when known.
@@ -128,6 +151,9 @@ type LLMMemoryProfile struct {
 	SubjectActor *LLMMemoryActorRef `json:"subject_actor,omitempty"`
 	// EvidenceRecordIDs stores absorbed supporting record IDs.
 	EvidenceRecordIDs []string `json:"evidence_record_ids,omitempty"`
+	// ValidUntil records the expiration time for time-bounded memories.
+	// Nil means the memory has no expiration.
+	ValidUntil *time.Time `json:"valid_until,omitempty"`
 }
 
 // Validate checks whether the typed profile is coherent.
@@ -197,6 +223,13 @@ type LLMMemoryEntry struct {
 	Profile LLMMemoryProfile
 	// Metadata carries optional provider-agnostic context.
 	Metadata map[string]string
+	// Keywords carries key terms extracted alongside the memory content.
+	Keywords []string
+	// Tags carries categorical labels extracted alongside the memory content.
+	Tags []string
+	// Links stores directional relationships to other records in the same
+	// scope.
+	Links []LLMMemoryLink
 }
 
 // Validate checks that a memory entry is complete enough to store.
@@ -235,6 +268,13 @@ type LLMMemoryUpdate struct {
 	Profile LLMMemoryProfile
 	// Metadata carries optional provider-agnostic context.
 	Metadata map[string]string
+	// Keywords carries key terms extracted alongside the memory content.
+	Keywords []string
+	// Tags carries categorical labels extracted alongside the memory content.
+	Tags []string
+	// Links stores directional relationships to other records in the same
+	// scope.
+	Links []LLMMemoryLink
 }
 
 // Validate checks that an update payload is complete enough to apply.
@@ -275,6 +315,13 @@ type LLMMemoryRecord struct {
 	Profile LLMMemoryProfile
 	// Metadata carries optional provider-agnostic context.
 	Metadata map[string]string
+	// Keywords carries key terms extracted alongside the memory content.
+	Keywords []string
+	// Tags carries categorical labels extracted alongside the memory content.
+	Tags []string
+	// Links stores directional relationships to other records in the same
+	// scope.
+	Links []LLMMemoryLink
 	// CreatedAt records when this memory was first stored.
 	CreatedAt time.Time
 	// UpdatedAt records when this memory was last modified.

@@ -29,6 +29,10 @@ const (
 	defaultReflectionMaxGenerated       = 3
 	defaultRetrievalPlanningEnabled     = true
 	defaultRetrievalPlanningTimeout     = 10 * time.Second
+
+	defaultClusterMinSize             = 3
+	defaultClusterSimilarityThreshold = float32(0.80)
+	defaultClusterTemporalWeight      = 0.3
 )
 
 // Config configures naturalmemory module behavior.
@@ -84,6 +88,15 @@ type Config struct {
 	RetrievalPlanningEnabled bool
 	// RetrievalPlanningTimeout bounds one retrieval planning request lifecycle.
 	RetrievalPlanningTimeout time.Duration
+	// ClusterMinSize is the minimum number of memories in a cluster before
+	// theme generation is attempted. Smaller clusters use pairwise merge.
+	ClusterMinSize int
+	// ClusterSimilarityThreshold controls the affinity threshold for grouping
+	// memories into clusters during consolidation and must be in (0, 1].
+	ClusterSimilarityThreshold float32
+	// ClusterTemporalWeight controls the weight of temporal proximity in the
+	// affinity function used for clustering and must be in [0, 1].
+	ClusterTemporalWeight float64
 }
 
 type fileModuleConfig struct {
@@ -109,6 +122,9 @@ func defaultConfig() Config {
 		ReflectionMaxGenerated:       defaultReflectionMaxGenerated,
 		RetrievalPlanningEnabled:     defaultRetrievalPlanningEnabled,
 		RetrievalPlanningTimeout:     defaultRetrievalPlanningTimeout,
+		ClusterMinSize:               defaultClusterMinSize,
+		ClusterSimilarityThreshold:   defaultClusterSimilarityThreshold,
+		ClusterTemporalWeight:        defaultClusterTemporalWeight,
 	}
 }
 
@@ -155,6 +171,15 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.RetrievalPlanningTimeout <= 0 {
 		return fmt.Errorf("validate naturalmemory config: retrieval_planning_timeout must be > 0")
+	}
+	if cfg.ClusterMinSize < 2 {
+		return fmt.Errorf("validate naturalmemory config: cluster_min_size must be >= 2")
+	}
+	if cfg.ClusterSimilarityThreshold <= 0 || cfg.ClusterSimilarityThreshold > 1 {
+		return fmt.Errorf("validate naturalmemory config: cluster_similarity_threshold must be between 0 and 1")
+	}
+	if cfg.ClusterTemporalWeight < 0 || cfg.ClusterTemporalWeight > 1 {
+		return fmt.Errorf("validate naturalmemory config: cluster_temporal_weight must be between 0 and 1")
 	}
 	if !cfg.Enabled {
 		return nil
@@ -251,6 +276,9 @@ func mergeNaturalMemoryConfig(base Config, raw *llmconfig.NaturalMemoryConfig) C
 	cfg.ReflectionMaxGenerated = raw.ReflectionMaxGenerated
 	cfg.RetrievalPlanningEnabled = raw.RetrievalPlanningEnabled
 	cfg.RetrievalPlanningTimeout = raw.RetrievalPlanningTimeout
+	cfg.ClusterMinSize = raw.ClusterMinSize
+	cfg.ClusterSimilarityThreshold = raw.ClusterSimilarityThreshold
+	cfg.ClusterTemporalWeight = raw.ClusterTemporalWeight
 
 	return cfg
 }

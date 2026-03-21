@@ -76,6 +76,9 @@ func TestRetrieveSemanticMemoriesSerializesMatches(t *testing.T) {
 	if !strings.Contains(memories, `<semantic_memories count="2">`) {
 		t.Fatalf("memories = %q, want count=2 wrapper", memories)
 	}
+	if !strings.Contains(memories, `<tier role="recalled" count="2">`) {
+		t.Fatalf("memories = %q, want recalled tier with count=2", memories)
+	}
 	if !strings.Contains(memories, `id="mem-1"`) || !strings.Contains(memories, `id="mem-2"`) {
 		t.Fatalf("memories = %q, want both memory ids", memories)
 	}
@@ -215,7 +218,7 @@ func TestRankSemanticMemoryMatchesUsesCompositeSignals(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			ranked := rankSemanticMemoryMatches(testCase.matches, defaultNaturalMemoryDecayFactor, now, testCase.current, testCase.related)
+			ranked := rankSemanticMemoryMatches(testCase.matches, defaultNaturalMemoryDecayFactor, now, testCase.current, testCase.related, nil)
 			if len(ranked) != len(testCase.wantOrder) {
 				t.Fatalf("ranked len = %d, want %d", len(ranked), len(testCase.wantOrder))
 			}
@@ -225,6 +228,71 @@ func TestRankSemanticMemoryMatchesUsesCompositeSignals(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRankSemanticMemoryMatchesBoostsLinkedRecords(t *testing.T) {
+	now := time.Date(2026, time.March, 17, 12, 0, 0, 0, time.UTC)
+
+	// mem-A links to mem-B. mem-B and mem-C have nearly identical base
+	// signals, but the inbound link on mem-B should boost it above mem-C.
+	// mem-A has higher importance to stay on top despite no inbound links.
+	matches := []ai.LLMMemoryMatch{
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:        "mem-A",
+				CreatedAt: now.Add(-1 * time.Hour),
+				Profile: ai.LLMMemoryProfile{
+					Kind:           ai.LLMMemoryKindUnit,
+					Importance:     9,
+					LastAccessedAt: now.Add(-1 * time.Hour),
+				},
+				Links: []ai.LLMMemoryLink{
+					{TargetID: "mem-B", Relation: "related"},
+				},
+			},
+			Similarity: 0.85,
+		},
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:        "mem-B",
+				CreatedAt: now.Add(-1 * time.Hour),
+				Profile: ai.LLMMemoryProfile{
+					Kind:           ai.LLMMemoryKindUnit,
+					Importance:     5,
+					LastAccessedAt: now.Add(-1 * time.Hour),
+				},
+			},
+			Similarity: 0.85,
+		},
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:        "mem-C",
+				CreatedAt: now.Add(-1 * time.Hour),
+				Profile: ai.LLMMemoryProfile{
+					Kind:           ai.LLMMemoryKindUnit,
+					Importance:     5,
+					LastAccessedAt: now.Add(-1 * time.Hour),
+				},
+			},
+			Similarity: 0.85,
+		},
+	}
+
+	ranked := rankSemanticMemoryMatches(matches, defaultNaturalMemoryDecayFactor, now, platform.Actor{}, nil, nil)
+	if len(ranked) != 3 {
+		t.Fatalf("ranked len = %d, want 3", len(ranked))
+	}
+	// mem-A has highest importance → first.
+	if ranked[0].Record.ID != "mem-A" {
+		t.Fatalf("ranked[0] = %q, want mem-A (highest importance)", ranked[0].Record.ID)
+	}
+	// mem-B should beat mem-C because it has an inbound link from mem-A.
+	if ranked[1].Record.ID != "mem-B" {
+		t.Fatalf("ranked[1] = %q, want mem-B (boosted by link from mem-A)", ranked[1].Record.ID)
+	}
+	if ranked[2].Record.ID != "mem-C" {
+		t.Fatalf("ranked[2] = %q, want mem-C", ranked[2].Record.ID)
 	}
 }
 
@@ -405,6 +473,316 @@ func TestRenderSystemPromptHasSemanticMemoryTemplateVariable(t *testing.T) {
 	}
 	if rendered != "disabled" {
 		t.Fatalf("rendered system prompt without memory = %q, want disabled", rendered)
+	}
+}
+
+func TestRankSemanticMemoryMatchesKeywordBonus(t *testing.T) {
+	now := time.Date(2026, time.March, 17, 12, 0, 0, 0, time.UTC)
+
+	// mem-A and mem-B have identical base signals except mem-A has keywords
+	// that overlap with the query terms. The keyword bonus should push mem-A
+	// above mem-B.
+	matches := []ai.LLMMemoryMatch{
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:        "mem-A",
+				CreatedAt: now.Add(-1 * time.Hour),
+				Profile: ai.LLMMemoryProfile{
+					Kind:           ai.LLMMemoryKindUnit,
+					Importance:     5,
+					LastAccessedAt: now.Add(-1 * time.Hour),
+				},
+				Keywords: []string{"tea", "preference"},
+			},
+			Similarity: 0.85,
+		},
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:        "mem-B",
+				CreatedAt: now.Add(-1 * time.Hour),
+				Profile: ai.LLMMemoryProfile{
+					Kind:           ai.LLMMemoryKindUnit,
+					Importance:     5,
+					LastAccessedAt: now.Add(-1 * time.Hour),
+				},
+			},
+			Similarity: 0.85,
+		},
+	}
+
+	ranked := rankSemanticMemoryMatches(
+		matches, defaultNaturalMemoryDecayFactor, now,
+		platform.Actor{}, nil,
+		[]string{"tea", "preference", "alice"},
+	)
+	if len(ranked) != 2 {
+		t.Fatalf("ranked len = %d, want 2", len(ranked))
+	}
+	if ranked[0].Record.ID != "mem-A" {
+		t.Fatalf("ranked[0] = %q, want mem-A (keyword bonus)", ranked[0].Record.ID)
+	}
+	if ranked[1].Record.ID != "mem-B" {
+		t.Fatalf("ranked[1] = %q, want mem-B", ranked[1].Record.ID)
+	}
+}
+
+func TestParseRetrievalPlanWithTimeFilter(t *testing.T) {
+	testCases := []struct {
+		name           string
+		input          string
+		wantQueries    []string
+		wantTimeFilter string
+		wantDepth      string
+	}{
+		{
+			name:           "full plan with time filter and depth",
+			input:          `{"queries":["alice tea","bob plans"],"time_filter":"recent","depth":"deep"}`,
+			wantQueries:    []string{"alice tea", "bob plans"},
+			wantTimeFilter: "recent",
+			wantDepth:      "deep",
+		},
+		{
+			name:           "last_week filter",
+			input:          `{"queries":["meeting notes"],"time_filter":"last_week","depth":"few"}`,
+			wantQueries:    []string{"meeting notes"},
+			wantTimeFilter: "last_week",
+			wantDepth:      "few",
+		},
+		{
+			name:           "all filter normalizes to empty",
+			input:          `{"queries":["general query"],"time_filter":"all","depth":"normal"}`,
+			wantQueries:    []string{"general query"},
+			wantTimeFilter: "",
+			wantDepth:      "",
+		},
+		{
+			name:           "missing filter fields default to empty",
+			input:          `{"queries":["simple query"]}`,
+			wantQueries:    []string{"simple query"},
+			wantTimeFilter: "",
+			wantDepth:      "",
+		},
+		{
+			name:           "unknown filter values normalize to empty",
+			input:          `{"queries":["test"],"time_filter":"yesterday","depth":"ultra"}`,
+			wantQueries:    []string{"test"},
+			wantTimeFilter: "",
+			wantDepth:      "",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			plan, err := parseRetrievalPlanResponse(testCase.input)
+			if err != nil {
+				t.Fatalf("parseRetrievalPlanResponse failed: %v", err)
+			}
+			if len(plan.Queries) != len(testCase.wantQueries) {
+				t.Fatalf("queries len = %d, want %d", len(plan.Queries), len(testCase.wantQueries))
+			}
+			for index, wantQuery := range testCase.wantQueries {
+				if plan.Queries[index] != wantQuery {
+					t.Fatalf("queries[%d] = %q, want %q", index, plan.Queries[index], wantQuery)
+				}
+			}
+			if plan.TimeFilter != testCase.wantTimeFilter {
+				t.Fatalf("time_filter = %q, want %q", plan.TimeFilter, testCase.wantTimeFilter)
+			}
+			if plan.Depth != testCase.wantDepth {
+				t.Fatalf("depth = %q, want %q", plan.Depth, testCase.wantDepth)
+			}
+		})
+	}
+}
+
+func TestFilterMatchesByTimeRange(t *testing.T) {
+	now := time.Date(2026, time.March, 17, 12, 0, 0, 0, time.UTC)
+	matches := []ai.LLMMemoryMatch{
+		{Record: ai.LLMMemoryRecord{ID: "recent", CreatedAt: now.Add(-6 * time.Hour)}, Similarity: 0.9},
+		{Record: ai.LLMMemoryRecord{ID: "this-week", CreatedAt: now.Add(-3 * 24 * time.Hour)}, Similarity: 0.85},
+		{Record: ai.LLMMemoryRecord{ID: "old", CreatedAt: now.Add(-30 * 24 * time.Hour)}, Similarity: 0.8},
+	}
+
+	testCases := []struct {
+		name    string
+		filter  string
+		wantIDs []string
+	}{
+		{
+			name:    "recent filters to last 24h",
+			filter:  "recent",
+			wantIDs: []string{"recent"},
+		},
+		{
+			name:    "last_week filters to last 7 days",
+			filter:  "last_week",
+			wantIDs: []string{"recent", "this-week"},
+		},
+		{
+			name:    "empty filter keeps all",
+			filter:  "",
+			wantIDs: []string{"recent", "this-week", "old"},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			filtered := filterMatchesByTime(matches, testCase.filter, now)
+			if len(filtered) != len(testCase.wantIDs) {
+				t.Fatalf("filtered len = %d, want %d", len(filtered), len(testCase.wantIDs))
+			}
+			for index, wantID := range testCase.wantIDs {
+				if filtered[index].Record.ID != wantID {
+					t.Fatalf("filtered[%d] = %q, want %q", index, filtered[index].Record.ID, wantID)
+				}
+			}
+		})
+	}
+}
+
+func TestMaxSearchLimitAdjustedByDepth(t *testing.T) {
+	testCases := []struct {
+		name       string
+		base       int
+		queryCount int
+		depth      string
+		want       int
+	}{
+		{name: "normal depth single query", base: 5, queryCount: 1, depth: "", want: 10},
+		{name: "few depth single query", base: 5, queryCount: 1, depth: "few", want: 5},
+		{name: "deep depth single query", base: 5, queryCount: 1, depth: "deep", want: 15},
+		{name: "normal depth multi query", base: 3, queryCount: 3, depth: "", want: 6},
+		{name: "deep depth multi query", base: 3, queryCount: 3, depth: "deep", want: 9},
+		{name: "few depth multi query", base: 3, queryCount: 3, depth: "few", want: 3},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := maxSemanticMemorySearchLimit(testCase.base, testCase.queryCount, testCase.depth)
+			if got != testCase.want {
+				t.Fatalf("maxSemanticMemorySearchLimit(%d, %d, %q) = %d, want %d",
+					testCase.base, testCase.queryCount, testCase.depth, got, testCase.want)
+			}
+		})
+	}
+}
+
+func TestExtractQueryTerms(t *testing.T) {
+	terms := extractQueryTerms([]string{"Alice tea preference", "bob's study plan"})
+	if len(terms) == 0 {
+		t.Fatal("extractQueryTerms returned no terms")
+	}
+	found := make(map[string]bool)
+	for _, term := range terms {
+		found[term] = true
+	}
+	for _, want := range []string{"alice", "tea", "preference", "bob's", "study", "plan"} {
+		if !found[want] {
+			t.Errorf("missing term %q in %v", want, terms)
+		}
+	}
+	// Short words (< 3 chars) should be excluded.
+	for _, bad := range []string{"a", "of", "is"} {
+		if found[bad] {
+			t.Errorf("found short term %q, should be excluded", bad)
+		}
+	}
+}
+
+func TestRenderSemanticMemoryDocumentTiered(t *testing.T) {
+	matches := []ai.LLMMemoryMatch{
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:       "mem-reflection",
+				Content:  "User values routine",
+				Category: "reflection",
+				Profile:  ai.LLMMemoryProfile{Kind: ai.LLMMemoryKindSynthesized, Importance: 8},
+			},
+			Similarity: 0.9,
+		},
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:       "mem-theme",
+				Content:  "Recurring interest in cooking",
+				Category: "theme",
+				Profile:  ai.LLMMemoryProfile{Kind: ai.LLMMemoryKindSynthesized, Importance: 7},
+			},
+			Similarity: 0.85,
+		},
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:       "mem-unit",
+				Content:  "User said they like tea",
+				Category: "preference",
+				Profile:  ai.LLMMemoryProfile{Kind: ai.LLMMemoryKindUnit, Importance: 5},
+			},
+			Similarity: 0.82,
+		},
+	}
+
+	doc := renderSemanticMemoryDocument(matches)
+	if !strings.Contains(doc, `<semantic_memories count="3">`) {
+		t.Fatalf("doc = %q, want count=3", doc)
+	}
+	if !strings.Contains(doc, `<tier role="background" count="2">`) {
+		t.Fatalf("doc = %q, want background tier with count=2", doc)
+	}
+	if !strings.Contains(doc, `<tier role="recalled" count="1">`) {
+		t.Fatalf("doc = %q, want recalled tier with count=1", doc)
+	}
+	// Background tier should contain both reflection and theme.
+	bgStart := strings.Index(doc, `<tier role="background"`)
+	bgEnd := strings.Index(doc, "</tier>")
+	if bgStart < 0 || bgEnd < 0 {
+		t.Fatalf("doc = %q, missing background tier boundaries", doc)
+	}
+	bgSection := doc[bgStart:bgEnd]
+	if !strings.Contains(bgSection, `id="mem-reflection"`) {
+		t.Fatalf("background section = %q, want mem-reflection", bgSection)
+	}
+	if !strings.Contains(bgSection, `id="mem-theme"`) {
+		t.Fatalf("background section = %q, want mem-theme", bgSection)
+	}
+
+	// Recalled tier should contain the unit memory.
+	rcStart := strings.Index(doc, `<tier role="recalled"`)
+	if rcStart < 0 {
+		t.Fatalf("doc = %q, missing recalled tier", doc)
+	}
+	rcSection := doc[rcStart:]
+	if !strings.Contains(rcSection, `id="mem-unit"`) {
+		t.Fatalf("recalled section = %q, want mem-unit", rcSection)
+	}
+}
+
+func TestRenderSemanticMemoryDocumentSingleTier(t *testing.T) {
+	matches := []ai.LLMMemoryMatch{
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:       "mem-1",
+				Content:  "Alice likes tea",
+				Category: "preference",
+				Profile:  ai.LLMMemoryProfile{Kind: ai.LLMMemoryKindUnit, Importance: 5},
+			},
+			Similarity: 0.9,
+		},
+		{
+			Record: ai.LLMMemoryRecord{
+				ID:       "mem-2",
+				Content:  "Bob studies CS",
+				Category: "knowledge",
+				Profile:  ai.LLMMemoryProfile{Kind: ai.LLMMemoryKindUnit, Importance: 6},
+			},
+			Similarity: 0.85,
+		},
+	}
+
+	doc := renderSemanticMemoryDocument(matches)
+	if !strings.Contains(doc, `<semantic_memories count="2">`) {
+		t.Fatalf("doc = %q, want count=2", doc)
+	}
+	if strings.Contains(doc, `role="background"`) {
+		t.Fatalf("doc = %q, did not expect background tier when no background memories", doc)
+	}
+	if !strings.Contains(doc, `<tier role="recalled" count="2">`) {
+		t.Fatalf("doc = %q, want recalled tier with count=2", doc)
 	}
 }
 

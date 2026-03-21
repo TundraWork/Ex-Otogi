@@ -6,6 +6,68 @@ import (
 	"time"
 )
 
+func TestLLMMemoryLinkValidate(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		link    LLMMemoryLink
+		wantErr string
+	}{
+		{
+			name:    "valid related",
+			link:    LLMMemoryLink{TargetID: "mem-1", Relation: "related"},
+			wantErr: "",
+		},
+		{
+			name:    "valid refines",
+			link:    LLMMemoryLink{TargetID: "mem-1", Relation: "refines"},
+			wantErr: "",
+		},
+		{
+			name:    "valid supersedes",
+			link:    LLMMemoryLink{TargetID: "mem-1", Relation: "supersedes"},
+			wantErr: "",
+		},
+		{
+			name:    "empty relation is valid",
+			link:    LLMMemoryLink{TargetID: "mem-1", Relation: ""},
+			wantErr: "",
+		},
+		{
+			name:    "missing target_id",
+			link:    LLMMemoryLink{TargetID: "", Relation: "related"},
+			wantErr: "missing target_id",
+		},
+		{
+			name:    "unsupported relation",
+			link:    LLMMemoryLink{TargetID: "mem-1", Relation: "unknown"},
+			wantErr: "unsupported relation",
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := testCase.link.Validate()
+			if testCase.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate failed: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate error = nil, want %q", testCase.wantErr)
+			}
+			if !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("Validate error = %q, want substring %q", err, testCase.wantErr)
+			}
+		})
+	}
+}
+
 func TestLLMMemoryUpdateValidate(t *testing.T) {
 	t.Parallel()
 

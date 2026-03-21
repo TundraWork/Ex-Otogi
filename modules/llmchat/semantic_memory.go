@@ -22,10 +22,15 @@ const (
 	synthesizedKindWeight        = 1.15
 	currentActorWeight           = 1.15
 	relatedActorWeight           = 1.05
+	linkedBoostWeight            = 1.1
+	keywordOverlapBonus          = 0.05
+	maxKeywordBonusHits          = 4
 )
 
 type retrievalPlan struct {
-	Queries []string `json:"queries"`
+	Queries    []string `json:"queries"`
+	TimeFilter string   `json:"time_filter"`
+	Depth      string   `json:"depth"`
 }
 
 func (m *Module) retrieveSemanticMemories(
@@ -61,24 +66,28 @@ func (m *Module) retrieveSemanticMemories(
 	m.debugSemanticMemoryRetrieve(ctx, scope, prompt)
 
 	replyRootSummary := m.replyRootSummary(ctx, event)
-	queries, err := m.buildSemanticMemoryQueries(ctx, prompt, replyRootSummary, settings)
+	plan, err := m.buildSemanticMemoryPlan(ctx, prompt, replyRootSummary, settings)
 	if err != nil {
 		return "", fmt.Errorf("retrieve semantic memories build queries: %w", err)
 	}
-	if len(queries) == 0 {
+	if len(plan.Queries) == 0 {
 		return "", nil
 	}
 
-	matches, err := m.searchSemanticMemoryQueries(ctx, scope, queries, embeddingProvider, policy)
+	matches, err := m.searchSemanticMemoryQueries(ctx, scope, plan.Queries, embeddingProvider, policy, plan.Depth)
 	if err != nil {
 		return "", fmt.Errorf("retrieve semantic memories search: %w", err)
+	}
+	if plan.TimeFilter != "" {
+		matches = filterMatchesByTime(matches, plan.TimeFilter, m.now())
 	}
 	if len(matches) == 0 {
 		return "", nil
 	}
 
 	relatedActors := m.replyChainActors(ctx, event)
-	ranked := rankSemanticMemoryMatches(matches, settings.DecayFactor, m.now(), event.Actor, relatedActors)
+	queryTerms := extractQueryTerms(plan.Queries)
+	ranked := rankSemanticMemoryMatches(matches, settings.DecayFactor, m.now(), event.Actor, relatedActors, queryTerms)
 	selected := selectSemanticMemoryMatches(ranked, policy.MaxMemoryRunes)
 	if len(selected) == 0 {
 		return "", nil
@@ -125,19 +134,22 @@ func semanticMemoryScope(event *platform.Event) ai.LLMMemoryScope {
 	}
 }
 
-func (m *Module) buildSemanticMemoryQueries(
+func (m *Module) buildSemanticMemoryPlan(
 	ctx context.Context,
 	prompt string,
 	replyRootSummary string,
 	settings NaturalMemorySettings,
-) ([]string, error) {
+) (retrievalPlan, error) {
 	if settings.RetrievalPlanningEnabled {
-		if planned, err := m.planSemanticMemoryQueries(ctx, prompt, replyRootSummary, settings); err == nil && len(planned) > 0 {
-			return dedupeQueries(planned), nil
+		if plan, err := m.planSemanticMemoryQueries(ctx, prompt, replyRootSummary, settings); err == nil && len(plan.Queries) > 0 {
+			plan.Queries = dedupeQueries(plan.Queries)
+			return plan, nil
 		}
 	}
 
-	return heuristicSemanticMemoryQueries(prompt, replyRootSummary), nil
+	return retrievalPlan{
+		Queries: heuristicSemanticMemoryQueries(prompt, replyRootSummary),
+	}, nil
 }
 
 func (m *Module) planSemanticMemoryQueries(
@@ -145,17 +157,17 @@ func (m *Module) planSemanticMemoryQueries(
 	prompt string,
 	replyRootSummary string,
 	settings NaturalMemorySettings,
-) ([]string, error) {
+) (retrievalPlan, error) {
 	if m == nil || m.providerRegistry == nil {
-		return nil, fmt.Errorf("provider registry unavailable")
+		return retrievalPlan{}, fmt.Errorf("provider registry unavailable")
 	}
 	if strings.TrimSpace(settings.ExtractionProvider) == "" || strings.TrimSpace(settings.ExtractionModel) == "" {
-		return nil, fmt.Errorf("natural memory planner is not configured")
+		return retrievalPlan{}, fmt.Errorf("natural memory planner is not configured")
 	}
 
 	provider, err := m.providerRegistry.Resolve(settings.ExtractionProvider)
 	if err != nil {
-		return nil, fmt.Errorf("resolve planner provider %s: %w", settings.ExtractionProvider, err)
+		return retrievalPlan{}, fmt.Errorf("resolve planner provider %s: %w", settings.ExtractionProvider, err)
 	}
 
 	requestCtx := ctx
@@ -174,7 +186,7 @@ func (m *Module) planSemanticMemoryQueries(
 		Temperature: 0.1,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("generate retrieval plan: %w", err)
+		return retrievalPlan{}, fmt.Errorf("generate retrieval plan: %w", err)
 	}
 
 	responseText, err := collectStreamText(requestCtx, stream)
@@ -183,18 +195,18 @@ func (m *Module) planSemanticMemoryQueries(
 		if closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close retrieval plan stream: %w", closeErr))
 		}
-		return nil, err
+		return retrievalPlan{}, err
 	}
 	if closeErr != nil {
-		return nil, fmt.Errorf("close retrieval plan stream: %w", closeErr)
+		return retrievalPlan{}, fmt.Errorf("close retrieval plan stream: %w", closeErr)
 	}
 
-	queries, err := parseRetrievalPlanResponse(responseText)
+	plan, err := parseRetrievalPlanResponse(responseText)
 	if err != nil {
-		return nil, err
+		return retrievalPlan{}, err
 	}
 
-	return queries, nil
+	return plan, nil
 }
 
 func renderRetrievalPlanPrompt(prompt string, replyRootSummary string) string {
@@ -214,29 +226,37 @@ func renderRetrievalPlanPrompt(prompt string, replyRootSummary string) string {
 		builder.WriteString(strings.TrimSpace(replyRootSummary))
 		builder.WriteString("\n</reply_root>\n\n")
 	}
-	builder.WriteString(`Respond with one JSON object: {"queries":["...","..."]}`)
+	builder.WriteString("Respond with one JSON object:\n")
+	builder.WriteString(`{"queries":["...","..."],"time_filter":"all|recent|last_week","depth":"few|normal|deep"}`)
+	builder.WriteString("\n\n")
+	builder.WriteString("time_filter: \"recent\" = last 24h, \"last_week\" = last 7 days, \"all\" = no filter (default).\n")
+	builder.WriteString("depth: \"few\" = lightweight retrieval, \"normal\" = standard (default), \"deep\" = thorough retrieval.\n")
 
 	return builder.String()
 }
 
-func parseRetrievalPlanResponse(text string) ([]string, error) {
+func parseRetrievalPlanResponse(text string) (retrievalPlan, error) {
 	trimmed := strings.TrimSpace(stripMarkdownCodeFence(text))
 	if trimmed == "" {
-		return nil, fmt.Errorf("empty retrieval plan")
+		return retrievalPlan{}, fmt.Errorf("empty retrieval plan")
 	}
 
 	var plan retrievalPlan
 	if err := json.Unmarshal([]byte(trimmed), &plan); err != nil {
 		extracted, extractErr := extractJSONObject(trimmed)
 		if extractErr != nil {
-			return nil, fmt.Errorf("parse retrieval plan: %w", err)
+			return retrievalPlan{}, fmt.Errorf("parse retrieval plan: %w", err)
 		}
 		if err := json.Unmarshal([]byte(extracted), &plan); err != nil {
-			return nil, fmt.Errorf("parse retrieval plan: %w", err)
+			return retrievalPlan{}, fmt.Errorf("parse retrieval plan: %w", err)
 		}
 	}
 
-	return dedupeQueries(plan.Queries), nil
+	plan.Queries = dedupeQueries(plan.Queries)
+	plan.TimeFilter = normalizeTimeFilter(strings.TrimSpace(plan.TimeFilter))
+	plan.Depth = normalizeDepth(strings.TrimSpace(plan.Depth))
+
+	return plan, nil
 }
 
 func heuristicSemanticMemoryQueries(prompt string, replyRootSummary string) []string {
@@ -291,9 +311,10 @@ func (m *Module) searchSemanticMemoryQueries(
 	queries []string,
 	embeddingProvider ai.EmbeddingProvider,
 	policy *SemanticMemoryPolicy,
+	depth string,
 ) ([]ai.LLMMemoryMatch, error) {
 	merged := make(map[string]ai.LLMMemoryMatch)
-	limit := maxSemanticMemorySearchLimit(policy.MaxRetrievedMemories, len(queries))
+	limit := maxSemanticMemorySearchLimit(policy.MaxRetrievedMemories, len(queries), depth)
 
 	for _, query := range queries {
 		queryEmbedding, err := embedSingleText(ctx, embeddingProvider, query, ai.EmbeddingTaskTypeQuery)
@@ -332,10 +353,16 @@ func rankSemanticMemoryMatches(
 	now time.Time,
 	currentActor platform.Actor,
 	relatedActors map[string]struct{},
+	queryTerms []string,
 ) []ai.LLMMemoryMatch {
 	type scoredMatch struct {
 		match      ai.LLMMemoryMatch
 		finalScore float64
+	}
+
+	matchIDs := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		matchIDs[match.Record.ID] = struct{}{}
 	}
 
 	scored := make([]scoredMatch, 0, len(matches))
@@ -349,6 +376,44 @@ func rankSemanticMemoryMatches(
 			semanticMemoryActorWeight(match.Record, currentActor, relatedActors)
 
 		scored = append(scored, scoredMatch{match: match, finalScore: finalScore})
+	}
+
+	// Boost records whose keywords overlap with query terms.
+	if len(queryTerms) > 0 {
+		queryTermSet := make(map[string]struct{}, len(queryTerms))
+		for _, term := range queryTerms {
+			queryTermSet[term] = struct{}{}
+		}
+		for index := range scored {
+			overlap := 0
+			for _, keyword := range scored[index].match.Record.Keywords {
+				if _, exists := queryTermSet[strings.ToLower(keyword)]; exists {
+					overlap++
+				}
+			}
+			if overlap > 0 {
+				hits := overlap
+				if hits > maxKeywordBonusHits {
+					hits = maxKeywordBonusHits
+				}
+				scored[index].finalScore *= 1.0 + keywordOverlapBonus*float64(hits)
+			}
+		}
+	}
+
+	// Boost records that are linked from other records in the match set.
+	inboundLinkCounts := make(map[string]int, len(scored))
+	for _, entry := range scored {
+		for _, link := range entry.match.Record.Links {
+			if _, exists := matchIDs[link.TargetID]; exists {
+				inboundLinkCounts[link.TargetID]++
+			}
+		}
+	}
+	for index := range scored {
+		if count := inboundLinkCounts[scored[index].match.Record.ID]; count > 0 {
+			scored[index].finalScore *= linkedBoostWeight
+		}
 	}
 
 	sort.Slice(scored, func(i, j int) bool {
@@ -431,14 +496,44 @@ func fitSemanticMemoryMatch(
 }
 
 func renderSemanticMemoryDocument(matches []ai.LLMMemoryMatch) string {
+	var background, recalled []ai.LLMMemoryMatch
+	for _, match := range matches {
+		if isBackgroundMemory(match.Record) {
+			background = append(background, match)
+		} else {
+			recalled = append(recalled, match)
+		}
+	}
+
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("<semantic_memories count=\"%d\">\n", len(matches)))
-	for _, match := range matches {
-		builder.WriteString(renderSemanticMemoryMatch(match))
-		builder.WriteByte('\n')
+	if len(background) > 0 {
+		builder.WriteString(fmt.Sprintf("<tier role=\"background\" count=\"%d\">\n", len(background)))
+		for _, match := range background {
+			builder.WriteString(renderSemanticMemoryMatch(match))
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("</tier>\n")
+	}
+	if len(recalled) > 0 {
+		builder.WriteString(fmt.Sprintf("<tier role=\"recalled\" count=\"%d\">\n", len(recalled)))
+		for _, match := range recalled {
+			builder.WriteString(renderSemanticMemoryMatch(match))
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("</tier>\n")
 	}
 	builder.WriteString("</semantic_memories>")
 	return builder.String()
+}
+
+func isBackgroundMemory(record ai.LLMMemoryRecord) bool {
+	switch record.Category {
+	case "reflection", "theme":
+		return true
+	default:
+		return false
+	}
 }
 
 func renderSemanticMemoryMatch(match ai.LLMMemoryMatch) string {
@@ -490,6 +585,9 @@ func (m *Module) reinforceSemanticMemoryMatches(ctx context.Context, matches []a
 			Embedding: append([]float32(nil), match.Record.Embedding...),
 			Profile:   profile,
 			Metadata:  semanticMemoryMetadata(match.Record.Metadata, profile),
+			Keywords:  append([]string(nil), match.Record.Keywords...),
+			Tags:      append([]string(nil), match.Record.Tags...),
+			Links:     append([]ai.LLMMemoryLink(nil), match.Record.Links...),
 		}); err != nil {
 			errs = append(errs, fmt.Errorf("reinforce semantic memory %s: %w", match.Record.ID, err))
 		}
@@ -686,15 +784,91 @@ func semanticMemoryMetadata(existing map[string]string, profile ai.LLMMemoryProf
 	return metadata
 }
 
-func maxSemanticMemorySearchLimit(base int, queryCount int) int {
+func maxSemanticMemorySearchLimit(base int, queryCount int, depth string) int {
 	if base <= 0 {
 		base = defaultMaxRetrievedMemories
 	}
-	if queryCount <= 1 {
-		return maxInt(base*2, base)
+
+	switch depth {
+	case "few":
+		return base
+	case "deep":
+		scaled := base * 3
+		if queryCount > 1 {
+			return maxInt(scaled, base+queryCount)
+		}
+		return maxInt(scaled, base)
+	default:
+		// "normal" or empty — preserve existing behavior (2×).
+		scaled := base * 2
+		if queryCount > 1 {
+			return maxInt(scaled, base+queryCount)
+		}
+		return maxInt(scaled, base)
+	}
+}
+
+func normalizeTimeFilter(raw string) string {
+	switch strings.ToLower(raw) {
+	case "recent":
+		return "recent"
+	case "last_week":
+		return "last_week"
+	default:
+		return ""
+	}
+}
+
+func normalizeDepth(raw string) string {
+	switch strings.ToLower(raw) {
+	case "few":
+		return "few"
+	case "deep":
+		return "deep"
+	default:
+		return ""
+	}
+}
+
+func filterMatchesByTime(matches []ai.LLMMemoryMatch, filter string, now time.Time) []ai.LLMMemoryMatch {
+	var cutoff time.Time
+	switch filter {
+	case "recent":
+		cutoff = now.Add(-24 * time.Hour)
+	case "last_week":
+		cutoff = now.Add(-7 * 24 * time.Hour)
+	default:
+		return matches
 	}
 
-	return maxInt(base*2, base+queryCount)
+	filtered := make([]ai.LLMMemoryMatch, 0, len(matches))
+	for _, match := range matches {
+		if !match.Record.CreatedAt.Before(cutoff) {
+			filtered = append(filtered, match)
+		}
+	}
+
+	return filtered
+}
+
+func extractQueryTerms(queries []string) []string {
+	seen := make(map[string]struct{})
+	var terms []string
+	for _, query := range queries {
+		for _, word := range strings.Fields(strings.ToLower(query)) {
+			cleaned := strings.Trim(word, ".,;:!?\"'()[]{}")
+			if cleaned == "" || len(cleaned) < 3 {
+				continue
+			}
+			if _, exists := seen[cleaned]; exists {
+				continue
+			}
+			seen[cleaned] = struct{}{}
+			terms = append(terms, cleaned)
+		}
+	}
+
+	return terms
 }
 
 func maxInt(left int, right int) int {

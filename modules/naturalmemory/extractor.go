@@ -27,11 +27,14 @@ var validExtractionCategories = map[string]struct{}{
 }
 
 type extractedMemory struct {
-	Content          string `json:"content"`
-	Category         string `json:"category"`
-	Importance       int    `json:"importance"`
-	SubjectActorID   string `json:"subject_actor_id"`
-	SubjectActorName string `json:"subject_actor_name"`
+	Content          string   `json:"content"`
+	Category         string   `json:"category"`
+	Importance       int      `json:"importance"`
+	SubjectActorID   string   `json:"subject_actor_id"`
+	SubjectActorName string   `json:"subject_actor_name"`
+	ValidUntil       string   `json:"valid_until"`
+	Keywords         []string `json:"keywords"`
+	Tags             []string `json:"tags"`
 }
 
 type extractionContext struct {
@@ -174,7 +177,7 @@ func (m *Module) upsertCandidate(
 		return fmt.Errorf("llm memory service unavailable")
 	}
 
-	embedding, err := embedSingleText(ctx, m.embeddingProvider, candidate.Content, ai.EmbeddingTaskTypeDocument)
+	embedding, err := embedSingleText(ctx, m.embeddingProvider, buildEmbeddingText(candidate), ai.EmbeddingTaskTypeDocument)
 	if err != nil {
 		return fmt.Errorf("embed candidate: %w", err)
 	}
@@ -191,7 +194,7 @@ func (m *Module) upsertCandidate(
 	decision := m.decideSynthesis(ctx, candidate, matches, contextWindow)
 	originalContent := candidate.Content
 	switch decision.Action {
-	case synthesisActionAdd, synthesisActionRewrite:
+	case synthesisActionAdd, synthesisActionRewrite, synthesisActionSupersede:
 		candidate.Content = strings.TrimSpace(decision.Content)
 		candidate.Category = strings.TrimSpace(decision.Category)
 		candidate.Importance = decision.Importance
@@ -201,9 +204,9 @@ func (m *Module) upsertCandidate(
 	}
 
 	canonicalEmbedding := embedding
-	if (decision.Action == synthesisActionAdd || decision.Action == synthesisActionRewrite) &&
+	if (decision.Action == synthesisActionAdd || decision.Action == synthesisActionRewrite || decision.Action == synthesisActionSupersede) &&
 		candidate.Content != "" && candidate.Content != originalContent {
-		canonicalEmbedding, err = embedSingleText(ctx, m.embeddingProvider, candidate.Content, ai.EmbeddingTaskTypeDocument)
+		canonicalEmbedding, err = embedSingleText(ctx, m.embeddingProvider, buildEmbeddingText(candidate), ai.EmbeddingTaskTypeDocument)
 		if err != nil {
 			return fmt.Errorf("embed canonical candidate: %w", err)
 		}
@@ -212,34 +215,42 @@ func (m *Module) upsertCandidate(
 	profile.Importance = candidate.Importance
 	profile.SubjectActor = resolveSubjectActor(candidate, contextWindow)
 	metadata := buildProfileMetadata(profile)
+
+	var resultRecord ai.LLMMemoryRecord
 	switch decision.Action {
 	case synthesisActionAdd:
-		_, err = m.llmMemory.Store(ctx, ai.LLMMemoryEntry{
+		stored, storeErr := m.llmMemory.Store(ctx, ai.LLMMemoryEntry{
 			Scope:     scope,
 			Content:   candidate.Content,
 			Category:  candidate.Category,
 			Embedding: canonicalEmbedding,
 			Profile:   profile,
 			Metadata:  metadata,
+			Keywords:  candidate.Keywords,
+			Tags:      candidate.Tags,
 		})
-		if err != nil {
-			return fmt.Errorf("store candidate: %w", err)
+		if storeErr != nil {
+			return fmt.Errorf("store candidate: %w", storeErr)
 		}
+		resultRecord = stored
 	case synthesisActionRewrite:
 		existingRecord, found := findMatchRecord(matches, decision.TargetID)
 		if !found {
-			_, err = m.llmMemory.Store(ctx, ai.LLMMemoryEntry{
+			stored, storeErr := m.llmMemory.Store(ctx, ai.LLMMemoryEntry{
 				Scope:     scope,
 				Content:   candidate.Content,
 				Category:  candidate.Category,
 				Embedding: canonicalEmbedding,
 				Profile:   profile,
 				Metadata:  metadata,
+				Keywords:  candidate.Keywords,
+				Tags:      candidate.Tags,
 			})
-			if err != nil {
-				return fmt.Errorf("store rewritten candidate fallback: %w", err)
+			if storeErr != nil {
+				return fmt.Errorf("store rewritten candidate fallback: %w", storeErr)
 			}
-			return nil
+			resultRecord = stored
+			break
 		}
 		profile = mergeSynthesizedProfile(existingRecord.Profile, profile, decision.AbsorbedRecordIDs)
 		metadata = buildProfileMetadata(profile)
@@ -250,9 +261,13 @@ func (m *Module) upsertCandidate(
 			Embedding: canonicalEmbedding,
 			Profile:   profile,
 			Metadata:  mergeMetadataMaps(existingRecord.Metadata, metadata),
+			Keywords:  candidate.Keywords,
+			Tags:      candidate.Tags,
+			Links:     existingRecord.Links,
 		}
-		if _, err := m.llmMemory.Update(ctx, update); err != nil {
-			return fmt.Errorf("update candidate %s: %w", decision.TargetID, err)
+		updated, updateErr := m.llmMemory.Update(ctx, update)
+		if updateErr != nil {
+			return fmt.Errorf("update candidate %s: %w", decision.TargetID, updateErr)
 		}
 		for _, recordID := range decision.AbsorbedRecordIDs {
 			if recordID == decision.TargetID {
@@ -262,11 +277,40 @@ func (m *Module) upsertCandidate(
 				return fmt.Errorf("delete absorbed candidate %s: %w", recordID, err)
 			}
 		}
+		resultRecord = updated
+	case synthesisActionSupersede:
+		if err := m.llmMemory.Delete(ctx, decision.TargetID); err != nil {
+			return fmt.Errorf("delete superseded memory %s: %w", decision.TargetID, err)
+		}
+		for _, recordID := range decision.AbsorbedRecordIDs {
+			if recordID == decision.TargetID {
+				continue
+			}
+			if err := m.llmMemory.Delete(ctx, recordID); err != nil {
+				return fmt.Errorf("delete absorbed candidate %s: %w", recordID, err)
+			}
+		}
+		stored, storeErr := m.llmMemory.Store(ctx, ai.LLMMemoryEntry{
+			Scope:     scope,
+			Content:   candidate.Content,
+			Category:  candidate.Category,
+			Embedding: canonicalEmbedding,
+			Profile:   profile,
+			Metadata:  metadata,
+			Keywords:  candidate.Keywords,
+			Tags:      candidate.Tags,
+		})
+		if storeErr != nil {
+			return fmt.Errorf("store superseding candidate: %w", storeErr)
+		}
+		resultRecord = stored
 	case synthesisActionNoop:
 		return nil
 	default:
 		return fmt.Errorf("unsupported synthesis action %q", decision.Action)
 	}
+
+	m.applyLinks(ctx, resultRecord, matches, decision.Action, decision.TargetID, decision.AbsorbedRecordIDs)
 
 	return nil
 }
@@ -439,6 +483,12 @@ func parseExtractionResponse(text string) ([]extractedMemory, error) {
 		candidate.Category = strings.TrimSpace(candidate.Category)
 		candidate.SubjectActorID = strings.TrimSpace(candidate.SubjectActorID)
 		candidate.SubjectActorName = strings.TrimSpace(candidate.SubjectActorName)
+		candidate.ValidUntil = strings.TrimSpace(candidate.ValidUntil)
+		if candidate.ValidUntil != "" {
+			if _, err := time.Parse(time.RFC3339, candidate.ValidUntil); err != nil {
+				candidate.ValidUntil = ""
+			}
+		}
 		switch {
 		case candidate.Content == "":
 			continue
@@ -577,7 +627,7 @@ func buildMemoryProfile(
 	contextWindow extractionContext,
 	now time.Time,
 ) ai.LLMMemoryProfile {
-	return ai.LLMMemoryProfile{
+	profile := ai.LLMMemoryProfile{
 		Kind:            ai.LLMMemoryKindUnit,
 		Importance:      candidate.Importance,
 		LastAccessedAt:  now.UTC(),
@@ -587,6 +637,14 @@ func buildMemoryProfile(
 		SourceActor:     memoryActorRef(contextWindow.SourceActor),
 		SubjectActor:    resolveSubjectActor(candidate, contextWindow),
 	}
+	if candidate.ValidUntil != "" {
+		if parsed, err := time.Parse(time.RFC3339, candidate.ValidUntil); err == nil {
+			utc := parsed.UTC()
+			profile.ValidUntil = &utc
+		}
+	}
+
+	return profile
 }
 
 func resolveSubjectActor(candidate extractedMemory, contextWindow extractionContext) *ai.LLMMemoryActorRef {
@@ -765,4 +823,162 @@ func maxInt(left int, right int) int {
 	}
 
 	return right
+}
+
+const (
+	linkRelationRelated = "related"
+	linkRelationRefines = "refines"
+	linkMaxPerRecord    = 3
+	linkMinSimilarity   = float32(0.5)
+)
+
+// generateLinks creates directional links from a newly stored or updated
+// record to the most similar existing records in the match set. Records that
+// were deleted during the upsert (target of supersede or absorbed records)
+// are excluded.
+func generateLinks(
+	matches []ai.LLMMemoryMatch,
+	action synthesisAction,
+	targetID string,
+	absorbedIDs []string,
+	threshold float32,
+	maxLinks int,
+) []ai.LLMMemoryLink {
+	if len(matches) == 0 || maxLinks <= 0 {
+		return nil
+	}
+
+	excluded := make(map[string]struct{}, len(absorbedIDs)+1)
+	if targetID != "" && action == synthesisActionSupersede {
+		excluded[targetID] = struct{}{}
+	}
+	for _, id := range absorbedIDs {
+		excluded[id] = struct{}{}
+	}
+
+	relation := linkRelationRelated
+	if action == synthesisActionRewrite {
+		relation = linkRelationRefines
+	}
+
+	var links []ai.LLMMemoryLink
+	for _, match := range matches {
+		if _, skip := excluded[match.Record.ID]; skip {
+			continue
+		}
+		if match.Similarity < threshold {
+			continue
+		}
+		if match.Record.ID == targetID {
+			continue
+		}
+		links = append(links, ai.LLMMemoryLink{
+			TargetID: match.Record.ID,
+			Relation: relation,
+		})
+		if len(links) >= maxLinks {
+			break
+		}
+	}
+
+	return links
+}
+
+// applyLinks generates links for a newly stored or updated record and sets
+// them via an Update call. It also creates reverse links on target records.
+// Errors are non-fatal and silently ignored.
+func (m *Module) applyLinks(
+	ctx context.Context,
+	record ai.LLMMemoryRecord,
+	matches []ai.LLMMemoryMatch,
+	action synthesisAction,
+	targetID string,
+	absorbedIDs []string,
+) {
+	if m == nil || m.llmMemory == nil || record.ID == "" {
+		return
+	}
+
+	links := generateLinks(matches, action, targetID, absorbedIDs, linkMinSimilarity, linkMaxPerRecord)
+	if len(links) == 0 {
+		return
+	}
+
+	record.Links = mergeLinks(record.Links, links)
+	if _, err := m.llmMemory.Update(ctx, ai.LLMMemoryUpdate{
+		ID:        record.ID,
+		Content:   record.Content,
+		Category:  record.Category,
+		Embedding: append([]float32(nil), record.Embedding...),
+		Profile:   record.Profile,
+		Metadata:  cloneMetadataMap(record.Metadata),
+		Keywords:  append([]string(nil), record.Keywords...),
+		Tags:      append([]string(nil), record.Tags...),
+		Links:     record.Links,
+	}); err != nil {
+		return
+	}
+
+	// Add reverse links on each target.
+	reverseLink := ai.LLMMemoryLink{TargetID: record.ID, Relation: links[0].Relation}
+	for _, link := range links {
+		for _, match := range matches {
+			if match.Record.ID != link.TargetID {
+				continue
+			}
+			updatedLinks := mergeLinks(match.Record.Links, []ai.LLMMemoryLink{reverseLink})
+			if _, err := m.llmMemory.Update(ctx, ai.LLMMemoryUpdate{
+				ID:        match.Record.ID,
+				Content:   match.Record.Content,
+				Category:  match.Record.Category,
+				Embedding: append([]float32(nil), match.Record.Embedding...),
+				Profile:   match.Record.Profile,
+				Metadata:  cloneMetadataMap(match.Record.Metadata),
+				Keywords:  append([]string(nil), match.Record.Keywords...),
+				Tags:      append([]string(nil), match.Record.Tags...),
+				Links:     updatedLinks,
+			}); err != nil {
+				continue
+			}
+			break
+		}
+	}
+}
+
+// mergeLinks unions two link slices, deduplicating by TargetID.
+func mergeLinks(existing []ai.LLMMemoryLink, additions []ai.LLMMemoryLink) []ai.LLMMemoryLink {
+	seen := make(map[string]struct{}, len(existing))
+	merged := make([]ai.LLMMemoryLink, 0, len(existing)+len(additions))
+	for _, link := range existing {
+		seen[link.TargetID] = struct{}{}
+		merged = append(merged, link)
+	}
+	for _, link := range additions {
+		if _, exists := seen[link.TargetID]; exists {
+			continue
+		}
+		seen[link.TargetID] = struct{}{}
+		merged = append(merged, link)
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+
+	return merged
+}
+
+func buildEmbeddingText(candidate extractedMemory) string {
+	parts := []string{strings.TrimSpace(candidate.Content)}
+	for _, keyword := range candidate.Keywords {
+		if trimmed := strings.TrimSpace(keyword); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	for _, tag := range candidate.Tags {
+		if trimmed := strings.TrimSpace(tag); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+
+	return strings.Join(parts, " ")
 }

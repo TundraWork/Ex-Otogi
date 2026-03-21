@@ -64,6 +64,9 @@ const (
 	defaultNaturalMemoryReflectionMaxGenerated       = 3
 	defaultNaturalMemoryRetrievalPlanningEnabled     = true
 	defaultNaturalMemoryRetrievalPlanningTimeout     = 10 * time.Second
+	defaultNaturalMemoryClusterMinSize               = 3
+	defaultNaturalMemoryClusterSimilarityThreshold   = float32(0.80)
+	defaultNaturalMemoryClusterTemporalWeight        = 0.3
 )
 
 // Config is the full runtime LLM configuration model loaded from JSON.
@@ -310,6 +313,15 @@ type NaturalMemoryConfig struct {
 	RetrievalPlanningEnabled bool
 	// RetrievalPlanningTimeout bounds one retrieval planning request lifecycle.
 	RetrievalPlanningTimeout time.Duration
+	// ClusterMinSize is the minimum number of memories in a cluster before
+	// theme generation is attempted. Smaller clusters use pairwise merge.
+	ClusterMinSize int
+	// ClusterSimilarityThreshold controls the affinity threshold for grouping
+	// memories into clusters during consolidation and must be in (0, 1].
+	ClusterSimilarityThreshold float32
+	// ClusterTemporalWeight controls the weight of temporal proximity in the
+	// affinity function used for clustering and must be in [0, 1].
+	ClusterTemporalWeight float64
 }
 
 type fileConfig struct {
@@ -424,6 +436,9 @@ type fileNaturalMemory struct {
 	ReflectionMaxGenerated       *int     `json:"reflection_max_generated"`
 	RetrievalPlanningEnabled     *bool    `json:"retrieval_planning_enabled"`
 	RetrievalPlanningTimeout     string   `json:"retrieval_planning_timeout"`
+	ClusterMinSize               *int     `json:"cluster_min_size"`
+	ClusterSimilarityThreshold   *float64 `json:"cluster_similarity_threshold"`
+	ClusterTemporalWeight        *float64 `json:"cluster_temporal_weight"`
 }
 
 type rootRaw struct {
@@ -1020,6 +1035,9 @@ func parseNaturalMemoryConfig(raw *fileNaturalMemory) (*NaturalMemoryConfig, err
 		ReflectionMaxGenerated:       defaultNaturalMemoryReflectionMaxGenerated,
 		RetrievalPlanningEnabled:     defaultNaturalMemoryRetrievalPlanningEnabled,
 		RetrievalPlanningTimeout:     defaultNaturalMemoryRetrievalPlanningTimeout,
+		ClusterMinSize:               defaultNaturalMemoryClusterMinSize,
+		ClusterSimilarityThreshold:   defaultNaturalMemoryClusterSimilarityThreshold,
+		ClusterTemporalWeight:        defaultNaturalMemoryClusterTemporalWeight,
 	}
 
 	if raw.ExtractionMaxInputRunes != nil {
@@ -1054,6 +1072,15 @@ func parseNaturalMemoryConfig(raw *fileNaturalMemory) (*NaturalMemoryConfig, err
 	}
 	if raw.RetrievalPlanningEnabled != nil {
 		cfg.RetrievalPlanningEnabled = *raw.RetrievalPlanningEnabled
+	}
+	if raw.ClusterMinSize != nil {
+		cfg.ClusterMinSize = *raw.ClusterMinSize
+	}
+	if raw.ClusterSimilarityThreshold != nil {
+		cfg.ClusterSimilarityThreshold = float32(*raw.ClusterSimilarityThreshold)
+	}
+	if raw.ClusterTemporalWeight != nil {
+		cfg.ClusterTemporalWeight = *raw.ClusterTemporalWeight
 	}
 
 	if rawTimeout := strings.TrimSpace(raw.ExtractionTimeout); rawTimeout != "" {

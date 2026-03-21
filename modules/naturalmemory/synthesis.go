@@ -15,9 +15,10 @@ const synthesisDecisionSystemPrompt = `You are a memory synthesis system. Decide
 type synthesisAction string
 
 const (
-	synthesisActionAdd     synthesisAction = "add"
-	synthesisActionRewrite synthesisAction = "rewrite"
-	synthesisActionNoop    synthesisAction = "noop"
+	synthesisActionAdd       synthesisAction = "add"
+	synthesisActionRewrite   synthesisAction = "rewrite"
+	synthesisActionSupersede synthesisAction = "supersede"
+	synthesisActionNoop      synthesisAction = "noop"
 )
 
 type synthesisDecision struct {
@@ -86,11 +87,13 @@ func renderSynthesisDecisionPrompt(
 	builder.WriteString("Actions:\n")
 	builder.WriteString("- add: the candidate is a genuinely new fact worth storing as its own memory\n")
 	builder.WriteString("- rewrite: update one existing memory into a better canonical form and optionally absorb duplicates\n")
+	builder.WriteString("- supersede: the candidate contradicts or invalidates an existing memory — delete the old and store the new\n")
 	builder.WriteString("- noop: the candidate is already fully covered and should not change storage\n\n")
 	builder.WriteString("Rules:\n")
 	builder.WriteString("- Prefer rewrite over add when the candidate is a refinement, correction, or stronger phrasing of an existing memory\n")
-	builder.WriteString("- Rewritten content must be self-contained, explicit about the subject, and use absolute dates when needed\n")
-	builder.WriteString("- target_id must be one of the existing memory ids below when action is rewrite\n")
+	builder.WriteString("- Use supersede when the candidate directly contradicts an existing memory (e.g. preference changed, fact reversed, status updated to opposite)\n")
+	builder.WriteString("- Rewritten or superseding content must be self-contained, explicit about the subject, and use absolute dates when needed\n")
+	builder.WriteString("- target_id must be one of the existing memory ids below when action is rewrite or supersede\n")
 	builder.WriteString("- absorbed_record_ids may include duplicate ids other than target_id\n\n")
 	builder.WriteString("<anchor_time>\n")
 	builder.WriteString(contextWindow.AnchorTime.UTC().Format(time.RFC3339))
@@ -120,7 +123,7 @@ func renderSynthesisDecisionPrompt(
 	}
 	builder.WriteString("</existing_memories>\n\n")
 	builder.WriteString("Respond with one JSON object only.\n")
-	builder.WriteString(`Format: {"action":"add|rewrite|noop","target_id":"...","content":"...","category":"...","importance":1,"subject_actor_id":"...","subject_actor_name":"...","absorbed_record_ids":["..."]}`)
+	builder.WriteString(`Format: {"action":"add|rewrite|supersede|noop","target_id":"...","content":"...","category":"...","importance":1,"subject_actor_id":"...","subject_actor_name":"...","absorbed_record_ids":["..."]}`)
 
 	return builder.String()
 }
@@ -159,15 +162,16 @@ func normalizeSynthesisDecision(
 	decision.SubjectActorName = strings.TrimSpace(decision.SubjectActorName)
 
 	switch decision.Action {
-	case synthesisActionAdd, synthesisActionRewrite, synthesisActionNoop:
+	case synthesisActionAdd, synthesisActionRewrite, synthesisActionSupersede, synthesisActionNoop:
 	default:
 		return fallback
 	}
 
-	if decision.Action == synthesisActionRewrite && !containsMemoryID(matches, decision.TargetID) {
+	if (decision.Action == synthesisActionRewrite || decision.Action == synthesisActionSupersede) &&
+		!containsMemoryID(matches, decision.TargetID) {
 		return fallback
 	}
-	if decision.Action == synthesisActionRewrite || decision.Action == synthesisActionAdd {
+	if decision.Action == synthesisActionRewrite || decision.Action == synthesisActionAdd || decision.Action == synthesisActionSupersede {
 		if decision.Content == "" {
 			decision.Content = candidate.Content
 		}

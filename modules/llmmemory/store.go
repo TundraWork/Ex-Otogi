@@ -68,6 +68,9 @@ func (s *Store) Store(ctx context.Context, entry ai.LLMMemoryEntry) (ai.LLMMemor
 		Embedding: cloneEmbedding(entry.Embedding),
 		Profile:   normalizeProfile(entry.Profile, entry.Metadata, now),
 		Metadata:  cloneMetadata(entry.Metadata),
+		Keywords:  cloneStrings(entry.Keywords),
+		Tags:      cloneStrings(entry.Tags),
+		Links:     cloneLinks(entry.Links),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -96,12 +99,17 @@ func (s *Store) Search(ctx context.Context, query ai.LLMMemoryQuery) ([]ai.LLMMe
 
 	effective := resolveQueryDefaults(query)
 
+	now := s.now()
+
 	s.mu.RLock()
 	ids := append([]string(nil), s.scopes[effective.Scope]...)
 	matches := make([]ai.LLMMemoryMatch, 0, len(ids))
 	for _, id := range ids {
 		record := s.records[id]
 		if record == nil {
+			continue
+		}
+		if record.Profile.ValidUntil != nil && record.Profile.ValidUntil.Before(now) {
 			continue
 		}
 		if len(record.Embedding) != len(effective.Embedding) {
@@ -157,6 +165,9 @@ func (s *Store) Update(ctx context.Context, update ai.LLMMemoryUpdate) (ai.LLMMe
 	record.Embedding = cloneEmbedding(update.Embedding)
 	record.Profile = normalizeProfile(update.Profile, update.Metadata, s.now())
 	record.Metadata = cloneMetadata(update.Metadata)
+	record.Keywords = cloneStrings(update.Keywords)
+	record.Tags = cloneStrings(update.Tags)
+	record.Links = cloneLinks(update.Links)
 	record.UpdatedAt = s.now()
 
 	return cloneRecord(*record), nil
@@ -291,6 +302,9 @@ func cloneRecord(record ai.LLMMemoryRecord) ai.LLMMemoryRecord {
 	record.Embedding = cloneEmbedding(record.Embedding)
 	record.Profile = cloneProfile(record.Profile)
 	record.Metadata = cloneMetadata(record.Metadata)
+	record.Keywords = cloneStrings(record.Keywords)
+	record.Tags = cloneStrings(record.Tags)
+	record.Links = cloneLinks(record.Links)
 	return record
 }
 
@@ -300,6 +314,10 @@ func cloneProfile(profile ai.LLMMemoryProfile) ai.LLMMemoryProfile {
 	profile.SubjectActor = cloneActorRef(profile.SubjectActor)
 	if len(profile.EvidenceRecordIDs) > 0 {
 		profile.EvidenceRecordIDs = append([]string(nil), profile.EvidenceRecordIDs...)
+	}
+	if profile.ValidUntil != nil {
+		cloned := profile.ValidUntil.UTC()
+		profile.ValidUntil = &cloned
 	}
 	return profile
 }
@@ -335,6 +353,22 @@ func cloneMetadata(metadata map[string]string) map[string]string {
 	}
 
 	return cloned
+}
+
+func cloneStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	return append([]string(nil), values...)
+}
+
+func cloneLinks(links []ai.LLMMemoryLink) []ai.LLMMemoryLink {
+	if len(links) == 0 {
+		return nil
+	}
+
+	return append([]ai.LLMMemoryLink(nil), links...)
 }
 
 func normalizeProfile(
