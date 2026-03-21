@@ -32,9 +32,12 @@ AGENT_GUARD_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/agent_guard.sh
 PRE_COMMIT_QUALITY_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/pre_commit_quality.sh
 TEST_EXCEPTION_FILE ?= $(CURDIR)/config/quality/test_required_exceptions.txt
 
+WEB_DIR ?= $(CURDIR)/web
+
 .PHONY: tools doctor quality quality-core fmt fmt-check lint arch-check \
 	test test-race test-leak coverage-report security-warn agent-guard quality-pre-commit \
-	build dev generate hooks-install hooks-run
+	build dev generate hooks-install hooks-run \
+	web-install web-dev web-build web-lint web-format web-check
 
 tools: ## Install pinned local development tooling under .cache/tools/bin
 	@mkdir -p $(TOOLS_BIN) $(TOOLS_VERSION_DIR) $(GOLANGCI_LINT_CACHE) $(GO_BUILD_CACHE) $(COVERAGE_DIR)
@@ -181,3 +184,25 @@ dev: ## Run with hot reload when air is available
 		echo "air not found; running without hot reload"; \
 		$(GO) run $(MAIN_PKG); \
 	fi
+
+# ---------------------------------------------------------------------------
+# Web control panel (web/)
+# ---------------------------------------------------------------------------
+
+web-install: ## Install web control panel dependencies
+	cd $(WEB_DIR) && pnpm install
+
+web-dev: ## Run web control panel dev server
+	cd $(WEB_DIR) && pnpm run dev
+
+web-build: ## Build web control panel for production
+	cd $(WEB_DIR) && pnpm run build
+
+web-lint: ## Lint web control panel source
+	cd $(WEB_DIR) && pnpm run lint
+
+web-format: ## Format web control panel source
+	cd $(WEB_DIR) && pnpm run format
+
+web-check: ## Run web control panel type checking
+	cd $(WEB_DIR) && pnpm run type-check

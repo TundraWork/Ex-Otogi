@@ -1,4 +1,18 @@
+# Go
 .cache/
 bin/
 config/bot.json
 config/llm.json
+
+# Frontend (web/)
+web/node_modules/
+web/dist/
+web/.output/
+web/.nuxt/
+web/.env
+web/.env.local
+web/.env.*.local
+web/*.local
+
+# Frontend tooling
+web/components.d.ts
