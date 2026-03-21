@@ -101,6 +101,7 @@ func (m *Module) extractMemories(ctx context.Context, scope ai.LLMMemoryScope, c
 	if err != nil {
 		return fmt.Errorf("list existing memories: %w", err)
 	}
+	m.debugExtractionStart(ctx, scope, contextWindow.SourceArticleID, len([]rune(contextWindow.ConversationText)), len(existing))
 
 	prompt := renderExtractionPrompt(contextWindow, existing)
 	extractionCtx := ctx
@@ -139,6 +140,11 @@ func (m *Module) extractMemories(ctx context.Context, scope ai.LLMMemoryScope, c
 		m.debugExtractionParseError(ctx, err, responseText)
 		return nil
 	}
+	categories := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		categories = append(categories, c.Category)
+	}
+	m.debugExtractionResult(ctx, len(candidates), categories)
 
 	for _, candidate := range candidates {
 		if err := m.processCandidate(ctx, scope, contextWindow, candidate); err != nil {
@@ -191,7 +197,14 @@ func (m *Module) upsertCandidate(
 		return fmt.Errorf("search duplicates: %w", err)
 	}
 
+	var topSimilarity float32
+	if len(matches) > 0 {
+		topSimilarity = matches[0].Similarity
+	}
+	m.debugSynthesisQuery(ctx, len([]rune(candidate.Content)), len(matches), topSimilarity)
+
 	decision := m.decideSynthesis(ctx, candidate, matches, contextWindow)
+	m.debugCandidateUpsert(ctx, decision.Action, decision.TargetID, candidate.Category, candidate.Importance, len([]rune(candidate.Content)))
 	originalContent := candidate.Content
 	switch decision.Action {
 	case synthesisActionAdd, synthesisActionRewrite, synthesisActionSupersede:
@@ -920,6 +933,7 @@ func (m *Module) applyLinks(
 	}
 
 	// Add reverse links on each target.
+	reverseLinksApplied := 0
 	reverseLink := ai.LLMMemoryLink{TargetID: record.ID, Relation: links[0].Relation}
 	for _, link := range links {
 		for _, match := range matches {
@@ -940,9 +954,11 @@ func (m *Module) applyLinks(
 			}); err != nil {
 				continue
 			}
+			reverseLinksApplied++
 			break
 		}
 	}
+	m.debugLinkGeneration(ctx, record.ID, len(links), reverseLinksApplied)
 }
 
 // mergeLinks unions two link slices, deduplicating by TargetID.

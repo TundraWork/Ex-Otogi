@@ -61,9 +61,24 @@ func (m *Module) Name() string {
 	return "naturalmemory"
 }
 
-// Spec declares naturalmemory module metadata.
+// Spec declares naturalmemory module metadata and capabilities.
 func (m *Module) Spec() core.ModuleSpec {
-	return core.ModuleSpec{}
+	return core.ModuleSpec{
+		AdditionalCapabilities: []core.Capability{
+			{
+				Name:        "naturalmemory-article-observer",
+				Description: "observes article events for automatic long-term memory extraction",
+				Interest: core.InterestSet{
+					Kinds:          []platform.EventKind{platform.EventKindArticleCreated},
+					RequireArticle: true,
+				},
+				RequiredServices: []string{
+					ai.ServiceLLMMemory,
+					core.ServiceMemory,
+				},
+			},
+		},
+	}
 }
 
 // OnRegister resolves dependencies and subscribes to article events when the
@@ -188,7 +203,7 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 		ConversationID: event.Conversation.ID,
 	}
 	m.rememberScope(scope)
-	m.debugArticleObserved(ctx, scope, event.Article.ID)
+	m.debugArticleReceived(ctx, scope, event.Article.ID, len([]rune(event.Article.Text)), actorDisplayName(event.Actor))
 
 	contextWindow, err := m.buildExtractionContext(ctx, event)
 	if err != nil {

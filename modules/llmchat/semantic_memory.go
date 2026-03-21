@@ -70,6 +70,7 @@ func (m *Module) retrieveSemanticMemories(
 	if err != nil {
 		return "", fmt.Errorf("retrieve semantic memories build queries: %w", err)
 	}
+	m.debugSemanticMemoryPlan(ctx, plan, settings.RetrievalPlanningEnabled)
 	if len(plan.Queries) == 0 {
 		return "", nil
 	}
@@ -78,8 +79,12 @@ func (m *Module) retrieveSemanticMemories(
 	if err != nil {
 		return "", fmt.Errorf("retrieve semantic memories search: %w", err)
 	}
+	searchLimit := maxSemanticMemorySearchLimit(policy.MaxRetrievedMemories, len(plan.Queries), plan.Depth)
+	m.debugSemanticMemorySearch(ctx, len(matches), searchLimit, plan.Depth)
 	if plan.TimeFilter != "" {
+		preFilterCount := len(matches)
 		matches = filterMatchesByTime(matches, plan.TimeFilter, m.now())
+		m.debugSemanticMemoryTimeFilter(ctx, preFilterCount, len(matches), plan.TimeFilter)
 	}
 	if len(matches) == 0 {
 		return "", nil
@@ -89,6 +94,7 @@ func (m *Module) retrieveSemanticMemories(
 	queryTerms := extractQueryTerms(plan.Queries)
 	ranked := rankSemanticMemoryMatches(matches, settings.DecayFactor, m.now(), event.Actor, relatedActors, queryTerms)
 	selected := selectSemanticMemoryMatches(ranked, policy.MaxMemoryRunes)
+	m.debugSemanticMemoryRank(ctx, len(ranked), len(selected), len(queryTerms))
 	if len(selected) == 0 {
 		return "", nil
 	}
@@ -97,7 +103,15 @@ func (m *Module) retrieveSemanticMemories(
 	}
 
 	serialized := renderSemanticMemoryDocument(selected)
-	m.debugSemanticMemoryRetrieveResult(ctx, scope, len(selected), len(serialized))
+	var backgroundCount, recalledCount int
+	for _, match := range selected {
+		if isBackgroundMemory(match.Record) {
+			backgroundCount++
+		} else {
+			recalledCount++
+		}
+	}
+	m.debugSemanticMemoryRetrieveResult(ctx, scope, len(selected), len(serialized), backgroundCount, recalledCount)
 
 	return serialized, nil
 }

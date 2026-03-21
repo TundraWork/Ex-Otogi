@@ -78,6 +78,7 @@ func (m *Module) stopConsolidation(ctx context.Context) error {
 
 func (m *Module) runConsolidationCycle(ctx context.Context) error {
 	scopes := m.drainActiveScopes()
+	m.debugConsolidationCycleStart(ctx, len(scopes))
 	for _, scope := range scopes {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("consolidation cycle context: %w", err)
@@ -109,11 +110,14 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 
 	now := m.now()
 	kept := make([]ai.LLMMemoryRecord, 0, len(records))
+	expiredCount := 0
+	prunedCount := 0
 	for _, record := range records {
 		if record.Profile.ValidUntil != nil && record.Profile.ValidUntil.Before(now) {
 			if err := m.llmMemory.Delete(ctx, record.ID); err != nil {
 				return fmt.Errorf("delete expired memory %s: %w", record.ID, err)
 			}
+			expiredCount++
 			continue
 		}
 		importance := memoryImportance(record)
@@ -121,10 +125,12 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 			if err := m.llmMemory.Delete(ctx, record.ID); err != nil {
 				return fmt.Errorf("delete pruned memory %s: %w", record.ID, err)
 			}
+			prunedCount++
 			continue
 		}
 		kept = append(kept, record)
 	}
+	m.debugConsolidationScopeStart(ctx, scope, len(records), expiredCount, prunedCount, len(kept))
 	if len(kept) == 0 {
 		return nil
 	}
@@ -135,6 +141,20 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 		m.cfg.ClusterTemporalWeight,
 		m.cfg.DecayFactor,
 	)
+	themeEligible := 0
+	mergeEligible := 0
+	singletons := 0
+	for _, cluster := range clusters {
+		switch {
+		case len(cluster) >= m.cfg.ClusterMinSize:
+			themeEligible++
+		case len(cluster) > 1:
+			mergeEligible++
+		default:
+			singletons++
+		}
+	}
+	m.debugConsolidationClustering(ctx, len(clusters), themeEligible, mergeEligible, singletons)
 	for _, cluster := range clusters {
 		if len(cluster) >= m.cfg.ClusterMinSize {
 			if err := m.generateThemeFromCluster(ctx, scope, cluster, now); err != nil && m.logger != nil {
@@ -146,6 +166,7 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 				)
 			}
 		} else if len(cluster) > 1 {
+			m.debugConsolidationMerge(ctx, len(cluster))
 			if err := m.mergeNearDuplicates(ctx, cluster, now); err != nil {
 				return err
 			}
@@ -156,6 +177,7 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 	if err != nil {
 		return fmt.Errorf("refresh scope memories: %w", err)
 	}
+	m.debugConsolidationReflection(ctx, len(refreshed), m.cfg.ReflectionMinSourceMemories)
 	if err := m.maybeGenerateReflections(ctx, scope, refreshed, now); err != nil && m.logger != nil {
 		m.logger.WarnContext(ctx, "naturalmemory reflection generation",
 			"scope_platform", scope.Platform,
@@ -174,11 +196,13 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 
 	sortMemoriesByScore(refreshed, m.cfg.DecayFactor, now)
 
+	overflow := len(refreshed) - m.cfg.MaxMemoriesPerScope
 	for _, record := range refreshed[m.cfg.MaxMemoriesPerScope:] {
 		if err := m.llmMemory.Delete(ctx, record.ID); err != nil {
 			return fmt.Errorf("delete capped memory %s: %w", record.ID, err)
 		}
 	}
+	m.debugConsolidationCapOverflow(ctx, len(refreshed), m.cfg.MaxMemoriesPerScope, overflow)
 
 	return nil
 }
@@ -446,6 +470,7 @@ func (m *Module) generateThemeFromCluster(
 	}); err != nil {
 		return fmt.Errorf("store theme: %w", err)
 	}
+	m.debugConsolidationThemeGenerated(ctx, len(cluster), len([]rune(candidate.Content)))
 
 	// Delete source records.
 	for _, record := range cluster {

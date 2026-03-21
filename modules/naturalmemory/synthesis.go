@@ -40,6 +40,7 @@ func (m *Module) decideSynthesis(
 ) synthesisDecision {
 	fallback := fallbackSynthesisDecision(candidate, matches, m.cfg.DuplicateSimilarityThreshold)
 	if len(matches) == 0 || m == nil || m.extractionProvider == nil {
+		m.debugSynthesisDecision(ctx, fallback.Action, fallback.TargetID, len(fallback.AbsorbedRecordIDs), true)
 		return fallback
 	}
 
@@ -59,21 +60,26 @@ func (m *Module) decideSynthesis(
 		Temperature: 0.1,
 	})
 	if err != nil {
+		m.debugSynthesisDecision(ctx, fallback.Action, fallback.TargetID, len(fallback.AbsorbedRecordIDs), true)
 		return fallback
 	}
 
 	responseText, err := collectStreamText(requestCtx, stream)
 	closeErr := stream.Close()
 	if err != nil || closeErr != nil {
+		m.debugSynthesisDecision(ctx, fallback.Action, fallback.TargetID, len(fallback.AbsorbedRecordIDs), true)
 		return fallback
 	}
 
 	decision, err := parseSynthesisDecision(responseText)
 	if err != nil {
+		m.debugSynthesisDecision(ctx, fallback.Action, fallback.TargetID, len(fallback.AbsorbedRecordIDs), true)
 		return fallback
 	}
 
-	return normalizeSynthesisDecision(decision, candidate, matches, fallback)
+	result := normalizeSynthesisDecision(decision, candidate, matches, fallback)
+	m.debugSynthesisDecision(ctx, result.Action, result.TargetID, len(result.AbsorbedRecordIDs), false)
+	return result
 }
 
 func renderSynthesisDecisionPrompt(

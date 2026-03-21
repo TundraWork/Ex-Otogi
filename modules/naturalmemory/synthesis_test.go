@@ -271,6 +271,29 @@ func TestNormalizeSynthesisDecisionSupersede(t *testing.T) {
 	}
 }
 
+func TestDecideSynthesisFallbackWithNoMatches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
+	module := New(withClock(func() time.Time { return now }), withConfig(Config{
+		Enabled:                      true,
+		DuplicateSimilarityThreshold: 0.85,
+	}))
+
+	decision := module.decideSynthesis(
+		context.Background(),
+		extractedMemory{Content: "Alice likes tea", Category: "preference", Importance: 7},
+		nil,
+		extractionContext{AnchorTime: now},
+	)
+	if decision.Action != synthesisActionAdd {
+		t.Fatalf("action = %q, want add (fallback with no matches)", decision.Action)
+	}
+	if decision.Content != "Alice likes tea" {
+		t.Fatalf("content = %q, want original candidate content", decision.Content)
+	}
+}
+
 func TestRenderSynthesisPromptIncludesSupersedeAction(t *testing.T) {
 	t.Parallel()
 

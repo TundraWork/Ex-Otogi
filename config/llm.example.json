@@ -21,7 +21,10 @@
     "reflection_source_limit": 20,
     "reflection_max_generated": 3,
     "retrieval_planning_enabled": true,
-    "retrieval_planning_timeout": "10s"
+    "retrieval_planning_timeout": "10s",
+    "cluster_min_size": 3,
+    "cluster_similarity_threshold": 0.80,
+    "cluster_temporal_weight": 0.3
   },
   "providers": {
     "openai-main": {

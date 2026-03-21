@@ -72,11 +72,63 @@ func (m *Module) debugSemanticMemoryRetrieve(ctx context.Context, scope ai.LLMMe
 	)
 }
 
+func (m *Module) debugSemanticMemoryPlan(ctx context.Context, plan retrievalPlan, plannerUsed bool) {
+	if m == nil || m.logger == nil {
+		return
+	}
+
+	m.logger.DebugContext(ctx, "llmchat semantic memory plan",
+		"query_count", len(plan.Queries),
+		"queries", plan.Queries,
+		"time_filter", plan.TimeFilter,
+		"depth", plan.Depth,
+		"planner_used", plannerUsed,
+	)
+}
+
+func (m *Module) debugSemanticMemorySearch(ctx context.Context, rawMatchCount int, searchLimit int, depth string) {
+	if m == nil || m.logger == nil {
+		return
+	}
+
+	m.logger.DebugContext(ctx, "llmchat semantic memory search",
+		"raw_match_count", rawMatchCount,
+		"search_limit", searchLimit,
+		"depth", depth,
+	)
+}
+
+func (m *Module) debugSemanticMemoryTimeFilter(ctx context.Context, beforeCount int, afterCount int, filter string) {
+	if m == nil || m.logger == nil {
+		return
+	}
+
+	m.logger.DebugContext(ctx, "llmchat semantic memory time filter",
+		"before_count", beforeCount,
+		"after_count", afterCount,
+		"filter", filter,
+	)
+}
+
+func (m *Module) debugSemanticMemoryRank(ctx context.Context, rankedCount int, selectedCount int, queryTermCount int) {
+	if m == nil || m.logger == nil {
+		return
+	}
+
+	m.logger.DebugContext(ctx, "llmchat semantic memory rank",
+		"ranked_count", rankedCount,
+		"selected_count", selectedCount,
+		"query_term_count", queryTermCount,
+	)
+}
+
 func (m *Module) debugSemanticMemoryRetrieveResult(
 	ctx context.Context,
 	scope ai.LLMMemoryScope,
 	matchCount int,
 	serializedLength int,
+	backgroundCount int,
+	recalledCount int,
 ) {
 	if m == nil || m.logger == nil {
 		return
@@ -87,5 +139,7 @@ func (m *Module) debugSemanticMemoryRetrieveResult(
 		"scope_conversation_id", scope.ConversationID,
 		"match_count", matchCount,
 		"serialized_length", serializedLength,
+		"background_count", backgroundCount,
+		"recalled_count", recalledCount,
 	)
 }

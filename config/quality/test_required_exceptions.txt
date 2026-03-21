@@ -2,3 +2,6 @@
 # Supports shell-style glob matching against repository-relative paths.
 # Keep this list small and document each exception with a reason comment.
 
+# Debug logging wrappers: nil-guard + slog call, no branching logic to test.
+modules/*/debug_log.go
+
