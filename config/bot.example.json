@@ -26,8 +26,9 @@
         "download_threads": 4,
         "download_verify": false,
         "attachment_cache_entries": 2048,
-        "code": "",
+        "bot_token": "",
         "phone": "+15550001111",
+        "code": "",
         "password": "",
         "session_file": ".cache/telegram/session.json"
       }
