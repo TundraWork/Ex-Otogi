@@ -84,10 +84,16 @@ func BuildRuntimeFromConfig(
 		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd session storage: %w", err)
 	}
 
-	client := gotdtelegram.NewClient(cfg.appID, cfg.appHash, gotdtelegram.Options{
+	opts, err := gotdtelegram.OptionsFromEnvironment(gotdtelegram.Options{
 		UpdateHandler:  updateChannel,
 		SessionStorage: sessionStorage,
 	})
+	if err != nil {
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd telegram options: %w", err)
+	}
+
+	client := gotdtelegram.NewClient(cfg.appID, cfg.appHash, opts)
+	logger.Info("gotd telegram client created")
 
 	peers := NewPeerCache()
 	mediaLocators := newMediaLocatorCache(cfg.attachmentCacheEntries)
