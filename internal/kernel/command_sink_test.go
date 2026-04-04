@@ -2,20 +2,23 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	kernelmanagement "ex-otogi/internal/kernel/management"
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
 func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -76,7 +79,7 @@ func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) 
 func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -142,7 +145,7 @@ func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testi
 func TestCommandDerivingSinkUnregisteredCommandPublishesOnlySourceEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -183,7 +186,7 @@ func TestCommandDerivingSinkUnregisteredCommandPublishesOnlySourceEvent(t *testi
 func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -244,6 +247,81 @@ func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *te
 	case event := <-commandEvents:
 		t.Fatalf("unexpected derived command event: %+v", event)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestCommandDerivingSinkRecordsInboundRawEventArtifact(t *testing.T) {
+	t.Parallel()
+
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
+	t.Cleanup(func() {
+		_ = bus.Close(context.Background())
+	})
+
+	services := NewServiceRegistry()
+	managementService := kernelmanagement.NewService(kernelmanagement.Limits{
+		MaxEvents:        8,
+		MaxArtifacts:     8,
+		MaxArtifactBytes: 16 * 1024,
+	})
+	if err := services.Register(panel.ServiceRecorder, managementService); err != nil {
+		t.Fatalf("register recorder failed: %v", err)
+	}
+
+	sink := &commandDerivingDispatcher{
+		base: bus,
+		lookupCommand: func(platform.CommandPrefix, string) (platform.CommandSpec, bool) {
+			return platform.CommandSpec{}, false
+		},
+		serviceLookup: services,
+	}
+
+	source := newSourceCreatedEvent("evt-raw", "msg-raw", "hello observability", "")
+	source.Source.ID = "tg-src"
+	source.Article.Entities = []platform.TextEntity{
+		{Type: platform.TextEntityTypeBold, Offset: 0, Length: 5},
+	}
+
+	if err := sink.Publish(context.Background(), source); err != nil {
+		t.Fatalf("publish failed: %v", err)
+	}
+
+	page, err := managementService.ListEvents(context.Background(), panel.EventQuery{AfterID: 0, Limit: 10})
+	if err != nil {
+		t.Fatalf("ListEvents failed: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("len(Items) = %d, want 1", len(page.Items))
+	}
+
+	recordedEvent := page.Items[0]
+	if recordedEvent.Kind != "platform.event.received" {
+		t.Fatalf("event kind = %q, want platform.event.received", recordedEvent.Kind)
+	}
+	if len(recordedEvent.ArtifactIDs) != 1 {
+		t.Fatalf("len(ArtifactIDs) = %d, want 1", len(recordedEvent.ArtifactIDs))
+	}
+
+	artifact, err := managementService.GetArtifact(context.Background(), recordedEvent.ArtifactIDs[0])
+	if err != nil {
+		t.Fatalf("GetArtifact failed: %v", err)
+	}
+	if artifact.Kind != panel.ArtifactKindStructuredDebug {
+		t.Fatalf("artifact kind = %q, want %q", artifact.Kind, panel.ArtifactKindStructuredDebug)
+	}
+
+	var payload platform.Event
+	if err := json.Unmarshal([]byte(artifact.Content), &payload); err != nil {
+		t.Fatalf("json.Unmarshal artifact content failed: %v", err)
+	}
+	if payload.ID != source.ID {
+		t.Fatalf("payload.ID = %q, want %q", payload.ID, source.ID)
+	}
+	if payload.Article == nil || payload.Article.Text != source.Article.Text {
+		t.Fatalf("payload.Article = %+v, want text %q", payload.Article, source.Article.Text)
+	}
+	if payload.Source.ID != source.Source.ID {
+		t.Fatalf("payload.Source.ID = %q, want %q", payload.Source.ID, source.Source.ID)
 	}
 }
 
@@ -488,7 +566,7 @@ func TestChatAllowlistConfig(t *testing.T) {
 func TestCommandDerivingDispatcherAllowlistDropsNonAllowlistedEvents(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -536,7 +614,7 @@ func TestCommandDerivingDispatcherAllowlistDropsNonAllowlistedEvents(t *testing.
 func TestCommandDerivingDispatcherAllowlistPassesAllowlistedChat(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -588,7 +666,7 @@ func TestCommandDerivingDispatcherAllowlistPassesAllowlistedChat(t *testing.T) {
 func TestCommandDerivingDispatcherAllowlistBypassSystemCommand(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -646,7 +724,7 @@ func TestCommandDerivingDispatcherAllowlistBypassSystemCommand(t *testing.T) {
 func TestCommandDerivingDispatcherAllowlistBypassRejectsNonBypassSystemCommand(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -695,7 +773,7 @@ func TestCommandDerivingDispatcherAllowlistBypassRejectsNonBypassSystemCommand(t
 func TestCommandDerivingDispatcherAllowlistBypassRejectsOrdinaryCommand(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})

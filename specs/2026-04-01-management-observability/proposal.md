@@ -1,0 +1,16 @@
+# Management Observability Foundation
+
+在 `pkg` 里新拉一个包出来，用于实现 management。第一阶段先服务于查看日志和统计数据，比如业务事件、记忆检索和召回、文本嵌入状态、LLM 调用时的 prompt 等。
+
+这个包需要先提供编程 API，供仓库内其它包主动上报 management 相关的数据。随后增加一个 Huma server，向前端提供 management API。第一阶段以查询为主，不包含操作命令；后续可能再加入控制类命令。
+
+当前约束与方向如下：
+
+- 数据只保存在内存中，使用滑动窗口。
+- 保存原文，不做 prompt 或 artifact 截断，以便调试。
+- 前端采用轮询方式拉取事件流；事件必须有全局自增 ID，前端自行维护游标。
+- HTTP 监听地址可配置，默认 `127.0.0.1`。
+- HTTP API 一律要求 token 鉴权。
+- provider 应主动调用追踪/观测包上报事件，以便统计 embedding 和 LLM 调用。
+- 使用统一通用事件模型，但每种事件拥有自己的 DTO payload。
+- 第一阶段目标偏调试，而不是运维统计。

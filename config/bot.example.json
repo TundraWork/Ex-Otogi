@@ -11,6 +11,15 @@
       "bypass_commands": ["whoami"]
     }
   },
+  "management": {
+    "enabled": false,
+    "listen_address": "127.0.0.1",
+    "bearer_token": "change-me",
+    "max_events": 2048,
+    "max_artifacts": 1024,
+    "max_artifact_bytes": 16777216,
+    "max_snapshots": 128
+  },
   "drivers": [
     {
       "name": "telegram-main",

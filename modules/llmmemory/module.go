@@ -12,6 +12,7 @@ import (
 
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 
 	"github.com/google/uuid"
 )
@@ -61,6 +62,7 @@ type Module struct {
 	logger    *slog.Logger
 	clock     func() time.Time
 	newID     func() string
+	recorder  panel.Recorder
 	stopCh    chan struct{}
 	flushDone chan struct{}
 }
@@ -114,6 +116,14 @@ func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error
 	default:
 		return fmt.Errorf("llmmemory resolve logger: %w", err)
 	}
+	recorder, err := core.ResolveAs[panel.Recorder](runtime.Services(), panel.ServiceRecorder)
+	switch {
+	case err == nil:
+		m.recorder = recorder
+	case errors.Is(err, core.ErrServiceNotFound):
+	default:
+		return fmt.Errorf("llmmemory resolve recorder: %w", err)
+	}
 
 	cfg, err := loadConfig(runtime.Config())
 	if err != nil {
@@ -142,6 +152,11 @@ func (m *Module) OnStart(ctx context.Context) error {
 			m.logger.WarnContext(ctx, "llmmemory load persistence", "error", err)
 		} else {
 			m.debugPersistenceLoad(ctx, m.cfg.PersistenceFile)
+			m.emitManagementEvent(ctx, "memory.store.persistence_loaded", "loaded llm memory persistence", panel.MemoryStoreOperationPayload{
+				Store:         m.Name(),
+				Operation:     "persistence.load",
+				AffectedCount: m.store.recordCount(),
+			})
 		}
 	}
 	if m.cfg.FlushInterval > 0 && strings.TrimSpace(m.cfg.PersistenceFile) != "" {
@@ -165,6 +180,11 @@ func (m *Module) OnShutdown(ctx context.Context) error {
 			return fmt.Errorf("llmmemory final flush: %w", err)
 		}
 		m.debugPersistenceSave(ctx, m.cfg.PersistenceFile)
+		m.emitManagementEvent(ctx, "memory.store.persistence_saved", "saved llm memory persistence", panel.MemoryStoreOperationPayload{
+			Store:         m.Name(),
+			Operation:     "persistence.save",
+			AffectedCount: m.store.recordCount(),
+		})
 	}
 
 	return nil
@@ -182,6 +202,10 @@ func (m *Module) Store(ctx context.Context, entry ai.LLMMemoryEntry) (ai.LLMMemo
 		return ai.LLMMemoryRecord{}, err
 	}
 	m.debugStoreResult(ctx, record)
+	m.emitManagementEvent(ctx, "memory.store.upserted", "stored semantic memory record", panel.MemoryStoreUpsertedPayload{
+		Store:         m.Name(),
+		UpsertedCount: 1,
+	})
 
 	return record, nil
 }
@@ -198,6 +222,11 @@ func (m *Module) Search(ctx context.Context, query ai.LLMMemoryQuery) ([]ai.LLMM
 		return nil, err
 	}
 	m.debugSearchResult(ctx, query, matches)
+	m.emitManagementEvent(ctx, "memory.store.searched", "searched semantic memory store", panel.MemoryStoreOperationPayload{
+		Store:         m.Name(),
+		Operation:     "search",
+		AffectedCount: len(matches),
+	})
 
 	return matches, nil
 }
@@ -209,8 +238,17 @@ func (m *Module) Update(ctx context.Context, update ai.LLMMemoryUpdate) (ai.LLMM
 	}
 
 	m.debugUpdate(ctx, update)
+	record, err := m.store.Update(ctx, update)
+	if err != nil {
+		return ai.LLMMemoryRecord{}, err
+	}
+	m.emitManagementEvent(ctx, "memory.store.updated", "updated semantic memory record", panel.MemoryStoreOperationPayload{
+		Store:         m.Name(),
+		Operation:     "update",
+		AffectedCount: 1,
+	})
 
-	return m.store.Update(ctx, update)
+	return record, nil
 }
 
 // Delete removes one stored memory record by ID.
@@ -220,8 +258,16 @@ func (m *Module) Delete(ctx context.Context, id string) error {
 	}
 
 	m.debugDelete(ctx, id)
+	if err := m.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	m.emitManagementEvent(ctx, "memory.store.deleted", "deleted semantic memory record", panel.MemoryStoreOperationPayload{
+		Store:         m.Name(),
+		Operation:     "delete",
+		AffectedCount: 1,
+	})
 
-	return m.store.Delete(ctx, id)
+	return nil
 }
 
 // ListByScope returns stored memory records for one scope.

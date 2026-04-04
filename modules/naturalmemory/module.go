@@ -11,6 +11,7 @@ import (
 
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -29,6 +30,7 @@ type Module struct {
 	consolidationProvider ai.LLMProvider
 	memory                core.MemoryService
 	logger                *slog.Logger
+	recorder              panel.Recorder
 	clock                 func() time.Time
 
 	activeScopes   map[string]ai.LLMMemoryScope
@@ -91,6 +93,14 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	case errors.Is(err, core.ErrServiceNotFound):
 	default:
 		return fmt.Errorf("naturalmemory resolve logger: %w", err)
+	}
+	recorder, err := core.ResolveAs[panel.Recorder](runtime.Services(), panel.ServiceRecorder)
+	switch {
+	case err == nil:
+		m.recorder = recorder
+	case errors.Is(err, core.ErrServiceNotFound):
+	default:
+		return fmt.Errorf("naturalmemory resolve recorder: %w", err)
 	}
 
 	cfg, err := loadConfig(runtime.Config())
@@ -190,6 +200,9 @@ func (m *Module) OnShutdown(ctx context.Context) error {
 }
 
 func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error {
+	if m.recorder != nil {
+		ctx = panel.WithRecorder(ctx, m.recorder)
+	}
 	if !m.cfg.Enabled || event == nil || event.Article == nil {
 		return nil
 	}

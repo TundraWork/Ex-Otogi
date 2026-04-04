@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -64,6 +65,10 @@ func (m *Module) retrieveSemanticMemories(
 	settings := resolveNaturalMemorySettings(m.cfg.NaturalMemory)
 	scope := semanticMemoryScope(event)
 	m.debugSemanticMemoryRetrieve(ctx, scope, prompt)
+	m.emitManagementEvent(ctx, event, "memory.retrieve.started", "started semantic memory retrieval", panel.MemoryRetrieveStartedPayload{
+		Provider:   agent.EmbeddingProvider,
+		QueryCount: 1,
+	})
 
 	replyRootSummary := m.replyRootSummary(ctx, event)
 	plan, err := m.buildSemanticMemoryPlan(ctx, prompt, replyRootSummary, settings)
@@ -71,6 +76,12 @@ func (m *Module) retrieveSemanticMemories(
 		return "", fmt.Errorf("retrieve semantic memories build queries: %w", err)
 	}
 	m.debugSemanticMemoryPlan(ctx, plan, settings.RetrievalPlanningEnabled)
+	m.emitManagementEvent(ctx, event, "memory.retrieve.planned", "planned semantic memory retrieval", panel.MemoryRetrievePlanPayload{
+		Queries:     append([]string(nil), plan.Queries...),
+		TimeFilter:  plan.TimeFilter,
+		Depth:       plan.Depth,
+		PlannerUsed: settings.RetrievalPlanningEnabled,
+	})
 	if len(plan.Queries) == 0 {
 		return "", nil
 	}
@@ -81,6 +92,10 @@ func (m *Module) retrieveSemanticMemories(
 	}
 	searchLimit := maxSemanticMemorySearchLimit(policy.MaxRetrievedMemories, len(plan.Queries), plan.Depth)
 	m.debugSemanticMemorySearch(ctx, len(matches), searchLimit, plan.Depth)
+	m.emitManagementEvent(ctx, event, "memory.retrieve.searched", "searched semantic memory candidates", panel.MemoryRetrieveSearchedPayload{
+		CandidateCount: len(matches),
+		ReturnedCount:  min(len(matches), searchLimit),
+	})
 	if plan.TimeFilter != "" {
 		preFilterCount := len(matches)
 		matches = filterMatchesByTime(matches, plan.TimeFilter, m.now())
@@ -112,6 +127,10 @@ func (m *Module) retrieveSemanticMemories(
 		}
 	}
 	m.debugSemanticMemoryRetrieveResult(ctx, scope, len(selected), len(serialized), backgroundCount, recalledCount)
+	m.emitManagementEvent(ctx, event, "memory.retrieve.completed", "completed semantic memory retrieval", panel.MemoryRetrieveCompletedPayload{
+		ResultCount: len(selected),
+		ElapsedMS:   0,
+	})
 
 	return serialized, nil
 }

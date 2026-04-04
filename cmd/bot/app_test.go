@@ -15,6 +15,7 @@ import (
 
 	driverpkg "ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -144,6 +145,42 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("loads management config when enabled", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "bot.json")
+		writeConfigFile(t, configPath, `{
+			"management":{
+				"enabled":true,
+				"listen_address":"127.0.0.1:9090",
+				"bearer_token":"test-token",
+				"max_events":128,
+				"max_artifacts":64,
+				"max_artifact_bytes":4096,
+				"max_snapshots":16
+			},
+			"drivers":[
+				{"name":"tg-main","type":"telegram","config":{"app_id":123456,"app_hash":"sample_hash"}}
+			]
+		}`)
+		t.Setenv(envConfigFile, configPath)
+
+		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
+		if err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+		if !cfg.management.enabled {
+			t.Fatal("management.enabled = false, want true")
+		}
+		if cfg.management.listenAddress != "127.0.0.1:9090" {
+			t.Fatalf("management.listenAddress = %q, want 127.0.0.1:9090", cfg.management.listenAddress)
+		}
+		if cfg.management.bearerToken != "test-token" {
+			t.Fatalf("management.bearerToken = %q, want test-token", cfg.management.bearerToken)
+		}
+		if cfg.management.maxEvents != 128 || cfg.management.maxArtifacts != 64 || cfg.management.maxArtifactBytes != 4096 || cfg.management.maxSnapshots != 16 {
+			t.Fatalf("unexpected management limits: %+v", cfg.management)
+		}
+	})
+
 	t.Run("single-driver mode infers default route", func(t *testing.T) {
 		configPath := filepath.Join(t.TempDir(), "bot.json")
 		writeConfigFile(t, configPath, `{
@@ -236,6 +273,11 @@ func TestLoadConfig(t *testing.T) {
 				name:       "unsupported driver type",
 				fileJSON:   `{"drivers":[{"name":"legacy","type":"irc","config":{}}]}`,
 				wantErrSub: "unsupported type irc",
+			},
+			{
+				name:       "management enabled requires token",
+				fileJSON:   `{"management":{"enabled":true},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				wantErrSub: "management.bearer_token is required",
 			},
 		}
 
@@ -336,6 +378,24 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("llmchat config_file = %q, want /tmp/llm.json", llmchatCfg.ConfigFile)
 		}
 	})
+}
+
+func TestBuildKernelRuntimeRegistersManagementServicesWhenEnabled(t *testing.T) {
+	cfg := defaultAppConfig()
+	cfg.management.enabled = true
+	cfg.management.bearerToken = "test-token"
+
+	kernelRuntime, err := buildKernelRuntime(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
+	if err != nil {
+		t.Fatalf("buildKernelRuntime failed: %v", err)
+	}
+
+	if _, err := kernelRuntime.Services().Resolve(panel.ServiceRecorder); err != nil {
+		t.Fatalf("resolve management recorder failed: %v", err)
+	}
+	if _, err := kernelRuntime.Services().Resolve(panel.ServiceQuery); err != nil {
+		t.Fatalf("resolve management query failed: %v", err)
+	}
 }
 
 func TestRegisterRuntimeServices(t *testing.T) {

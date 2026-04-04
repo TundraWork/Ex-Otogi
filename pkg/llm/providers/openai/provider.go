@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -120,13 +122,22 @@ func (p *Provider) GenerateStream(
 	if err != nil {
 		return nil, fmt.Errorf("openai generate stream map request: %w", err)
 	}
+	startedAt := time.Now()
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		recordLLMStart(ctx, recorder, "openai", req, startedAt)
+	}
 
 	stream := p.responses.NewStreaming(ctx, params)
 	if stream == nil {
 		return nil, fmt.Errorf("openai generate stream: openai stream is nil")
 	}
 
-	return newOpenAIStream(stream), nil
+	wrapped := ai.LLMStream(newOpenAIStream(stream))
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		wrapped = newObservedLLMStream(ctx, wrapped, recorder, "openai", strings.TrimSpace(req.Model), startedAt)
+	}
+
+	return wrapped, nil
 }
 
 func mapGenerateRequest(req ai.LLMGenerateRequest) (responses.ResponseNewParams, error) {

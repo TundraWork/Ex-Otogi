@@ -7,8 +7,10 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 
 	"google.golang.org/genai"
 )
@@ -117,6 +119,10 @@ func (p *EmbeddingProvider) Embed(ctx context.Context, req ai.EmbeddingRequest) 
 	if err != nil {
 		return ai.EmbeddingResponse{}, fmt.Errorf("gemini embed validate request: %w", err)
 	}
+	startedAt := time.Now()
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		recordEmbeddingStart(ctx, recorder, "gemini", effective, startedAt)
+	}
 
 	contents := make([]*genai.Content, 0, len(effective.Texts))
 	for _, text := range effective.Texts {
@@ -133,6 +139,9 @@ func (p *EmbeddingProvider) Embed(ctx context.Context, req ai.EmbeddingRequest) 
 
 	response, err := p.models.EmbedContent(ctx, strings.TrimSpace(effective.Model), contents, config)
 	if err != nil {
+		if recorder, ok := panel.RecorderFromContext(ctx); ok {
+			recordEmbeddingFailed(ctx, recorder, "gemini", effective, startedAt, err)
+		}
 		return ai.EmbeddingResponse{}, fmt.Errorf("gemini embed request: %w", err)
 	}
 	if response == nil {
@@ -158,7 +167,12 @@ func (p *EmbeddingProvider) Embed(ctx context.Context, req ai.EmbeddingRequest) 
 		vectors = append(vectors, vector)
 	}
 
-	return ai.EmbeddingResponse{Vectors: vectors}, nil
+	result := ai.EmbeddingResponse{Vectors: vectors}
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		recordEmbeddingCompleted(ctx, recorder, "gemini", effective, result, startedAt)
+	}
+
+	return result, nil
 }
 
 func (p *EmbeddingProvider) resolveRequest(req ai.EmbeddingRequest) (ai.EmbeddingRequest, error) {

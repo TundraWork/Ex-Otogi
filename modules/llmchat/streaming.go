@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -141,6 +142,14 @@ func (m *Module) streamProviderReplyWithTools(
 		)
 
 		m.debugToolCallsDetected(streamCtx, iteration, result.toolCalls)
+		toolNames := make([]string, 0, len(result.toolCalls))
+		for _, toolCall := range result.toolCalls {
+			toolNames = append(toolNames, toolCall.Name)
+		}
+		m.emitManagementEvent(streamCtx, nil, "llm.tool.detected", "detected model tool calls", panel.LLMToolDetectedPayload{
+			ToolNames: toolNames,
+			Count:     len(toolNames),
+		})
 
 		toolMessages, toolErr := m.executeToolCalls(streamCtx, toolRegistry, result.toolCalls)
 		if toolErr != nil {
@@ -376,13 +385,17 @@ func (m *Module) executeToolCalls(
 
 		result, err := toolRegistry.Execute(ctx, toolCall.Name, json.RawMessage(toolCall.Arguments))
 		if err != nil {
+			m.recordToolExecuted(ctx, nil, toolCall.Name, false, m.now().Sub(execStart), err)
 			return nil, fmt.Errorf("tool_calls[%d] execute %s: %w", index, toolCall.Name, err)
 		}
 		if strings.TrimSpace(result) == "" {
+			emptyErr := fmt.Errorf("empty result")
+			m.recordToolExecuted(ctx, nil, toolCall.Name, false, m.now().Sub(execStart), emptyErr)
 			return nil, fmt.Errorf("tool_calls[%d] execute %s: empty result", index, toolCall.Name)
 		}
 
 		m.debugToolExecuteEnd(ctx, toolCall, m.now().Sub(execStart), len(result))
+		m.recordToolExecuted(ctx, nil, toolCall.Name, true, m.now().Sub(execStart), nil)
 
 		results = append(results, ai.LLMMessage{
 			Role:       ai.LLMMessageRoleTool,

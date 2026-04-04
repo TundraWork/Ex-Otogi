@@ -50,6 +50,7 @@ func New(options ...Option) (*Kernel, error) {
 		cfg.subscriptionWorker,
 		cfg.handlerTimeout,
 		cfg.onAsyncError,
+		cfg.onEventPublished,
 	)
 
 	kernelRuntime := &Kernel{

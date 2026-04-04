@@ -6,8 +6,10 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -107,6 +109,10 @@ func (p *EmbeddingProvider) Embed(ctx context.Context, req ai.EmbeddingRequest) 
 	if err != nil {
 		return ai.EmbeddingResponse{}, fmt.Errorf("openai embed validate request: %w", err)
 	}
+	startedAt := time.Now()
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		recordEmbeddingStart(ctx, recorder, "openai", effective, startedAt)
+	}
 
 	params := openai.EmbeddingNewParams{
 		Input: openai.EmbeddingNewParamsInputUnion{
@@ -120,6 +126,9 @@ func (p *EmbeddingProvider) Embed(ctx context.Context, req ai.EmbeddingRequest) 
 
 	response, err := p.embeddings.New(ctx, params)
 	if err != nil {
+		if recorder, ok := panel.RecorderFromContext(ctx); ok {
+			recordEmbeddingFailed(ctx, recorder, "openai", effective, startedAt, err)
+		}
 		return ai.EmbeddingResponse{}, fmt.Errorf("openai embed request: %w", err)
 	}
 	if response == nil {
@@ -142,7 +151,12 @@ func (p *EmbeddingProvider) Embed(ctx context.Context, req ai.EmbeddingRequest) 
 		vectors = append(vectors, vector)
 	}
 
-	return ai.EmbeddingResponse{Vectors: vectors}, nil
+	result := ai.EmbeddingResponse{Vectors: vectors}
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		recordEmbeddingCompleted(ctx, recorder, "openai", effective, result, startedAt)
+	}
+
+	return result, nil
 }
 
 func (p *EmbeddingProvider) resolveRequest(req ai.EmbeddingRequest) (ai.EmbeddingRequest, error) {

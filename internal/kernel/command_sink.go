@@ -2,11 +2,14 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -176,16 +179,65 @@ func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *platform
 	if s.base == nil {
 		return fmt.Errorf("publish command deriving sink: nil base sink")
 	}
+	tracedCtx, _, err := ensureTraceContext(ctx)
+	if err != nil {
+		return fmt.Errorf("publish command deriving sink: %w", err)
+	}
+	s.recordInboundEvent(tracedCtx, event)
 
 	if !s.allowlist.IsConversationAllowed(event.Source.ID, event.Conversation.ID) {
-		return s.publishBypassOnly(ctx, event)
+		return s.publishBypassOnly(tracedCtx, event)
 	}
 
-	if err := s.base.Publish(ctx, event); err != nil {
+	if err := s.base.Publish(tracedCtx, event); err != nil {
 		return fmt.Errorf("publish source event %s: %w", event.Kind, err)
 	}
 
-	return s.deriveCommand(ctx, event)
+	return s.deriveCommand(tracedCtx, event)
+}
+
+func (s *commandDerivingDispatcher) recordInboundEvent(ctx context.Context, event *platform.Event) {
+	if s == nil || event == nil {
+		return
+	}
+	recorder, err := core.ResolveAs[panel.Recorder](s.serviceLookup, panel.ServiceRecorder)
+	if err != nil {
+		return
+	}
+	recordedEvent, err := recorder.RecordEvent(ctx, panel.Event{
+		Category:       panel.EventCategoryBusinessEvent,
+		Kind:           "platform.event.received",
+		Level:          panel.EventLevelDebug,
+		Module:         "kernel",
+		Component:      "driver-dispatcher",
+		Platform:       string(event.Source.Platform),
+		ConversationID: event.Conversation.ID,
+		ActorID:        event.Actor.ID,
+		Summary:        "received inbound platform event",
+		PayloadType:    "PlatformEventReceivedPayload",
+		Payload: panel.PlatformEventReceivedPayload{
+			EventKind: string(event.Kind),
+			SourceID:  event.Source.ID,
+			MessageID: commandReplyToMessageID(event),
+		},
+	})
+	if err != nil {
+		return
+	}
+	content, err := json.Marshal(event)
+	if err != nil || len(content) == 0 {
+		return
+	}
+	_, err = recorder.RecordArtifact(ctx, panel.Artifact{
+		ID:        fmt.Sprintf("art_%d_%d", recordedEvent.ID, time.Now().UnixNano()),
+		EventID:   recordedEvent.ID,
+		Kind:      panel.ArtifactKindStructuredDebug,
+		CreatedAt: time.Now().UTC(),
+		Content:   string(content),
+	})
+	if err != nil {
+		return
+	}
 }
 
 // publishBypassOnly handles events from non-allowlisted conversations.

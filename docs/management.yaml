@@ -1,0 +1,502 @@
+components:
+  schemas:
+    Artifact:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - //schemas/Artifact.json
+          format: uri
+          readOnly: true
+          type: string
+        Content:
+          type: string
+        CreatedAt:
+          format: date-time
+          type: string
+        EventID:
+          format: int64
+          type: integer
+        ID:
+          type: string
+        Kind:
+          type: string
+      required:
+        - ID
+        - EventID
+        - Kind
+        - CreatedAt
+        - Content
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    ErrorModel:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - //schemas/ErrorModel.json
+          format: uri
+          readOnly: true
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          examples:
+            - Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          type:
+            - array
+            - "null"
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          examples:
+            - https://example.com/error-log/abc123
+          format: uri
+          type: string
+        status:
+          description: HTTP status code
+          examples:
+            - 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          examples:
+            - Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          examples:
+            - https://example.com/errors/example
+          format: uri
+          type: string
+      type: object
+    Event:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - //schemas/Event.json
+          format: uri
+          readOnly: true
+          type: string
+        ActorID:
+          type: string
+        ArtifactIDs:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        Category:
+          type: string
+        Component:
+          type: string
+        ConversationID:
+          type: string
+        ID:
+          format: int64
+          type: integer
+        Kind:
+          type: string
+        Level:
+          type: string
+        Module:
+          type: string
+        OccurredAt:
+          format: date-time
+          type: string
+        ParentEventID:
+          format: int64
+          type:
+            - integer
+            - "null"
+        Payload: {}
+        PayloadType:
+          type: string
+        Platform:
+          type: string
+        Summary:
+          type: string
+        TenantID:
+          type: string
+        TraceID:
+          type: string
+      required:
+        - ID
+        - OccurredAt
+        - TraceID
+        - ParentEventID
+        - Category
+        - Kind
+        - Level
+        - Module
+        - Component
+        - TenantID
+        - Platform
+        - ConversationID
+        - ActorID
+        - Summary
+        - PayloadType
+        - Payload
+        - ArtifactIDs
+      type: object
+    EventPage:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - //schemas/EventPage.json
+          format: uri
+          readOnly: true
+          type: string
+        CursorResetRequired:
+          type: boolean
+        HasMore:
+          type: boolean
+        Items:
+          items:
+            $ref: "#/components/schemas/Event"
+          type:
+            - array
+            - "null"
+        LastID:
+          format: int64
+          type: integer
+        WindowEndID:
+          format: int64
+          type: integer
+        WindowStartID:
+          format: int64
+          type: integer
+      required:
+        - Items
+        - LastID
+        - WindowStartID
+        - WindowEndID
+        - CursorResetRequired
+        - HasMore
+      type: object
+    Overview:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - //schemas/Overview.json
+          format: uri
+          readOnly: true
+          type: string
+        ActiveInflightByComponent:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        EventCountsByCategory:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        RecentErrorCount:
+          format: int64
+          type: integer
+        RecentTraceCount:
+          format: int64
+          type: integer
+        TotalEvents:
+          format: int64
+          type: integer
+        WindowEndID:
+          format: int64
+          type: integer
+        WindowStartID:
+          format: int64
+          type: integer
+      required:
+        - WindowStartID
+        - WindowEndID
+        - TotalEvents
+        - EventCountsByCategory
+        - RecentErrorCount
+        - ActiveInflightByComponent
+        - RecentTraceCount
+      type: object
+    Snapshot:
+      additionalProperties: false
+      properties:
+        Key:
+          type: string
+        Module:
+          type: string
+        Namespace:
+          type: string
+        Payload: {}
+        PayloadType:
+          type: string
+        Summary:
+          type: string
+        UpdatedAt:
+          format: date-time
+          type: string
+      required:
+        - Namespace
+        - Key
+        - Module
+        - UpdatedAt
+        - Summary
+        - PayloadType
+        - Payload
+      type: object
+    SnapshotList:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - //schemas/SnapshotList.json
+          format: uri
+          readOnly: true
+          type: string
+        Items:
+          items:
+            $ref: "#/components/schemas/Snapshot"
+          type:
+            - array
+            - "null"
+      required:
+        - Items
+      type: object
+    TraceView:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - //schemas/TraceView.json
+          format: uri
+          readOnly: true
+          type: string
+        Items:
+          items:
+            $ref: "#/components/schemas/Event"
+          type:
+            - array
+            - "null"
+        TraceID:
+          type: string
+      required:
+        - TraceID
+        - Items
+      type: object
+info:
+  title: Ex-Otogi Management API
+  version: 1.0.0
+openapi: 3.1.0
+paths:
+  /panel/artifacts/{id}:
+    get:
+      operationId: get-panel-artifacts-by-id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Artifact"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get panel artifacts by ID
+  /panel/events:
+    get:
+      operationId: get-panel-events
+      parameters:
+        - explode: false
+          in: query
+          name: after_id
+          schema:
+            format: int64
+            type: integer
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            format: int64
+            type: integer
+        - explode: false
+          in: query
+          name: category
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: kind
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: trace_id
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: conversation_id
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: module
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: level
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventPage"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get panel events
+  /panel/events/{id}:
+    get:
+      operationId: get-panel-events-by-id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get panel events by ID
+  /panel/overview:
+    get:
+      operationId: get-panel-overview
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Overview"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get panel overview
+  /panel/snapshots:
+    get:
+      operationId: get-panel-snapshots
+      parameters:
+        - explode: false
+          in: query
+          name: namespace
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: key
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: module
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SnapshotList"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get panel snapshots
+  /panel/traces/{trace_id}:
+    get:
+      operationId: get-panel-traces-by-trace-id
+      parameters:
+        - in: path
+          name: trace_id
+          required: true
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: limit
+          schema:
+            format: int64
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraceView"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get panel traces by trace ID
+servers:
+  - url: /

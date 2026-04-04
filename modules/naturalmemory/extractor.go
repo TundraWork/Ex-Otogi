@@ -13,6 +13,7 @@ import (
 
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -102,6 +103,10 @@ func (m *Module) extractMemories(ctx context.Context, scope ai.LLMMemoryScope, c
 		return fmt.Errorf("list existing memories: %w", err)
 	}
 	m.debugExtractionStart(ctx, scope, contextWindow.SourceArticleID, len([]rune(contextWindow.ConversationText)), len(existing))
+	m.emitManagementEvent(ctx, "memory.extract.started", "started natural memory extraction", panel.MemoryExtractStartedPayload{
+		SourceKind:   "article",
+		SegmentCount: len(contextWindow.Participants),
+	})
 
 	prompt := renderExtractionPrompt(contextWindow, existing)
 	extractionCtx := ctx
@@ -145,6 +150,10 @@ func (m *Module) extractMemories(ctx context.Context, scope ai.LLMMemoryScope, c
 		categories = append(categories, c.Category)
 	}
 	m.debugExtractionResult(ctx, len(candidates), categories)
+	m.emitManagementEvent(ctx, "memory.extract.completed", "completed natural memory extraction", panel.MemoryExtractCompletedPayload{
+		ExtractedCount: len(candidates),
+		Consolidated:   false,
+	})
 
 	for _, candidate := range candidates {
 		if err := m.processCandidate(ctx, scope, contextWindow, candidate); err != nil {

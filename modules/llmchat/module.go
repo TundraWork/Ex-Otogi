@@ -12,6 +12,7 @@ import (
 
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 
 	"ex-otogi/pkg/llm"
@@ -46,6 +47,7 @@ type Module struct {
 	embeddingRegistry ai.EmbeddingProviderRegistry
 	llmMemory         ai.LLMMemoryService
 	logger            *slog.Logger
+	recorder          panel.Recorder
 	clock             func() time.Time
 	sleep             func(context.Context, time.Duration) error
 }
@@ -107,6 +109,14 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	case errors.Is(err, core.ErrServiceNotFound):
 	default:
 		return fmt.Errorf("llmchat resolve logger: %w", err)
+	}
+	recorder, err := core.ResolveAs[panel.Recorder](runtime.Services(), panel.ServiceRecorder)
+	switch {
+	case err == nil:
+		m.recorder = recorder
+	case errors.Is(err, core.ErrServiceNotFound):
+	default:
+		return fmt.Errorf("llmchat resolve recorder: %w", err)
 	}
 
 	cfg, registry, embeddingRegistry, err := m.loadConfig(ctx, runtime)
@@ -522,6 +532,9 @@ func (m *Module) OnShutdown(_ context.Context) error {
 }
 
 func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error {
+	if m.recorder != nil {
+		ctx = panel.WithRecorder(ctx, m.recorder)
+	}
 	if event == nil || event.Article == nil {
 		return nil
 	}
