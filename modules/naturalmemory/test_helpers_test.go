@@ -341,8 +341,7 @@ func writeNaturalMemoryLLMConfigFile(t testingT) string {
 	body := `{
 		"request_timeout":"90s",
 		"providers":{
-			"openai-main":{"type":"openai","api_key":"sk-test"},
-			"openai-consolidation":{"type":"openai","api_key":"sk-test"}
+			"openai-main":{"type":"openai","api_key":"sk-test"}
 		},
 		"natural_memory":{
 			"enabled":true,
@@ -350,10 +349,7 @@ func writeNaturalMemoryLLMConfigFile(t testingT) string {
 			"extraction_model":"gpt-4.1-mini",
 			"embedding_provider":"openai-main",
 			"extraction_timeout":"30s",
-			"consolidation_interval":"1h",
-			"consolidation_provider":"openai-consolidation",
-			"consolidation_model":"gpt-4.1-mini",
-			"consolidation_timeout":"60s"
+			"consolidation_interval":"1h"
 		},
 		"agents":[
 			{

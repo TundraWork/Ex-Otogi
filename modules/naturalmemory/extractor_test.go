@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
-	"ex-otogi/pkg/otogi/core"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -22,28 +21,28 @@ func TestParseExtractionResponse(t *testing.T) {
 	}{
 		{
 			name:      "plain json",
-			input:     `[{"content":"Alice likes tea","category":"preference","importance":7,"subject_actor_id":"user-1","subject_actor_name":"Alice"}]`,
+			input:     `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7,"subject_actor_id":"user-1","subject_actor_name":"Alice"}]`,
 			wantCount: 1,
 		},
 		{
 			name: "markdown fence",
 			input: "```json\n" +
-				`[{"content":"Alice is a student","category":"user_fact","importance":8}]` +
+				`[{"action":"new","content":"Alice is a student","category":"user_fact","importance":8}]` +
 				"\n```",
 			wantCount: 1,
 		},
 		{
 			name:      "json embedded in prose",
-			input:     `Memories: [{"content":"Trip booked","category":"experience","importance":6}] end.`,
+			input:     `Memories: [{"action":"new","content":"Trip booked","category":"experience","importance":6}] end.`,
 			wantCount: 1,
 		},
 		{
 			name: "filters invalid entries",
 			input: `[
-				{"content":"  ","category":"preference","importance":7},
-				{"content":"Valid fact","category":"knowledge","importance":5},
-				{"content":"Bad category","category":"misc","importance":8},
-				{"content":"Bad importance","category":"knowledge","importance":11}
+				{"action":"new","content":"  ","category":"preference","importance":7},
+				{"action":"new","content":"Valid fact","category":"knowledge","importance":5},
+				{"action":"new","content":"Bad category","category":"misc","importance":8},
+				{"action":"new","content":"Bad importance","category":"knowledge","importance":11}
 			]`,
 			wantCount: 1,
 		},
@@ -87,25 +86,25 @@ func TestParseExtractionResponseWithValidUntil(t *testing.T) {
 	}{
 		{
 			name:           "valid_until present",
-			input:          `[{"content":"Alice is visiting Tokyo until April","category":"experience","importance":6,"valid_until":"2026-04-01T00:00:00Z"}]`,
+			input:          `[{"action":"new","content":"Alice is visiting Tokyo until April","category":"experience","importance":6,"valid_until":"2026-04-01T00:00:00Z"}]`,
 			wantCount:      1,
 			wantValidUntil: "2026-04-01T00:00:00Z",
 		},
 		{
 			name:           "valid_until empty",
-			input:          `[{"content":"Alice likes tea","category":"preference","importance":7,"valid_until":""}]`,
+			input:          `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7,"valid_until":""}]`,
 			wantCount:      1,
 			wantValidUntil: "",
 		},
 		{
 			name:           "valid_until missing",
-			input:          `[{"content":"Alice likes tea","category":"preference","importance":7}]`,
+			input:          `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7}]`,
 			wantCount:      1,
 			wantValidUntil: "",
 		},
 		{
 			name:           "valid_until invalid format stripped",
-			input:          `[{"content":"Alice likes tea","category":"preference","importance":7,"valid_until":"next week"}]`,
+			input:          `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7,"valid_until":"next week"}]`,
 			wantCount:      1,
 			wantValidUntil: "",
 		},
@@ -133,7 +132,7 @@ func TestParseExtractionResponseWithValidUntil(t *testing.T) {
 func TestParseExtractionResponseWithKeywordsAndTags(t *testing.T) {
 	t.Parallel()
 
-	input := `[{"content":"Alice likes jasmine tea","category":"preference","importance":7,"keywords":["tea","jasmine","preference"],"tags":["beverage"]}]`
+	input := `[{"action":"new","content":"Alice likes jasmine tea","category":"preference","importance":7,"keywords":["tea","jasmine","preference"],"tags":["beverage"]}]`
 	got, err := parseExtractionResponse(input)
 	if err != nil {
 		t.Fatalf("parseExtractionResponse failed: %v", err)
@@ -195,72 +194,59 @@ func TestBuildEmbeddingTextIncludesKeywordsAndTags(t *testing.T) {
 	}
 }
 
-func TestGenerateLinksFromMatches(t *testing.T) {
+func TestParseExtractionResponseWithActions(t *testing.T) {
 	t.Parallel()
 
-	matches := []ai.LLMMemoryMatch{
-		{Record: ai.LLMMemoryRecord{ID: "mem-1"}, Similarity: 0.9},
-		{Record: ai.LLMMemoryRecord{ID: "mem-2"}, Similarity: 0.7},
-		{Record: ai.LLMMemoryRecord{ID: "mem-3"}, Similarity: 0.3},
-	}
-
 	tests := []struct {
-		name         string
-		action       synthesisAction
-		targetID     string
-		absorbedIDs  []string
-		threshold    float32
-		maxLinks     int
-		wantCount    int
-		wantRelation string
+		name       string
+		input      string
+		wantCount  int
+		wantAction extractionAction
 	}{
 		{
-			name:         "add creates related links above threshold",
-			action:       synthesisActionAdd,
-			threshold:    0.5,
-			maxLinks:     3,
-			wantCount:    2,
-			wantRelation: "related",
+			name:       "new action",
+			input:      `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount:  1,
+			wantAction: extractionActionNew,
 		},
 		{
-			name:         "rewrite creates refines links",
-			action:       synthesisActionRewrite,
-			targetID:     "mem-1",
-			threshold:    0.5,
-			maxLinks:     3,
-			wantCount:    1,
-			wantRelation: "refines",
+			name:       "update action",
+			input:      `[{"action":"update","target_id":"mem-1","content":"Alice loves tea","category":"preference","importance":8}]`,
+			wantCount:  1,
+			wantAction: extractionActionUpdate,
 		},
 		{
-			name:         "supersede excludes deleted target",
-			action:       synthesisActionSupersede,
-			targetID:     "mem-1",
-			absorbedIDs:  []string{"mem-2"},
-			threshold:    0.1,
-			maxLinks:     3,
-			wantCount:    1,
-			wantRelation: "related",
+			name:       "delete action",
+			input:      `[{"action":"delete","target_id":"mem-1"}]`,
+			wantCount:  1,
+			wantAction: extractionActionDelete,
 		},
 		{
-			name:      "max links caps output",
-			action:    synthesisActionAdd,
-			threshold: 0.1,
-			maxLinks:  1,
-			wantCount: 1,
-		},
-		{
-			name:      "high threshold filters all",
-			action:    synthesisActionAdd,
-			threshold: 0.95,
-			maxLinks:  3,
+			name:      "noop action is filtered out",
+			input:     `[{"action":"noop","content":"Alice likes tea","category":"preference","importance":7}]`,
 			wantCount: 0,
 		},
 		{
-			name:      "empty matches returns nil",
-			action:    synthesisActionAdd,
-			threshold: 0.1,
-			maxLinks:  3,
+			name:      "empty action is filtered out",
+			input:     `[{"content":"Alice likes tea","category":"preference","importance":7}]`,
 			wantCount: 0,
+		},
+		{
+			name:       "unknown action defaults to new",
+			input:      `[{"action":"unknown","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount:  1,
+			wantAction: extractionActionNew,
+		},
+		{
+			name:      "delete without target_id is filtered out",
+			input:     `[{"action":"delete"}]`,
+			wantCount: 0,
+		},
+		{
+			name:       "update without target_id becomes new",
+			input:      `[{"action":"update","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount:  1,
+			wantAction: extractionActionNew,
 		},
 	}
 
@@ -269,42 +255,17 @@ func TestGenerateLinksFromMatches(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			input := matches
-			if testCase.name == "empty matches returns nil" {
-				input = nil
+			got, err := parseExtractionResponse(testCase.input)
+			if err != nil {
+				t.Fatalf("parseExtractionResponse failed: %v", err)
 			}
-			links := generateLinks(input, testCase.action, testCase.targetID, testCase.absorbedIDs, testCase.threshold, testCase.maxLinks)
-			if len(links) != testCase.wantCount {
-				t.Fatalf("links len = %d, want %d", len(links), testCase.wantCount)
+			if len(got) != testCase.wantCount {
+				t.Fatalf("candidate count = %d, want %d", len(got), testCase.wantCount)
 			}
-			if testCase.wantRelation != "" && len(links) > 0 && links[0].Relation != testCase.wantRelation {
-				t.Fatalf("links[0].relation = %q, want %q", links[0].Relation, testCase.wantRelation)
+			if testCase.wantCount > 0 && got[0].Action != testCase.wantAction {
+				t.Fatalf("action = %q, want %q", got[0].Action, testCase.wantAction)
 			}
 		})
-	}
-}
-
-func TestMergeLinksDeduplicates(t *testing.T) {
-	t.Parallel()
-
-	existing := []ai.LLMMemoryLink{
-		{TargetID: "mem-1", Relation: "related"},
-		{TargetID: "mem-2", Relation: "refines"},
-	}
-	additions := []ai.LLMMemoryLink{
-		{TargetID: "mem-2", Relation: "related"},
-		{TargetID: "mem-3", Relation: "related"},
-	}
-
-	merged := mergeLinks(existing, additions)
-	if len(merged) != 3 {
-		t.Fatalf("merged len = %d, want 3", len(merged))
-	}
-	// mem-2 should keep the existing relation (refines), not be overwritten.
-	for _, link := range merged {
-		if link.TargetID == "mem-2" && link.Relation != "refines" {
-			t.Fatalf("mem-2 relation = %q, want refines (existing preserved)", link.Relation)
-		}
 	}
 }
 
@@ -393,7 +354,7 @@ func TestRenderExtractionPrompt(t *testing.T) {
 	if !strings.Contains(prompt, `"subject_actor_id":"..."`) {
 		t.Fatalf("prompt = %q, want subject actor output instructions", prompt)
 	}
-	if !strings.Contains(prompt, `"category":"user_fact|preference|knowledge|experience"`) {
+	if !strings.Contains(prompt, `"category":"user_fact|preference|knowledge|experience|reflection"`) {
 		t.Fatalf("prompt = %q, want json output instructions", prompt)
 	}
 	if !strings.Contains(prompt, `"valid_until":""`) {
@@ -404,7 +365,7 @@ func TestRenderExtractionPrompt(t *testing.T) {
 	}
 }
 
-func TestExtractMemoriesLogsExtractionResult(t *testing.T) {
+func TestProcessWindowStoresNewMemory(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
@@ -417,71 +378,48 @@ func TestExtractMemoriesLogsExtractionResult(t *testing.T) {
 		ExtractionTimeout:            time.Second,
 		ExtractionMaxInputRunes:      4000,
 		ConsolidationInterval:        0,
-		ConsolidationTimeout:         time.Second,
 		MaxMemoriesPerScope:          10,
 		DecayFactor:                  0.99,
 		MinImportance:                1,
 		DuplicateSimilarityThreshold: 0.85,
-		ContextWindowSize:            5,
-		SynthesisMatchLimit:          5,
-		ReflectionMinSourceMemories:  2,
-		ReflectionSourceLimit:        5,
-		ReflectionMaxGenerated:       1,
+		BufferQuietPeriod:            2 * time.Minute,
+		BufferMaxRunes:               3000,
+		BufferMaxArticles:            30,
+		BufferMaxAge:                 10 * time.Minute,
+		BufferCheckInterval:          15 * time.Second,
+		RetrievalSearchLimit:         20,
+		RetrievalPlanningEnabled:     true,
+		RetrievalPlanningTimeout:     10 * time.Second,
 	}))
 	module.llmMemory = memoryStore
+	module.memory = &memoryContextStub{}
 	module.embeddingProvider = &embeddingProviderStub{
 		response: ai.EmbeddingResponse{Vectors: [][]float32{{1, 0}}},
 	}
 	module.extractionProvider = &llmProviderStub{
 		stream: &llmStreamStub{chunks: []ai.LLMGenerateChunk{
-			{Kind: ai.LLMGenerateChunkKindOutputText, Delta: `[{"content":"Alice likes tea","category":"preference","importance":7}]`},
+			{Kind: ai.LLMGenerateChunkKindOutputText, Delta: `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7}]`},
 		}},
 	}
 
-	err := module.extractMemories(context.Background(), ai.LLMMemoryScope{
+	err := module.processWindow(context.Background(), ai.LLMMemoryScope{
 		Platform:       "telegram",
 		ConversationID: "chat-1",
-	}, extractionContext{
-		ConversationText: "alice: I like tea",
-		AnchorTime:       now,
-		SourceArticleID:  "a-1",
-		SourceActor:      platform.Actor{ID: "user-1", DisplayName: "Alice"},
-	})
+	}, []bufferedArticle{
+		{
+			Article:    platform.Article{ID: "a-1", Text: "I like tea"},
+			Actor:      platform.Actor{ID: "user-1", DisplayName: "Alice"},
+			OccurredAt: now,
+			ReceivedAt: now,
+		},
+	}, FlushReasonQuiet)
 	if err != nil {
-		t.Fatalf("extractMemories failed: %v", err)
+		t.Fatalf("processWindow failed: %v", err)
 	}
 	if len(memoryStore.storedEntries) != 1 {
 		t.Fatalf("stored entries len = %d, want 1", len(memoryStore.storedEntries))
 	}
 	if memoryStore.storedEntries[0].Category != "preference" {
 		t.Fatalf("category = %q, want preference", memoryStore.storedEntries[0].Category)
-	}
-}
-
-func TestSerializeExtractionConversation(t *testing.T) {
-	t.Parallel()
-
-	serialized := serializeExtractionConversation([]core.ConversationContextEntry{
-		{
-			Actor:   platform.Actor{ID: "u-1", Username: "alice"},
-			Article: platform.Article{ID: "a-1", Text: "I like tea"},
-		},
-		{
-			Actor:   platform.Actor{ID: "bot-1", Username: "otogi", IsBot: true},
-			Article: platform.Article{ID: "a-2", Text: "Noted that."},
-		},
-	}, extractionConversationEntry{
-		Actor:   platform.Actor{ID: "u-2", DisplayName: "Bob"},
-		Article: platform.Article{ID: "a-3", Text: "Also I moved to Sydney"},
-	}, 90)
-
-	if !strings.Contains(serialized, "Bob <actor:u-2>: Also I moved to Sydney") {
-		t.Fatalf("serialized = %q, want current article line", serialized)
-	}
-	if !strings.Contains(serialized, "otogi <actor:bot-1> (bot): Noted that.") {
-		t.Fatalf("serialized = %q, want bot line", serialized)
-	}
-	if strings.Contains(serialized, "alice <actor:u-1>: I like tea") {
-		t.Fatalf("serialized = %q, did not expect oldest line after trimming", serialized)
 	}
 }

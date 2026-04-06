@@ -17,22 +17,18 @@ const (
 	defaultExtractionTimeout            = 30 * time.Second
 	defaultExtractionMaxInputRunes      = 4000
 	defaultConsolidationInterval        = time.Hour
-	defaultConsolidationTimeout         = 60 * time.Second
 	defaultMaxMemoriesPerScope          = 200
 	defaultDecayFactor                  = 0.995
 	defaultMinImportance                = 3
 	defaultDuplicateSimilarityThreshold = 0.85
-	defaultContextWindowSize            = 5
-	defaultSynthesisMatchLimit          = 5
-	defaultReflectionMinSourceMemories  = 8
-	defaultReflectionSourceLimit        = 20
-	defaultReflectionMaxGenerated       = 3
 	defaultRetrievalPlanningEnabled     = true
 	defaultRetrievalPlanningTimeout     = 10 * time.Second
-
-	defaultClusterMinSize             = 3
-	defaultClusterSimilarityThreshold = float32(0.80)
-	defaultClusterTemporalWeight      = 0.3
+	defaultBufferQuietPeriod            = 2 * time.Minute
+	defaultBufferMaxRunes               = 3000
+	defaultBufferMaxArticles            = 30
+	defaultBufferMaxAge                 = 10 * time.Minute
+	defaultBufferCheckInterval          = 15 * time.Second
+	defaultRetrievalSearchLimit         = 20
 )
 
 // Config configures naturalmemory module behavior.
@@ -54,13 +50,6 @@ type Config struct {
 	// ConsolidationInterval controls how often consolidation runs. Zero disables
 	// background consolidation.
 	ConsolidationInterval time.Duration
-	// ConsolidationProvider identifies which provider profile handles
-	// consolidation requests.
-	ConsolidationProvider string
-	// ConsolidationModel identifies which model handles consolidation.
-	ConsolidationModel string
-	// ConsolidationTimeout bounds one consolidation request lifecycle.
-	ConsolidationTimeout time.Duration
 	// MaxMemoriesPerScope caps the number of retained memories per scope.
 	MaxMemoriesPerScope int
 	// DecayFactor controls recency decay and must be in (0, 1].
@@ -70,38 +59,32 @@ type Config struct {
 	// DuplicateSimilarityThreshold controls when two memories are considered the
 	// same fact and must be in (0, 1].
 	DuplicateSimilarityThreshold float32
-	// ContextWindowSize controls how many earlier conversation entries are
-	// included before the current article during extraction.
-	ContextWindowSize int
-	// SynthesisMatchLimit caps how many nearby memories participate in one
-	// write-time synthesis decision.
-	SynthesisMatchLimit int
-	// ReflectionMinSourceMemories is the minimum surviving memory count required
-	// before reflection generation runs.
-	ReflectionMinSourceMemories int
-	// ReflectionSourceLimit caps how many memories feed one reflection request.
-	ReflectionSourceLimit int
-	// ReflectionMaxGenerated caps how many reflection memories are generated per
-	// consolidation cycle.
-	ReflectionMaxGenerated int
 	// RetrievalPlanningEnabled turns on adaptive retrieval planning in llmchat.
 	RetrievalPlanningEnabled bool
 	// RetrievalPlanningTimeout bounds one retrieval planning request lifecycle.
 	RetrievalPlanningTimeout time.Duration
-	// ClusterMinSize is the minimum number of memories in a cluster before
-	// theme generation is attempted. Smaller clusters use pairwise merge.
-	ClusterMinSize int
-	// ClusterSimilarityThreshold controls the affinity threshold for grouping
-	// memories into clusters during consolidation and must be in (0, 1].
-	ClusterSimilarityThreshold float32
-	// ClusterTemporalWeight controls the weight of temporal proximity in the
-	// affinity function used for clustering and must be in [0, 1].
-	ClusterTemporalWeight float64
+	// BufferQuietPeriod is the debounce duration after the last article before
+	// the window is flushed to extraction.
+	BufferQuietPeriod time.Duration
+	// BufferMaxRunes caps how many runes of article text can accumulate in one
+	// window before a forced flush.
+	BufferMaxRunes int
+	// BufferMaxArticles caps how many articles can accumulate in one window
+	// before a forced flush.
+	BufferMaxArticles int
+	// BufferMaxAge caps the maximum age of the oldest article in a window
+	// before a forced flush.
+	BufferMaxAge time.Duration
+	// BufferCheckInterval controls how often the flush worker scans for ready
+	// windows.
+	BufferCheckInterval time.Duration
+	// RetrievalSearchLimit caps how many existing memories are shown to the
+	// extraction LLM as candidates for UPDATE/DELETE actions.
+	RetrievalSearchLimit int
 }
 
 type fileModuleConfig struct {
-	ConfigFile        string `json:"config_file"`
-	ContextWindowSize *int   `json:"context_window_size"`
+	ConfigFile string `json:"config_file"`
 }
 
 func defaultConfig() Config {
@@ -110,21 +93,18 @@ func defaultConfig() Config {
 		ExtractionTimeout:            defaultExtractionTimeout,
 		ExtractionMaxInputRunes:      defaultExtractionMaxInputRunes,
 		ConsolidationInterval:        defaultConsolidationInterval,
-		ConsolidationTimeout:         defaultConsolidationTimeout,
 		MaxMemoriesPerScope:          defaultMaxMemoriesPerScope,
 		DecayFactor:                  defaultDecayFactor,
 		MinImportance:                defaultMinImportance,
 		DuplicateSimilarityThreshold: defaultDuplicateSimilarityThreshold,
-		ContextWindowSize:            defaultContextWindowSize,
-		SynthesisMatchLimit:          defaultSynthesisMatchLimit,
-		ReflectionMinSourceMemories:  defaultReflectionMinSourceMemories,
-		ReflectionSourceLimit:        defaultReflectionSourceLimit,
-		ReflectionMaxGenerated:       defaultReflectionMaxGenerated,
 		RetrievalPlanningEnabled:     defaultRetrievalPlanningEnabled,
 		RetrievalPlanningTimeout:     defaultRetrievalPlanningTimeout,
-		ClusterMinSize:               defaultClusterMinSize,
-		ClusterSimilarityThreshold:   defaultClusterSimilarityThreshold,
-		ClusterTemporalWeight:        defaultClusterTemporalWeight,
+		BufferQuietPeriod:            defaultBufferQuietPeriod,
+		BufferMaxRunes:               defaultBufferMaxRunes,
+		BufferMaxArticles:            defaultBufferMaxArticles,
+		BufferMaxAge:                 defaultBufferMaxAge,
+		BufferCheckInterval:          defaultBufferCheckInterval,
+		RetrievalSearchLimit:         defaultRetrievalSearchLimit,
 	}
 }
 
@@ -139,9 +119,6 @@ func (cfg Config) Validate() error {
 	if cfg.ConsolidationInterval < 0 {
 		return fmt.Errorf("validate naturalmemory config: consolidation_interval must be >= 0")
 	}
-	if cfg.ConsolidationTimeout <= 0 {
-		return fmt.Errorf("validate naturalmemory config: consolidation_timeout must be > 0")
-	}
 	if cfg.MaxMemoriesPerScope <= 0 {
 		return fmt.Errorf("validate naturalmemory config: max_memories_per_scope must be > 0")
 	}
@@ -154,32 +131,29 @@ func (cfg Config) Validate() error {
 	if cfg.DuplicateSimilarityThreshold <= 0 || cfg.DuplicateSimilarityThreshold > 1 {
 		return fmt.Errorf("validate naturalmemory config: duplicate_similarity_threshold must be between 0 and 1")
 	}
-	if cfg.ContextWindowSize <= 0 {
-		return fmt.Errorf("validate naturalmemory config: context_window_size must be > 0")
-	}
-	if cfg.SynthesisMatchLimit <= 0 {
-		return fmt.Errorf("validate naturalmemory config: synthesis_match_limit must be > 0")
-	}
-	if cfg.ReflectionMinSourceMemories <= 0 {
-		return fmt.Errorf("validate naturalmemory config: reflection_min_source_memories must be > 0")
-	}
-	if cfg.ReflectionSourceLimit <= 0 {
-		return fmt.Errorf("validate naturalmemory config: reflection_source_limit must be > 0")
-	}
-	if cfg.ReflectionMaxGenerated <= 0 {
-		return fmt.Errorf("validate naturalmemory config: reflection_max_generated must be > 0")
-	}
 	if cfg.RetrievalPlanningTimeout <= 0 {
 		return fmt.Errorf("validate naturalmemory config: retrieval_planning_timeout must be > 0")
 	}
-	if cfg.ClusterMinSize < 2 {
-		return fmt.Errorf("validate naturalmemory config: cluster_min_size must be >= 2")
+	if cfg.BufferQuietPeriod <= 0 {
+		return fmt.Errorf("validate naturalmemory config: buffer_quiet_period must be > 0")
 	}
-	if cfg.ClusterSimilarityThreshold <= 0 || cfg.ClusterSimilarityThreshold > 1 {
-		return fmt.Errorf("validate naturalmemory config: cluster_similarity_threshold must be between 0 and 1")
+	if cfg.BufferMaxRunes <= 0 {
+		return fmt.Errorf("validate naturalmemory config: buffer_max_runes must be > 0")
 	}
-	if cfg.ClusterTemporalWeight < 0 || cfg.ClusterTemporalWeight > 1 {
-		return fmt.Errorf("validate naturalmemory config: cluster_temporal_weight must be between 0 and 1")
+	if cfg.BufferMaxRunes > cfg.ExtractionMaxInputRunes {
+		return fmt.Errorf("validate naturalmemory config: buffer_max_runes must be <= extraction_max_input_runes")
+	}
+	if cfg.BufferMaxArticles <= 0 {
+		return fmt.Errorf("validate naturalmemory config: buffer_max_articles must be > 0")
+	}
+	if cfg.BufferMaxAge < cfg.BufferQuietPeriod {
+		return fmt.Errorf("validate naturalmemory config: buffer_max_age must be >= buffer_quiet_period")
+	}
+	if cfg.BufferCheckInterval <= 0 {
+		return fmt.Errorf("validate naturalmemory config: buffer_check_interval must be > 0")
+	}
+	if cfg.RetrievalSearchLimit <= 0 {
+		return fmt.Errorf("validate naturalmemory config: retrieval_search_limit must be > 0")
 	}
 	if !cfg.Enabled {
 		return nil
@@ -192,14 +166,6 @@ func (cfg Config) Validate() error {
 	}
 	if strings.TrimSpace(cfg.EmbeddingProvider) == "" {
 		return fmt.Errorf("validate naturalmemory config: embedding_provider is required when enabled=true")
-	}
-	if cfg.ConsolidationInterval > 0 {
-		if strings.TrimSpace(cfg.ConsolidationProvider) == "" {
-			return fmt.Errorf("validate naturalmemory config: consolidation_provider is required when consolidation_interval > 0")
-		}
-		if strings.TrimSpace(cfg.ConsolidationModel) == "" {
-			return fmt.Errorf("validate naturalmemory config: consolidation_model is required when consolidation_interval > 0")
-		}
 	}
 
 	return nil
@@ -224,10 +190,6 @@ func loadConfig(registry core.ConfigRegistry) (Config, error) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return Config{}, fmt.Errorf("unmarshal: %w", err)
 	}
-	if parsed.ContextWindowSize != nil {
-		cfg.ContextWindowSize = *parsed.ContextWindowSize
-	}
-
 	configFile := strings.TrimSpace(parsed.ConfigFile)
 	if envPath := strings.TrimSpace(os.Getenv("OTOGI_LLM_CONFIG_FILE")); envPath != "" {
 		configFile = envPath
@@ -262,23 +224,18 @@ func mergeNaturalMemoryConfig(base Config, raw *llmconfig.NaturalMemoryConfig) C
 	cfg.ExtractionTimeout = raw.ExtractionTimeout
 	cfg.ExtractionMaxInputRunes = raw.ExtractionMaxInputRunes
 	cfg.ConsolidationInterval = raw.ConsolidationInterval
-	cfg.ConsolidationProvider = strings.TrimSpace(raw.ConsolidationProvider)
-	cfg.ConsolidationModel = strings.TrimSpace(raw.ConsolidationModel)
-	cfg.ConsolidationTimeout = raw.ConsolidationTimeout
 	cfg.MaxMemoriesPerScope = raw.MaxMemoriesPerScope
 	cfg.DecayFactor = raw.DecayFactor
 	cfg.MinImportance = raw.MinImportance
 	cfg.DuplicateSimilarityThreshold = raw.DuplicateSimilarityThreshold
-	cfg.ContextWindowSize = raw.ContextWindowSize
-	cfg.SynthesisMatchLimit = raw.SynthesisMatchLimit
-	cfg.ReflectionMinSourceMemories = raw.ReflectionMinSourceMemories
-	cfg.ReflectionSourceLimit = raw.ReflectionSourceLimit
-	cfg.ReflectionMaxGenerated = raw.ReflectionMaxGenerated
 	cfg.RetrievalPlanningEnabled = raw.RetrievalPlanningEnabled
 	cfg.RetrievalPlanningTimeout = raw.RetrievalPlanningTimeout
-	cfg.ClusterMinSize = raw.ClusterMinSize
-	cfg.ClusterSimilarityThreshold = raw.ClusterSimilarityThreshold
-	cfg.ClusterTemporalWeight = raw.ClusterTemporalWeight
+	cfg.BufferQuietPeriod = raw.BufferQuietPeriod
+	cfg.BufferMaxRunes = raw.BufferMaxRunes
+	cfg.BufferMaxArticles = raw.BufferMaxArticles
+	cfg.BufferMaxAge = raw.BufferMaxAge
+	cfg.BufferCheckInterval = raw.BufferCheckInterval
+	cfg.RetrievalSearchLimit = raw.RetrievalSearchLimit
 
 	return cfg
 }

@@ -76,14 +76,8 @@ func TestRetrieveSemanticMemoriesSerializesMatches(t *testing.T) {
 	if !strings.Contains(memories, `<semantic_memories count="2">`) {
 		t.Fatalf("memories = %q, want count=2 wrapper", memories)
 	}
-	if !strings.Contains(memories, `<tier role="recalled" count="2">`) {
-		t.Fatalf("memories = %q, want recalled tier with count=2", memories)
-	}
 	if !strings.Contains(memories, `id="mem-1"`) || !strings.Contains(memories, `id="mem-2"`) {
 		t.Fatalf("memories = %q, want both memory ids", memories)
-	}
-	if !strings.Contains(memories, `kind="unit"`) || !strings.Contains(memories, `kind="synthesized"`) {
-		t.Fatalf("memories = %q, want kind attributes", memories)
 	}
 	if !strings.Contains(memories, `importance="7"`) || !strings.Contains(memories, `importance="6"`) {
 		t.Fatalf("memories = %q, want importance attributes", memories)
@@ -721,34 +715,18 @@ func TestRenderSemanticMemoryDocumentTiered(t *testing.T) {
 	if !strings.Contains(doc, `<semantic_memories count="3">`) {
 		t.Fatalf("doc = %q, want count=3", doc)
 	}
-	if !strings.Contains(doc, `<tier role="background" count="2">`) {
-		t.Fatalf("doc = %q, want background tier with count=2", doc)
+	// Flat list — no tiers.
+	if strings.Contains(doc, "<tier") {
+		t.Fatalf("doc = %q, want flat list without tiers", doc)
 	}
-	if !strings.Contains(doc, `<tier role="recalled" count="1">`) {
-		t.Fatalf("doc = %q, want recalled tier with count=1", doc)
+	if !strings.Contains(doc, `id="mem-reflection"`) {
+		t.Fatalf("doc = %q, want mem-reflection", doc)
 	}
-	// Background tier should contain both reflection and theme.
-	bgStart := strings.Index(doc, `<tier role="background"`)
-	bgEnd := strings.Index(doc, "</tier>")
-	if bgStart < 0 || bgEnd < 0 {
-		t.Fatalf("doc = %q, missing background tier boundaries", doc)
+	if !strings.Contains(doc, `id="mem-theme"`) {
+		t.Fatalf("doc = %q, want mem-theme", doc)
 	}
-	bgSection := doc[bgStart:bgEnd]
-	if !strings.Contains(bgSection, `id="mem-reflection"`) {
-		t.Fatalf("background section = %q, want mem-reflection", bgSection)
-	}
-	if !strings.Contains(bgSection, `id="mem-theme"`) {
-		t.Fatalf("background section = %q, want mem-theme", bgSection)
-	}
-
-	// Recalled tier should contain the unit memory.
-	rcStart := strings.Index(doc, `<tier role="recalled"`)
-	if rcStart < 0 {
-		t.Fatalf("doc = %q, missing recalled tier", doc)
-	}
-	rcSection := doc[rcStart:]
-	if !strings.Contains(rcSection, `id="mem-unit"`) {
-		t.Fatalf("recalled section = %q, want mem-unit", rcSection)
+	if !strings.Contains(doc, `id="mem-unit"`) {
+		t.Fatalf("doc = %q, want mem-unit", doc)
 	}
 }
 
@@ -778,11 +756,11 @@ func TestRenderSemanticMemoryDocumentSingleTier(t *testing.T) {
 	if !strings.Contains(doc, `<semantic_memories count="2">`) {
 		t.Fatalf("doc = %q, want count=2", doc)
 	}
-	if strings.Contains(doc, `role="background"`) {
-		t.Fatalf("doc = %q, did not expect background tier when no background memories", doc)
+	if strings.Contains(doc, "<tier") {
+		t.Fatalf("doc = %q, want flat list without tiers", doc)
 	}
-	if !strings.Contains(doc, `<tier role="recalled" count="2">`) {
-		t.Fatalf("doc = %q, want recalled tier with count=2", doc)
+	if !strings.Contains(doc, `id="mem-1"`) || !strings.Contains(doc, `id="mem-2"`) {
+		t.Fatalf("doc = %q, want both memory ids", doc)
 	}
 }
 

@@ -52,21 +52,18 @@ const (
 	defaultNaturalMemoryExtractionTimeout            = 30 * time.Second
 	defaultNaturalMemoryExtractionMaxInputRunes      = 4000
 	defaultNaturalMemoryConsolidationInterval        = time.Hour
-	defaultNaturalMemoryConsolidationTimeout         = 60 * time.Second
 	defaultNaturalMemoryMaxMemoriesPerScope          = 200
 	defaultNaturalMemoryDecayFactor                  = 0.995
 	defaultNaturalMemoryMinImportance                = 3
 	defaultNaturalMemoryDuplicateSimilarityThreshold = 0.85
-	defaultNaturalMemoryContextWindowSize            = 5
-	defaultNaturalMemorySynthesisMatchLimit          = 5
-	defaultNaturalMemoryReflectionMinSourceMemories  = 8
-	defaultNaturalMemoryReflectionSourceLimit        = 20
-	defaultNaturalMemoryReflectionMaxGenerated       = 3
 	defaultNaturalMemoryRetrievalPlanningEnabled     = true
 	defaultNaturalMemoryRetrievalPlanningTimeout     = 10 * time.Second
-	defaultNaturalMemoryClusterMinSize               = 3
-	defaultNaturalMemoryClusterSimilarityThreshold   = float32(0.80)
-	defaultNaturalMemoryClusterTemporalWeight        = 0.3
+	defaultNaturalMemoryBufferQuietPeriod            = 2 * time.Minute
+	defaultNaturalMemoryBufferMaxRunes               = 3000
+	defaultNaturalMemoryBufferMaxArticles            = 30
+	defaultNaturalMemoryBufferMaxAge                 = 10 * time.Minute
+	defaultNaturalMemoryBufferCheckInterval          = 15 * time.Second
+	defaultNaturalMemoryRetrievalSearchLimit         = 20
 )
 
 // Config is the full runtime LLM configuration model loaded from JSON.
@@ -277,13 +274,6 @@ type NaturalMemoryConfig struct {
 	// ConsolidationInterval controls how often consolidation runs. Zero
 	// disables the background consolidator.
 	ConsolidationInterval time.Duration
-	// ConsolidationProvider identifies which provider profile to use for
-	// consolidation requests.
-	ConsolidationProvider string
-	// ConsolidationModel identifies which model to call for consolidation.
-	ConsolidationModel string
-	// ConsolidationTimeout bounds one consolidation request lifecycle.
-	ConsolidationTimeout time.Duration
 	// MaxMemoriesPerScope caps the number of natural memories retained per
 	// conversation scope.
 	MaxMemoriesPerScope int
@@ -294,34 +284,28 @@ type NaturalMemoryConfig struct {
 	// DuplicateSimilarityThreshold controls when two memories are treated as
 	// duplicates and must be in (0, 1].
 	DuplicateSimilarityThreshold float32
-	// ContextWindowSize controls how many earlier conversation entries are
-	// included before the current article during extraction.
-	ContextWindowSize int
-	// SynthesisMatchLimit caps how many candidate neighbor memories participate
-	// in write-time synthesis decisions.
-	SynthesisMatchLimit int
-	// ReflectionMinSourceMemories is the minimum surviving memory count required
-	// before reflection generation runs.
-	ReflectionMinSourceMemories int
-	// ReflectionSourceLimit caps how many memories are fed into one reflection
-	// generation request.
-	ReflectionSourceLimit int
-	// ReflectionMaxGenerated caps how many reflection memories can be generated
-	// per consolidation cycle.
-	ReflectionMaxGenerated int
 	// RetrievalPlanningEnabled turns on adaptive retrieval planning in llmchat.
 	RetrievalPlanningEnabled bool
 	// RetrievalPlanningTimeout bounds one retrieval planning request lifecycle.
 	RetrievalPlanningTimeout time.Duration
-	// ClusterMinSize is the minimum number of memories in a cluster before
-	// theme generation is attempted. Smaller clusters use pairwise merge.
-	ClusterMinSize int
-	// ClusterSimilarityThreshold controls the affinity threshold for grouping
-	// memories into clusters during consolidation and must be in (0, 1].
-	ClusterSimilarityThreshold float32
-	// ClusterTemporalWeight controls the weight of temporal proximity in the
-	// affinity function used for clustering and must be in [0, 1].
-	ClusterTemporalWeight float64
+	// BufferQuietPeriod is the debounce duration after the last article before
+	// the window is flushed to extraction.
+	BufferQuietPeriod time.Duration
+	// BufferMaxRunes caps how many runes of article text can accumulate in
+	// one window before a forced flush.
+	BufferMaxRunes int
+	// BufferMaxArticles caps how many articles can accumulate in one window
+	// before a forced flush.
+	BufferMaxArticles int
+	// BufferMaxAge caps the maximum age of the oldest article in a window
+	// before a forced flush.
+	BufferMaxAge time.Duration
+	// BufferCheckInterval controls how often the flush worker scans for
+	// ready windows.
+	BufferCheckInterval time.Duration
+	// RetrievalSearchLimit caps how many existing memories are shown to the
+	// extraction LLM as candidates for UPDATE/DELETE actions.
+	RetrievalSearchLimit int
 }
 
 type fileConfig struct {
@@ -422,23 +406,18 @@ type fileNaturalMemory struct {
 	ExtractionTimeout            string   `json:"extraction_timeout"`
 	ExtractionMaxInputRunes      *int     `json:"extraction_max_input_runes"`
 	ConsolidationInterval        string   `json:"consolidation_interval"`
-	ConsolidationProvider        string   `json:"consolidation_provider"`
-	ConsolidationModel           string   `json:"consolidation_model"`
-	ConsolidationTimeout         string   `json:"consolidation_timeout"`
 	MaxMemoriesPerScope          *int     `json:"max_memories_per_scope"`
 	DecayFactor                  *float64 `json:"decay_factor"`
 	MinImportance                *int     `json:"min_importance"`
 	DuplicateSimilarityThreshold *float64 `json:"duplicate_similarity_threshold"`
-	ContextWindowSize            *int     `json:"context_window_size"`
-	SynthesisMatchLimit          *int     `json:"synthesis_match_limit"`
-	ReflectionMinSourceMemories  *int     `json:"reflection_min_source_memories"`
-	ReflectionSourceLimit        *int     `json:"reflection_source_limit"`
-	ReflectionMaxGenerated       *int     `json:"reflection_max_generated"`
 	RetrievalPlanningEnabled     *bool    `json:"retrieval_planning_enabled"`
 	RetrievalPlanningTimeout     string   `json:"retrieval_planning_timeout"`
-	ClusterMinSize               *int     `json:"cluster_min_size"`
-	ClusterSimilarityThreshold   *float64 `json:"cluster_similarity_threshold"`
-	ClusterTemporalWeight        *float64 `json:"cluster_temporal_weight"`
+	BufferQuietPeriod            string   `json:"buffer_quiet_period"`
+	BufferMaxRunes               *int     `json:"buffer_max_runes"`
+	BufferMaxArticles            *int     `json:"buffer_max_articles"`
+	BufferMaxAge                 string   `json:"buffer_max_age"`
+	BufferCheckInterval          string   `json:"buffer_check_interval"`
+	RetrievalSearchLimit         *int     `json:"retrieval_search_limit"`
 }
 
 type rootRaw struct {
@@ -1021,23 +1000,18 @@ func parseNaturalMemoryConfig(raw *fileNaturalMemory) (*NaturalMemoryConfig, err
 		ExtractionTimeout:            defaultNaturalMemoryExtractionTimeout,
 		ExtractionMaxInputRunes:      defaultNaturalMemoryExtractionMaxInputRunes,
 		ConsolidationInterval:        defaultNaturalMemoryConsolidationInterval,
-		ConsolidationProvider:        strings.TrimSpace(raw.ConsolidationProvider),
-		ConsolidationModel:           strings.TrimSpace(raw.ConsolidationModel),
-		ConsolidationTimeout:         defaultNaturalMemoryConsolidationTimeout,
 		MaxMemoriesPerScope:          defaultNaturalMemoryMaxMemoriesPerScope,
 		DecayFactor:                  defaultNaturalMemoryDecayFactor,
 		MinImportance:                defaultNaturalMemoryMinImportance,
 		DuplicateSimilarityThreshold: defaultNaturalMemoryDuplicateSimilarityThreshold,
-		ContextWindowSize:            defaultNaturalMemoryContextWindowSize,
-		SynthesisMatchLimit:          defaultNaturalMemorySynthesisMatchLimit,
-		ReflectionMinSourceMemories:  defaultNaturalMemoryReflectionMinSourceMemories,
-		ReflectionSourceLimit:        defaultNaturalMemoryReflectionSourceLimit,
-		ReflectionMaxGenerated:       defaultNaturalMemoryReflectionMaxGenerated,
 		RetrievalPlanningEnabled:     defaultNaturalMemoryRetrievalPlanningEnabled,
 		RetrievalPlanningTimeout:     defaultNaturalMemoryRetrievalPlanningTimeout,
-		ClusterMinSize:               defaultNaturalMemoryClusterMinSize,
-		ClusterSimilarityThreshold:   defaultNaturalMemoryClusterSimilarityThreshold,
-		ClusterTemporalWeight:        defaultNaturalMemoryClusterTemporalWeight,
+		BufferQuietPeriod:            defaultNaturalMemoryBufferQuietPeriod,
+		BufferMaxRunes:               defaultNaturalMemoryBufferMaxRunes,
+		BufferMaxArticles:            defaultNaturalMemoryBufferMaxArticles,
+		BufferMaxAge:                 defaultNaturalMemoryBufferMaxAge,
+		BufferCheckInterval:          defaultNaturalMemoryBufferCheckInterval,
+		RetrievalSearchLimit:         defaultNaturalMemoryRetrievalSearchLimit,
 	}
 
 	if raw.ExtractionMaxInputRunes != nil {
@@ -1055,32 +1029,17 @@ func parseNaturalMemoryConfig(raw *fileNaturalMemory) (*NaturalMemoryConfig, err
 	if raw.DuplicateSimilarityThreshold != nil {
 		cfg.DuplicateSimilarityThreshold = float32(*raw.DuplicateSimilarityThreshold)
 	}
-	if raw.ContextWindowSize != nil {
-		cfg.ContextWindowSize = *raw.ContextWindowSize
-	}
-	if raw.SynthesisMatchLimit != nil {
-		cfg.SynthesisMatchLimit = *raw.SynthesisMatchLimit
-	}
-	if raw.ReflectionMinSourceMemories != nil {
-		cfg.ReflectionMinSourceMemories = *raw.ReflectionMinSourceMemories
-	}
-	if raw.ReflectionSourceLimit != nil {
-		cfg.ReflectionSourceLimit = *raw.ReflectionSourceLimit
-	}
-	if raw.ReflectionMaxGenerated != nil {
-		cfg.ReflectionMaxGenerated = *raw.ReflectionMaxGenerated
-	}
 	if raw.RetrievalPlanningEnabled != nil {
 		cfg.RetrievalPlanningEnabled = *raw.RetrievalPlanningEnabled
 	}
-	if raw.ClusterMinSize != nil {
-		cfg.ClusterMinSize = *raw.ClusterMinSize
+	if raw.BufferMaxRunes != nil {
+		cfg.BufferMaxRunes = *raw.BufferMaxRunes
 	}
-	if raw.ClusterSimilarityThreshold != nil {
-		cfg.ClusterSimilarityThreshold = float32(*raw.ClusterSimilarityThreshold)
+	if raw.BufferMaxArticles != nil {
+		cfg.BufferMaxArticles = *raw.BufferMaxArticles
 	}
-	if raw.ClusterTemporalWeight != nil {
-		cfg.ClusterTemporalWeight = *raw.ClusterTemporalWeight
+	if raw.RetrievalSearchLimit != nil {
+		cfg.RetrievalSearchLimit = *raw.RetrievalSearchLimit
 	}
 
 	if rawTimeout := strings.TrimSpace(raw.ExtractionTimeout); rawTimeout != "" {
@@ -1097,19 +1056,33 @@ func parseNaturalMemoryConfig(raw *fileNaturalMemory) (*NaturalMemoryConfig, err
 		}
 		cfg.ConsolidationInterval = interval
 	}
-	if rawTimeout := strings.TrimSpace(raw.ConsolidationTimeout); rawTimeout != "" {
-		timeout, err := time.ParseDuration(rawTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("parse consolidation_timeout: %w", err)
-		}
-		cfg.ConsolidationTimeout = timeout
-	}
 	if rawTimeout := strings.TrimSpace(raw.RetrievalPlanningTimeout); rawTimeout != "" {
 		timeout, err := time.ParseDuration(rawTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("parse retrieval_planning_timeout: %w", err)
 		}
 		cfg.RetrievalPlanningTimeout = timeout
+	}
+	if rawDuration := strings.TrimSpace(raw.BufferQuietPeriod); rawDuration != "" {
+		duration, err := time.ParseDuration(rawDuration)
+		if err != nil {
+			return nil, fmt.Errorf("parse buffer_quiet_period: %w", err)
+		}
+		cfg.BufferQuietPeriod = duration
+	}
+	if rawDuration := strings.TrimSpace(raw.BufferMaxAge); rawDuration != "" {
+		duration, err := time.ParseDuration(rawDuration)
+		if err != nil {
+			return nil, fmt.Errorf("parse buffer_max_age: %w", err)
+		}
+		cfg.BufferMaxAge = duration
+	}
+	if rawDuration := strings.TrimSpace(raw.BufferCheckInterval); rawDuration != "" {
+		duration, err := time.ParseDuration(rawDuration)
+		if err != nil {
+			return nil, fmt.Errorf("parse buffer_check_interval: %w", err)
+		}
+		cfg.BufferCheckInterval = duration
 	}
 
 	return cfg, nil
@@ -1220,9 +1193,6 @@ func validateNaturalMemoryConfig(
 	if cfg.ConsolidationInterval < 0 {
 		return fmt.Errorf("consolidation_interval must be >= 0")
 	}
-	if cfg.ConsolidationTimeout <= 0 {
-		return fmt.Errorf("consolidation_timeout must be > 0")
-	}
 	if cfg.MaxMemoriesPerScope <= 0 {
 		return fmt.Errorf("max_memories_per_scope must be > 0")
 	}
@@ -1235,20 +1205,23 @@ func validateNaturalMemoryConfig(
 	if cfg.DuplicateSimilarityThreshold <= 0 || cfg.DuplicateSimilarityThreshold > 1 {
 		return fmt.Errorf("duplicate_similarity_threshold must be between 0 and 1")
 	}
-	if cfg.ContextWindowSize <= 0 {
-		return fmt.Errorf("context_window_size must be > 0")
+	if cfg.BufferQuietPeriod <= 0 {
+		return fmt.Errorf("buffer_quiet_period must be > 0")
 	}
-	if cfg.SynthesisMatchLimit <= 0 {
-		return fmt.Errorf("synthesis_match_limit must be > 0")
+	if cfg.BufferMaxRunes <= 0 {
+		return fmt.Errorf("buffer_max_runes must be > 0")
 	}
-	if cfg.ReflectionMinSourceMemories <= 0 {
-		return fmt.Errorf("reflection_min_source_memories must be > 0")
+	if cfg.BufferMaxArticles <= 0 {
+		return fmt.Errorf("buffer_max_articles must be > 0")
 	}
-	if cfg.ReflectionSourceLimit <= 0 {
-		return fmt.Errorf("reflection_source_limit must be > 0")
+	if cfg.BufferMaxAge <= 0 {
+		return fmt.Errorf("buffer_max_age must be > 0")
 	}
-	if cfg.ReflectionMaxGenerated <= 0 {
-		return fmt.Errorf("reflection_max_generated must be > 0")
+	if cfg.BufferCheckInterval <= 0 {
+		return fmt.Errorf("buffer_check_interval must be > 0")
+	}
+	if cfg.RetrievalSearchLimit <= 0 {
+		return fmt.Errorf("retrieval_search_limit must be > 0")
 	}
 	if cfg.RetrievalPlanningTimeout <= 0 {
 		return fmt.Errorf("retrieval_planning_timeout must be > 0")
@@ -1271,21 +1244,6 @@ func validateNaturalMemoryConfig(
 	if _, exists := providers[strings.TrimSpace(cfg.EmbeddingProvider)]; !exists {
 		return fmt.Errorf("embedding_provider %s is not configured", strings.TrimSpace(cfg.EmbeddingProvider))
 	}
-	if cfg.ConsolidationInterval > 0 {
-		if strings.TrimSpace(cfg.ConsolidationProvider) == "" {
-			return fmt.Errorf("consolidation_provider is required when consolidation_interval > 0")
-		}
-		if strings.TrimSpace(cfg.ConsolidationModel) == "" {
-			return fmt.Errorf("consolidation_model is required when consolidation_interval > 0")
-		}
-		if _, exists := providers[strings.TrimSpace(cfg.ConsolidationProvider)]; !exists {
-			return fmt.Errorf(
-				"consolidation_provider %s is not configured",
-				strings.TrimSpace(cfg.ConsolidationProvider),
-			)
-		}
-	}
-
 	return nil
 }
 

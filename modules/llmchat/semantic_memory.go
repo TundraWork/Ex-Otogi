@@ -19,11 +19,8 @@ import (
 
 const (
 	retrievalPlannerSystemPrompt = `You are a semantic memory retrieval planner. Produce a small set of search intents that will help retrieve the most relevant long-term memories for the current user message.`
-	unitKindWeight               = 1.0
-	synthesizedKindWeight        = 1.15
 	currentActorWeight           = 1.15
 	relatedActorWeight           = 1.05
-	linkedBoostWeight            = 1.1
 	keywordOverlapBonus          = 0.05
 	maxKeywordBonusHits          = 4
 )
@@ -62,6 +59,7 @@ func (m *Module) retrieveSemanticMemories(
 		return "", nil
 	}
 
+	retrieveStart := m.now()
 	settings := resolveNaturalMemorySettings(m.cfg.NaturalMemory)
 	scope := semanticMemoryScope(event)
 	m.debugSemanticMemoryRetrieve(ctx, scope, prompt)
@@ -118,18 +116,10 @@ func (m *Module) retrieveSemanticMemories(
 	}
 
 	serialized := renderSemanticMemoryDocument(selected)
-	var backgroundCount, recalledCount int
-	for _, match := range selected {
-		if isBackgroundMemory(match.Record) {
-			backgroundCount++
-		} else {
-			recalledCount++
-		}
-	}
-	m.debugSemanticMemoryRetrieveResult(ctx, scope, len(selected), len(serialized), backgroundCount, recalledCount)
+	m.debugSemanticMemoryRetrieveResult(ctx, scope, len(selected), len(serialized), 0, len(selected))
 	m.emitManagementEvent(ctx, event, "memory.retrieve.completed", "completed semantic memory retrieval", panel.MemoryRetrieveCompletedPayload{
 		ResultCount: len(selected),
-		ElapsedMS:   0,
+		ElapsedMS:   m.now().Sub(retrieveStart).Milliseconds(),
 	})
 
 	return serialized, nil
@@ -393,11 +383,6 @@ func rankSemanticMemoryMatches(
 		finalScore float64
 	}
 
-	matchIDs := make(map[string]struct{}, len(matches))
-	for _, match := range matches {
-		matchIDs[match.Record.ID] = struct{}{}
-	}
-
 	scored := make([]scoredMatch, 0, len(matches))
 	for _, match := range matches {
 		importanceWeight := 0.5 + (float64(semanticMemoryImportance(match.Record)) / 20.0)
@@ -405,7 +390,6 @@ func rankSemanticMemoryMatches(
 		finalScore := float64(match.Similarity) *
 			importanceWeight *
 			recencyWeight *
-			semanticMemoryKindWeight(match.Record) *
 			semanticMemoryActorWeight(match.Record, currentActor, relatedActors)
 
 		scored = append(scored, scoredMatch{match: match, finalScore: finalScore})
@@ -431,21 +415,6 @@ func rankSemanticMemoryMatches(
 				}
 				scored[index].finalScore *= 1.0 + keywordOverlapBonus*float64(hits)
 			}
-		}
-	}
-
-	// Boost records that are linked from other records in the match set.
-	inboundLinkCounts := make(map[string]int, len(scored))
-	for _, entry := range scored {
-		for _, link := range entry.match.Record.Links {
-			if _, exists := matchIDs[link.TargetID]; exists {
-				inboundLinkCounts[link.TargetID]++
-			}
-		}
-	}
-	for index := range scored {
-		if count := inboundLinkCounts[scored[index].match.Record.ID]; count > 0 {
-			scored[index].finalScore *= linkedBoostWeight
 		}
 	}
 
@@ -529,51 +498,21 @@ func fitSemanticMemoryMatch(
 }
 
 func renderSemanticMemoryDocument(matches []ai.LLMMemoryMatch) string {
-	var background, recalled []ai.LLMMemoryMatch
-	for _, match := range matches {
-		if isBackgroundMemory(match.Record) {
-			background = append(background, match)
-		} else {
-			recalled = append(recalled, match)
-		}
-	}
-
 	var builder strings.Builder
 	builder.WriteString(fmt.Sprintf("<semantic_memories count=\"%d\">\n", len(matches)))
-	if len(background) > 0 {
-		builder.WriteString(fmt.Sprintf("<tier role=\"background\" count=\"%d\">\n", len(background)))
-		for _, match := range background {
-			builder.WriteString(renderSemanticMemoryMatch(match))
-			builder.WriteByte('\n')
-		}
-		builder.WriteString("</tier>\n")
-	}
-	if len(recalled) > 0 {
-		builder.WriteString(fmt.Sprintf("<tier role=\"recalled\" count=\"%d\">\n", len(recalled)))
-		for _, match := range recalled {
-			builder.WriteString(renderSemanticMemoryMatch(match))
-			builder.WriteByte('\n')
-		}
-		builder.WriteString("</tier>\n")
+	for _, match := range matches {
+		builder.WriteString(renderSemanticMemoryMatch(match))
+		builder.WriteByte('\n')
 	}
 	builder.WriteString("</semantic_memories>")
 	return builder.String()
-}
-
-func isBackgroundMemory(record ai.LLMMemoryRecord) bool {
-	switch record.Category {
-	case "reflection", "theme":
-		return true
-	default:
-		return false
-	}
 }
 
 func renderSemanticMemoryMatch(match ai.LLMMemoryMatch) string {
 	attributes := []string{
 		fmt.Sprintf("id=\"%s\"", html.EscapeString(match.Record.ID)),
 		fmt.Sprintf("category=\"%s\"", html.EscapeString(match.Record.Category)),
-		fmt.Sprintf("kind=\"%s\"", html.EscapeString(string(semanticMemoryKind(match.Record)))),
+		fmt.Sprintf("kind=\"%s\"", html.EscapeString(string(match.Record.Profile.Kind))),
 		fmt.Sprintf("importance=\"%d\"", semanticMemoryImportance(match.Record)),
 	}
 	if match.Record.Profile.SubjectActor != nil && strings.TrimSpace(match.Record.Profile.SubjectActor.Name) != "" {
@@ -606,7 +545,7 @@ func (m *Module) reinforceSemanticMemoryMatches(ctx context.Context, matches []a
 	for _, match := range matches {
 		profile := match.Record.Profile
 		if profile.Kind == "" {
-			profile.Kind = semanticMemoryKind(match.Record)
+			profile.Kind = match.Record.Profile.Kind
 		}
 		profile.LastAccessedAt = now
 		profile.AccessCount++
@@ -696,23 +635,6 @@ func semanticMemoryLastAccessed(record ai.LLMMemoryRecord) time.Time {
 	}
 
 	return record.CreatedAt.UTC()
-}
-
-func semanticMemoryKind(record ai.LLMMemoryRecord) ai.LLMMemoryKind {
-	if record.Profile.Kind != "" {
-		return record.Profile.Kind
-	}
-
-	return ai.LLMMemoryKindUnit
-}
-
-func semanticMemoryKindWeight(record ai.LLMMemoryRecord) float64 {
-	switch semanticMemoryKind(record) {
-	case ai.LLMMemoryKindSynthesized:
-		return synthesizedKindWeight
-	default:
-		return unitKindWeight
-	}
 }
 
 func semanticMemoryActorWeight(

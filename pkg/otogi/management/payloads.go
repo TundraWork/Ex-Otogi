@@ -72,6 +72,36 @@ type MemoryExtractCompletedPayload struct {
 	Consolidated bool
 }
 
+// MemoryWindowFlushedPayload describes one window flush event.
+type MemoryWindowFlushedPayload struct {
+	// Reason describes why the window was flushed (quiet, max_count, max_runes, max_age, scope_drain, shutdown).
+	Reason string
+	// ArticleCount is the number of articles in the flushed window.
+	ArticleCount int
+}
+
+// MemoryConsolidationPrunedPayload describes one consolidation pruning pass.
+type MemoryConsolidationPrunedPayload struct {
+	// TotalRecords is the number of records before pruning.
+	TotalRecords int
+	// ExpiredCount is the number of records removed due to ValidUntil expiry.
+	ExpiredCount int
+	// DecayPrunedCount is the number of records removed due to low decay score.
+	DecayPrunedCount int
+	// KeptCount is the number of records retained after pruning.
+	KeptCount int
+}
+
+// MemoryConsolidationCappedPayload describes overflow pruning at the cap.
+type MemoryConsolidationCappedPayload struct {
+	// TotalRecords is the number of records before capping.
+	TotalRecords int
+	// MaxAllowed is the configured maximum.
+	MaxAllowed int
+	// RemovedCount is the number of records removed to enforce the cap.
+	RemovedCount int
+}
+
 // MemoryStoreUpsertedPayload describes one memory store write.
 type MemoryStoreUpsertedPayload struct {
 	// Store identifies the memory store implementation.

@@ -114,3 +114,14 @@ func parseMetadataTime(metadata map[string]string, key string, defaultValue time
 
 	return parsed.UTC()
 }
+
+func sortMemoriesByScore(records []ai.LLMMemoryRecord, decayFactor float64, now time.Time) {
+	sort.Slice(records, func(i, j int) bool {
+		leftScore := effectiveScore(records[i], decayFactor, now)
+		rightScore := effectiveScore(records[j], decayFactor, now)
+		if leftScore == rightScore {
+			return records[i].UpdatedAt.After(records[j].UpdatedAt)
+		}
+		return leftScore > rightScore
+	})
+}

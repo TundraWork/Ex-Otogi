@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
@@ -16,25 +15,25 @@ import (
 )
 
 const (
-	serviceLogger               = "logger"
-	consolidationHandlerTimeout = 5 * time.Second
+	serviceLogger        = "logger"
+	enqueueHandlerBuffer = 64
+	enqueueHandlerTimout = 2 * time.Second
 )
 
 // Module provides automatic long-term memory formation from article activity.
 type Module struct {
 	cfg Config
 
-	llmMemory             ai.LLMMemoryService
-	embeddingProvider     ai.EmbeddingProvider
-	extractionProvider    ai.LLMProvider
-	consolidationProvider ai.LLMProvider
-	memory                core.MemoryService
-	logger                *slog.Logger
-	recorder              panel.Recorder
-	clock                 func() time.Time
+	llmMemory          ai.LLMMemoryService
+	embeddingProvider  ai.EmbeddingProvider
+	extractionProvider ai.LLMProvider
+	memory             core.MemoryService
+	logger             *slog.Logger
+	recorder           panel.Recorder
+	clock              func() time.Time
 
-	activeScopes   map[string]ai.LLMMemoryScope
-	activeScopesMu sync.Mutex
+	windowManager *windowManager
+	flusher       *flushWorker
 
 	stopCh    chan struct{}
 	flushDone chan struct{}
@@ -46,10 +45,9 @@ type Option func(*Module)
 // New creates one naturalmemory module instance.
 func New(options ...Option) *Module {
 	module := &Module{
-		cfg:          defaultConfig(),
-		logger:       slog.Default(),
-		clock:        time.Now,
-		activeScopes: make(map[string]ai.LLMMemoryScope),
+		cfg:    defaultConfig(),
+		logger: slog.Default(),
+		clock:  time.Now,
 	}
 	for _, option := range options {
 		option(module)
@@ -143,34 +141,21 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 		return fmt.Errorf("naturalmemory resolve embedding provider %s: %w", m.cfg.EmbeddingProvider, err)
 	}
 
-	var consolidationProvider ai.LLMProvider
-	if m.cfg.ConsolidationInterval > 0 {
-		consolidationProvider, err = providerRegistry.Resolve(m.cfg.ConsolidationProvider)
-		if err != nil {
-			return fmt.Errorf(
-				"naturalmemory resolve consolidation provider %s: %w",
-				m.cfg.ConsolidationProvider,
-				err,
-			)
-		}
-	}
-
 	m.llmMemory = llmMemoryService
 	m.memory = memoryService
 	m.extractionProvider = extractionProvider
 	m.embeddingProvider = embeddingProvider
-	m.consolidationProvider = consolidationProvider
+	m.windowManager = newWindowManager(m.cfg, m.clock)
 
-	handlerTimeout := m.cfg.ExtractionTimeout + consolidationHandlerTimeout
 	if _, err := runtime.Subscribe(ctx, core.InterestSet{
 		Kinds:          []platform.EventKind{platform.EventKindArticleCreated},
 		RequireArticle: true,
 	}, core.SubscriptionSpec{
 		Name:           "naturalmemory-articles",
-		Buffer:         64,
+		Buffer:         enqueueHandlerBuffer,
 		Workers:        1,
 		Backpressure:   core.BackpressureDropOldest,
-		HandlerTimeout: handlerTimeout,
+		HandlerTimeout: enqueueHandlerTimout,
 	}, m.handleArticle); err != nil {
 		return fmt.Errorf("naturalmemory subscribe: %w", err)
 	}
@@ -178,24 +163,50 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	return nil
 }
 
-// OnStart starts background consolidation when configured.
+// OnStart starts the background flush worker and consolidation when configured.
 func (m *Module) OnStart(ctx context.Context) error {
 	if m == nil {
 		return fmt.Errorf("naturalmemory start: nil module")
 	}
-	if m.cfg.Enabled && m.cfg.ConsolidationInterval > 0 {
+	if !m.cfg.Enabled {
+		return nil
+	}
+
+	// Start the flush worker.
+	m.flusher = &flushWorker{
+		interval: m.cfg.BufferCheckInterval,
+		clock:    m.clock,
+		manager:  m.windowManager,
+		process: func(ctx context.Context, w readyWindow) error {
+			return m.processWindow(ctx, w.Scope, w.Articles, w.Reason)
+		},
+		logger: m.logger,
+	}
+	m.flusher.Start(ctx)
+
+	// Start consolidation if configured.
+	if m.cfg.ConsolidationInterval > 0 {
 		m.startConsolidation(ctx)
 	}
 
 	return nil
 }
 
-// OnShutdown stops background consolidation.
+// OnShutdown stops the flush worker first (draining all windows), then
+// stops the consolidation worker.
 func (m *Module) OnShutdown(ctx context.Context) error {
 	if m == nil {
 		return fmt.Errorf("naturalmemory shutdown: nil module")
 	}
 
+	// Stop flush worker first — it drains all pending windows.
+	if m.flusher != nil {
+		if err := m.flusher.Stop(ctx); err != nil && m.logger != nil {
+			m.logger.WarnContext(ctx, "naturalmemory flush worker stop", "error", err)
+		}
+	}
+
+	// Then stop the consolidation worker.
 	return m.stopConsolidation(ctx)
 }
 
@@ -215,59 +226,15 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 		Platform:       string(event.Source.Platform),
 		ConversationID: event.Conversation.ID,
 	}
-	m.rememberScope(scope)
-	m.debugArticleReceived(ctx, scope, event.Article.ID, len([]rune(event.Article.Text)), actorDisplayName(event.Actor))
-
-	contextWindow, err := m.buildExtractionContext(ctx, event)
-	if err != nil {
-		return fmt.Errorf("naturalmemory build context: %w", err)
-	}
-	if err := m.extractMemories(ctx, scope, contextWindow); err != nil {
-		return fmt.Errorf("naturalmemory extract memories: %w", err)
-	}
+	m.windowManager.Enqueue(scope, bufferedArticle{
+		Article:    *event.Article,
+		Actor:      event.Actor,
+		OccurredAt: normalizeAnchorTime(event, m.now()),
+		ReceivedAt: m.now(),
+	})
+	m.debugWindowEnqueue(ctx, scope, event.Article.ID)
 
 	return nil
-}
-
-func (m *Module) rememberScope(scope ai.LLMMemoryScope) {
-	if m == nil {
-		return
-	}
-
-	key := scopeKey(scope)
-
-	m.activeScopesMu.Lock()
-	defer m.activeScopesMu.Unlock()
-
-	if m.activeScopes == nil {
-		m.activeScopes = make(map[string]ai.LLMMemoryScope)
-	}
-	m.activeScopes[key] = scope
-}
-
-func (m *Module) drainActiveScopes() []ai.LLMMemoryScope {
-	if m == nil {
-		return nil
-	}
-
-	m.activeScopesMu.Lock()
-	defer m.activeScopesMu.Unlock()
-
-	if len(m.activeScopes) == 0 {
-		return nil
-	}
-
-	scopes := make([]ai.LLMMemoryScope, 0, len(m.activeScopes))
-	for key, scope := range m.activeScopes {
-		scopes = append(scopes, scope)
-		delete(m.activeScopes, key)
-	}
-
-	return scopes
-}
-
-func scopeKey(scope ai.LLMMemoryScope) string {
-	return scope.TenantID + "\x00" + scope.Platform + "\x00" + scope.ConversationID
 }
 
 func (m *Module) now() time.Time {

@@ -74,8 +74,8 @@ func TestOnRegisterLoadsConfigAndSubscribes(t *testing.T) {
 	if gotSpec.Backpressure != core.BackpressureDropOldest {
 		t.Fatalf("backpressure = %q, want %q", gotSpec.Backpressure, core.BackpressureDropOldest)
 	}
-	if gotSpec.HandlerTimeout != 35*time.Second {
-		t.Fatalf("handler timeout = %s, want 35s", gotSpec.HandlerTimeout)
+	if gotSpec.HandlerTimeout != enqueueHandlerTimout {
+		t.Fatalf("handler timeout = %s, want %s", gotSpec.HandlerTimeout, enqueueHandlerTimout)
 	}
 	if len(gotInterest.Kinds) != 1 || gotInterest.Kinds[0] != platform.EventKindArticleCreated {
 		t.Fatalf("interest kinds = %v, want article.created", gotInterest.Kinds)
@@ -113,20 +113,11 @@ func TestOnRegisterWithoutConfigLeavesModuleDisabled(t *testing.T) {
 	}
 }
 
-func TestHandleArticleExtractsAndStoresMemory(t *testing.T) {
+func TestHandleArticleEnqueuesIntoWindowManager(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
-	memoryStore := &recordingLLMMemoryService{}
-	extractionProvider := &llmProviderStub{
-		stream: &llmStreamStub{chunks: []ai.LLMGenerateChunk{
-			{Kind: ai.LLMGenerateChunkKindOutputText, Delta: `[{"content":"Alice likes tea","category":"preference","importance":8}]`},
-		}},
-	}
-	embeddingProvider := &embeddingProviderStub{
-		response: ai.EmbeddingResponse{Vectors: [][]float32{{1, 0}}},
-	}
-	module := New(withClock(func() time.Time { return now }), withConfig(Config{
+	cfg := Config{
 		Enabled:                      true,
 		ExtractionProvider:           "openai-main",
 		ExtractionModel:              "gpt-4.1-mini",
@@ -134,24 +125,23 @@ func TestHandleArticleExtractsAndStoresMemory(t *testing.T) {
 		ExtractionTimeout:            time.Second,
 		ExtractionMaxInputRunes:      4000,
 		ConsolidationInterval:        0,
-		ConsolidationTimeout:         time.Second,
 		MaxMemoriesPerScope:          10,
 		DecayFactor:                  0.99,
 		MinImportance:                1,
 		DuplicateSimilarityThreshold: 0.85,
-		ContextWindowSize:            5,
-	}))
-	module.memory = &memoryContextStub{
-		leadingContext: []core.ConversationContextEntry{
-			{
-				Actor:   platform.Actor{ID: "user-1", DisplayName: "Alice"},
-				Article: platform.Article{ID: "a-1", Text: "I love tea."},
-			},
-		},
+		BufferQuietPeriod:            2 * time.Minute,
+		BufferMaxRunes:               3000,
+		BufferMaxArticles:            30,
+		BufferMaxAge:                 10 * time.Minute,
+		BufferCheckInterval:          15 * time.Second,
+		RetrievalSearchLimit:         20,
+		RetrievalPlanningEnabled:     true,
+		RetrievalPlanningTimeout:     10 * time.Second,
 	}
-	module.llmMemory = memoryStore
-	module.extractionProvider = extractionProvider
-	module.embeddingProvider = embeddingProvider
+	module := New(withClock(func() time.Time { return now }), withConfig(cfg))
+	module.windowManager = newWindowManager(cfg, func() time.Time { return now })
+	module.memory = &memoryContextStub{}
+	module.llmMemory = &recordingLLMMemoryService{}
 
 	event := &platform.Event{
 		Kind:       platform.EventKindArticleCreated,
@@ -172,61 +162,43 @@ func TestHandleArticleExtractsAndStoresMemory(t *testing.T) {
 		t.Fatalf("handleArticle failed: %v", err)
 	}
 
-	if len(memoryStore.storedEntries) != 1 {
-		t.Fatalf("stored entries = %d, want 1", len(memoryStore.storedEntries))
+	// Verify article was enqueued into the window manager.
+	scopes := module.windowManager.ActiveScopes()
+	if len(scopes) != 1 {
+		t.Fatalf("active scopes = %d, want 1", len(scopes))
 	}
-	entry := memoryStore.storedEntries[0]
-	if entry.Content != "Alice likes tea" {
-		t.Fatalf("stored content = %q, want Alice likes tea", entry.Content)
+	if scopes[0].ConversationID != "chat-1" {
+		t.Fatalf("scope conversation = %q, want chat-1", scopes[0].ConversationID)
 	}
-	if entry.Category != "preference" {
-		t.Fatalf("stored category = %q, want preference", entry.Category)
-	}
-	if entry.Profile.Kind != ai.LLMMemoryKindUnit {
-		t.Fatalf("profile.kind = %q, want %q", entry.Profile.Kind, ai.LLMMemoryKindUnit)
-	}
-	if entry.Profile.Source != "natural" {
-		t.Fatalf("profile.source = %q, want natural", entry.Profile.Source)
-	}
-	if entry.Profile.SourceArticleID != "a-2" {
-		t.Fatalf("profile.source_article_id = %q, want a-2", entry.Profile.SourceArticleID)
-	}
-	if entry.Profile.SourceActor == nil || entry.Profile.SourceActor.Name != "Alice" {
-		t.Fatalf("profile.source_actor = %+v, want Alice", entry.Profile.SourceActor)
-	}
-	if entry.Profile.SubjectActor == nil || entry.Profile.SubjectActor.Name != "Alice" {
-		t.Fatalf("profile.subject_actor = %+v, want Alice", entry.Profile.SubjectActor)
-	}
-	if entry.Scope.ConversationID != "chat-1" || entry.Scope.Platform != "telegram" {
-		t.Fatalf("stored scope = %+v, want chat-1/telegram", entry.Scope)
-	}
-	if extractionProvider.lastReq.Model != "gpt-4.1-mini" {
-		t.Fatalf("extraction model = %q, want gpt-4.1-mini", extractionProvider.lastReq.Model)
-	}
-	if len(extractionProvider.lastReq.Messages) != 2 {
-		t.Fatalf("message count = %d, want 2", len(extractionProvider.lastReq.Messages))
-	}
-	if embeddingProvider.lastRequest.TaskType != ai.EmbeddingTaskTypeDocument {
-		t.Fatalf("embedding task type = %q, want document", embeddingProvider.lastRequest.TaskType)
+	if scopes[0].Platform != "telegram" {
+		t.Fatalf("scope platform = %q, want telegram", scopes[0].Platform)
 	}
 }
 
 func TestOnStartAndShutdownManageConsolidationLifecycle(t *testing.T) {
 	t.Parallel()
 
-	module := New(withConfig(Config{
+	cfg := Config{
 		Enabled:                      true,
 		ExtractionTimeout:            time.Second,
-		ExtractionMaxInputRunes:      1000,
+		ExtractionMaxInputRunes:      4000,
 		ConsolidationInterval:        10 * time.Millisecond,
-		ConsolidationTimeout:         time.Second,
 		MaxMemoriesPerScope:          10,
 		DecayFactor:                  0.99,
 		MinImportance:                1,
 		DuplicateSimilarityThreshold: 0.85,
-		ContextWindowSize:            5,
-	}))
+		BufferQuietPeriod:            2 * time.Minute,
+		BufferMaxRunes:               3000,
+		BufferMaxArticles:            30,
+		BufferMaxAge:                 10 * time.Minute,
+		BufferCheckInterval:          15 * time.Second,
+		RetrievalSearchLimit:         20,
+		RetrievalPlanningEnabled:     true,
+		RetrievalPlanningTimeout:     10 * time.Second,
+	}
+	module := New(withConfig(cfg))
 	module.llmMemory = &recordingLLMMemoryService{}
+	module.windowManager = newWindowManager(cfg, time.Now)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
