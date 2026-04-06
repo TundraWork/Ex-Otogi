@@ -50,14 +50,14 @@ async function submit() {
           Secure access to runtime traces, events, and snapshots.
         </h1>
         <p class="mt-6 max-w-xl text-lg leading-8 text-slate-600">
-          This panel authenticates with a bearer token and validates it against
-          the Management API before opening the admin workspace.
+          This panel authenticates with a Management API token and validates it
+          against the Management API before opening the admin workspace.
         </p>
       </section>
 
       <Card class="w-full border border-slate-200 bg-white/95 text-slate-950 shadow-2xl shadow-slate-300/40">
         <template #title>
-          <div class="text-2xl font-semibold">Sign in with API token</div>
+          <div class="text-2xl font-semibold">Sign in with Management API token</div>
         </template>
         <template #content>
           <form class="space-y-5" @submit.prevent="submit">
@@ -70,10 +70,10 @@ async function submit() {
                 input-class="w-full"
                 :feedback="false"
                 toggle-mask
-                placeholder="Paste management token"
+                placeholder="Paste Management API token"
                 @update:model-value="authStore.clearError()"
               />
-                <label for="token">Bearer token</label>
+                <label for="token">Management API token</label>
               </FloatLabel>
             </div>
 

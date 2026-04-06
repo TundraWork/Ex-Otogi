@@ -15,7 +15,7 @@ const mobileNavOpen = ref(false)
 
 const maskedToken = computed(() => {
   if (!authStore.token) {
-    return 'No active token'
+    return 'No active Management API token'
   }
 
   const visibleStart = authStore.token.slice(0, 6)
@@ -42,7 +42,7 @@ async function logout() {
           <p class="text-xs uppercase tracking-[0.35em] text-slate-500">Ex-Otogi</p>
           <h1 class="mt-3 text-xl font-semibold">Management Admin</h1>
           <p class="mt-3 text-sm text-slate-500">
-            Token session active
+            Management API token session active
           </p>
           <div class="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
             {{ maskedToken }}
@@ -84,7 +84,7 @@ async function logout() {
           <template #header>
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-slate-500">Navigation</p>
-              <p class="mt-1 text-lg font-semibold">Active token</p>
+              <p class="mt-1 text-lg font-semibold">Active Management API token</p>
             </div>
           </template>
 
