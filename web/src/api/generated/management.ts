@@ -197,7 +197,7 @@ export interface components {
             Payload: unknown;
             PayloadType: string;
             Platform: string;
-            Summary: string;
+            Subject: string;
             TenantID: string;
             TraceID: string;
         };

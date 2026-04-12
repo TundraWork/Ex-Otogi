@@ -31,7 +31,7 @@ type Event struct {
 	Platform       string
 	ConversationID string
 	ActorID        string
-	Summary        string
+	Subject        string
 	PayloadType    string
 	PayloadJson    string
 	Description    string

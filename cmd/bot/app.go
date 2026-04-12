@@ -620,7 +620,7 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *ke
 				Level:       panel.EventLevelError,
 				Module:      "kernel",
 				Component:   "event-bus",
-				Summary:     "asynchronous runtime error",
+				Subject:     "asynchronous runtime error",
 				Description: panel.TruncateDescription(fmt.Sprintf("%s: %s", scope, err.Error())),
 				PayloadType: "RuntimeAsyncErrorPayload",
 				Payload: panel.RuntimeAsyncErrorPayload{
@@ -642,7 +642,7 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *ke
 				Platform:       string(event.Source.Platform),
 				ConversationID: event.Conversation.ID,
 				ActorID:        event.Actor.ID,
-				Summary:        "published platform event to matching subscribers",
+				Subject:        "published platform event to matching subscribers",
 				PayloadType:    "PlatformEventPublishedPayload",
 				Payload: panel.PlatformEventPublishedPayload{
 					EventKind:       string(event.Kind),

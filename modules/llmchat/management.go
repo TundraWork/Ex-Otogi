@@ -28,7 +28,7 @@ func (m *Module) emitManagementEvent(
 		Level:       panel.EventLevelDebug,
 		Module:      m.Name(),
 		Component:   "semantic-memory",
-		Summary:     summary,
+		Subject:     summary,
 		Description: description,
 		PayloadType: llmchatPayloadTypeName(payload),
 		Payload:     payload,

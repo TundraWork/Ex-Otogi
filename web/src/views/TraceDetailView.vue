@@ -174,7 +174,7 @@ watch(
                   </span>
                 </div>
                 <div>
-                  <h2 class="text-lg font-semibold text-slate-900">{{ event.Summary }}</h2>
+                  <h2 class="text-lg font-semibold text-slate-900">{{ event.Subject }}</h2>
                   <p class="mt-2 text-sm text-slate-600">{{ event.Component }}</p>
                 </div>
               </div>

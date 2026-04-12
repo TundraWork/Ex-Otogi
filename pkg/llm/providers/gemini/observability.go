@@ -88,7 +88,7 @@ func (s *observedLLMStream) finishSuccess() {
 		Level:       panel.EventLevelDebug,
 		Module:      "llm-provider",
 		Component:   s.provider,
-		Summary:     "completed llm provider call",
+		Subject:     "completed llm provider call",
 		Description: panel.TruncateDescription(responseText),
 		PayloadType: "LLMCallCompletedPayload",
 		Payload: panel.LLMCallCompletedPayload{
@@ -119,7 +119,7 @@ func (s *observedLLMStream) finishFailure(streamErr error) {
 		Level:       panel.EventLevelError,
 		Module:      "llm-provider",
 		Component:   s.provider,
-		Summary:     "llm provider call failed",
+		Subject:     "llm provider call failed",
 		Description: panel.TruncateDescription(fmt.Sprintf("%s: %s", s.provider, streamErr.Error())),
 		PayloadType: "LLMCallFailedPayload",
 		Payload: panel.LLMCallFailedPayload{
@@ -148,7 +148,7 @@ func recordLLMStart(
 		Level:       panel.EventLevelDebug,
 		Module:      "llm-provider",
 		Component:   provider,
-		Summary:     "started llm provider call",
+		Subject:     "started llm provider call",
 		PayloadType: "LLMCallStartedPayload",
 		Payload: panel.LLMCallStartedPayload{
 			Provider:     provider,
@@ -181,7 +181,7 @@ func recordEmbeddingStart(
 		Level:       panel.EventLevelDebug,
 		Module:      "embedding-provider",
 		Component:   provider,
-		Summary:     "started embedding provider call",
+		Subject:     "started embedding provider call",
 		PayloadType: "EmbeddingCallStartedPayload",
 		Payload: panel.EmbeddingCallStartedPayload{
 			Provider:   provider,
@@ -217,7 +217,7 @@ func recordEmbeddingCompleted(
 		Level:       panel.EventLevelDebug,
 		Module:      "embedding-provider",
 		Component:   provider,
-		Summary:     "completed embedding provider call",
+		Subject:     "completed embedding provider call",
 		PayloadType: "EmbeddingCallCompletedPayload",
 		Payload: panel.EmbeddingCallCompletedPayload{
 			Provider:   provider,
@@ -247,7 +247,7 @@ func recordEmbeddingFailed(
 		Level:       panel.EventLevelError,
 		Module:      "embedding-provider",
 		Component:   provider,
-		Summary:     "embedding provider call failed",
+		Subject:     "embedding provider call failed",
 		Description: panel.TruncateDescription(callErr.Error()),
 		PayloadType: "EmbeddingCallFailedPayload",
 		Payload: panel.EmbeddingCallFailedPayload{

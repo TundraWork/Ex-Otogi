@@ -74,8 +74,8 @@ type Event struct {
 	ConversationID string
 	// ActorID identifies the actor correlated with the event.
 	ActorID string
-	// Summary is the short human-readable event description.
-	Summary string
+	// Subject is the short human-readable event description.
+	Subject string
 	// Description carries a brief human-readable excerpt derived from the event
 	// payload. Maximum 140 Unicode characters. Empty when no relevant content
 	// is available.

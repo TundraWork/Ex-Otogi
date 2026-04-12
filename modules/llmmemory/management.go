@@ -23,7 +23,7 @@ func (m *Module) emitManagementEvent(
 		Level:       panel.EventLevelDebug,
 		Module:      m.Name(),
 		Component:   "semantic-store",
-		Summary:     summary,
+		Subject:     summary,
 		Description: description,
 		PayloadType: payloadTypeName(payload),
 		Payload:     payload,

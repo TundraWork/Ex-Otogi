@@ -2,7 +2,7 @@
 INSERT INTO events (
   occurred_at, trace_id, parent_event_id, category, kind, level,
   module, component, tenant_id, platform, conversation_id, actor_id,
-  summary, description, payload_type, payload_json
+  subject, description, payload_type, payload_json
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 ) RETURNING *;

@@ -398,7 +398,7 @@ onBeforeUnmount(() => {
                 </div>
 
               <div>
-                <h2 class="text-lg font-semibold text-slate-900">{{ event.Summary }}</h2>
+                <h2 class="text-lg font-semibold text-slate-900">{{ event.Subject }}</h2>
                 <p v-if="event.Description" class="mt-1 text-sm text-slate-500">{{ event.Description }}</p>
               </div>
             </div>

@@ -136,7 +136,7 @@ components:
           type: string
         Platform:
           type: string
-        Summary:
+        Subject:
           type: string
         TenantID:
           type: string
@@ -156,7 +156,7 @@ components:
         - Platform
         - ConversationID
         - ActorID
-        - Summary
+        - Subject
         - Description
         - PayloadType
         - Payload

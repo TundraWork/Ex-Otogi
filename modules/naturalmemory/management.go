@@ -18,7 +18,7 @@ func (m *Module) emitManagementEvent(ctx context.Context, kind string, summary s
 		Level:       panel.EventLevelDebug,
 		Module:      m.Name(),
 		Component:   "natural-memory",
-		Summary:     summary,
+		Subject:     summary,
 		Description: description,
 		PayloadType: naturalMemoryPayloadTypeName(payload),
 		Payload:     payload,

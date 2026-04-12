@@ -77,7 +77,7 @@ func (q *Queries) CountRecentErrors(ctx context.Context) (int64, error) {
 }
 
 const getEvent = `-- name: GetEvent :one
-SELECT id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, summary, payload_type, payload_json, description FROM events WHERE id = ?
+SELECT id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, subject, payload_type, payload_json, description FROM events WHERE id = ?
 `
 
 func (q *Queries) GetEvent(ctx context.Context, id int64) (Event, error) {
@@ -97,7 +97,7 @@ func (q *Queries) GetEvent(ctx context.Context, id int64) (Event, error) {
 		&i.Platform,
 		&i.ConversationID,
 		&i.ActorID,
-		&i.Summary,
+		&i.Subject,
 		&i.PayloadType,
 		&i.PayloadJson,
 		&i.Description,
@@ -106,7 +106,7 @@ func (q *Queries) GetEvent(ctx context.Context, id int64) (Event, error) {
 }
 
 const getTraceEvents = `-- name: GetTraceEvents :many
-SELECT id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, summary, payload_type, payload_json, description FROM events
+SELECT id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, subject, payload_type, payload_json, description FROM events
 WHERE trace_id = ?
 ORDER BY id ASC
 `
@@ -134,7 +134,7 @@ func (q *Queries) GetTraceEvents(ctx context.Context, traceID string) ([]Event, 
 			&i.Platform,
 			&i.ConversationID,
 			&i.ActorID,
-			&i.Summary,
+			&i.Subject,
 			&i.PayloadType,
 			&i.PayloadJson,
 			&i.Description,
@@ -156,10 +156,10 @@ const insertEvent = `-- name: InsertEvent :one
 INSERT INTO events (
   occurred_at, trace_id, parent_event_id, category, kind, level,
   module, component, tenant_id, platform, conversation_id, actor_id,
-  summary, description, payload_type, payload_json
+  subject, description, payload_type, payload_json
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-) RETURNING id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, summary, payload_type, payload_json, description
+) RETURNING id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, subject, payload_type, payload_json, description
 `
 
 type InsertEventParams struct {
@@ -175,7 +175,7 @@ type InsertEventParams struct {
 	Platform       string
 	ConversationID string
 	ActorID        string
-	Summary        string
+	Subject        string
 	Description    string
 	PayloadType    string
 	PayloadJson    string
@@ -195,7 +195,7 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Event
 		arg.Platform,
 		arg.ConversationID,
 		arg.ActorID,
-		arg.Summary,
+		arg.Subject,
 		arg.Description,
 		arg.PayloadType,
 		arg.PayloadJson,
@@ -215,7 +215,7 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Event
 		&i.Platform,
 		&i.ConversationID,
 		&i.ActorID,
-		&i.Summary,
+		&i.Subject,
 		&i.PayloadType,
 		&i.PayloadJson,
 		&i.Description,
@@ -224,7 +224,7 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Event
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, summary, payload_type, payload_json, description FROM events
+SELECT id, occurred_at, trace_id, parent_event_id, category, kind, level, module, component, tenant_id, platform, conversation_id, actor_id, subject, payload_type, payload_json, description FROM events
 WHERE (?1 = '' OR category = ?1)
   AND (?2 = '' OR kind = ?2)
   AND (?3 = '' OR trace_id = ?3)
@@ -279,7 +279,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event
 			&i.Platform,
 			&i.ConversationID,
 			&i.ActorID,
-			&i.Summary,
+			&i.Subject,
 			&i.PayloadType,
 			&i.PayloadJson,
 			&i.Description,
