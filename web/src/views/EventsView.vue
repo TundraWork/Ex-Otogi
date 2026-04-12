@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Drawer from 'primevue/drawer'
 import FloatLabel from 'primevue/floatlabel'
+import IconField from 'primevue/iconfield'
+import InputIcon from 'primevue/inputicon'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
 import type { components } from '@/api/generated/management'
@@ -149,6 +151,11 @@ async function applyFilters() {
   })
 }
 
+async function clearField(field: keyof typeof filterForm) {
+  filterForm[field] = field === 'limit' ? '50' : ''
+  await applyFilters()
+}
+
 async function filterByTag(field: 'category' | 'kind' | 'module', value: string) {
   if (!value) return
   filterForm[field] = value
@@ -248,49 +255,63 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-sm shadow-slate-200/70">
-        <form class="grid gap-4 md:grid-cols-2 xl:grid-cols-4" @submit.prevent="applyFilters">
-          <div>
-            <FloatLabel variant="on">
-              <InputText id="limit" v-model="filterForm.limit" placeholder="50" />
-              <label for="limit">Limit</label>
-            </FloatLabel>
-          </div>
-          <div>
-            <FloatLabel variant="on">
-              <InputText id="category" v-model="filterForm.category" placeholder="message" />
-              <label for="category">Category</label>
-            </FloatLabel>
-          </div>
-          <div>
-            <FloatLabel variant="on">
-              <InputText id="kind" v-model="filterForm.kind" placeholder="dispatch" />
-              <label for="kind">Kind</label>
-            </FloatLabel>
-          </div>
-          <div>
-            <FloatLabel variant="on">
-              <InputText id="trace_id" v-model="filterForm.trace_id" placeholder="trace-..." />
-              <label for="trace_id">Trace ID</label>
-            </FloatLabel>
-          </div>
-          <div>
-            <FloatLabel variant="on">
-              <InputText id="conversation_id" v-model="filterForm.conversation_id" placeholder="conversation-..." />
-              <label for="conversation_id">Conversation ID</label>
-            </FloatLabel>
-          </div>
-          <div>
-            <FloatLabel variant="on">
-              <InputText id="module" v-model="filterForm.module" placeholder="telegram" />
-              <label for="module">Module</label>
-            </FloatLabel>
-          </div>
-          <div>
-            <FloatLabel variant="on">
-              <InputText id="level" v-model="filterForm.level" placeholder="info" />
-              <label for="level">Level</label>
-            </FloatLabel>
-          </div>
+        <form class="grid gap-3 md:grid-cols-2 xl:grid-cols-4" @submit.prevent="applyFilters">
+          <FloatLabel variant="on">
+            <IconField>
+              <InputText fluid id="limit" v-model="filterForm.limit" placeholder="50" />
+              <InputIcon v-if="filterForm.limit && filterForm.limit !== '50'" class="pi pi-times cursor-pointer" @click="clearField('limit')" />
+              <InputIcon v-else class="pi" />
+            </IconField>
+            <label for="limit">Limit</label>
+          </FloatLabel>
+          <FloatLabel variant="on">
+            <IconField>
+              <InputText fluid id="category" v-model="filterForm.category" placeholder="message" />
+              <InputIcon v-if="filterForm.category" class="pi pi-times cursor-pointer" @click="clearField('category')" />
+              <InputIcon v-else class="pi" />
+            </IconField>
+            <label for="category">Category</label>
+          </FloatLabel>
+          <FloatLabel variant="on">
+            <IconField>
+              <InputText fluid id="kind" v-model="filterForm.kind" placeholder="dispatch" />
+              <InputIcon v-if="filterForm.kind" class="pi pi-times cursor-pointer" @click="clearField('kind')" />
+              <InputIcon v-else class="pi" />
+            </IconField>
+            <label for="kind">Kind</label>
+          </FloatLabel>
+          <FloatLabel variant="on">
+            <IconField>
+              <InputText fluid id="trace_id" v-model="filterForm.trace_id" placeholder="trace-..." />
+              <InputIcon v-if="filterForm.trace_id" class="pi pi-times cursor-pointer" @click="clearField('trace_id')" />
+              <InputIcon v-else class="pi" />
+            </IconField>
+            <label for="trace_id">Trace ID</label>
+          </FloatLabel>
+          <FloatLabel variant="on">
+            <IconField>
+              <InputText fluid id="conversation_id" v-model="filterForm.conversation_id" placeholder="conversation-..." />
+              <InputIcon v-if="filterForm.conversation_id" class="pi pi-times cursor-pointer" @click="clearField('conversation_id')" />
+              <InputIcon v-else class="pi" />
+            </IconField>
+            <label for="conversation_id">Conversation ID</label>
+          </FloatLabel>
+          <FloatLabel variant="on">
+            <IconField>
+              <InputText fluid id="module" v-model="filterForm.module" placeholder="telegram" />
+              <InputIcon v-if="filterForm.module" class="pi pi-times cursor-pointer" @click="clearField('module')" />
+              <InputIcon v-else class="pi" />
+            </IconField>
+            <label for="module">Module</label>
+          </FloatLabel>
+          <FloatLabel variant="on">
+            <IconField>
+              <InputText fluid id="level" v-model="filterForm.level" placeholder="info" />
+              <InputIcon v-if="filterForm.level" class="pi pi-times cursor-pointer" @click="clearField('level')" />
+              <InputIcon v-else class="pi" />
+            </IconField>
+            <label for="level">Level</label>
+          </FloatLabel>
           <div class="flex items-end gap-3">
             <Button class="flex-1" type="submit" label="Apply filters" />
             <Button type="button" label="Clear" severity="secondary" outlined @click="clearFilters" />
@@ -300,7 +321,7 @@ onBeforeUnmount(() => {
 
       <Message v-if="cursorResetRequired" severity="warn" :closable="false">
         The server requested a cursor reset. Reload the current filters to continue from a fresh window.
-        <Button size="small" text label="Reset cursor" @click="reloadEvents" />
+        <Button text label="Reset cursor" @click="reloadEvents" />
       </Message>
 
       <Message v-if="errorMessage" severity="error" :closable="false">
@@ -383,7 +404,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="flex shrink-0 flex-wrap gap-3">
-              <Button size="small" label="View detail" @click="loadEventDetail(event.ID)" />
+              <Button label="View detail" @click="loadEventDetail(event.ID)" />
               <RouterLink
                 v-if="event.TraceID"
                 :to="`/traces/${event.TraceID}`"

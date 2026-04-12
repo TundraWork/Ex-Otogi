@@ -13,7 +13,6 @@ body {
     "Inter Variable", "Microsoft YaHei", "微软雅黑", "Segoe UI", "SimHei",
     sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
     "Noto Color Emoji";
-  min-width: 320px;
 }
 
 ::selection {
@@ -26,10 +25,12 @@ body {
   }
 
   :root {
+    font-size: 14px;
     --scrollbar-color-thumb: var(--p-surface-300);
     --scrollbar-color-track: var(--p-surface-50);
     --scrollbar-size: calc(var(--spacing) * 2);
     --scrollbar-radius: var(--radius-md);
+    --p-form-field-padding-x: 0.9rem; /* fix primevue iconfield padding */
   }
 
   a {

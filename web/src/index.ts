@@ -1,5 +1,4 @@
 import './index.css'
-import 'primeicons/primeicons.css'
 import { definePreset } from '@primeuix/themes'
 import Aura from '@primeuix/themes/aura'
 import PrimeVue from 'primevue/config'
