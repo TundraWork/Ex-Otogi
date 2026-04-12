@@ -149,6 +149,12 @@ async function applyFilters() {
   })
 }
 
+async function filterByTag(field: 'category' | 'kind' | 'module', value: string) {
+  if (!value) return
+  filterForm[field] = value
+  await applyFilters()
+}
+
 async function clearFilters() {
   filterForm.limit = '50'
   filterForm.category = ''
@@ -347,15 +353,24 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="flex flex-wrap gap-2">
-                  <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+                  <button
+                    class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 cursor-pointer"
+                    @click="filterByTag('category', event.Category)"
+                  >
                     {{ event.Category }}
-                  </span>
-                  <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+                  </button>
+                  <button
+                    class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 cursor-pointer"
+                    @click="filterByTag('kind', event.Kind)"
+                  >
                     {{ event.Kind }}
-                  </span>
-                  <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+                  </button>
+                  <button
+                    class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 cursor-pointer"
+                    @click="filterByTag('module', event.Module)"
+                  >
                     {{ event.Module }}
-                  </span>
+                  </button>
                   <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
                     {{ event.Component }}
                   </span>
