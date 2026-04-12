@@ -73,7 +73,7 @@ func (m *Module) processWindow(
 		ctx = panel.WithRecorder(ctx, m.recorder)
 	}
 
-	m.emitManagementEvent(ctx, "memory.window.flushed", "flushed article window for extraction", panel.MemoryWindowFlushedPayload{
+	m.emitManagementEvent(ctx, "memory.window.flushed", "flushed article window for extraction", panel.TruncateDescription(fmt.Sprintf("%s (%d articles)", reason, len(articles))), panel.MemoryWindowFlushedPayload{
 		Reason:       string(reason),
 		ArticleCount: len(articles),
 	})
@@ -116,7 +116,7 @@ func (m *Module) processWindow(
 		return fmt.Errorf("process window search existing: %w", err)
 	}
 
-	m.emitManagementEvent(ctx, "memory.extract.started", "started natural memory extraction", panel.MemoryExtractStartedPayload{
+	m.emitManagementEvent(ctx, "memory.extract.started", "started natural memory extraction", "", panel.MemoryExtractStartedPayload{
 		SourceKind:   "window",
 		SegmentCount: len(articles),
 	})
@@ -127,7 +127,7 @@ func (m *Module) processWindow(
 		return fmt.Errorf("process window extraction: %w", err)
 	}
 	if len(candidates) == 0 {
-		m.emitManagementEvent(ctx, "memory.extract.completed", "completed natural memory extraction", panel.MemoryExtractCompletedPayload{
+		m.emitManagementEvent(ctx, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
 			ExtractedCount: 0,
 			Consolidated:   false,
 		})
@@ -164,7 +164,7 @@ func (m *Module) processWindow(
 		}
 	}
 
-	m.emitManagementEvent(ctx, "memory.extract.completed", "completed natural memory extraction", panel.MemoryExtractCompletedPayload{
+	m.emitManagementEvent(ctx, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
 		ExtractedCount: len(candidates),
 		Consolidated:   false,
 	})

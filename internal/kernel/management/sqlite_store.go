@@ -119,6 +119,7 @@ func (s *SQLiteStore) RecordEvent(ctx context.Context, event panel.Event) (panel
 		ConversationID: record.ConversationID,
 		ActorID:        record.ActorID,
 		Summary:        record.Summary,
+		Description:    record.Description,
 		PayloadType:    payloadType,
 		PayloadJson:    string(payloadJSON),
 	})
@@ -453,6 +454,7 @@ func (s *SQLiteStore) scanEvent(ctx context.Context, row managementsql.Event) (p
 		ConversationID: row.ConversationID,
 		ActorID:        row.ActorID,
 		Summary:        row.Summary,
+		Description:    row.Description,
 		PayloadType:    row.PayloadType,
 		Payload:        payload,
 		ArtifactIDs:    artifactIDs,

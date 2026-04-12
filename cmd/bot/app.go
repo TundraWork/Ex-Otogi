@@ -621,6 +621,7 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *ke
 				Module:      "kernel",
 				Component:   "event-bus",
 				Summary:     "asynchronous runtime error",
+				Description: panel.TruncateDescription(fmt.Sprintf("%s: %s", scope, err.Error())),
 				PayloadType: "RuntimeAsyncErrorPayload",
 				Payload: panel.RuntimeAsyncErrorPayload{
 					Operation: scope,

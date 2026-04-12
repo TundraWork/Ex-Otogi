@@ -399,7 +399,7 @@ onBeforeUnmount(() => {
 
               <div>
                 <h2 class="text-lg font-semibold text-slate-900">{{ event.Summary }}</h2>
-                <p class="mt-2 text-sm text-slate-600">Trace {{ event.TraceID || 'N/A' }}</p>
+                <p v-if="event.Description" class="mt-1 text-sm text-slate-500">{{ event.Description }}</p>
               </div>
             </div>
 
@@ -465,6 +465,11 @@ onBeforeUnmount(() => {
             <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Actor</p>
             <p class="mt-3 text-sm text-slate-700">{{ selectedEvent.ActorID }}</p>
           </div>
+        </section>
+
+        <section v-if="selectedEvent.Description" class="rounded-2xl border border-slate-200 bg-white p-4">
+          <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Description</p>
+          <p class="mt-3 text-sm text-slate-700">{{ selectedEvent.Description }}</p>
         </section>
 
         <section class="rounded-2xl border border-slate-200 bg-white p-4">

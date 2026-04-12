@@ -184,6 +184,7 @@ export interface components {
             Category: string;
             Component: string;
             ConversationID: string;
+            Description: string;
             /** Format: int64 */
             ID: number;
             Kind: string;

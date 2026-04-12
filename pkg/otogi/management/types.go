@@ -76,6 +76,10 @@ type Event struct {
 	ActorID string
 	// Summary is the short human-readable event description.
 	Summary string
+	// Description carries a brief human-readable excerpt derived from the event
+	// payload. Maximum 140 Unicode characters. Empty when no relevant content
+	// is available.
+	Description string
 	// PayloadType names the concrete DTO stored in Payload.
 	PayloadType string
 	// Payload carries the kind-specific event DTO.

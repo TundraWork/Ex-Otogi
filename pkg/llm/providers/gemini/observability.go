@@ -89,6 +89,7 @@ func (s *observedLLMStream) finishSuccess() {
 		Module:      "llm-provider",
 		Component:   s.provider,
 		Summary:     "completed llm provider call",
+		Description: panel.TruncateDescription(responseText),
 		PayloadType: "LLMCallCompletedPayload",
 		Payload: panel.LLMCallCompletedPayload{
 			Provider:           s.provider,
@@ -119,6 +120,7 @@ func (s *observedLLMStream) finishFailure(streamErr error) {
 		Module:      "llm-provider",
 		Component:   s.provider,
 		Summary:     "llm provider call failed",
+		Description: panel.TruncateDescription(fmt.Sprintf("%s: %s", s.provider, streamErr.Error())),
 		PayloadType: "LLMCallFailedPayload",
 		Payload: panel.LLMCallFailedPayload{
 			Provider:  s.provider,
@@ -246,6 +248,7 @@ func recordEmbeddingFailed(
 		Module:      "embedding-provider",
 		Component:   provider,
 		Summary:     "embedding provider call failed",
+		Description: panel.TruncateDescription(callErr.Error()),
 		PayloadType: "EmbeddingCallFailedPayload",
 		Payload: panel.EmbeddingCallFailedPayload{
 			Provider:  provider,

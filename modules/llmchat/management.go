@@ -2,6 +2,7 @@ package llmchat
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -14,6 +15,7 @@ func (m *Module) emitManagementEvent(
 	event *platform.Event,
 	kind string,
 	summary string,
+	description string,
 	payload any,
 ) {
 	if m == nil || m.recorder == nil {
@@ -27,6 +29,7 @@ func (m *Module) emitManagementEvent(
 		Module:      m.Name(),
 		Component:   "semantic-memory",
 		Summary:     summary,
+		Description: description,
 		PayloadType: llmchatPayloadTypeName(payload),
 		Payload:     payload,
 	}
@@ -61,7 +64,11 @@ func (m *Module) recordToolExecuted(
 	if err != nil {
 		payload.Error = err.Error()
 	}
-	m.emitManagementEvent(ctx, event, "llm.tool.executed", "executed tool call", payload)
+	successLabel := "success"
+	if !success {
+		successLabel = "failure"
+	}
+	m.emitManagementEvent(ctx, event, "llm.tool.executed", "executed tool call", panel.TruncateDescription(fmt.Sprintf("%s (%s)", toolName, successLabel)), payload)
 }
 
 func llmchatPayloadTypeName(payload any) string {

@@ -63,7 +63,7 @@ func (m *Module) retrieveSemanticMemories(
 	settings := resolveNaturalMemorySettings(m.cfg.NaturalMemory)
 	scope := semanticMemoryScope(event)
 	m.debugSemanticMemoryRetrieve(ctx, scope, prompt)
-	m.emitManagementEvent(ctx, event, "memory.retrieve.started", "started semantic memory retrieval", panel.MemoryRetrieveStartedPayload{
+	m.emitManagementEvent(ctx, event, "memory.retrieve.started", "started semantic memory retrieval", "", panel.MemoryRetrieveStartedPayload{
 		Provider:   agent.EmbeddingProvider,
 		QueryCount: 1,
 	})
@@ -74,7 +74,7 @@ func (m *Module) retrieveSemanticMemories(
 		return "", fmt.Errorf("retrieve semantic memories build queries: %w", err)
 	}
 	m.debugSemanticMemoryPlan(ctx, plan, settings.RetrievalPlanningEnabled)
-	m.emitManagementEvent(ctx, event, "memory.retrieve.planned", "planned semantic memory retrieval", panel.MemoryRetrievePlanPayload{
+	m.emitManagementEvent(ctx, event, "memory.retrieve.planned", "planned semantic memory retrieval", panel.TruncateDescription(strings.Join(plan.Queries, ", ")), panel.MemoryRetrievePlanPayload{
 		Queries:     append([]string(nil), plan.Queries...),
 		TimeFilter:  plan.TimeFilter,
 		Depth:       plan.Depth,
@@ -90,7 +90,7 @@ func (m *Module) retrieveSemanticMemories(
 	}
 	searchLimit := maxSemanticMemorySearchLimit(policy.MaxRetrievedMemories, len(plan.Queries), plan.Depth)
 	m.debugSemanticMemorySearch(ctx, len(matches), searchLimit, plan.Depth)
-	m.emitManagementEvent(ctx, event, "memory.retrieve.searched", "searched semantic memory candidates", panel.MemoryRetrieveSearchedPayload{
+	m.emitManagementEvent(ctx, event, "memory.retrieve.searched", "searched semantic memory candidates", "", panel.MemoryRetrieveSearchedPayload{
 		CandidateCount: len(matches),
 		ReturnedCount:  min(len(matches), searchLimit),
 	})
@@ -117,7 +117,7 @@ func (m *Module) retrieveSemanticMemories(
 
 	serialized := renderSemanticMemoryDocument(selected)
 	m.debugSemanticMemoryRetrieveResult(ctx, scope, len(selected), len(serialized), 0, len(selected))
-	m.emitManagementEvent(ctx, event, "memory.retrieve.completed", "completed semantic memory retrieval", panel.MemoryRetrieveCompletedPayload{
+	m.emitManagementEvent(ctx, event, "memory.retrieve.completed", "completed semantic memory retrieval", "", panel.MemoryRetrieveCompletedPayload{
 		ResultCount: len(selected),
 		ElapsedMS:   m.now().Sub(retrieveStart).Milliseconds(),
 	})

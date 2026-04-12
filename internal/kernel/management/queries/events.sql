@@ -2,9 +2,9 @@
 INSERT INTO events (
   occurred_at, trace_id, parent_event_id, category, kind, level,
   module, component, tenant_id, platform, conversation_id, actor_id,
-  summary, payload_type, payload_json
+  summary, description, payload_type, payload_json
 ) VALUES (
-  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 ) RETURNING *;
 
 -- name: GetEvent :one

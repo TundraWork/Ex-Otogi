@@ -112,6 +112,8 @@ components:
           type: string
         ConversationID:
           type: string
+        Description:
+          type: string
         ID:
           format: int64
           type: integer
@@ -155,6 +157,7 @@ components:
         - ConversationID
         - ActorID
         - Summary
+        - Description
         - PayloadType
         - Payload
         - ArtifactIDs

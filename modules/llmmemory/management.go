@@ -11,6 +11,7 @@ func (m *Module) emitManagementEvent(
 	ctx context.Context,
 	kind string,
 	summary string,
+	description string,
 	payload any,
 ) {
 	if m == nil || m.recorder == nil {
@@ -23,6 +24,7 @@ func (m *Module) emitManagementEvent(
 		Module:      m.Name(),
 		Component:   "semantic-store",
 		Summary:     summary,
+		Description: description,
 		PayloadType: payloadTypeName(payload),
 		Payload:     payload,
 	})

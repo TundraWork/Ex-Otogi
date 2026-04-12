@@ -7,7 +7,7 @@ import (
 	panel "ex-otogi/pkg/otogi/management"
 )
 
-func (m *Module) emitManagementEvent(ctx context.Context, kind string, summary string, payload any) {
+func (m *Module) emitManagementEvent(ctx context.Context, kind string, summary string, description string, payload any) {
 	if m == nil || m.recorder == nil {
 		return
 	}
@@ -19,6 +19,7 @@ func (m *Module) emitManagementEvent(ctx context.Context, kind string, summary s
 		Module:      m.Name(),
 		Component:   "natural-memory",
 		Summary:     summary,
+		Description: description,
 		PayloadType: naturalMemoryPayloadTypeName(payload),
 		Payload:     payload,
 	})

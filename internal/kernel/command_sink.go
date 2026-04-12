@@ -214,6 +214,7 @@ func (s *commandDerivingDispatcher) recordInboundEvent(ctx context.Context, even
 		ConversationID: event.Conversation.ID,
 		ActorID:        event.Actor.ID,
 		Summary:        "received inbound platform event",
+		Description:    panel.TruncateDescription(event.Article.Text),
 		PayloadType:    "PlatformEventReceivedPayload",
 		Payload: panel.PlatformEventReceivedPayload{
 			EventKind: string(event.Kind),

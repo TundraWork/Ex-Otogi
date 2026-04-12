@@ -146,7 +146,7 @@ func (m *Module) streamProviderReplyWithTools(
 		for _, toolCall := range result.toolCalls {
 			toolNames = append(toolNames, toolCall.Name)
 		}
-		m.emitManagementEvent(streamCtx, nil, "llm.tool.detected", "detected model tool calls", panel.LLMToolDetectedPayload{
+		m.emitManagementEvent(streamCtx, nil, "llm.tool.detected", "detected model tool calls", panel.TruncateDescription(strings.Join(toolNames, ", ")), panel.LLMToolDetectedPayload{
 			ToolNames: toolNames,
 			Count:     len(toolNames),
 		})
