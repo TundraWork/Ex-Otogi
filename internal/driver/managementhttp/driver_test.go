@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -37,7 +38,7 @@ func TestHandlerRejectsMissingOrInvalidToken(t *testing.T) {
 	}
 }
 
-func TestHandlerAuthorizedQueriesAndCursorReset(t *testing.T) {
+func TestHandlerAuthorizedQueriesAndEventListing(t *testing.T) {
 	t.Parallel()
 
 	service := seedService(t)
@@ -58,8 +59,8 @@ func TestHandlerAuthorizedQueriesAndCursorReset(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body failed: %v", err)
 	}
-	if !body.CursorResetRequired {
-		t.Fatal("CursorResetRequired = false, want true")
+	if body.CursorResetRequired {
+		t.Fatal("CursorResetRequired = true, want false (no retention eviction)")
 	}
 	if len(body.Items) == 0 {
 		t.Fatal("expected retained events in response")
@@ -127,15 +128,16 @@ func TestDriverShutdownIsClean(t *testing.T) {
 	}
 }
 
-func seedService(t *testing.T) *kernelmanagement.Service {
+func seedService(t *testing.T) *kernelmanagement.SQLiteStore {
 	t.Helper()
 
-	service := kernelmanagement.NewService(kernelmanagement.Limits{
-		MaxEvents:        2,
-		MaxArtifacts:     8,
-		MaxArtifactBytes: 4096,
-		MaxSnapshots:     8,
-	})
+	dbPath := filepath.Join(t.TempDir(), "management.db")
+	service, err := kernelmanagement.NewSQLiteStore(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore failed: %v", err)
+	}
+	t.Cleanup(func() { service.Close() })
+
 	ctx := context.Background()
 	first, err := service.RecordEvent(ctx, panel.Event{
 		Category: panel.EventCategoryRuntime,

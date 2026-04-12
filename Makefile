@@ -174,8 +174,11 @@ hooks-run: ## Run pre-commit on all files
 	@mkdir -p $(PRE_COMMIT_HOME_DIR)
 	PRE_COMMIT_HOME=$(PRE_COMMIT_HOME_DIR) $(PRE_COMMIT_CMD) run --all-files
 
+SQLC ?= sqlc
+
 generate: ## Run go:generate for mocks and generated code
 	PATH=$(TOOLS_BIN):$$PATH $(GO) generate ./...
+	$(SQLC) generate
 
 dev: ## Run with hot reload when air is available
 	@if command -v air >/dev/null 2>&1; then \

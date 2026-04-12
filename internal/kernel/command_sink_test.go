@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -259,11 +260,11 @@ func TestCommandDerivingSinkRecordsInboundRawEventArtifact(t *testing.T) {
 	})
 
 	services := NewServiceRegistry()
-	managementService := kernelmanagement.NewService(kernelmanagement.Limits{
-		MaxEvents:        8,
-		MaxArtifacts:     8,
-		MaxArtifactBytes: 16 * 1024,
-	})
+	managementService, err := kernelmanagement.NewSQLiteStore(context.Background(), filepath.Join(t.TempDir(), "management.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore failed: %v", err)
+	}
+	t.Cleanup(func() { managementService.Close() })
 	if err := services.Register(panel.ServiceRecorder, managementService); err != nil {
 		t.Fatalf("register recorder failed: %v", err)
 	}

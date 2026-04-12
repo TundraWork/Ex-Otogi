@@ -20,3 +20,5 @@ web/components.d.ts
 web/tsconfig.tsbuildinfo
 
 /.pnpm-store
+
+cmd/bot/data/management.db

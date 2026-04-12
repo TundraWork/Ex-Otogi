@@ -155,3 +155,36 @@ url = "https://github.com/pre-commit/pre-commit/releases/download/v4.5.1/pre-com
 [tools.pre-commit."platforms.macos-x64"]
 checksum = "sha256:19d00ba35cbf9c04dc3736cd8bb641e8633f3eddd4cedde71809574ae68a2cd1"
 url = "https://github.com/pre-commit/pre-commit/releases/download/v4.5.1/pre-commit-4.5.1.pyz"
+
+[[tools.sqlc]]
+version = "1.29.0"
+backend = "github:sqlc-dev/sqlc"
+
+[tools.sqlc."platforms.linux-arm64"]
+url = "https://github.com/sqlc-dev/sqlc/releases/download/v1.29.0/sqlc_1.29.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/sqlc-dev/sqlc/releases/assets/247132193"
+
+[tools.sqlc."platforms.linux-arm64-musl"]
+url = "https://github.com/sqlc-dev/sqlc/releases/download/v1.29.0/sqlc_1.29.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/sqlc-dev/sqlc/releases/assets/247132193"
+
+[tools.sqlc."platforms.linux-x64"]
+checksum = "blake3:ecba3ebaa08fcc0137ab002e6e3af248b4c7b750d721135656c1a5ffea554f52"
+url = "https://github.com/sqlc-dev/sqlc/releases/download/v1.29.0/sqlc_1.29.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/sqlc-dev/sqlc/releases/assets/247132178"
+
+[tools.sqlc."platforms.linux-x64-musl"]
+url = "https://github.com/sqlc-dev/sqlc/releases/download/v1.29.0/sqlc_1.29.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/sqlc-dev/sqlc/releases/assets/247132178"
+
+[tools.sqlc."platforms.macos-arm64"]
+url = "https://github.com/sqlc-dev/sqlc/releases/download/v1.29.0/sqlc_1.29.0_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/sqlc-dev/sqlc/releases/assets/247132164"
+
+[tools.sqlc."platforms.macos-x64"]
+url = "https://github.com/sqlc-dev/sqlc/releases/download/v1.29.0/sqlc_1.29.0_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/sqlc-dev/sqlc/releases/assets/247132151"
+
+[tools.sqlc."platforms.windows-x64"]
+url = "https://github.com/sqlc-dev/sqlc/releases/download/v1.29.0/sqlc_1.29.0_windows_amd64.zip"
+url_api = "https://api.github.com/repos/sqlc-dev/sqlc/releases/assets/247132671"

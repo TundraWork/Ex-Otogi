@@ -152,10 +152,7 @@ func TestLoadConfig(t *testing.T) {
 				"enabled":true,
 				"listen_address":"127.0.0.1:9090",
 				"bearer_token":"test-token",
-				"max_events":128,
-				"max_artifacts":64,
-				"max_artifact_bytes":4096,
-				"max_snapshots":16
+				"database_path":"data/test.db"
 			},
 			"drivers":[
 				{"name":"tg-main","type":"telegram","config":{"app_id":123456,"app_hash":"sample_hash"}}
@@ -176,8 +173,8 @@ func TestLoadConfig(t *testing.T) {
 		if cfg.management.bearerToken != "test-token" {
 			t.Fatalf("management.bearerToken = %q, want test-token", cfg.management.bearerToken)
 		}
-		if cfg.management.maxEvents != 128 || cfg.management.maxArtifacts != 64 || cfg.management.maxArtifactBytes != 4096 || cfg.management.maxSnapshots != 16 {
-			t.Fatalf("unexpected management limits: %+v", cfg.management)
+		if cfg.management.databasePath != "data/test.db" {
+			t.Fatalf("management.databasePath = %q, want data/test.db", cfg.management.databasePath)
 		}
 	})
 
@@ -385,10 +382,11 @@ func TestBuildKernelRuntimeRegistersManagementServicesWhenEnabled(t *testing.T) 
 	cfg.management.enabled = true
 	cfg.management.bearerToken = "test-token"
 
-	kernelRuntime, err := buildKernelRuntime(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
+	kernelRuntime, managementStore, err := buildKernelRuntime(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
 	if err != nil {
 		t.Fatalf("buildKernelRuntime failed: %v", err)
 	}
+	defer managementStore.Close()
 
 	if _, err := kernelRuntime.Services().Resolve(panel.ServiceRecorder); err != nil {
 		t.Fatalf("resolve management recorder failed: %v", err)

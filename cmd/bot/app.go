@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -34,22 +35,19 @@ import (
 )
 
 const (
-	envConfigFile                  = "OTOGI_CONFIG_FILE"
-	defaultConfigFilePath          = "config/bot.json"
-	alternateConfigFilePath        = "bin/config/bot.json"
-	defaultModuleLifecycleTimeout  = 3 * time.Second
-	defaultModuleHandlerTimeout    = 3 * time.Second
-	defaultShutdownTimeout         = 10 * time.Second
-	defaultSubscriptionBuffer      = 256
-	defaultSubscriptionWorker      = 2
-	defaultManagementListenAddr    = "127.0.0.1"
-	defaultManagementEventLimit    = 2048
-	defaultManagementArtifactLimit = 1024
-	defaultManagementArtifactBytes = 16 * 1024 * 1024
-	defaultManagementSnapshotLimit = 128
-	stdlibLogSource                = "stdlib"
-	stdlibLogComponent             = "google_genai_sdk"
-	stdlibLogKindContextCanceled   = "context_canceled"
+	envConfigFile                 = "OTOGI_CONFIG_FILE"
+	defaultConfigFilePath         = "config/bot.json"
+	alternateConfigFilePath       = "bin/config/bot.json"
+	defaultModuleLifecycleTimeout = 3 * time.Second
+	defaultModuleHandlerTimeout   = 3 * time.Second
+	defaultShutdownTimeout        = 10 * time.Second
+	defaultSubscriptionBuffer     = 256
+	defaultSubscriptionWorker     = 2
+	defaultManagementListenAddr   = "127.0.0.1"
+	defaultManagementDatabasePath = "data/management.db"
+	stdlibLogSource               = "stdlib"
+	stdlibLogComponent            = "google_genai_sdk"
+	stdlibLogKindContextCanceled  = "context_canceled"
 )
 
 var runtimeModules = []func() core.Module{
@@ -87,13 +85,10 @@ type appConfig struct {
 }
 
 type managementConfig struct {
-	enabled          bool
-	listenAddress    string
-	bearerToken      string
-	maxEvents        int
-	maxArtifacts     int
-	maxArtifactBytes int
-	maxSnapshots     int
+	enabled       bool
+	listenAddress string
+	bearerToken   string
+	databasePath  string
 }
 
 type fileConfig struct {
@@ -106,13 +101,10 @@ type fileConfig struct {
 }
 
 type fileManagementConfig struct {
-	Enabled          *bool  `json:"enabled"`
-	ListenAddress    string `json:"listen_address"`
-	BearerToken      string `json:"bearer_token"`
-	MaxEvents        *int   `json:"max_events"`
-	MaxArtifacts     *int   `json:"max_artifacts"`
-	MaxArtifactBytes *int   `json:"max_artifact_bytes"`
-	MaxSnapshots     *int   `json:"max_snapshots"`
+	Enabled       *bool  `json:"enabled"`
+	ListenAddress string `json:"listen_address"`
+	BearerToken   string `json:"bearer_token"`
+	DatabasePath  string `json:"database_path"`
 }
 
 type fileKernelConfig struct {
@@ -169,7 +161,7 @@ func run() error {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 	configureStdlibLogBridge(logger)
-	kernelRuntime, err := buildKernelRuntime(logger, cfg)
+	kernelRuntime, managementStore, err := buildKernelRuntime(logger, cfg)
 	if err != nil {
 		return fmt.Errorf("build kernel runtime: %w", err)
 	}
@@ -200,7 +192,16 @@ func run() error {
 	defer stop()
 
 	if err := kernelRuntime.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if managementStore != nil {
+			managementStore.Close()
+		}
 		return fmt.Errorf("run kernel: %w", err)
+	}
+
+	if managementStore != nil {
+		if closeErr := managementStore.Close(); closeErr != nil {
+			return fmt.Errorf("close management store: %w", closeErr)
+		}
 	}
 
 	return nil
@@ -304,11 +305,8 @@ func defaultAppConfig() appConfig {
 		drivers:      make([]driver.Definition, 0),
 		moduleRoutes: make(map[string]kernel.ModuleRoute),
 		management: managementConfig{
-			listenAddress:    defaultManagementListenAddr,
-			maxEvents:        defaultManagementEventLimit,
-			maxArtifacts:     defaultManagementArtifactLimit,
-			maxArtifactBytes: defaultManagementArtifactBytes,
-			maxSnapshots:     defaultManagementSnapshotLimit,
+			listenAddress: defaultManagementListenAddr,
+			databasePath:  defaultManagementDatabasePath,
 		},
 		moduleConfigs: make(map[string]json.RawMessage),
 	}
@@ -394,29 +392,8 @@ func applyConfigFile(cfg *appConfig, path string) error {
 			cfg.management.listenAddress = rawAddress
 		}
 		cfg.management.bearerToken = strings.TrimSpace(parsed.Management.BearerToken)
-		if parsed.Management.MaxEvents != nil {
-			if *parsed.Management.MaxEvents <= 0 {
-				return fmt.Errorf("parse management.max_events: must be > 0")
-			}
-			cfg.management.maxEvents = *parsed.Management.MaxEvents
-		}
-		if parsed.Management.MaxArtifacts != nil {
-			if *parsed.Management.MaxArtifacts <= 0 {
-				return fmt.Errorf("parse management.max_artifacts: must be > 0")
-			}
-			cfg.management.maxArtifacts = *parsed.Management.MaxArtifacts
-		}
-		if parsed.Management.MaxArtifactBytes != nil {
-			if *parsed.Management.MaxArtifactBytes <= 0 {
-				return fmt.Errorf("parse management.max_artifact_bytes: must be > 0")
-			}
-			cfg.management.maxArtifactBytes = *parsed.Management.MaxArtifactBytes
-		}
-		if parsed.Management.MaxSnapshots != nil {
-			if *parsed.Management.MaxSnapshots <= 0 {
-				return fmt.Errorf("parse management.max_snapshots: must be > 0")
-			}
-			cfg.management.maxSnapshots = *parsed.Management.MaxSnapshots
+		if rawPath := strings.TrimSpace(parsed.Management.DatabasePath); rawPath != "" {
+			cfg.management.databasePath = rawPath
 		}
 	}
 
@@ -620,22 +597,24 @@ func parseLogLevel(raw string) (slog.Level, error) {
 	}
 }
 
-func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, error) {
-	var managementService *kernelmanagement.Service
+func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *kernelmanagement.SQLiteStore, error) {
+	var managementStore *kernelmanagement.SQLiteStore
 	var asyncErrorHandler func(context.Context, string, error)
 	var publishObserver func(context.Context, *platform.Event, int)
 	if cfg.management.enabled {
-		managementService = kernelmanagement.NewService(kernelmanagement.Limits{
-			MaxEvents:        cfg.management.maxEvents,
-			MaxArtifacts:     cfg.management.maxArtifacts,
-			MaxArtifactBytes: cfg.management.maxArtifactBytes,
-			MaxSnapshots:     cfg.management.maxSnapshots,
-		})
+		if err := os.MkdirAll(filepath.Dir(cfg.management.databasePath), 0o755); err != nil {
+			return nil, nil, fmt.Errorf("create management database directory: %w", err)
+		}
+		var err error
+		managementStore, err = kernelmanagement.NewSQLiteStore(context.Background(), cfg.management.databasePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create management sqlite store: %w", err)
+		}
 		asyncErrorHandler = func(ctx context.Context, scope string, err error) {
 			if logger != nil {
 				logger.ErrorContext(ctx, "otogi async error", "scope", scope, "error", err)
 			}
-			recordManagementEvent(ctx, managementService, panel.Event{
+			recordManagementEvent(ctx, managementStore, panel.Event{
 				Category:    panel.EventCategoryRuntime,
 				Kind:        "runtime.async_error",
 				Level:       panel.EventLevelError,
@@ -653,7 +632,7 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, err
 			if event == nil {
 				return
 			}
-			recordManagementEvent(ctx, managementService, panel.Event{
+			recordManagementEvent(ctx, managementStore, panel.Event{
 				Category:       panel.EventCategoryBusinessEvent,
 				Kind:           "platform.event.published",
 				Level:          panel.EventLevelDebug,
@@ -684,18 +663,18 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, err
 		kernel.WithChatAllowlist(cfg.allowlistConversationIDs, cfg.allowlistBypassCommands),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build kernel runtime: %w", err)
+		return nil, nil, fmt.Errorf("build kernel runtime: %w", err)
 	}
-	if managementService != nil {
-		if err := kernelRuntime.RegisterService(panel.ServiceRecorder, managementService); err != nil {
-			return nil, fmt.Errorf("register management recorder service: %w", err)
+	if managementStore != nil {
+		if err := kernelRuntime.RegisterService(panel.ServiceRecorder, managementStore); err != nil {
+			return nil, nil, fmt.Errorf("register management recorder service: %w", err)
 		}
-		if err := kernelRuntime.RegisterService(panel.ServiceQuery, managementService); err != nil {
-			return nil, fmt.Errorf("register management query service: %w", err)
+		if err := kernelRuntime.RegisterService(panel.ServiceQuery, managementStore); err != nil {
+			return nil, nil, fmt.Errorf("register management query service: %w", err)
 		}
 	}
 
-	return kernelRuntime, nil
+	return kernelRuntime, managementStore, nil
 }
 
 func recordManagementEvent(ctx context.Context, recorder panel.Recorder, event panel.Event) {
