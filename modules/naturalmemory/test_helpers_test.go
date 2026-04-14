@@ -114,16 +114,22 @@ func (s *embeddingRegistryStub) Resolve(provider string) (ai.EmbeddingProvider, 
 
 type recordingLLMMemoryService struct {
 	storedEntries []ai.LLMMemoryEntry
+	storeErr      error
 	searchResp    []ai.LLMMemoryMatch
 	searchErr     error
 	listResp      []ai.LLMMemoryRecord
 	listErr       error
 	updates       []ai.LLMMemoryUpdate
+	updateErr     error
 	deleted       []string
+	deleteErr     error
 	lastSearch    ai.LLMMemoryQuery
 }
 
 func (s *recordingLLMMemoryService) Store(_ context.Context, entry ai.LLMMemoryEntry) (ai.LLMMemoryRecord, error) {
+	if s.storeErr != nil {
+		return ai.LLMMemoryRecord{}, s.storeErr
+	}
 	s.storedEntries = append(s.storedEntries, entry)
 	record := ai.LLMMemoryRecord{
 		ID:        fmt.Sprintf("mem-%d", len(s.storedEntries)),
@@ -152,6 +158,9 @@ func (s *recordingLLMMemoryService) Update(
 	_ context.Context,
 	update ai.LLMMemoryUpdate,
 ) (ai.LLMMemoryRecord, error) {
+	if s.updateErr != nil {
+		return ai.LLMMemoryRecord{}, s.updateErr
+	}
 	s.updates = append(s.updates, update)
 	record := ai.LLMMemoryRecord{
 		ID:        update.ID,
@@ -176,6 +185,9 @@ func (s *recordingLLMMemoryService) Update(
 }
 
 func (s *recordingLLMMemoryService) Delete(_ context.Context, id string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	s.deleted = append(s.deleted, id)
 	filtered := make([]ai.LLMMemoryRecord, 0, len(s.listResp))
 	for _, record := range s.listResp {

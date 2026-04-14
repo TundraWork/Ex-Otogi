@@ -42,6 +42,13 @@ type readyWindow struct {
 	Reason   FlushReason
 }
 
+type windowSnapshot struct {
+	articleCount int
+	runeCount    int
+	firstRecv    time.Time
+	lastRecv     time.Time
+}
+
 // articleWindow is the internal per-scope accumulation buffer.
 // It is NOT concurrency-safe on its own; the owning windowManager serializes
 // all access via its mutex.
@@ -89,6 +96,15 @@ func (w *articleWindow) empty() bool {
 	return len(w.articles) == 0
 }
 
+func (w *articleWindow) snapshot() windowSnapshot {
+	return windowSnapshot{
+		articleCount: len(w.articles),
+		runeCount:    w.runes,
+		firstRecv:    w.firstRecv,
+		lastRecv:     w.lastRecv,
+	}
+}
+
 // windowScopeKey builds a string key for a memory scope suitable for map
 // lookups inside the window manager.
 func windowScopeKey(scope ai.LLMMemoryScope) string {
@@ -113,9 +129,10 @@ func newWindowManager(cfg Config, clock func() time.Time) *windowManager {
 	}
 }
 
-// Enqueue adds one article to the appropriate scope window.
+// Enqueue adds one article to the appropriate scope window and returns the
+// resulting buffered window snapshot.
 // Thread-safe. Deduplicates by Article.ID within a window.
-func (m *windowManager) Enqueue(scope ai.LLMMemoryScope, a bufferedArticle) {
+func (m *windowManager) Enqueue(scope ai.LLMMemoryScope, a bufferedArticle) windowSnapshot {
 	key := windowScopeKey(scope)
 
 	m.mu.Lock()
@@ -131,6 +148,8 @@ func (m *windowManager) Enqueue(scope ai.LLMMemoryScope, a bufferedArticle) {
 	}
 
 	w.append(a)
+
+	return w.snapshot()
 }
 
 // Ready returns all windows that meet any trigger condition, draining them.

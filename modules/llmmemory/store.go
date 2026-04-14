@@ -262,6 +262,18 @@ func (s *Store) recordCount() int {
 	return len(s.records)
 }
 
+func (s *Store) lookupScope(id string) (ai.LLMMemoryScope, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	record := s.records[strings.TrimSpace(id)]
+	if record == nil {
+		return ai.LLMMemoryScope{}, false
+	}
+
+	return record.Scope, true
+}
+
 func (s *Store) scopeCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

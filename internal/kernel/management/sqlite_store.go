@@ -547,16 +547,28 @@ func newPayloadByType(payloadType string) any {
 		return new(panel.MemoryRetrieveSearchedPayload)
 	case "MemoryRetrieveCompletedPayload":
 		return new(panel.MemoryRetrieveCompletedPayload)
+	case "MemoryWindowEnqueuedPayload":
+		return new(panel.MemoryWindowEnqueuedPayload)
 	case "MemoryExtractStartedPayload":
 		return new(panel.MemoryExtractStartedPayload)
 	case "MemoryExtractCompletedPayload":
 		return new(panel.MemoryExtractCompletedPayload)
 	case "MemoryWindowFlushedPayload":
 		return new(panel.MemoryWindowFlushedPayload)
+	case "MemoryWindowSkippedPayload":
+		return new(panel.MemoryWindowSkippedPayload)
+	case "MemoryWindowProcessingFailedPayload":
+		return new(panel.MemoryWindowProcessingFailedPayload)
+	case "MemoryExtractParseFailedPayload":
+		return new(panel.MemoryExtractParseFailedPayload)
+	case "MemoryExtractApplyFailedPayload":
+		return new(panel.MemoryExtractApplyFailedPayload)
 	case "MemoryConsolidationPrunedPayload":
 		return new(panel.MemoryConsolidationPrunedPayload)
 	case "MemoryConsolidationCappedPayload":
 		return new(panel.MemoryConsolidationCappedPayload)
+	case "MemoryConsolidationCycleCompletedPayload":
+		return new(panel.MemoryConsolidationCycleCompletedPayload)
 	case "MemoryStoreUpsertedPayload":
 		return new(panel.MemoryStoreUpsertedPayload)
 	case "MemoryStoreOperationPayload":
@@ -600,15 +612,27 @@ func derefPayload(target any) any {
 		return *v
 	case *panel.MemoryRetrieveCompletedPayload:
 		return *v
+	case *panel.MemoryWindowEnqueuedPayload:
+		return *v
 	case *panel.MemoryExtractStartedPayload:
 		return *v
 	case *panel.MemoryExtractCompletedPayload:
 		return *v
 	case *panel.MemoryWindowFlushedPayload:
 		return *v
+	case *panel.MemoryWindowSkippedPayload:
+		return *v
+	case *panel.MemoryWindowProcessingFailedPayload:
+		return *v
+	case *panel.MemoryExtractParseFailedPayload:
+		return *v
+	case *panel.MemoryExtractApplyFailedPayload:
+		return *v
 	case *panel.MemoryConsolidationPrunedPayload:
 		return *v
 	case *panel.MemoryConsolidationCappedPayload:
+		return *v
+	case *panel.MemoryConsolidationCycleCompletedPayload:
 		return *v
 	case *panel.MemoryStoreUpsertedPayload:
 		return *v

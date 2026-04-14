@@ -180,7 +180,8 @@ func (m *Module) OnStart(ctx context.Context) error {
 		process: func(ctx context.Context, w readyWindow) error {
 			return m.processWindow(ctx, w.Scope, w.Articles, w.Reason)
 		},
-		logger: m.logger,
+		logger:   m.logger,
+		recorder: m.recorder,
 	}
 	m.flusher.Start(ctx)
 
@@ -226,13 +227,18 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 		Platform:       string(event.Source.Platform),
 		ConversationID: event.Conversation.ID,
 	}
-	m.windowManager.Enqueue(scope, bufferedArticle{
+	snapshot := m.windowManager.Enqueue(scope, bufferedArticle{
 		Article:    *event.Article,
 		Actor:      event.Actor,
 		OccurredAt: normalizeAnchorTime(event, m.now()),
 		ReceivedAt: m.now(),
 	})
 	m.debugWindowEnqueue(ctx, scope, event.Article.ID)
+	m.emitManagementEvent(ctx, &scope, "memory.window.enqueued", "queued article into extraction window", "", panel.MemoryWindowEnqueuedPayload{
+		ArticleID:          event.Article.ID,
+		WindowArticleCount: snapshot.articleCount,
+		WindowRuneCount:    snapshot.runeCount,
+	})
 
 	return nil
 }

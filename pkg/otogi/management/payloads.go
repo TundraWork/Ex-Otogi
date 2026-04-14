@@ -56,18 +56,38 @@ type MemoryRetrieveCompletedPayload struct {
 	ElapsedMS int64
 }
 
+// MemoryWindowEnqueuedPayload describes one article being queued into an
+// extraction window.
+type MemoryWindowEnqueuedPayload struct {
+	// ArticleID identifies the newly queued article.
+	ArticleID string
+	// WindowArticleCount is the number of articles currently buffered.
+	WindowArticleCount int
+	// WindowRuneCount is the total buffered article text size in runes.
+	WindowRuneCount int
+}
+
 // MemoryExtractStartedPayload describes one memory extraction request.
 type MemoryExtractStartedPayload struct {
 	// SourceKind identifies the source material being analyzed.
 	SourceKind string
 	// SegmentCount is the number of input segments considered.
 	SegmentCount int
+	// InputRunes is the serialized prompt input size in runes.
+	InputRunes int
+	// ExistingMemoryCount is the number of retrieved existing memories provided
+	// to the extractor for comparison.
+	ExistingMemoryCount int
 }
 
 // MemoryExtractCompletedPayload describes the outcome of one extraction pass.
 type MemoryExtractCompletedPayload struct {
 	// ExtractedCount is the number of candidate memories produced.
 	ExtractedCount int
+	// AppliedCount is the number of candidate actions successfully applied.
+	AppliedCount int
+	// FailedCount is the number of candidate actions that failed to apply.
+	FailedCount int
 	// Consolidated reports whether post-processing consolidated the candidates.
 	Consolidated bool
 }
@@ -78,6 +98,55 @@ type MemoryWindowFlushedPayload struct {
 	Reason string
 	// ArticleCount is the number of articles in the flushed window.
 	ArticleCount int
+	// RuneCount is the total buffered article text size in runes.
+	RuneCount int
+	// BufferedMS is the elapsed time from the first buffered receive until the
+	// window started processing.
+	BufferedMS int64
+}
+
+// MemoryWindowSkippedPayload describes one flushed window that was skipped
+// before extraction.
+type MemoryWindowSkippedPayload struct {
+	// Reason identifies why the flushed window was skipped.
+	Reason string
+	// ArticleCount is the number of articles in the skipped window.
+	ArticleCount int
+}
+
+// MemoryWindowProcessingFailedPayload describes one background window
+// processing failure.
+type MemoryWindowProcessingFailedPayload struct {
+	// Reason describes why the window was flushed.
+	Reason string
+	// ArticleCount is the number of articles in the failed window.
+	ArticleCount int
+	// Error is the wrapped processing failure.
+	Error string
+}
+
+// MemoryExtractParseFailedPayload describes one extractor response parse
+// failure.
+type MemoryExtractParseFailedPayload struct {
+	// ResponseRunes is the extractor response size in runes.
+	ResponseRunes int
+	// Error is the response parse failure.
+	Error string
+}
+
+// MemoryExtractApplyFailedPayload describes one extracted candidate that could
+// not be applied to the memory store.
+type MemoryExtractApplyFailedPayload struct {
+	// Action identifies the attempted extractor action.
+	Action string
+	// TargetID identifies the target record when present.
+	TargetID string
+	// Category is the extracted memory category.
+	Category string
+	// Importance is the extracted importance score.
+	Importance int
+	// Error is the application failure.
+	Error string
 }
 
 // MemoryConsolidationPrunedPayload describes one consolidation pruning pass.
@@ -100,6 +169,15 @@ type MemoryConsolidationCappedPayload struct {
 	MaxAllowed int
 	// RemovedCount is the number of records removed to enforce the cap.
 	RemovedCount int
+}
+
+// MemoryConsolidationCycleCompletedPayload describes one consolidation cycle
+// pass across currently active scopes.
+type MemoryConsolidationCycleCompletedPayload struct {
+	// ScopeCount is the number of active scopes inspected this cycle.
+	ScopeCount int
+	// ElapsedMS is the total cycle duration in milliseconds.
+	ElapsedMS int64
 }
 
 // MemoryStoreUpsertedPayload describes one memory store write.

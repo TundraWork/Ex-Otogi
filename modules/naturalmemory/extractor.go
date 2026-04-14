@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
@@ -72,10 +73,14 @@ func (m *Module) processWindow(
 	if m.recorder != nil {
 		ctx = panel.WithRecorder(ctx, m.recorder)
 	}
+	startedAt := m.now()
+	articleCount, runeCount, bufferedMS := bufferedWindowMetrics(articles, startedAt)
 
-	m.emitManagementEvent(ctx, "memory.window.flushed", "flushed article window for extraction", panel.TruncateDescription(fmt.Sprintf("%s (%d articles)", reason, len(articles))), panel.MemoryWindowFlushedPayload{
+	m.emitManagementEvent(ctx, &scope, "memory.window.flushed", "flushed article window for extraction", panel.TruncateDescription(fmt.Sprintf("%s (%d articles)", reason, len(articles))), panel.MemoryWindowFlushedPayload{
 		Reason:       string(reason),
-		ArticleCount: len(articles),
+		ArticleCount: articleCount,
+		RuneCount:    runeCount,
+		BufferedMS:   bufferedMS,
 	})
 
 	// 1. resolve reply quotes
@@ -92,6 +97,10 @@ func (m *Module) processWindow(
 	// 2. serialize conversation
 	convText, _ := serializeWindowConversation(articles, quotes, m.cfg.ExtractionMaxInputRunes)
 	if strings.TrimSpace(convText) == "" {
+		m.emitManagementEvent(ctx, &scope, "memory.window.skipped", "skipped flushed article window", "empty serialized conversation", panel.MemoryWindowSkippedPayload{
+			Reason:       "empty_serialized_conversation",
+			ArticleCount: articleCount,
+		})
 		return nil
 	}
 
@@ -116,19 +125,23 @@ func (m *Module) processWindow(
 		return fmt.Errorf("process window search existing: %w", err)
 	}
 
-	m.emitManagementEvent(ctx, "memory.extract.started", "started natural memory extraction", "", panel.MemoryExtractStartedPayload{
-		SourceKind:   "window",
-		SegmentCount: len(articles),
+	m.emitManagementEvent(ctx, &scope, "memory.extract.started", "started natural memory extraction", "", panel.MemoryExtractStartedPayload{
+		SourceKind:          "window",
+		SegmentCount:        len(articles),
+		InputRunes:          utf8.RuneCountInString(convText),
+		ExistingMemoryCount: len(relevantExisting),
 	})
 
 	// 4. extraction-with-action LLM (the only LLM call per flush)
-	candidates, err := m.runExtractionLLM(ctx, contextWindow, matchRecords(relevantExisting))
+	candidates, err := m.runExtractionLLM(ctx, scope, contextWindow, matchRecords(relevantExisting))
 	if err != nil {
 		return fmt.Errorf("process window extraction: %w", err)
 	}
 	if len(candidates) == 0 {
-		m.emitManagementEvent(ctx, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
+		m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
 			ExtractedCount: 0,
+			AppliedCount:   0,
+			FailedCount:    0,
 			Consolidated:   false,
 		})
 		return nil
@@ -143,6 +156,8 @@ func (m *Module) processWindow(
 
 	// 6. apply each action
 	embIdx := 0
+	appliedCount := 0
+	failedCount := 0
 	for _, c := range candidates {
 		var applyErr error
 		switch c.Action {
@@ -161,11 +176,23 @@ func (m *Module) processWindow(
 		}
 		if applyErr != nil {
 			m.debugCandidateError(ctx, c, applyErr)
+			failedCount++
+			m.emitManagementWarningEvent(ctx, &scope, "natural-memory", "memory.extract.apply_failed", "failed applying extracted memory candidate", panel.TruncateDescription(candidateDescription(c)), panel.MemoryExtractApplyFailedPayload{
+				Action:     string(c.Action),
+				TargetID:   c.TargetID,
+				Category:   c.Category,
+				Importance: c.Importance,
+				Error:      applyErr.Error(),
+			})
+			continue
 		}
+		appliedCount++
 	}
 
-	m.emitManagementEvent(ctx, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
+	m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
 		ExtractedCount: len(candidates),
+		AppliedCount:   appliedCount,
+		FailedCount:    failedCount,
 		Consolidated:   false,
 	})
 
@@ -205,6 +232,7 @@ func filterCandidatesForEmbed(candidates []extractedMemory) []extractedMemory {
 
 func (m *Module) runExtractionLLM(
 	ctx context.Context,
+	scope ai.LLMMemoryScope,
 	contextWindow extractionContext,
 	existingMemories []ai.LLMMemoryRecord,
 ) ([]extractedMemory, error) {
@@ -243,6 +271,10 @@ func (m *Module) runExtractionLLM(
 	candidates, err := parseExtractionResponse(responseText)
 	if err != nil {
 		m.debugExtractionParseError(ctx, err, responseText)
+		m.emitManagementWarningEvent(ctx, &scope, "natural-memory", "memory.extract.parse_failed", "failed parsing natural memory extraction output", panel.TruncateDescription(err.Error()), panel.MemoryExtractParseFailedPayload{
+			ResponseRunes: utf8.RuneCountInString(responseText),
+			Error:         err.Error(),
+		})
 		return nil, nil
 	}
 
@@ -455,6 +487,40 @@ func parseExtractionResponse(text string) ([]extractedMemory, error) {
 	}
 
 	return valid, nil
+}
+
+func bufferedWindowMetrics(articles []bufferedArticle, now time.Time) (articleCount int, runeCount int, bufferedMS int64) {
+	articleCount = len(articles)
+	if len(articles) == 0 {
+		return 0, 0, 0
+	}
+
+	firstReceivedAt := now
+	for _, article := range articles {
+		runeCount += utf8.RuneCountInString(article.Article.Text)
+		if article.ReceivedAt.IsZero() {
+			continue
+		}
+		if firstReceivedAt.IsZero() || article.ReceivedAt.Before(firstReceivedAt) {
+			firstReceivedAt = article.ReceivedAt
+		}
+	}
+	if firstReceivedAt.IsZero() || now.Before(firstReceivedAt) {
+		return articleCount, runeCount, 0
+	}
+
+	return articleCount, runeCount, now.Sub(firstReceivedAt).Milliseconds()
+}
+
+func candidateDescription(candidate extractedMemory) string {
+	switch {
+	case strings.TrimSpace(candidate.Content) != "":
+		return fmt.Sprintf("%s: %s", candidate.Action, candidate.Content)
+	case strings.TrimSpace(candidate.TargetID) != "":
+		return fmt.Sprintf("%s: %s", candidate.Action, candidate.TargetID)
+	default:
+		return string(candidate.Action)
+	}
 }
 
 // ---------------------------------------------------------------------------

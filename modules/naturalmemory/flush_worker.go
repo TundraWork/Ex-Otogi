@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	panel "ex-otogi/pkg/otogi/management"
 )
 
 // flushWorker periodically scans the window manager for ready windows
@@ -15,6 +17,7 @@ type flushWorker struct {
 	manager  *windowManager
 	process  func(ctx context.Context, w readyWindow) error
 	logger   *slog.Logger
+	recorder panel.Recorder
 	stopCh   chan struct{}
 	doneCh   chan struct{}
 }
@@ -89,7 +92,11 @@ func (w *flushWorker) flushReady(ctx context.Context) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if err := w.process(ctx, rw); err != nil && w.logger != nil {
+		if err := w.process(ctx, rw); err != nil {
+			w.recordProcessingFailure(ctx, rw, err)
+			if w.logger == nil {
+				continue
+			}
 			w.logger.WarnContext(ctx, "naturalmemory flush worker process",
 				"scope_platform", rw.Scope.Platform,
 				"scope_conversation_id", rw.Scope.ConversationID,
@@ -111,7 +118,11 @@ func (w *flushWorker) drainAll(ctx context.Context) {
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if err := w.process(ctx, rw); err != nil && w.logger != nil {
+		if err := w.process(ctx, rw); err != nil {
+			w.recordProcessingFailure(ctx, rw, err)
+			if w.logger == nil {
+				continue
+			}
 			w.logger.WarnContext(ctx, "naturalmemory flush worker drain",
 				"scope_platform", rw.Scope.Platform,
 				"scope_conversation_id", rw.Scope.ConversationID,
@@ -120,5 +131,34 @@ func (w *flushWorker) drainAll(ctx context.Context) {
 				"error", err,
 			)
 		}
+	}
+}
+
+func (w *flushWorker) recordProcessingFailure(ctx context.Context, rw readyWindow, err error) {
+	if w == nil || w.recorder == nil || err == nil {
+		return
+	}
+
+	occurredAt := time.Now().UTC()
+	if w.clock != nil {
+		occurredAt = w.clock().UTC()
+	}
+
+	_, recordErr := w.recorder.RecordEvent(ctx, newNaturalMemoryEvent(
+		occurredAt,
+		&rw.Scope,
+		panel.EventLevelError,
+		"flush-worker",
+		"memory.window.processing.failed",
+		"failed processing flushed memory window",
+		panel.TruncateDescription(err.Error()),
+		panel.MemoryWindowProcessingFailedPayload{
+			Reason:       string(rw.Reason),
+			ArticleCount: len(rw.Articles),
+			Error:        err.Error(),
+		},
+	))
+	if recordErr != nil {
+		return
 	}
 }

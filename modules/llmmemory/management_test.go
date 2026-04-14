@@ -32,9 +32,21 @@ func TestModuleEmitsManagementEventsWithTrace(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
+	if _, err := module.Update(ctx, ai.LLMMemoryUpdate{
+		ID:        record.ID,
+		Content:   "updated memory",
+		Category:  "knowledge",
+		Embedding: []float32{1, 0},
+		Profile:   record.Profile,
+	}); err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if err := module.Delete(ctx, record.ID); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
 
-	if len(recorder.events) != 2 {
-		t.Fatalf("event count = %d, want 2", len(recorder.events))
+	if len(recorder.events) != 4 {
+		t.Fatalf("event count = %d, want 4", len(recorder.events))
 	}
 	if recorder.events[0].Kind != "memory.store.upserted" {
 		t.Fatalf("first event kind = %q, want memory.store.upserted", recorder.events[0].Kind)
@@ -42,8 +54,16 @@ func TestModuleEmitsManagementEventsWithTrace(t *testing.T) {
 	if recorder.events[1].Kind != "memory.store.searched" {
 		t.Fatalf("second event kind = %q, want memory.store.searched", recorder.events[1].Kind)
 	}
-	if recorder.events[0].TraceID != "trace-store" || recorder.events[1].TraceID != "trace-store" {
-		t.Fatalf("trace IDs = [%q,%q], want trace-store", recorder.events[0].TraceID, recorder.events[1].TraceID)
+	if recorder.events[2].Kind != "memory.store.updated" || recorder.events[3].Kind != "memory.store.deleted" {
+		t.Fatalf("tail event kinds = [%q,%q], want memory.store.updated/deleted", recorder.events[2].Kind, recorder.events[3].Kind)
+	}
+	for index, event := range recorder.events {
+		if event.TraceID != "trace-store" {
+			t.Fatalf("events[%d].trace_id = %q, want trace-store", index, event.TraceID)
+		}
+		if event.Platform != record.Scope.Platform || event.ConversationID != record.Scope.ConversationID {
+			t.Fatalf("events[%d] scope = [%q,%q], want [%q,%q]", index, event.Platform, event.ConversationID, record.Scope.Platform, record.Scope.ConversationID)
+		}
 	}
 	if recorder.events[0].PayloadType != "MemoryStoreUpsertedPayload" {
 		t.Fatalf("payload_type = %q, want MemoryStoreUpsertedPayload", recorder.events[0].PayloadType)
