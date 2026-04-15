@@ -104,6 +104,19 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args json.RawMe
 	return result, nil
 }
 
+func (r *ToolRegistry) definition(name string) (ai.LLMToolDefinition, bool) {
+	if !r.HasTools() {
+		return ai.LLMToolDefinition{}, false
+	}
+
+	handler, exists := r.handlers[strings.TrimSpace(name)]
+	if !exists || handler == nil {
+		return ai.LLMToolDefinition{}, false
+	}
+
+	return handler.Definition(), true
+}
+
 func (c *accumulatedToolCall) ToolCall() (ai.LLMToolCall, error) {
 	call := ai.LLMToolCall{
 		ID:               c.ID,

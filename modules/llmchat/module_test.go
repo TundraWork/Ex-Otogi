@@ -2775,7 +2775,7 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 	if len(sink.editRequests) < 2 {
 		t.Fatalf("edit request count = %d, want at least 2", len(sink.editRequests))
 	}
-	if sink.editRequests[0].Text != "Thinking...\n\nPlan steps" {
+	if sink.editRequests[0].Text != "Step 1: Thinking\n\nPlan steps" {
 		t.Fatalf("first edit text = %q, want thinking preview", sink.editRequests[0].Text)
 	}
 
@@ -2853,13 +2853,13 @@ func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 	}
 
 	thinkingText := sink.editRequests[len(sink.editRequests)-1].Text
-	prefix := defaultThinkingPlaceholder + "\n\n"
+	prefix := "Step 1: Thinking\n\n"
 	if !strings.HasPrefix(thinkingText, prefix) {
 		t.Fatalf("thinking text prefix = %q, want %q", thinkingText, prefix)
 	}
 	preview := strings.TrimPrefix(thinkingText, prefix)
-	if len([]rune(preview)) != maxThinkingPreviewRunes {
-		t.Fatalf("preview rune length = %d, want %d", len([]rune(preview)), maxThinkingPreviewRunes)
+	if len([]rune(preview)) != maxPlaceholderRunes {
+		t.Fatalf("preview rune length = %d, want %d", len([]rune(preview)), maxPlaceholderRunes)
 	}
 	if !strings.HasSuffix(preview, "...") {
 		t.Fatalf("preview should be truncated with ellipsis, got %q", preview)
@@ -3369,8 +3369,8 @@ func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
 	if len(sink.editRequests) != 2 {
 		t.Fatalf("edit request count = %d, want 2", len(sink.editRequests))
 	}
-	if sink.editRequests[0].Text != "Thinking...\n\ndraft steps" {
-		t.Fatalf("thinking edit text = %q, want %q", sink.editRequests[0].Text, "Thinking...\n\ndraft steps")
+	if sink.editRequests[0].Text != "Step 1: Thinking\n\ndraft steps" {
+		t.Fatalf("thinking edit text = %q, want %q", sink.editRequests[0].Text, "Step 1: Thinking\n\ndraft steps")
 	}
 	if sink.editRequests[1].MessageID != "msg-1" {
 		t.Fatalf("failure edit message id = %q, want msg-1", sink.editRequests[1].MessageID)

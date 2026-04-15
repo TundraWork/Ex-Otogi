@@ -153,8 +153,8 @@ func TestStreamProviderReplyWithToolsReinvokesProviderWithToolResults(t *testing
 	if len(sink.editRequests) != 2 {
 		t.Fatalf("edit request count = %d, want 2", len(sink.editRequests))
 	}
-	if sink.editRequests[0].Text != toolExecutionPlaceholder {
-		t.Fatalf("status edit text = %q, want %q", sink.editRequests[0].Text, toolExecutionPlaceholder)
+	if sink.editRequests[0].Text != "Step 2: Using remember\n\nSaving \"hello\" for later use" {
+		t.Fatalf("status edit text = %q, want numbered tool placeholder", sink.editRequests[0].Text)
 	}
 	if sink.editRequests[1].Text != "final answer" {
 		t.Fatalf("final edit text = %q, want final answer", sink.editRequests[1].Text)
@@ -323,6 +323,85 @@ func TestStreamProviderReplyWithToolsReturnsToolExecutionError(t *testing.T) {
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("provider request count = %d, want 1", len(provider.requests))
+	}
+}
+
+func TestStreamProviderReplyWithToolsAdvancesPlaceholderAcrossToolsAndThinking(t *testing.T) {
+	module := newTestModule(validModuleConfig())
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(3, 0).UTC(),
+		time.Unix(6, 0).UTC(),
+	})
+
+	registry := NewToolRegistry([]ToolHandler{
+		&toolHandlerStub{
+			name: "web_search",
+			definition: ai.LLMToolDefinition{
+				Name:        "web_search",
+				Description: "Search the web",
+				Parameters: json.RawMessage(`{
+					"type":"object",
+					"properties":{"query":{"type":"string"}},
+					"required":["query"],
+					"additionalProperties":false
+				}`),
+			},
+			execute: func(context.Context, json.RawMessage) (string, error) {
+				return `{"status":"ok"}`, nil
+			},
+		},
+	})
+	provider := &providerStub{
+		streams: []ai.LLMStream{
+			&streamStub{chunks: []ai.LLMGenerateChunk{
+				{
+					Kind:              ai.LLMGenerateChunkKindToolCall,
+					ToolCallID:        "call-1",
+					ToolCallName:      "web_search",
+					ToolCallArguments: `{"query":"Go 1.22 features"}`,
+				},
+			}},
+			&streamStub{chunks: []ai.LLMGenerateChunk{
+				{Kind: ai.LLMGenerateChunkKindThinkingSummary, Delta: "reviewing search results"},
+				{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "final answer"},
+			}},
+		},
+	}
+
+	err := module.streamProviderReplyWithTools(
+		context.Background(),
+		context.Background(),
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		ai.LLMGenerateRequest{
+			Model: "gpt-test",
+			Messages: []ai.LLMMessage{
+				{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+				{Role: ai.LLMMessageRoleUser, Content: "u"},
+			},
+			Tools: registry.Definitions(),
+		},
+		registry,
+	)
+	if err != nil {
+		t.Fatalf("streamProviderReplyWithTools failed: %v", err)
+	}
+
+	if len(sink.editRequests) != 3 {
+		t.Fatalf("edit request count = %d, want 3", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "Step 2: Using web search\n\nSearching for \"Go 1.22 features\"" {
+		t.Fatalf("first edit text = %q, want step 2 tool placeholder", sink.editRequests[0].Text)
+	}
+	if sink.editRequests[1].Text != "Step 3: Thinking\n\nreviewing search results" {
+		t.Fatalf("second edit text = %q, want step 3 thinking placeholder", sink.editRequests[1].Text)
+	}
+	if sink.editRequests[2].Text != "final answer" {
+		t.Fatalf("final edit text = %q, want final answer", sink.editRequests[2].Text)
 	}
 }
 
