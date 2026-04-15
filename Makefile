@@ -1,6 +1,8 @@
 SHELL := /bin/sh
 
 GO ?= go
+# Let the selected Go binary resolve its own stdlib even if the shell exports a stale GOROOT.
+unexport GOROOT
 MAIN_PKG ?= ./cmd/bot
 BUILD_OUT ?= $(CURDIR)/bin/bot
 TOOLS_DIR ?= $(CURDIR)/.cache/tools
