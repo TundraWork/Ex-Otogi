@@ -2,6 +2,7 @@ package llmchat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,12 @@ func TestRetrieveSemanticMemoriesEmitsManagementEvents(t *testing.T) {
 	}
 	if recorder.events[len(recorder.events)-1].Kind != "memory.retrieve.completed" {
 		t.Fatalf("last event kind = %q, want memory.retrieve.completed", recorder.events[len(recorder.events)-1].Kind)
+	}
+	if recorder.events[0].Description != "hi" {
+		t.Fatalf("first description = %q, want hi", recorder.events[0].Description)
+	}
+	if !strings.Contains(recorder.events[len(recorder.events)-1].Description, "Alice likes tea") {
+		t.Fatalf("last description = %q, want retrieved memory preview", recorder.events[len(recorder.events)-1].Description)
 	}
 	for _, event := range recorder.events {
 		if event.TraceID != "trace-retrieve" {

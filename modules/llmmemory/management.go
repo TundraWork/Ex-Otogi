@@ -2,7 +2,9 @@ package llmmemory
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 
 	"ex-otogi/pkg/otogi/ai"
 	panel "ex-otogi/pkg/otogi/management"
@@ -72,4 +74,31 @@ func payloadTypeName(payload any) string {
 	}
 
 	return typ.Name()
+}
+
+func memoryStorePersistenceDescription(operation string, path string, count int) string {
+	return panel.TruncateDescription(fmt.Sprintf("%s %d records %s", operation, count, path))
+}
+
+func memoryStoreRecordDescription(recordID string, category string, content string) string {
+	summary := strings.TrimSpace(recordID)
+	if strings.TrimSpace(category) != "" {
+		summary = strings.TrimSpace(category + " " + summary)
+	}
+	if strings.TrimSpace(content) == "" {
+		return panel.TruncateDescription(summary)
+	}
+	if summary == "" {
+		return panel.TruncateDescription(content)
+	}
+
+	return panel.TruncateDescription(summary + ": " + content)
+}
+
+func memoryStoreSearchDescription(limit int, matchCount int) string {
+	if limit > 0 {
+		return panel.TruncateDescription(fmt.Sprintf("%d matches (limit %d)", matchCount, limit))
+	}
+
+	return panel.TruncateDescription(fmt.Sprintf("%d matches", matchCount))
 }

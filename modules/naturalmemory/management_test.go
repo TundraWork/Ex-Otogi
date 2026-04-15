@@ -3,6 +3,7 @@ package naturalmemory
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -75,6 +76,15 @@ func TestProcessWindowEmitsManagementEvents(t *testing.T) {
 	if recorder.events[1].Kind != "memory.extract.started" || recorder.events[2].Kind != "memory.extract.completed" {
 		t.Fatalf("event kinds = [%q,%q,%q], want flushed/started/completed",
 			recorder.events[0].Kind, recorder.events[1].Kind, recorder.events[2].Kind)
+	}
+	if !strings.Contains(recorder.events[0].Description, "I like tea") {
+		t.Fatalf("flushed description = %q, want article preview", recorder.events[0].Description)
+	}
+	if !strings.Contains(recorder.events[1].Description, "I like tea") {
+		t.Fatalf("extract started description = %q, want conversation preview", recorder.events[1].Description)
+	}
+	if !strings.Contains(recorder.events[2].Description, "Alice likes tea") {
+		t.Fatalf("extract completed description = %q, want candidate preview", recorder.events[2].Description)
 	}
 	for _, event := range recorder.events {
 		if event.TraceID != "trace-extract" {
@@ -158,6 +168,9 @@ func TestHandleArticleEmitsWindowEnqueuedEvent(t *testing.T) {
 	if recorder.events[0].Kind != "memory.window.enqueued" {
 		t.Fatalf("event kind = %q, want memory.window.enqueued", recorder.events[0].Kind)
 	}
+	if !strings.Contains(recorder.events[0].Description, "hello world") {
+		t.Fatalf("event description = %q, want article preview", recorder.events[0].Description)
+	}
 	if recorder.events[0].Platform != "telegram" || recorder.events[0].ConversationID != "chat-1" {
 		t.Fatalf("event scope = [%q,%q], want telegram/chat-1", recorder.events[0].Platform, recorder.events[0].ConversationID)
 	}
@@ -224,6 +237,9 @@ func TestProcessWindowEmitsSkipEventForEmptySerializedConversation(t *testing.T)
 	if recorder.events[1].Kind != "memory.window.skipped" {
 		t.Fatalf("event[1] kind = %q, want memory.window.skipped", recorder.events[1].Kind)
 	}
+	if !strings.Contains(recorder.events[1].Description, "hello world") {
+		t.Fatalf("skip description = %q, want article preview", recorder.events[1].Description)
+	}
 }
 
 func TestProcessWindowEmitsParseFailureEvent(t *testing.T) {
@@ -281,6 +297,9 @@ func TestProcessWindowEmitsParseFailureEvent(t *testing.T) {
 	}
 	if recorder.events[2].Kind != "memory.extract.parse_failed" {
 		t.Fatalf("event[2] kind = %q, want memory.extract.parse_failed", recorder.events[2].Kind)
+	}
+	if !strings.Contains(recorder.events[2].Description, "not-json") {
+		t.Fatalf("parse failure description = %q, want response preview", recorder.events[2].Description)
 	}
 	completedPayload, ok := recorder.events[3].Payload.(panel.MemoryExtractCompletedPayload)
 	if !ok {
@@ -348,6 +367,9 @@ func TestProcessWindowEmitsApplyFailureEvent(t *testing.T) {
 	if recorder.events[2].Kind != "memory.extract.apply_failed" {
 		t.Fatalf("event[2] kind = %q, want memory.extract.apply_failed", recorder.events[2].Kind)
 	}
+	if !strings.Contains(recorder.events[2].Description, "Alice likes tea") || !strings.Contains(recorder.events[2].Description, "store failed") {
+		t.Fatalf("apply failure description = %q, want candidate and error detail", recorder.events[2].Description)
+	}
 	completedPayload, ok := recorder.events[3].Payload.(panel.MemoryExtractCompletedPayload)
 	if !ok {
 		t.Fatalf("completed payload type = %T, want MemoryExtractCompletedPayload", recorder.events[3].Payload)
@@ -396,6 +418,9 @@ func TestFlushWorkerEmitsProcessingFailedEvent(t *testing.T) {
 	if recorder.events[0].Kind != "memory.window.processing.failed" {
 		t.Fatalf("event kind = %q, want memory.window.processing.failed", recorder.events[0].Kind)
 	}
+	if !strings.Contains(recorder.events[0].Description, "hello") || !strings.Contains(recorder.events[0].Description, "boom") {
+		t.Fatalf("processing failure description = %q, want window preview and error", recorder.events[0].Description)
+	}
 }
 
 func TestRunConsolidationCycleEmitsManagementEvent(t *testing.T) {
@@ -421,5 +446,8 @@ func TestRunConsolidationCycleEmitsManagementEvent(t *testing.T) {
 	}
 	if recorder.events[0].Kind != "memory.consolidation.cycle.completed" {
 		t.Fatalf("event kind = %q, want memory.consolidation.cycle.completed", recorder.events[0].Kind)
+	}
+	if recorder.events[0].Description != "0 scopes in 0ms" {
+		t.Fatalf("event description = %q, want 0 scopes in 0ms", recorder.events[0].Description)
 	}
 }

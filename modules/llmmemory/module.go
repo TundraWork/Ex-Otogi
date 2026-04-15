@@ -152,7 +152,7 @@ func (m *Module) OnStart(ctx context.Context) error {
 			m.logger.WarnContext(ctx, "llmmemory load persistence", "error", err)
 		} else {
 			m.debugPersistenceLoad(ctx, m.cfg.PersistenceFile)
-			m.emitManagementEvent(ctx, nil, "memory.store.persistence_loaded", "loaded llm memory persistence", panel.TruncateDescription(fmt.Sprintf("loaded %d records", m.store.recordCount())), panel.MemoryStoreOperationPayload{
+			m.emitManagementEvent(ctx, nil, "memory.store.persistence_loaded", "loaded llm memory persistence", memoryStorePersistenceDescription("loaded", m.cfg.PersistenceFile, m.store.recordCount()), panel.MemoryStoreOperationPayload{
 				Store:         m.Name(),
 				Operation:     "persistence.load",
 				AffectedCount: m.store.recordCount(),
@@ -180,7 +180,7 @@ func (m *Module) OnShutdown(ctx context.Context) error {
 			return fmt.Errorf("llmmemory final flush: %w", err)
 		}
 		m.debugPersistenceSave(ctx, m.cfg.PersistenceFile)
-		m.emitManagementEvent(ctx, nil, "memory.store.persistence_saved", "saved llm memory persistence", panel.TruncateDescription(fmt.Sprintf("saved %d records", m.store.recordCount())), panel.MemoryStoreOperationPayload{
+		m.emitManagementEvent(ctx, nil, "memory.store.persistence_saved", "saved llm memory persistence", memoryStorePersistenceDescription("saved", m.cfg.PersistenceFile, m.store.recordCount()), panel.MemoryStoreOperationPayload{
 			Store:         m.Name(),
 			Operation:     "persistence.save",
 			AffectedCount: m.store.recordCount(),
@@ -202,7 +202,7 @@ func (m *Module) Store(ctx context.Context, entry ai.LLMMemoryEntry) (ai.LLMMemo
 		return ai.LLMMemoryRecord{}, err
 	}
 	m.debugStoreResult(ctx, record)
-	m.emitManagementEvent(ctx, &entry.Scope, "memory.store.upserted", "stored semantic memory record", "", panel.MemoryStoreUpsertedPayload{
+	m.emitManagementEvent(ctx, &entry.Scope, "memory.store.upserted", "stored semantic memory record", memoryStoreRecordDescription(record.ID, record.Category, record.Content), panel.MemoryStoreUpsertedPayload{
 		Store:         m.Name(),
 		UpsertedCount: 1,
 	})
@@ -222,7 +222,7 @@ func (m *Module) Search(ctx context.Context, query ai.LLMMemoryQuery) ([]ai.LLMM
 		return nil, err
 	}
 	m.debugSearchResult(ctx, query, matches)
-	m.emitManagementEvent(ctx, &query.Scope, "memory.store.searched", "searched semantic memory store", "", panel.MemoryStoreOperationPayload{
+	m.emitManagementEvent(ctx, &query.Scope, "memory.store.searched", "searched semantic memory store", memoryStoreSearchDescription(query.Limit, len(matches)), panel.MemoryStoreOperationPayload{
 		Store:         m.Name(),
 		Operation:     "search",
 		AffectedCount: len(matches),
@@ -242,7 +242,7 @@ func (m *Module) Update(ctx context.Context, update ai.LLMMemoryUpdate) (ai.LLMM
 	if err != nil {
 		return ai.LLMMemoryRecord{}, err
 	}
-	m.emitManagementEvent(ctx, &record.Scope, "memory.store.updated", "updated semantic memory record", "", panel.MemoryStoreOperationPayload{
+	m.emitManagementEvent(ctx, &record.Scope, "memory.store.updated", "updated semantic memory record", memoryStoreRecordDescription(record.ID, record.Category, record.Content), panel.MemoryStoreOperationPayload{
 		Store:         m.Name(),
 		Operation:     "update",
 		AffectedCount: 1,
@@ -266,7 +266,7 @@ func (m *Module) Delete(ctx context.Context, id string) error {
 	if scope != (ai.LLMMemoryScope{}) {
 		deleteScope = &scope
 	}
-	m.emitManagementEvent(ctx, deleteScope, "memory.store.deleted", "deleted semantic memory record", "", panel.MemoryStoreOperationPayload{
+	m.emitManagementEvent(ctx, deleteScope, "memory.store.deleted", "deleted semantic memory record", panel.TruncateDescription(id), panel.MemoryStoreOperationPayload{
 		Store:         m.Name(),
 		Operation:     "delete",
 		AffectedCount: 1,

@@ -2,6 +2,7 @@ package llmmemory
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"ex-otogi/pkg/otogi/ai"
@@ -56,6 +57,18 @@ func TestModuleEmitsManagementEventsWithTrace(t *testing.T) {
 	}
 	if recorder.events[2].Kind != "memory.store.updated" || recorder.events[3].Kind != "memory.store.deleted" {
 		t.Fatalf("tail event kinds = [%q,%q], want memory.store.updated/deleted", recorder.events[2].Kind, recorder.events[3].Kind)
+	}
+	if !strings.Contains(recorder.events[0].Description, "stored memory") {
+		t.Fatalf("upsert description = %q, want stored memory preview", recorder.events[0].Description)
+	}
+	if recorder.events[1].Description != "1 matches (limit 5)" {
+		t.Fatalf("search description = %q, want 1 matches (limit 5)", recorder.events[1].Description)
+	}
+	if !strings.Contains(recorder.events[2].Description, "updated memory") {
+		t.Fatalf("update description = %q, want updated memory preview", recorder.events[2].Description)
+	}
+	if recorder.events[3].Description != record.ID {
+		t.Fatalf("delete description = %q, want %q", recorder.events[3].Description, record.ID)
 	}
 	for index, event := range recorder.events {
 		if event.TraceID != "trace-store" {

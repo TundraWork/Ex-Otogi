@@ -299,6 +299,9 @@ func TestCommandDerivingSinkRecordsInboundRawEventArtifact(t *testing.T) {
 	if recordedEvent.Kind != "platform.event.received" {
 		t.Fatalf("event kind = %q, want platform.event.received", recordedEvent.Kind)
 	}
+	if recordedEvent.Description != "hello observability" {
+		t.Fatalf("event description = %q, want hello observability", recordedEvent.Description)
+	}
 	if len(recordedEvent.ArtifactIDs) != 1 {
 		t.Fatalf("len(ArtifactIDs) = %d, want 1", len(recordedEvent.ArtifactIDs))
 	}

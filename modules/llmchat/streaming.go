@@ -385,17 +385,17 @@ func (m *Module) executeToolCalls(
 
 		result, err := toolRegistry.Execute(ctx, toolCall.Name, json.RawMessage(toolCall.Arguments))
 		if err != nil {
-			m.recordToolExecuted(ctx, nil, toolCall.Name, false, m.now().Sub(execStart), err)
+			m.recordToolExecuted(ctx, nil, toolCall, false, m.now().Sub(execStart), err)
 			return nil, fmt.Errorf("tool_calls[%d] execute %s: %w", index, toolCall.Name, err)
 		}
 		if strings.TrimSpace(result) == "" {
 			emptyErr := fmt.Errorf("empty result")
-			m.recordToolExecuted(ctx, nil, toolCall.Name, false, m.now().Sub(execStart), emptyErr)
+			m.recordToolExecuted(ctx, nil, toolCall, false, m.now().Sub(execStart), emptyErr)
 			return nil, fmt.Errorf("tool_calls[%d] execute %s: empty result", index, toolCall.Name)
 		}
 
 		m.debugToolExecuteEnd(ctx, toolCall, m.now().Sub(execStart), len(result))
-		m.recordToolExecuted(ctx, nil, toolCall.Name, true, m.now().Sub(execStart), nil)
+		m.recordToolExecuted(ctx, nil, toolCall, true, m.now().Sub(execStart), nil)
 
 		results = append(results, ai.LLMMessage{
 			Role:       ai.LLMMessageRoleTool,

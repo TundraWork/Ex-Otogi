@@ -643,6 +643,7 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *ke
 				ConversationID: event.Conversation.ID,
 				ActorID:        event.Actor.ID,
 				Subject:        "published platform event to matching subscribers",
+				Description:    publishedPlatformEventDescription(event, subscriberCount),
 				PayloadType:    "PlatformEventPublishedPayload",
 				Payload: panel.PlatformEventPublishedPayload{
 					EventKind:       string(event.Kind),
@@ -685,6 +686,22 @@ func recordManagementEvent(ctx context.Context, recorder panel.Recorder, event p
 	_, err := recorder.RecordEvent(ctx, event)
 	if err != nil {
 		return
+	}
+}
+
+func publishedPlatformEventDescription(event *platform.Event, subscriberCount int) string {
+	if event == nil {
+		return ""
+	}
+
+	summary := fmt.Sprintf("%s to %d subscribers", event.Kind, subscriberCount)
+	switch {
+	case event.Article != nil && strings.TrimSpace(event.Article.Text) != "":
+		return panel.TruncateDescription(summary + ": " + event.Article.Text)
+	case event.Command != nil && strings.TrimSpace(event.Command.RawInput) != "":
+		return panel.TruncateDescription(summary + ": " + event.Command.RawInput)
+	default:
+		return panel.TruncateDescription(summary)
 	}
 }
 

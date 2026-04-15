@@ -76,7 +76,7 @@ func (m *Module) processWindow(
 	startedAt := m.now()
 	articleCount, runeCount, bufferedMS := bufferedWindowMetrics(articles, startedAt)
 
-	m.emitManagementEvent(ctx, &scope, "memory.window.flushed", "flushed article window for extraction", panel.TruncateDescription(fmt.Sprintf("%s (%d articles)", reason, len(articles))), panel.MemoryWindowFlushedPayload{
+	m.emitManagementEvent(ctx, &scope, "memory.window.flushed", "flushed article window for extraction", windowFlushedDescription(reason, articles), panel.MemoryWindowFlushedPayload{
 		Reason:       string(reason),
 		ArticleCount: articleCount,
 		RuneCount:    runeCount,
@@ -97,7 +97,7 @@ func (m *Module) processWindow(
 	// 2. serialize conversation
 	convText, _ := serializeWindowConversation(articles, quotes, m.cfg.ExtractionMaxInputRunes)
 	if strings.TrimSpace(convText) == "" {
-		m.emitManagementEvent(ctx, &scope, "memory.window.skipped", "skipped flushed article window", "empty serialized conversation", panel.MemoryWindowSkippedPayload{
+		m.emitManagementEvent(ctx, &scope, "memory.window.skipped", "skipped flushed article window", windowSkippedDescription("empty serialized conversation", articles), panel.MemoryWindowSkippedPayload{
 			Reason:       "empty_serialized_conversation",
 			ArticleCount: articleCount,
 		})
@@ -125,7 +125,7 @@ func (m *Module) processWindow(
 		return fmt.Errorf("process window search existing: %w", err)
 	}
 
-	m.emitManagementEvent(ctx, &scope, "memory.extract.started", "started natural memory extraction", "", panel.MemoryExtractStartedPayload{
+	m.emitManagementEvent(ctx, &scope, "memory.extract.started", "started natural memory extraction", extractStartedDescription(latestWindowPreview(articles), len(relevantExisting)), panel.MemoryExtractStartedPayload{
 		SourceKind:          "window",
 		SegmentCount:        len(articles),
 		InputRunes:          utf8.RuneCountInString(convText),
@@ -138,7 +138,7 @@ func (m *Module) processWindow(
 		return fmt.Errorf("process window extraction: %w", err)
 	}
 	if len(candidates) == 0 {
-		m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
+		m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", extractCompletedDescription(nil, 0, 0), panel.MemoryExtractCompletedPayload{
 			ExtractedCount: 0,
 			AppliedCount:   0,
 			FailedCount:    0,
@@ -177,7 +177,7 @@ func (m *Module) processWindow(
 		if applyErr != nil {
 			m.debugCandidateError(ctx, c, applyErr)
 			failedCount++
-			m.emitManagementWarningEvent(ctx, &scope, "natural-memory", "memory.extract.apply_failed", "failed applying extracted memory candidate", panel.TruncateDescription(candidateDescription(c)), panel.MemoryExtractApplyFailedPayload{
+			m.emitManagementWarningEvent(ctx, &scope, "natural-memory", "memory.extract.apply_failed", "failed applying extracted memory candidate", extractApplyFailureDescription(c, applyErr), panel.MemoryExtractApplyFailedPayload{
 				Action:     string(c.Action),
 				TargetID:   c.TargetID,
 				Category:   c.Category,
@@ -189,7 +189,7 @@ func (m *Module) processWindow(
 		appliedCount++
 	}
 
-	m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", "", panel.MemoryExtractCompletedPayload{
+	m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", extractCompletedDescription(candidates, appliedCount, failedCount), panel.MemoryExtractCompletedPayload{
 		ExtractedCount: len(candidates),
 		AppliedCount:   appliedCount,
 		FailedCount:    failedCount,
@@ -271,7 +271,7 @@ func (m *Module) runExtractionLLM(
 	candidates, err := parseExtractionResponse(responseText)
 	if err != nil {
 		m.debugExtractionParseError(ctx, err, responseText)
-		m.emitManagementWarningEvent(ctx, &scope, "natural-memory", "memory.extract.parse_failed", "failed parsing natural memory extraction output", panel.TruncateDescription(err.Error()), panel.MemoryExtractParseFailedPayload{
+		m.emitManagementWarningEvent(ctx, &scope, "natural-memory", "memory.extract.parse_failed", "failed parsing natural memory extraction output", extractParseFailureDescription(err, responseText), panel.MemoryExtractParseFailedPayload{
 			ResponseRunes: utf8.RuneCountInString(responseText),
 			Error:         err.Error(),
 		})

@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
+	"ex-otogi/pkg/otogi/ai"
 	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
@@ -51,13 +53,13 @@ func (m *Module) emitManagementEvent(
 func (m *Module) recordToolExecuted(
 	ctx context.Context,
 	event *platform.Event,
-	toolName string,
+	toolCall ai.LLMToolCall,
 	success bool,
 	elapsed time.Duration,
 	err error,
 ) {
 	payload := panel.LLMToolExecutedPayload{
-		ToolName:  toolName,
+		ToolName:  toolCall.Name,
 		Success:   success,
 		ElapsedMS: elapsed.Milliseconds(),
 	}
@@ -68,7 +70,14 @@ func (m *Module) recordToolExecuted(
 	if !success {
 		successLabel = "failure"
 	}
-	m.emitManagementEvent(ctx, event, "llm.tool.executed", "executed tool call", panel.TruncateDescription(fmt.Sprintf("%s (%s)", toolName, successLabel)), payload)
+	m.emitManagementEvent(
+		ctx,
+		event,
+		"llm.tool.executed",
+		"executed tool call",
+		toolExecutionDescription(toolCall, successLabel, elapsed, err),
+		payload,
+	)
 }
 
 func llmchatPayloadTypeName(payload any) string {
@@ -85,4 +94,19 @@ func llmchatPayloadTypeName(payload any) string {
 
 func stringsHasLLMPrefix(kind string) bool {
 	return len(kind) >= 4 && kind[:4] == "llm."
+}
+
+func toolExecutionDescription(toolCall ai.LLMToolCall, successLabel string, elapsed time.Duration, err error) string {
+	parts := make([]string, 0, 3)
+	if strings.TrimSpace(toolCall.Name) != "" {
+		parts = append(parts, fmt.Sprintf("%s %s in %dms", toolCall.Name, successLabel, elapsed.Milliseconds()))
+	}
+	if strings.TrimSpace(toolCall.Arguments) != "" {
+		parts = append(parts, toolCall.Arguments)
+	}
+	if err != nil && strings.TrimSpace(err.Error()) != "" {
+		parts = append(parts, err.Error())
+	}
+
+	return panel.TruncateDescription(strings.Join(parts, ": "))
 }

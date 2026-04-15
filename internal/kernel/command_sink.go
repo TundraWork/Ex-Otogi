@@ -214,7 +214,7 @@ func (s *commandDerivingDispatcher) recordInboundEvent(ctx context.Context, even
 		ConversationID: event.Conversation.ID,
 		ActorID:        event.Actor.ID,
 		Subject:        "received inbound platform event",
-		Description:    panel.TruncateDescription(event.Article.Text),
+		Description:    inboundPlatformEventDescription(event),
 		PayloadType:    "PlatformEventReceivedPayload",
 		Payload: panel.PlatformEventReceivedPayload{
 			EventKind: string(event.Kind),
@@ -238,6 +238,74 @@ func (s *commandDerivingDispatcher) recordInboundEvent(ctx context.Context, even
 	})
 	if err != nil {
 		return
+	}
+}
+
+func inboundPlatformEventDescription(event *platform.Event) string {
+	if event == nil {
+		return ""
+	}
+
+	switch {
+	case event.Article != nil && strings.TrimSpace(event.Article.Text) != "":
+		return panel.TruncateDescription(event.Article.Text)
+	case event.Command != nil && strings.TrimSpace(event.Command.RawInput) != "":
+		return panel.TruncateDescription(event.Command.RawInput)
+	case event.Mutation != nil:
+		if event.Mutation.After != nil && strings.TrimSpace(event.Mutation.After.Text) != "" {
+			return panel.TruncateDescription(event.Mutation.After.Text)
+		}
+		if event.Mutation.Before != nil && strings.TrimSpace(event.Mutation.Before.Text) != "" {
+			return panel.TruncateDescription(event.Mutation.Before.Text)
+		}
+		if strings.TrimSpace(event.Mutation.TargetArticleID) != "" {
+			return panel.TruncateDescription(fmt.Sprintf("%s article %s", event.Mutation.Type, event.Mutation.TargetArticleID))
+		}
+	case event.Reaction != nil && strings.TrimSpace(event.Reaction.Emoji) != "":
+		return panel.TruncateDescription(fmt.Sprintf("%s on article %s", event.Reaction.Emoji, event.Reaction.ArticleID))
+	case event.StateChange != nil:
+		return panel.TruncateDescription(stateChangeDescription(event.StateChange))
+	}
+
+	return ""
+}
+
+func stateChangeDescription(change *platform.StateChange) string {
+	if change == nil {
+		return ""
+	}
+
+	switch {
+	case change.Member != nil:
+		return fmt.Sprintf("%s member %s", change.Member.Action, actorLabel(change.Member.Member))
+	case change.Role != nil:
+		return fmt.Sprintf(
+			"role update for %s: %s -> %s",
+			change.Role.MemberID,
+			change.Role.OldRole,
+			change.Role.NewRole,
+		)
+	case change.Migration != nil:
+		return fmt.Sprintf(
+			"conversation migrated %s -> %s",
+			change.Migration.FromConversationID,
+			change.Migration.ToConversationID,
+		)
+	default:
+		return ""
+	}
+}
+
+func actorLabel(actor platform.Actor) string {
+	switch {
+	case strings.TrimSpace(actor.DisplayName) != "":
+		return actor.DisplayName
+	case strings.TrimSpace(actor.Username) != "":
+		return "@" + actor.Username
+	case strings.TrimSpace(actor.ID) != "":
+		return actor.ID
+	default:
+		return "unknown"
 	}
 }
 

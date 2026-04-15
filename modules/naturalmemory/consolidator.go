@@ -3,6 +3,7 @@ package naturalmemory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
@@ -85,7 +86,7 @@ func (m *Module) runConsolidationCycle(ctx context.Context) error {
 			)
 		}
 	}
-	m.emitManagementEvent(ctx, nil, "memory.consolidation.cycle.completed", "completed natural memory consolidation cycle", "", panel.MemoryConsolidationCycleCompletedPayload{
+	m.emitManagementEvent(ctx, nil, "memory.consolidation.cycle.completed", "completed natural memory consolidation cycle", consolidationCycleDescription(len(scopes), m.now().Sub(startedAt).Milliseconds()), panel.MemoryConsolidationCycleCompletedPayload{
 		ScopeCount: len(scopes),
 		ElapsedMS:  m.now().Sub(startedAt).Milliseconds(),
 	})
@@ -107,7 +108,7 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 	if m.windowManager != nil {
 		if drained, ok := m.windowManager.DrainScope(scope); ok {
 			if err := m.processWindow(ctx, scope, drained.Articles, FlushReasonScope); err != nil {
-				m.emitManagementErrorEvent(ctx, &scope, "consolidation", "memory.window.processing.failed", "failed processing scope-drained memory window", panel.TruncateDescription(err.Error()), panel.MemoryWindowProcessingFailedPayload{
+				m.emitManagementErrorEvent(ctx, &scope, "consolidation", "memory.window.processing.failed", "failed processing scope-drained memory window", processingFailureDescription(string(FlushReasonScope), drained.Articles, err), panel.MemoryWindowProcessingFailedPayload{
 					Reason:       string(FlushReasonScope),
 					ArticleCount: len(drained.Articles),
 					Error:        err.Error(),
@@ -152,7 +153,7 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 	m.debugConsolidationScopeStart(ctx, scope, len(records), expiredCount, prunedCount, len(kept))
 
 	if expiredCount > 0 || prunedCount > 0 {
-		m.emitManagementEvent(ctx, &scope, "memory.consolidation.pruned", "pruned expired and low-score memories", panel.TruncateDescription(fmt.Sprintf("%d expired, %d pruned", expiredCount, prunedCount)), panel.MemoryConsolidationPrunedPayload{
+		m.emitManagementEvent(ctx, &scope, "memory.consolidation.pruned", "pruned expired and low-score memories", consolidationPrunedDescription(expiredCount, prunedCount, len(kept)), panel.MemoryConsolidationPrunedPayload{
 			TotalRecords:     len(records),
 			ExpiredCount:     expiredCount,
 			DecayPrunedCount: prunedCount,
@@ -167,17 +168,34 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.LLMMemoryScope) 
 	sortMemoriesByScore(kept, m.cfg.DecayFactor, now)
 
 	overflow := len(kept) - m.cfg.MaxMemoriesPerScope
-	for _, record := range kept[m.cfg.MaxMemoriesPerScope:] {
+	removed := kept[m.cfg.MaxMemoriesPerScope:]
+	for _, record := range removed {
 		if err := m.llmMemory.Delete(ctx, record.ID); err != nil {
 			return fmt.Errorf("delete capped memory %s: %w", record.ID, err)
 		}
 	}
 	m.debugConsolidationCapOverflow(ctx, len(kept), m.cfg.MaxMemoriesPerScope, overflow)
-	m.emitManagementEvent(ctx, &scope, "memory.consolidation.capped", "enforced per-scope memory cap", panel.TruncateDescription(fmt.Sprintf("%d removed (cap %d)", overflow, m.cfg.MaxMemoriesPerScope)), panel.MemoryConsolidationCappedPayload{
+	removedPreview := strings.Join(firstMemoryContents(removed, 2), " | ")
+	m.emitManagementEvent(ctx, &scope, "memory.consolidation.capped", "enforced per-scope memory cap", consolidationCappedDescription(overflow, m.cfg.MaxMemoriesPerScope, removedPreview), panel.MemoryConsolidationCappedPayload{
 		TotalRecords: len(kept),
 		MaxAllowed:   m.cfg.MaxMemoriesPerScope,
 		RemovedCount: overflow,
 	})
 
 	return nil
+}
+
+func firstMemoryContents(records []ai.LLMMemoryRecord, limit int) []string {
+	previews := make([]string, 0, limit)
+	for _, record := range records {
+		if strings.TrimSpace(record.Content) == "" {
+			continue
+		}
+		previews = append(previews, record.Content)
+		if len(previews) == limit {
+			break
+		}
+	}
+
+	return previews
 }

@@ -120,7 +120,7 @@ func (s *observedLLMStream) finishFailure(streamErr error) {
 		Module:      "llm-provider",
 		Component:   s.provider,
 		Subject:     "llm provider call failed",
-		Description: panel.TruncateDescription(fmt.Sprintf("%s: %s", s.provider, streamErr.Error())),
+		Description: panel.TruncateDescription(fmt.Sprintf("%s/%s: %s", s.provider, s.model, streamErr.Error())),
 		PayloadType: "LLMCallFailedPayload",
 		Payload: panel.LLMCallFailedPayload{
 			Provider:  s.provider,
@@ -149,6 +149,7 @@ func recordLLMStart(
 		Module:      "llm-provider",
 		Component:   provider,
 		Subject:     "started llm provider call",
+		Description: llmRequestDescription(req),
 		PayloadType: "LLMCallStartedPayload",
 		Payload: panel.LLMCallStartedPayload{
 			Provider:     provider,
@@ -182,6 +183,7 @@ func recordEmbeddingStart(
 		Module:      "embedding-provider",
 		Component:   provider,
 		Subject:     "started embedding provider call",
+		Description: embeddingRequestDescription(req),
 		PayloadType: "EmbeddingCallStartedPayload",
 		Payload: panel.EmbeddingCallStartedPayload{
 			Provider:   provider,
@@ -219,6 +221,7 @@ func recordEmbeddingCompleted(
 		Module:      "embedding-provider",
 		Component:   provider,
 		Subject:     "completed embedding provider call",
+		Description: embeddingCompletionDescription(req, dimensions, time.Since(startedAt).Milliseconds()),
 		PayloadType: "EmbeddingCallCompletedPayload",
 		Payload: panel.EmbeddingCallCompletedPayload{
 			Provider:   provider,
@@ -249,7 +252,7 @@ func recordEmbeddingFailed(
 		Module:      "embedding-provider",
 		Component:   provider,
 		Subject:     "embedding provider call failed",
-		Description: panel.TruncateDescription(callErr.Error()),
+		Description: embeddingFailureDescription(req, callErr),
 		PayloadType: "EmbeddingCallFailedPayload",
 		Payload: panel.EmbeddingCallFailedPayload{
 			Provider:  provider,
@@ -291,4 +294,108 @@ func boolToCount(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func llmRequestDescription(req ai.LLMGenerateRequest) string {
+	summary := fmt.Sprintf("%d messages, %d tools", len(req.Messages), len(req.Tools))
+	preview := llmMessagePreview(req.Messages)
+	if preview == "" {
+		return panel.TruncateDescription(summary)
+	}
+
+	return panel.TruncateDescription(summary + ": " + preview)
+}
+
+func llmMessagePreview(messages []ai.LLMMessage) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if preview := llmMessageText(messages[index]); preview != "" {
+			return preview
+		}
+	}
+
+	return ""
+}
+
+func llmMessageText(message ai.LLMMessage) string {
+	if strings.TrimSpace(message.Content) != "" {
+		return message.Content
+	}
+	for _, part := range message.ContentParts() {
+		if part.Type == ai.LLMMessagePartTypeText && strings.TrimSpace(part.Text) != "" {
+			return part.Text
+		}
+	}
+	if len(message.ToolCalls) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(message.ToolCalls))
+	for _, toolCall := range message.ToolCalls {
+		if strings.TrimSpace(toolCall.Name) == "" {
+			continue
+		}
+		names = append(names, toolCall.Name)
+	}
+	if len(names) == 0 {
+		return ""
+	}
+
+	return "tool calls: " + strings.Join(names, ", ")
+}
+
+func embeddingRequestDescription(req ai.EmbeddingRequest) string {
+	summary := embeddingInputSummary(req)
+	preview := firstNonEmptyText(req.Texts)
+	if preview == "" {
+		return panel.TruncateDescription(summary)
+	}
+
+	return panel.TruncateDescription(summary + ": " + preview)
+}
+
+func embeddingCompletionDescription(req ai.EmbeddingRequest, dimensions int, elapsedMS int64) string {
+	summary := fmt.Sprintf("%s -> %d dims in %dms", embeddingInputSummary(req), dimensions, elapsedMS)
+	preview := firstNonEmptyText(req.Texts)
+	if preview == "" {
+		return panel.TruncateDescription(summary)
+	}
+
+	return panel.TruncateDescription(summary + ": " + preview)
+}
+
+func embeddingFailureDescription(req ai.EmbeddingRequest, callErr error) string {
+	if callErr == nil {
+		return embeddingRequestDescription(req)
+	}
+
+	summary := embeddingInputSummary(req)
+	if summary == "" {
+		return panel.TruncateDescription(callErr.Error())
+	}
+
+	return panel.TruncateDescription(summary + ": " + callErr.Error())
+}
+
+func embeddingInputSummary(req ai.EmbeddingRequest) string {
+	taskType := strings.TrimSpace(string(req.TaskType))
+	switch {
+	case taskType == "" && len(req.Texts) == 1:
+		return "1 input"
+	case taskType == "":
+		return fmt.Sprintf("%d inputs", len(req.Texts))
+	case len(req.Texts) == 1:
+		return "1 " + taskType + " input"
+	default:
+		return fmt.Sprintf("%d %s inputs", len(req.Texts), taskType)
+	}
+}
+
+func firstNonEmptyText(texts []string) string {
+	for _, text := range texts {
+		if strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+
+	return ""
 }

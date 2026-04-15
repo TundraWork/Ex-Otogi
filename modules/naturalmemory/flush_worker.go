@@ -151,7 +151,7 @@ func (w *flushWorker) recordProcessingFailure(ctx context.Context, rw readyWindo
 		"flush-worker",
 		"memory.window.processing.failed",
 		"failed processing flushed memory window",
-		panel.TruncateDescription(err.Error()),
+		processingFailureDescription(string(rw.Reason), rw.Articles, err),
 		panel.MemoryWindowProcessingFailedPayload{
 			Reason:       string(rw.Reason),
 			ArticleCount: len(rw.Articles),

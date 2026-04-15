@@ -234,7 +234,7 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 		ReceivedAt: m.now(),
 	})
 	m.debugWindowEnqueue(ctx, scope, event.Article.ID)
-	m.emitManagementEvent(ctx, &scope, "memory.window.enqueued", "queued article into extraction window", "", panel.MemoryWindowEnqueuedPayload{
+	m.emitManagementEvent(ctx, &scope, "memory.window.enqueued", "queued article into extraction window", windowEnqueuedDescription(event.Article.Text, snapshot.articleCount), panel.MemoryWindowEnqueuedPayload{
 		ArticleID:          event.Article.ID,
 		WindowArticleCount: snapshot.articleCount,
 		WindowRuneCount:    snapshot.runeCount,
