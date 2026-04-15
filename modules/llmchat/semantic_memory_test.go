@@ -349,6 +349,81 @@ func TestRetrieveSemanticMemoriesUsesPlannerQueries(t *testing.T) {
 	}
 }
 
+func TestRetrieveSemanticMemoriesRetriesTransientPlannerError(t *testing.T) {
+	embeddingProvider := &embeddingProviderStub{
+		response: ai.EmbeddingResponse{Vectors: [][]float32{{0.8, 0.2}}},
+	}
+	plannerProvider := &llmProviderStub{
+		streams: []ai.LLMStream{
+			&llmStreamStub{
+				recvErr: errors.New("transient planner failure"),
+			},
+			&llmStreamStub{
+				chunks: []ai.LLMGenerateChunk{
+					{Kind: ai.LLMGenerateChunkKindOutputText, Delta: `{"queries":["alice tea preference"]}`},
+				},
+			},
+		},
+		retryDelay: func(err error) (time.Duration, bool) {
+			if !strings.Contains(err.Error(), "transient planner failure") {
+				return 0, false
+			}
+			return llmRetryBaseInterval, true
+		},
+	}
+	memoryService := &llmMemoryServiceStub{}
+
+	module := newTestModule(validModuleConfig())
+	module.embeddingRegistry = &embeddingRegistryStub{
+		providers: map[string]ai.EmbeddingProvider{"embed-main": embeddingProvider},
+	}
+	module.providerRegistry = &llmProviderRegistryStub{
+		providers: map[string]ai.LLMProvider{"planner-main": plannerProvider},
+	}
+	module.llmMemory = memoryService
+	module.cfg.NaturalMemory = NaturalMemorySettings{
+		ExtractionProvider:       "planner-main",
+		ExtractionModel:          "planner-model",
+		DecayFactor:              defaultNaturalMemoryDecayFactor,
+		RetrievalPlanningEnabled: true,
+		RetrievalPlanningTimeout: time.Second,
+	}
+	sleeps := make([]time.Duration, 0, 1)
+	module.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+
+	agent := module.cfg.Agents[0]
+	agent.EmbeddingProvider = "embed-main"
+	agent.SemanticMemory = &SemanticMemoryPolicy{
+		Enabled:              true,
+		MaxRetrievedMemories: 3,
+		MinMemorySimilarity:  0.4,
+		MaxMemoryRunes:       1000,
+	}
+
+	memories, err := module.retrieveSemanticMemories(context.Background(), testLLMChatEvent("Otogi what tea should I drink?"), agent, "what tea should I drink?")
+	if err != nil {
+		t.Fatalf("retrieveSemanticMemories failed: %v", err)
+	}
+	if memories != "" {
+		t.Fatalf("memories = %q, want empty when planner searches find no matches", memories)
+	}
+	if len(plannerProvider.requests) != 2 {
+		t.Fatalf("planner request count = %d, want 2", len(plannerProvider.requests))
+	}
+	if len(memoryService.searchCalls) != 1 {
+		t.Fatalf("search call count = %d, want 1", len(memoryService.searchCalls))
+	}
+	if len(sleeps) != 1 {
+		t.Fatalf("sleep count = %d, want 1", len(sleeps))
+	}
+	if sleeps[0] != llmRetryBaseInterval {
+		t.Fatalf("retry sleep = %s, want %s", sleeps[0], llmRetryBaseInterval)
+	}
+}
+
 func TestBuildGenerateRequestInjectsSemanticMemoriesAfterSystemPrompts(t *testing.T) {
 	module := newTestModule(validModuleConfig())
 	module.memory = &memoryStub{

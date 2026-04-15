@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"ex-otogi/pkg/otogi/ai"
 )
@@ -115,11 +116,12 @@ func (s *llmMemoryServiceStub) ListByScope(
 }
 
 type llmProviderStub struct {
-	stream   ai.LLMStream
-	streams  []ai.LLMStream
-	err      error
-	lastReq  ai.LLMGenerateRequest
-	requests []ai.LLMGenerateRequest
+	stream     ai.LLMStream
+	streams    []ai.LLMStream
+	err        error
+	retryDelay func(error) (time.Duration, bool)
+	lastReq    ai.LLMGenerateRequest
+	requests   []ai.LLMGenerateRequest
 }
 
 func (s *llmProviderStub) GenerateStream(_ context.Context, req ai.LLMGenerateRequest) (ai.LLMStream, error) {
@@ -138,6 +140,14 @@ func (s *llmProviderStub) GenerateStream(_ context.Context, req ai.LLMGenerateRe
 	}
 
 	return s.stream, nil
+}
+
+func (s *llmProviderStub) RetryDelay(err error) (time.Duration, bool) {
+	if s == nil || s.retryDelay == nil {
+		return 0, false
+	}
+
+	return s.retryDelay(err)
 }
 
 type llmStreamStub struct {

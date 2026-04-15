@@ -78,13 +78,22 @@ func (m *Module) streamProviderReplyWithTools(
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		m.debugToolIteration(streamCtx, iteration, len(req.Messages))
 
-		result, iterationErr := m.streamProviderReplyIteration(
+		result, iterationErr := retryLLMOperation(
 			streamCtx,
-			target,
-			placeholderMessageID,
+			m.sleep,
+			m.logger,
+			fmt.Sprintf("stream provider reply iteration %d placeholder %s", iteration+1, placeholderMessageID),
 			provider,
-			req,
-			lastDeliveredPayload,
+			func() (streamIterationResult, error) {
+				return m.streamProviderReplyIteration(
+					streamCtx,
+					target,
+					placeholderMessageID,
+					provider,
+					req,
+					lastDeliveredPayload,
+				)
+			},
 		)
 		if iterationErr != nil {
 			return iterationErr

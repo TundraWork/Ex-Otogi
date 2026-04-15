@@ -426,6 +426,74 @@ func TestGeminiProviderGenerateStreamMapsFunctionToolsAndToolMessages(t *testing
 	}
 }
 
+func TestGeminiProviderGenerateStreamOmitsSyntheticToolCallIDs(t *testing.T) {
+	t.Parallel()
+
+	client := &modelsClientStub{
+		stream: seqFromSteps([]streamStep{
+			{
+				response: textResponse([]*genai.Part{{Text: "done"}}),
+			},
+		}),
+	}
+	provider := &Provider{
+		models: client,
+		defaults: requestOptions{
+			googleSearch: ptrBool(false),
+			urlContext:   ptrBool(false),
+		},
+	}
+
+	syntheticID := syntheticGeminiToolCallIDPrefix + "1"
+	req := ai.LLMGenerateRequest{
+		Model: "gemini-2.5-flash",
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleUser, Content: "remember this"},
+			{
+				Role: ai.LLMMessageRoleAssistant,
+				ToolCalls: []ai.LLMToolCall{
+					{
+						ID:        syntheticID,
+						Name:      "remember",
+						Arguments: `{"content":"hello"}`,
+					},
+				},
+			},
+			{
+				Role:       ai.LLMMessageRoleTool,
+				ToolCallID: syntheticID,
+				Content:    `{"result":"stored"}`,
+			},
+		},
+		Tools: []ai.LLMToolDefinition{
+			{
+				Name:        "remember",
+				Description: "Store a fact.",
+				Parameters:  []byte(`{"type":"object","properties":{"content":{"type":"string"}}}`),
+			},
+		},
+	}
+
+	stream, err := provider.GenerateStream(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if stream == nil {
+		t.Fatal("expected stream")
+	}
+
+	call := client.calls[0]
+	if call.contents[1].Parts[0].FunctionCall.ID != "" {
+		t.Fatalf("function call id = %q, want empty for synthetic fallback id", call.contents[1].Parts[0].FunctionCall.ID)
+	}
+	if call.contents[2].Parts[0].FunctionResponse.ID != "" {
+		t.Fatalf("function response id = %q, want empty for synthetic fallback id", call.contents[2].Parts[0].FunctionResponse.ID)
+	}
+	if call.contents[2].Parts[0].FunctionResponse.Name != "remember" {
+		t.Fatalf("function response name = %q, want remember", call.contents[2].Parts[0].FunctionResponse.Name)
+	}
+}
+
 func TestGeminiProviderGenerateStreamRejectsSystemImages(t *testing.T) {
 	t.Parallel()
 
@@ -872,6 +940,38 @@ func TestGeminiStreamFunctionCallChunk(t *testing.T) {
 	}
 	if chunk.ToolCallID != "call-1" {
 		t.Fatalf("chunk tool_call_id = %q, want call-1", chunk.ToolCallID)
+	}
+	if chunk.ToolCallName != "remember" {
+		t.Fatalf("chunk tool_call_name = %q, want remember", chunk.ToolCallName)
+	}
+	if chunk.ToolCallArguments != `{"content":"hello"}` {
+		t.Fatalf("chunk tool_call_arguments = %q, want json args", chunk.ToolCallArguments)
+	}
+}
+
+func TestGeminiStreamFunctionCallChunkSynthesizesMissingID(t *testing.T) {
+	t.Parallel()
+
+	stream := newGeminiStream(seqFromSteps([]streamStep{
+		{
+			response: textResponse([]*genai.Part{{
+				FunctionCall: &genai.FunctionCall{
+					Name: "remember",
+					Args: map[string]any{"content": "hello"},
+				},
+			}}),
+		},
+	}), false, nil, geminiRequestDiagnostics{})
+
+	chunk, err := stream.Recv(context.Background())
+	if err != nil {
+		t.Fatalf("Recv failed: %v", err)
+	}
+	if chunk.Kind != ai.LLMGenerateChunkKindToolCall {
+		t.Fatalf("chunk kind = %q, want tool_call", chunk.Kind)
+	}
+	if chunk.ToolCallID == "" {
+		t.Fatal("chunk tool_call_id = empty, want synthesized id")
 	}
 	if chunk.ToolCallName != "remember" {
 		t.Fatalf("chunk tool_call_name = %q, want remember", chunk.ToolCallName)

@@ -200,28 +200,43 @@ func (m *Module) planSemanticMemoryQueries(
 	}
 	defer cancel()
 
-	stream, err := provider.GenerateStream(requestCtx, ai.LLMGenerateRequest{
+	req := ai.LLMGenerateRequest{
 		Model: settings.ExtractionModel,
 		Messages: []ai.LLMMessage{
 			{Role: ai.LLMMessageRoleSystem, Content: retrievalPlannerSystemPrompt},
 			{Role: ai.LLMMessageRoleUser, Content: renderRetrievalPlanPrompt(prompt, replyRootSummary)},
 		},
 		Temperature: 0.1,
-	})
-	if err != nil {
-		return retrievalPlan{}, fmt.Errorf("generate retrieval plan: %w", err)
 	}
+	responseText, err := retryLLMOperation(
+		requestCtx,
+		m.sleep,
+		m.logger,
+		"semantic memory retrieval planner",
+		provider,
+		func() (string, error) {
+			stream, err := provider.GenerateStream(requestCtx, req)
+			if err != nil {
+				return "", fmt.Errorf("generate retrieval plan: %w", err)
+			}
 
-	responseText, err := collectStreamText(requestCtx, stream)
-	closeErr := stream.Close()
+			responseText, err := collectStreamText(requestCtx, stream)
+			closeErr := stream.Close()
+			if err != nil {
+				if closeErr != nil {
+					err = errors.Join(err, fmt.Errorf("close retrieval plan stream: %w", closeErr))
+				}
+				return "", err
+			}
+			if closeErr != nil {
+				return "", fmt.Errorf("close retrieval plan stream: %w", closeErr)
+			}
+
+			return responseText, nil
+		},
+	)
 	if err != nil {
-		if closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close retrieval plan stream: %w", closeErr))
-		}
 		return retrievalPlan{}, err
-	}
-	if closeErr != nil {
-		return retrievalPlan{}, fmt.Errorf("close retrieval plan stream: %w", closeErr)
 	}
 
 	plan, err := parseRetrievalPlanResponse(responseText)

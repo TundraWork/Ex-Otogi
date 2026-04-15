@@ -24,6 +24,7 @@ type subAgentTool struct {
 	provider ai.LLMProvider
 	logger   *slog.Logger
 	tmpl     *template.Template
+	sleep    func(context.Context, time.Duration) error
 }
 
 // newSubAgentTool creates one sub-agent tool handler. The prompt template is
@@ -49,6 +50,7 @@ func newSubAgentTool(cfg SubAgentConfig, provider ai.LLMProvider, logger *slog.L
 		provider: provider,
 		logger:   logger,
 		tmpl:     tmpl,
+		sleep:    sleepWithContext,
 	}, nil
 }
 
@@ -106,6 +108,26 @@ func (t *subAgentTool) Execute(ctx context.Context, args json.RawMessage) (strin
 	t.debugStart(ctx, userPrompt)
 	start := time.Now()
 
+	result, err := retryLLMOperation(
+		ctx,
+		t.sleep,
+		t.logger,
+		fmt.Sprintf("sub-agent tool %s", t.cfg.Name),
+		t.provider,
+		func() (string, error) {
+			return t.executeOnce(ctx, req)
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+
+	t.debugEnd(ctx, start, len(result))
+
+	return result, nil
+}
+
+func (t *subAgentTool) executeOnce(ctx context.Context, req ai.LLMGenerateRequest) (string, error) {
 	stream, err := t.provider.GenerateStream(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("sub-agent tool %s: generate stream: %w", t.cfg.Name, err)
@@ -127,8 +149,6 @@ func (t *subAgentTool) Execute(ctx context.Context, args json.RawMessage) (strin
 	if result == "" {
 		return "", fmt.Errorf("sub-agent tool %s: empty response from provider", t.cfg.Name)
 	}
-
-	t.debugEnd(ctx, start, len(result))
 
 	return result, nil
 }

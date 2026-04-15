@@ -329,12 +329,15 @@ func mapAssistantMessageParts(
 		if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
 			return nil, fmt.Errorf("tool_calls[%d] arguments: %w", index, err)
 		}
+		functionCall := &genai.FunctionCall{
+			Name: toolCall.Name,
+			Args: args,
+		}
+		if !isSyntheticGeminiToolCallID(toolCall.ID) {
+			functionCall.ID = toolCall.ID
+		}
 		part := &genai.Part{
-			FunctionCall: &genai.FunctionCall{
-				ID:   toolCall.ID,
-				Name: toolCall.Name,
-				Args: args,
-			},
+			FunctionCall: functionCall,
 		}
 		if len(toolCall.ThoughtSignature) > 0 {
 			part.ThoughtSignature = append([]byte(nil), toolCall.ThoughtSignature...)
@@ -357,13 +360,16 @@ func mapToolMessageContent(
 		return nil, fmt.Errorf("missing assistant tool call for id %s", message.ToolCallID)
 	}
 	response := mapToolResponse(message.Content)
+	functionResponse := &genai.FunctionResponse{
+		Name:     name,
+		Response: response,
+	}
+	if !isSyntheticGeminiToolCallID(message.ToolCallID) {
+		functionResponse.ID = message.ToolCallID
+	}
 
 	return genai.NewContentFromParts([]*genai.Part{{
-		FunctionResponse: &genai.FunctionResponse{
-			ID:       message.ToolCallID,
-			Name:     name,
-			Response: response,
-		},
+		FunctionResponse: functionResponse,
 	}}, genai.RoleUser), nil
 }
 
