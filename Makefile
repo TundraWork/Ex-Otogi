@@ -153,7 +153,7 @@ test-race: ## Run all tests with race detector (mandatory)
 
 test-leak: ## Run goroutine leak checks for concurrency-heavy packages
 	@mkdir -p $(GO_BUILD_CACHE)
-	GOCACHE=$(GO_BUILD_CACHE) $(GO) test -tags goleak ./internal/kernel ./internal/driver/telegram ./modules/llmchat ./modules/llmmemory
+	GOCACHE=$(GO_BUILD_CACHE) $(GO) test -tags goleak ./internal/kernel ./internal/driver/telegram ./modules/llmchat ./modules/semanticstore
 
 coverage-report: ## Generate report-only coverage artifacts under .cache/coverage
 	@mkdir -p $(COVERAGE_DIR) $(GO_BUILD_CACHE)

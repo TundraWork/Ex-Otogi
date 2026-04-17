@@ -22,11 +22,11 @@ import (
 	"ex-otogi/modules/eventcache"
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/llmchat"
-	"ex-otogi/modules/llmmemory"
-	"ex-otogi/modules/naturalmemory"
+	"ex-otogi/modules/memory"
 	"ex-otogi/modules/nbnhhsh"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/modules/quotehelper"
+	"ex-otogi/modules/semanticstore"
 	"ex-otogi/modules/sleep"
 	"ex-otogi/modules/whoami"
 	"ex-otogi/pkg/otogi/core"
@@ -52,7 +52,7 @@ const (
 
 var runtimeModules = []func() core.Module{
 	func() core.Module { return eventcache.New() },
-	func() core.Module { return llmmemory.New() },
+	func() core.Module { return semanticstore.New() },
 	func() core.Module { return quotehelper.New() },
 	func() core.Module { return duel.New() },
 	func() core.Module { return nbnhhsh.New() },
@@ -60,7 +60,7 @@ var runtimeModules = []func() core.Module{
 	func() core.Module { return help.New() },
 	func() core.Module { return sleep.New() },
 	func() core.Module { return llmchat.New() },
-	func() core.Module { return naturalmemory.New() },
+	func() core.Module { return memory.New() },
 	func() core.Module { return whoami.New() },
 }
 

@@ -15,20 +15,15 @@ const (
 	metadataKeyProvider       = "provider"
 	metadataKeyConversationID = "conversation_id"
 
-	defaultReplyChainMaxMessages    = 12
-	defaultLeadingContextMessages   = 4
-	defaultLeadingContextMaxAge     = 15 * time.Minute
-	defaultMaxContextRunes          = 12000
-	defaultMaxMessageRunes          = 1600
-	defaultQuoteReplyDepth          = 2
-	defaultMaxRetrievedMemories     = 5
-	defaultMinMemorySimilarity      = 0.3
-	defaultMaxMemoryRunes           = 2000
-	defaultImageInputMaxImages      = 3
-	defaultImageInputMaxBytes       = 10 << 20
-	defaultImageInputMaxTotalBytes  = 20 << 20
-	defaultNaturalMemoryDecayFactor = 0.995
-	defaultRetrievalPlanningTimeout = 10 * time.Second
+	defaultReplyChainMaxMessages   = 12
+	defaultLeadingContextMessages  = 4
+	defaultLeadingContextMaxAge    = 15 * time.Minute
+	defaultMaxContextRunes         = 12000
+	defaultMaxMessageRunes         = 1600
+	defaultQuoteReplyDepth         = 2
+	defaultImageInputMaxImages     = 3
+	defaultImageInputMaxBytes      = 10 << 20
+	defaultImageInputMaxTotalBytes = 20 << 20
 )
 
 // Config configures llmchat module behavior.
@@ -37,24 +32,6 @@ type Config struct {
 	RequestTimeout time.Duration
 	// Agents is the list of configured triggerable agents.
 	Agents []Agent
-	// NaturalMemory carries shared retrieval settings sourced from the natural
-	// memory facility configuration.
-	NaturalMemory NaturalMemorySettings
-}
-
-// NaturalMemorySettings carries shared retrieval settings sourced from the
-// natural memory facility.
-type NaturalMemorySettings struct {
-	// ExtractionProvider identifies which provider to use for retrieval planning.
-	ExtractionProvider string
-	// ExtractionModel identifies which model to use for retrieval planning.
-	ExtractionModel string
-	// DecayFactor controls recency weighting during semantic reranking.
-	DecayFactor float64
-	// RetrievalPlanningEnabled turns on adaptive retrieval planning.
-	RetrievalPlanningEnabled bool
-	// RetrievalPlanningTimeout bounds one retrieval planning request lifecycle.
-	RetrievalPlanningTimeout time.Duration
 }
 
 // Agent describes one configured chat persona and provider binding.
@@ -153,12 +130,9 @@ type ContextPolicy struct {
 type SemanticMemoryPolicy struct {
 	// Enabled turns on semantic retrieval.
 	Enabled bool
-	// MaxRetrievedMemories caps how many memories are injected into context.
-	MaxRetrievedMemories int
-	// MinMemorySimilarity filters retrieved memories by similarity score.
-	MinMemorySimilarity float32
-	// MaxMemoryRunes caps serialized semantic memory context size.
-	MaxMemoryRunes int
+	// SemanticRetrievalPolicy carries per-call retrieval bounds delegated to the
+	// SemanticRetriever service.
+	ai.SemanticRetrievalPolicy
 }
 
 // ImageInputPolicy controls how one agent reads current-event image attachments.
@@ -183,9 +157,6 @@ func (cfg Config) Validate() error {
 	if len(cfg.Agents) == 0 {
 		return fmt.Errorf("validate llmchat config: at least one agent is required")
 	}
-	if err := validateNaturalMemorySettings(resolveNaturalMemorySettings(cfg.NaturalMemory)); err != nil {
-		return fmt.Errorf("validate llmchat config: natural_memory: %w", err)
-	}
 
 	seenNames := make(map[string]struct{}, len(cfg.Agents))
 	for index, agent := range cfg.Agents {
@@ -208,29 +179,6 @@ func (cfg Config) Validate() error {
 			}
 			seenNames[normalized] = struct{}{}
 		}
-	}
-
-	return nil
-}
-
-func resolveNaturalMemorySettings(settings NaturalMemorySettings) NaturalMemorySettings {
-	resolved := settings
-	if resolved.DecayFactor == 0 {
-		resolved.DecayFactor = defaultNaturalMemoryDecayFactor
-	}
-	if resolved.RetrievalPlanningTimeout == 0 {
-		resolved.RetrievalPlanningTimeout = defaultRetrievalPlanningTimeout
-	}
-
-	return resolved
-}
-
-func validateNaturalMemorySettings(settings NaturalMemorySettings) error {
-	if settings.DecayFactor <= 0 || settings.DecayFactor > 1 {
-		return fmt.Errorf("decay_factor must be between 0 and 1")
-	}
-	if settings.RetrievalPlanningTimeout <= 0 {
-		return fmt.Errorf("retrieval_planning_timeout must be > 0")
 	}
 
 	return nil
@@ -335,19 +283,6 @@ func resolveSemanticMemoryPolicy(policy *SemanticMemoryPolicy) *SemanticMemoryPo
 	}
 
 	resolved := *policy
-	if !resolved.Enabled {
-		return &resolved
-	}
-	if resolved.MaxRetrievedMemories == 0 {
-		resolved.MaxRetrievedMemories = defaultMaxRetrievedMemories
-	}
-	if resolved.MinMemorySimilarity == 0 {
-		resolved.MinMemorySimilarity = defaultMinMemorySimilarity
-	}
-	if resolved.MaxMemoryRunes == 0 {
-		resolved.MaxMemoryRunes = defaultMaxMemoryRunes
-	}
-
 	return &resolved
 }
 
@@ -358,14 +293,9 @@ func validateSemanticMemoryPolicy(policy *SemanticMemoryPolicy) error {
 	if !policy.Enabled {
 		return nil
 	}
-	if policy.MaxRetrievedMemories <= 0 {
-		return fmt.Errorf("max_retrieved_memories must be > 0")
-	}
-	if policy.MinMemorySimilarity < 0 || policy.MinMemorySimilarity > 1 {
-		return fmt.Errorf("min_memory_similarity must be between 0 and 1")
-	}
-	if policy.MaxMemoryRunes <= 0 {
-		return fmt.Errorf("max_memory_runes must be > 0")
+
+	if err := policy.SemanticRetrievalPolicy.Validate(); err != nil {
+		return fmt.Errorf("validate semantic memory policy: %w", err)
 	}
 
 	return nil

@@ -45,7 +45,7 @@ type Module struct {
 
 	providerRegistry  ai.LLMProviderRegistry
 	embeddingRegistry ai.EmbeddingProviderRegistry
-	llmMemory         ai.LLMMemoryService
+	semanticRetriever ai.SemanticRetriever
 	logger            *slog.Logger
 	recorder          panel.Recorder
 	clock             func() time.Time
@@ -159,15 +159,6 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	default:
 		return fmt.Errorf("llmchat resolve media downloader: %w", err)
 	}
-	llmMemoryService, err := core.ResolveAs[ai.LLMMemoryService](runtime.Services(), ai.ServiceLLMMemory)
-	switch {
-	case err == nil:
-	case errors.Is(err, core.ErrServiceNotFound):
-		llmMemoryService = nil
-	default:
-		return fmt.Errorf("llmchat resolve llm memory: %w", err)
-	}
-
 	resolvedProviders := make(map[string]ai.LLMProvider)
 	for _, agent := range m.cfg.Agents {
 		providerName := strings.TrimSpace(agent.Provider)
@@ -206,7 +197,6 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	m.mediaDownloader = mediaDownloader
 	m.providerRegistry = registry
 	m.embeddingRegistry = embeddingRegistry
-	m.llmMemory = llmMemoryService
 	m.providers = resolvedProviders
 
 	handlerTimeout := m.cfg.RequestTimeout + llmchatHandlerTimeoutGrace
@@ -224,6 +214,16 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	}
 	if err := runtime.Services().Register(ai.ServiceEmbeddingProviderRegistry, embeddingRegistry); err != nil {
 		return fmt.Errorf("llmchat register embedding provider registry service: %w", err)
+	}
+
+	retriever, err := core.ResolveAs[ai.SemanticRetriever](runtime.Services(), ai.ServiceSemanticRetriever)
+	switch {
+	case err == nil:
+		m.semanticRetriever = retriever
+	case errors.Is(err, core.ErrServiceNotFound):
+		m.semanticRetriever = nil
+	default:
+		return fmt.Errorf("llmchat resolve semantic retriever: %w", err)
 	}
 
 	return nil
@@ -426,13 +426,6 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 	return Config{
 		RequestTimeout: cfg.RequestTimeout,
 		Agents:         agents,
-		NaturalMemory: NaturalMemorySettings{
-			ExtractionProvider:       stringValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) string { return value.ExtractionProvider }),
-			ExtractionModel:          stringValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) string { return value.ExtractionModel }),
-			DecayFactor:              float64Value(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) float64 { return value.DecayFactor }),
-			RetrievalPlanningEnabled: boolValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) bool { return value.RetrievalPlanningEnabled }),
-			RetrievalPlanningTimeout: durationValue(cfg.NaturalMemory, func(value *llmconfig.NaturalMemoryConfig) time.Duration { return value.RetrievalPlanningTimeout }),
-		},
 	}
 }
 
@@ -442,10 +435,12 @@ func toSemanticMemoryPolicy(policy *llmconfig.SemanticMemoryPolicy) *SemanticMem
 	}
 
 	return cloneSemanticMemoryPolicy(resolveSemanticMemoryPolicy(&SemanticMemoryPolicy{
-		Enabled:              policy.Enabled,
-		MaxRetrievedMemories: policy.MaxRetrievedMemories,
-		MinMemorySimilarity:  policy.MinMemorySimilarity,
-		MaxMemoryRunes:       policy.MaxMemoryRunes,
+		Enabled: policy.Enabled,
+		SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
+			MaxRetrievedMemories: policy.MaxRetrievedMemories,
+			MinSimilarity:        policy.MinMemorySimilarity,
+			MaxMemoryRunes:       policy.MaxMemoryRunes,
+		},
 	}))
 }
 
@@ -479,38 +474,6 @@ func cloneOptionalInt(value *int) *int {
 	}
 	cloned := *value
 	return &cloned
-}
-
-func stringValue[T any](value *T, selector func(*T) string) string {
-	if value == nil {
-		return ""
-	}
-
-	return selector(value)
-}
-
-func float64Value[T any](value *T, selector func(*T) float64) float64 {
-	if value == nil {
-		return 0
-	}
-
-	return selector(value)
-}
-
-func boolValue[T any](value *T, selector func(*T) bool) bool {
-	if value == nil {
-		return false
-	}
-
-	return selector(value)
-}
-
-func durationValue[T any](value *T, selector func(*T) time.Duration) time.Duration {
-	if value == nil {
-		return 0
-	}
-
-	return selector(value)
 }
 
 func cloneOptionalBool(value *bool) *bool {

@@ -93,13 +93,15 @@ func TestConfigValidate(t *testing.T) {
 			mutate: func(cfg *Config) {
 				cfg.Agents[0].EmbeddingProvider = "embed-main"
 				cfg.Agents[0].SemanticMemory = &SemanticMemoryPolicy{
-					Enabled:              true,
-					MaxRetrievedMemories: 5,
-					MinMemorySimilarity:  1.5,
-					MaxMemoryRunes:       2000,
+					Enabled: true,
+					SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
+						MaxRetrievedMemories: 5,
+						MinSimilarity:        1.5,
+						MaxMemoryRunes:       2000,
+					},
 				}
 			},
-			wantErrSubstring: "semantic_memory: min_memory_similarity must be between 0 and 1",
+			wantErrSubstring: "semantic_memory: validate semantic memory policy: validate semantic retrieval policy: min_similarity must be between 0 and 1",
 		},
 		{
 			name: "invalid system prompt template fails",
@@ -290,21 +292,31 @@ func TestResolveImageInputPolicyDefaults(t *testing.T) {
 	}
 }
 
-func TestResolveSemanticMemoryPolicyDefaults(t *testing.T) {
+func TestResolveSemanticMemoryPolicyPreservesFields(t *testing.T) {
 	t.Parallel()
 
-	policy := resolveSemanticMemoryPolicy(&SemanticMemoryPolicy{Enabled: true})
+	policy := resolveSemanticMemoryPolicy(&SemanticMemoryPolicy{
+		Enabled: true,
+		SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
+			MaxRetrievedMemories: 7,
+			MinSimilarity:        0.4,
+			MaxMemoryRunes:       3000,
+		},
+	})
 	if policy == nil {
-		t.Fatal("policy = nil, want defaults")
+		t.Fatal("policy = nil, want non-nil")
 	}
-	if policy.MaxRetrievedMemories != defaultMaxRetrievedMemories {
-		t.Fatalf("max_retrieved_memories = %d, want %d", policy.MaxRetrievedMemories, defaultMaxRetrievedMemories)
+	if !policy.Enabled {
+		t.Fatal("enabled = false, want true")
 	}
-	if policy.MinMemorySimilarity != defaultMinMemorySimilarity {
-		t.Fatalf("min_memory_similarity = %f, want %f", policy.MinMemorySimilarity, defaultMinMemorySimilarity)
+	if policy.MaxRetrievedMemories != 7 {
+		t.Fatalf("max_retrieved_memories = %d, want 7", policy.MaxRetrievedMemories)
 	}
-	if policy.MaxMemoryRunes != defaultMaxMemoryRunes {
-		t.Fatalf("max_memory_runes = %d, want %d", policy.MaxMemoryRunes, defaultMaxMemoryRunes)
+	if policy.MinSimilarity != 0.4 {
+		t.Fatalf("min_similarity = %f, want 0.4", policy.MinSimilarity)
+	}
+	if policy.MaxMemoryRunes != 3000 {
+		t.Fatalf("max_memory_runes = %d, want 3000", policy.MaxMemoryRunes)
 	}
 }
 

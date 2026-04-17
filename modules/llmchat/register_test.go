@@ -76,6 +76,9 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	if module.embeddingRegistry == nil {
 		t.Fatal("expected embedding registry to be configured")
 	}
+	if module.semanticRetriever != nil {
+		t.Fatal("expected semantic retriever to be nil when not registered")
+	}
 	if module.mediaDownloader == nil {
 		t.Fatal("expected media downloader to be configured")
 	}

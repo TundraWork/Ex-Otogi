@@ -82,7 +82,7 @@ func TestSQLiteListEventsOrderedAndFiltered(t *testing.T) {
 		{Category: panel.EventCategoryRuntime, Kind: "runtime.a", Level: panel.EventLevelInfo, Module: "kernel"},
 		{Category: panel.EventCategoryLLM, Kind: "llm.a", Level: panel.EventLevelDebug, Module: "llmchat", TraceID: "trace-1"},
 		{Category: panel.EventCategoryLLM, Kind: "llm.b", Level: panel.EventLevelError, Module: "llmchat", TraceID: "trace-2"},
-		{Category: panel.EventCategoryMemory, Kind: "memory.a", Level: panel.EventLevelInfo, Module: "naturalmemory"},
+		{Category: panel.EventCategoryMemory, Kind: "memory.a", Level: panel.EventLevelInfo, Module: "memory"},
 	} {
 		item, err := store.RecordEvent(ctx, event)
 		if err != nil {
