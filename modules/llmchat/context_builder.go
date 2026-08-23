@@ -803,13 +803,13 @@ func (m *Module) renderSystemPrompt(agent Agent, event *platform.Event, now time
 }
 
 func (m *Module) agentHasSemanticMemory(agent Agent) (bool, error) {
-	if agent.SemanticMemory == nil || !agent.SemanticMemory.Enabled {
+	if !agent.MemoryEnabled {
 		return false, nil
 	}
 	if m == nil || m.semanticRetriever == nil {
 		return false, nil
 	}
-	return m.semanticRetriever.Available(agent.EmbeddingProvider), nil
+	return m.semanticRetriever.Available(), nil
 }
 
 func renderSystemPromptWithSemanticMemory(

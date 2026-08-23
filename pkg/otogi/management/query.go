@@ -4,6 +4,8 @@ package management
 type EventQuery struct {
 	// AfterID requests events with IDs strictly greater than this cursor.
 	AfterID int64
+	// BeforeID requests events with IDs strictly less than this cursor.
+	BeforeID int64
 	// Limit caps the number of returned events when positive.
 	Limit int
 	// Category restricts matches to one coarse event category.

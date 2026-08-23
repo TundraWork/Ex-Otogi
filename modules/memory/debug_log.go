@@ -19,9 +19,6 @@ func (m *Module) debugConfigLoaded(ctx context.Context, cfg Config) {
 		"embedding_provider", cfg.EmbeddingProvider,
 		"consolidation_interval", cfg.ConsolidationInterval,
 		"extraction_max_input_runes", cfg.ExtractionMaxInputRunes,
-		"max_memories_per_scope", cfg.MaxMemoriesPerScope,
-		"min_importance", cfg.MinImportance,
-		"duplicate_similarity_threshold", cfg.DuplicateSimilarityThreshold,
 		"retrieval_search_limit", cfg.RetrievalSearchLimit,
 		"buffer_quiet_period", cfg.BufferQuietPeriod,
 		"buffer_max_runes", cfg.BufferMaxRunes,
@@ -49,7 +46,6 @@ func (m *Module) debugConsolidationStart(ctx context.Context) {
 
 	m.logger.DebugContext(ctx, "memory consolidation loop started",
 		"interval", m.cfg.ConsolidationInterval,
-		"max_memories_per_scope", m.cfg.MaxMemoriesPerScope,
 	)
 }
 
@@ -121,17 +117,5 @@ func (m *Module) debugConsolidationScopeStart(
 		"expired", expiredCount,
 		"pruned", prunedCount,
 		"kept", keptCount,
-	)
-}
-
-func (m *Module) debugConsolidationCapOverflow(ctx context.Context, totalRecords int, maxAllowed int, prunedCount int) {
-	if m == nil || m.logger == nil {
-		return
-	}
-
-	m.logger.DebugContext(ctx, "memory cap overflow pruned",
-		"total_records", totalRecords,
-		"max_allowed", maxAllowed,
-		"pruned", prunedCount,
 	)
 }

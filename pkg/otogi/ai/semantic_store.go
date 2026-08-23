@@ -12,40 +12,6 @@ import (
 // lookups and mutations.
 const ServiceSemanticStore = "otogi.semantic_store"
 
-const (
-	// SemanticMetadataImportance stores the memory importance score in legacy
-	// metadata-backed records.
-	SemanticMetadataImportance = "importance"
-	// SemanticMetadataAccessCount stores the retrieval count in legacy
-	// metadata-backed records.
-	SemanticMetadataAccessCount = "access_count"
-	// SemanticMetadataLastAccessed stores the last retrieval timestamp in
-	// legacy metadata-backed records.
-	SemanticMetadataLastAccessed = "last_accessed"
-	// SemanticMetadataSource stores the origin label for one memory.
-	SemanticMetadataSource = "source"
-	// SemanticMetadataSourceArticleID stores the source article ID for one
-	// memory.
-	SemanticMetadataSourceArticleID = "source_article_id"
-	// SemanticMetadataSourceActorID stores the source actor ID for one memory.
-	SemanticMetadataSourceActorID = "source_actor_id"
-	// SemanticMetadataSourceActorName stores the source actor name for one
-	// memory.
-	SemanticMetadataSourceActorName = "source_actor_name"
-	// SemanticMetadataSourceActorIsBot stores whether the source actor is a bot.
-	SemanticMetadataSourceActorIsBot = "source_actor_is_bot"
-	// SemanticMetadataSubjectActorID stores the subject actor ID for one memory.
-	SemanticMetadataSubjectActorID = "subject_actor_id"
-	// SemanticMetadataSubjectActorName stores the subject actor name for one
-	// memory.
-	SemanticMetadataSubjectActorName = "subject_actor_name"
-	// SemanticMetadataSubjectActorIsBot stores whether the subject actor is a
-	// bot.
-	SemanticMetadataSubjectActorIsBot = "subject_actor_is_bot"
-	// SemanticMetadataSourceRecordIDs stores absorbed evidence record IDs.
-	SemanticMetadataSourceRecordIDs = "source_record_ids"
-)
-
 // SemanticStore provides semantic knowledge storage and retrieval using
 // vector embeddings.
 //
@@ -137,10 +103,6 @@ type SemanticProfile struct {
 	Kind SemanticKind `json:"kind,omitempty"`
 	// Importance stores the 1-10 salience score assigned to the memory.
 	Importance int `json:"importance,omitempty"`
-	// LastAccessedAt records when the memory was last retrieved for use.
-	LastAccessedAt time.Time `json:"last_accessed_at,omitempty"`
-	// AccessCount counts successful retrieval uses of this memory.
-	AccessCount int `json:"access_count,omitempty"`
 	// Source identifies the module or process that created the memory.
 	Source string `json:"source,omitempty"`
 	// SourceArticleID stores the originating article ID when known.
@@ -163,9 +125,6 @@ func (p SemanticProfile) Validate() error {
 	}
 	if p.Importance < 0 || p.Importance > 10 {
 		return fmt.Errorf("validate semantic profile: importance must be between 0 and 10")
-	}
-	if p.AccessCount < 0 {
-		return fmt.Errorf("validate semantic profile: access_count must be >= 0")
 	}
 	if p.SourceActor != nil {
 		if err := p.SourceActor.Validate(); err != nil {
@@ -221,8 +180,6 @@ type SemanticEntry struct {
 	Embedding []float32
 	// Profile carries typed lifecycle and provenance details.
 	Profile SemanticProfile
-	// Metadata carries optional provider-agnostic context.
-	Metadata map[string]string
 	// Keywords carries key terms extracted alongside the memory content.
 	Keywords []string
 	// Tags carries categorical labels extracted alongside the memory content.
@@ -266,8 +223,6 @@ type SemanticUpdate struct {
 	Embedding []float32
 	// Profile carries typed lifecycle and provenance details.
 	Profile SemanticProfile
-	// Metadata carries optional provider-agnostic context.
-	Metadata map[string]string
 	// Keywords carries key terms extracted alongside the memory content.
 	Keywords []string
 	// Tags carries categorical labels extracted alongside the memory content.
@@ -313,8 +268,6 @@ type SemanticRecord struct {
 	Embedding []float32
 	// Profile carries typed lifecycle and provenance details.
 	Profile SemanticProfile
-	// Metadata carries optional provider-agnostic context.
-	Metadata map[string]string
 	// Keywords carries key terms extracted alongside the memory content.
 	Keywords []string
 	// Tags carries categorical labels extracted alongside the memory content.

@@ -82,28 +82,6 @@ func TestConfigValidate(t *testing.T) {
 			wantErrSubstring: "missing provider",
 		},
 		{
-			name: "semantic memory enabled requires embedding provider",
-			mutate: func(cfg *Config) {
-				cfg.Agents[0].SemanticMemory = &SemanticMemoryPolicy{Enabled: true}
-			},
-			wantErrSubstring: "embedding_provider is required when semantic_memory.enabled=true",
-		},
-		{
-			name: "semantic memory invalid similarity fails",
-			mutate: func(cfg *Config) {
-				cfg.Agents[0].EmbeddingProvider = "embed-main"
-				cfg.Agents[0].SemanticMemory = &SemanticMemoryPolicy{
-					Enabled: true,
-					SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
-						MaxRetrievedMemories: 5,
-						MinSimilarity:        1.5,
-						MaxMemoryRunes:       2000,
-					},
-				}
-			},
-			wantErrSubstring: "semantic_memory: validate semantic memory policy: validate semantic retrieval policy: min_similarity must be between 0 and 1",
-		},
-		{
 			name: "invalid system prompt template fails",
 			mutate: func(cfg *Config) {
 				cfg.Agents[0].SystemPromptTemplate = "{{.Missing"
@@ -292,34 +270,6 @@ func TestResolveImageInputPolicyDefaults(t *testing.T) {
 	}
 }
 
-func TestResolveSemanticMemoryPolicyPreservesFields(t *testing.T) {
-	t.Parallel()
-
-	policy := resolveSemanticMemoryPolicy(&SemanticMemoryPolicy{
-		Enabled: true,
-		SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
-			MaxRetrievedMemories: 7,
-			MinSimilarity:        0.4,
-			MaxMemoryRunes:       3000,
-		},
-	})
-	if policy == nil {
-		t.Fatal("policy = nil, want non-nil")
-	}
-	if !policy.Enabled {
-		t.Fatal("enabled = false, want true")
-	}
-	if policy.MaxRetrievedMemories != 7 {
-		t.Fatalf("max_retrieved_memories = %d, want 7", policy.MaxRetrievedMemories)
-	}
-	if policy.MinSimilarity != 0.4 {
-		t.Fatalf("min_similarity = %f, want 0.4", policy.MinSimilarity)
-	}
-	if policy.MaxMemoryRunes != 3000 {
-		t.Fatalf("max_memory_runes = %d, want 3000", policy.MaxMemoryRunes)
-	}
-}
-
 func validModuleConfig() Config {
 	return Config{
 		RequestTimeout: time.Second,
@@ -329,7 +279,6 @@ func validModuleConfig() Config {
 				Aliases:              []string{"Oto"},
 				Description:          "primary assistant",
 				Provider:             "provider-main",
-				EmbeddingProvider:    "",
 				Model:                "model-main",
 				SystemPromptTemplate: "You are {{.AgentName}}",
 				TemplateVariables: map[string]string{

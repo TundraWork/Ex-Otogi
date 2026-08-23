@@ -23,6 +23,9 @@ func retryDelay(err error) (time.Duration, bool) {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return 0, false
 	}
+	if delay, ok := ai.LLMFailureRetry(err); ok {
+		return clampRetryDelay(delay), true
+	}
 
 	var apiErr genai.APIError
 	if !errors.As(err, &apiErr) {

@@ -2,24 +2,47 @@
 INSERT INTO events (
   occurred_at, trace_id, parent_event_id, category, kind, level,
   module, component, tenant_id, platform, conversation_id, actor_id,
-  subject, description, payload_type, payload_json
+  subject, description, payload_json
 ) VALUES (
-  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 ) RETURNING *;
 
 -- name: GetEvent :one
 SELECT * FROM events WHERE id = ?;
 
--- name: ListEvents :many
+-- name: ListLatestEvents :many
 SELECT * FROM events
 WHERE (sqlc.arg(category) = '' OR category = sqlc.arg(category))
   AND (sqlc.arg(kind) = '' OR kind = sqlc.arg(kind))
   AND (sqlc.arg(trace_id) = '' OR trace_id = sqlc.arg(trace_id))
   AND (sqlc.arg(conversation_id) = '' OR conversation_id = sqlc.arg(conversation_id))
   AND (sqlc.arg(module) = '' OR module = sqlc.arg(module))
-  AND (sqlc.arg(level) = '' OR level = sqlc.arg(level))
+  AND ((sqlc.arg(level) = '' AND level != 'debug') OR level = sqlc.arg(level))
+ORDER BY id DESC
+LIMIT sqlc.arg(limit);
+
+-- name: ListNewerEvents :many
+SELECT * FROM events
+WHERE (sqlc.arg(category) = '' OR category = sqlc.arg(category))
+  AND (sqlc.arg(kind) = '' OR kind = sqlc.arg(kind))
+  AND (sqlc.arg(trace_id) = '' OR trace_id = sqlc.arg(trace_id))
+  AND (sqlc.arg(conversation_id) = '' OR conversation_id = sqlc.arg(conversation_id))
+  AND (sqlc.arg(module) = '' OR module = sqlc.arg(module))
+  AND ((sqlc.arg(level) = '' AND level != 'debug') OR level = sqlc.arg(level))
   AND id > sqlc.arg(after_id)
 ORDER BY id ASC
+LIMIT sqlc.arg(limit);
+
+-- name: ListOlderEvents :many
+SELECT * FROM events
+WHERE (sqlc.arg(category) = '' OR category = sqlc.arg(category))
+  AND (sqlc.arg(kind) = '' OR kind = sqlc.arg(kind))
+  AND (sqlc.arg(trace_id) = '' OR trace_id = sqlc.arg(trace_id))
+  AND (sqlc.arg(conversation_id) = '' OR conversation_id = sqlc.arg(conversation_id))
+  AND (sqlc.arg(module) = '' OR module = sqlc.arg(module))
+  AND ((sqlc.arg(level) = '' AND level != 'debug') OR level = sqlc.arg(level))
+  AND id < sqlc.arg(before_id)
+ORDER BY id DESC
 LIMIT sqlc.arg(limit);
 
 -- name: GetTraceEvents :many

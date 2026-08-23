@@ -62,7 +62,7 @@ func renderExtractionPrompt(contextWindow extractionContext, existingMemories []
 			"<memory id=%q category=%q importance=%d>%s</memory>\n",
 			memory.ID,
 			memory.Category,
-			memoryImportance(memory),
+			semanticMemoryImportance(memory),
 			memory.Content,
 		))
 	}

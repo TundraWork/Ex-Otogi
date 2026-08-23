@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 )
 
 // retryingLLMProviderStub adapts llmProviderStub so it can announce retry
@@ -44,8 +45,7 @@ func retrieverTestRequest(prompt string) ai.SemanticRetrievalRequest {
 			Platform:       "telegram",
 			ConversationID: "chat-1",
 		},
-		Prompt:            prompt,
-		EmbeddingProvider: "embed-main",
+		Prompt: prompt,
 		Policy: ai.SemanticRetrievalPolicy{
 			MaxRetrievedMemories: 3,
 			MinSimilarity:        0.4,
@@ -69,11 +69,9 @@ func TestRetrieveSerializesMatches(t *testing.T) {
 					Content:  `User prefers "<tea>"`,
 					Category: "preference",
 					Profile: ai.SemanticProfile{
-						Kind:           ai.SemanticKindUnit,
-						Importance:     7,
-						AccessCount:    1,
-						LastAccessedAt: now.Add(-2 * time.Hour),
-						SubjectActor:   &ai.SemanticActorRef{ID: "user-1", Name: "Alice"},
+						Kind:         ai.SemanticKindUnit,
+						Importance:   7,
+						SubjectActor: &ai.SemanticActorRef{ID: "user-1", Name: "Alice"},
 					},
 					CreatedAt: time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC),
 				},
@@ -85,11 +83,9 @@ func TestRetrieveSerializesMatches(t *testing.T) {
 					Content:  "User studies computer science",
 					Category: "knowledge",
 					Profile: ai.SemanticProfile{
-						Kind:           ai.SemanticKindSynthesized,
-						Importance:     6,
-						AccessCount:    3,
-						LastAccessedAt: now.Add(-24 * time.Hour),
-						SourceActor:    &ai.SemanticActorRef{ID: "user-2", Name: "Bob"},
+						Kind:        ai.SemanticKindSynthesized,
+						Importance:  6,
+						SourceActor: &ai.SemanticActorRef{ID: "user-2", Name: "Bob"},
 					},
 					CreatedAt: time.Date(2026, time.March, 9, 15, 30, 0, 0, time.UTC),
 				},
@@ -137,15 +133,8 @@ func TestRetrieveSerializesMatches(t *testing.T) {
 	if store.lastSearch.MinSimilarity != 0.4 {
 		t.Fatalf("search min similarity = %f, want 0.4", store.lastSearch.MinSimilarity)
 	}
-	if len(store.updates) != 2 {
-		t.Fatalf("reinforce update count = %d, want 2", len(store.updates))
-	}
-	if store.updates[0].Profile.AccessCount != 2 {
-		t.Fatalf("first reinforced access count = %d, want 2", store.updates[0].Profile.AccessCount)
-	}
-	if !store.updates[0].Profile.LastAccessedAt.Equal(now) {
-		t.Fatalf("first reinforced last_accessed_at = %s, want %s",
-			store.updates[0].Profile.LastAccessedAt, now)
+	if len(store.updates) != 0 {
+		t.Fatalf("retrieval update count = %d, want 0", len(store.updates))
 	}
 }
 
@@ -203,22 +192,19 @@ func TestRetrieveTrimsToBudget(t *testing.T) {
 	}
 }
 
-func TestRetrieveGracefullyDegradesWithoutServices(t *testing.T) {
+func TestRetrieveFailsWithoutServices(t *testing.T) {
 	t.Parallel()
 
 	module := New(withConfig(retrieverTestConfig()))
 	// semanticStore and embeddingRegistry left nil.
 
-	result, err := module.Retrieve(context.Background(), retrieverTestRequest("hi"))
-	if err != nil {
-		t.Fatalf("Retrieve failed: %v", err)
-	}
-	if result.Content != "" || result.MatchCount != 0 {
-		t.Fatalf("result = %+v, want empty without services", result)
+	_, err := module.Retrieve(context.Background(), retrieverTestRequest("hi"))
+	if err == nil || !strings.Contains(err.Error(), "semantic store unavailable") {
+		t.Fatalf("error = %v, want semantic store unavailable", err)
 	}
 }
 
-func TestRetrieveDisabledModuleReturnsEmpty(t *testing.T) {
+func TestRetrieveDisabledModuleReturnsError(t *testing.T) {
 	t.Parallel()
 
 	cfg := retrieverTestConfig()
@@ -226,12 +212,9 @@ func TestRetrieveDisabledModuleReturnsEmpty(t *testing.T) {
 	module := New(withConfig(cfg))
 	module.semanticStore = &recordingSemanticStore{}
 
-	result, err := module.Retrieve(context.Background(), retrieverTestRequest("hi"))
-	if err != nil {
-		t.Fatalf("Retrieve failed: %v", err)
-	}
-	if result.Content != "" || result.MatchCount != 0 {
-		t.Fatalf("result = %+v, want empty when module disabled", result)
+	_, err := module.Retrieve(context.Background(), retrieverTestRequest("hi"))
+	if err == nil || !strings.Contains(err.Error(), "retriever unavailable") {
+		t.Fatalf("error = %v, want retriever unavailable", err)
 	}
 }
 
@@ -270,7 +253,6 @@ func TestRetrieveUsesPlannerQueries(t *testing.T) {
 
 	cfg := retrieverTestConfig()
 	cfg.RetrievalPlanningEnabled = true
-	cfg.DecayFactor = 0.99
 	module := New(withConfig(cfg))
 	module.semanticStore = store
 	module.embeddingRegistry = &embeddingRegistryStub{
@@ -330,7 +312,6 @@ func TestRetrieveRetriesTransientPlannerError(t *testing.T) {
 
 	cfg := retrieverTestConfig()
 	cfg.RetrievalPlanningEnabled = true
-	cfg.DecayFactor = 0.99
 	module := New(withConfig(cfg))
 	module.semanticStore = store
 	module.embeddingRegistry = &embeddingRegistryStub{
@@ -366,6 +347,34 @@ func TestRetrieveRetriesTransientPlannerError(t *testing.T) {
 	}
 }
 
+func TestRetrieveRecordsPlannerDegradation(t *testing.T) {
+	t.Parallel()
+
+	recorder := newRecorderStub()
+	cfg := retrieverTestConfig()
+	cfg.RetrievalPlanningEnabled = true
+	module := New(withConfig(cfg))
+	module.recorder = recorder
+	module.semanticStore = &recordingSemanticStore{}
+	module.embeddingRegistry = &embeddingRegistryStub{providers: map[string]ai.EmbeddingProvider{
+		"embed-main": &embeddingProviderStub{response: ai.EmbeddingResponse{Vectors: [][]float32{{1, 0}}}},
+	}}
+	module.providerRegistry = &llmProviderRegistryStub{providers: map[string]ai.LLMProvider{
+		"planner-main": &llmProviderStub{err: errors.New("planner unavailable")},
+	}}
+
+	if _, err := module.Retrieve(context.Background(), retrieverTestRequest("remember tea")); err != nil {
+		t.Fatalf("Retrieve failed: %v", err)
+	}
+	if len(recorder.events) != 1 || recorder.events[0].Kind != "memory.retrieval.degraded" {
+		t.Fatalf("events = %+v, want one degraded retrieval", recorder.events)
+	}
+	payload, ok := recorder.events[0].Payload.(panel.MemoryRetrieveCompletedPayload)
+	if !ok || payload.Outcome != "degraded" || !strings.Contains(payload.Degradation, "planner unavailable") {
+		t.Fatalf("payload = %+v, want degraded planner failure", recorder.events[0].Payload)
+	}
+}
+
 func TestRankSemanticMemoryMatchesUsesCompositeSignals(t *testing.T) {
 	t.Parallel()
 
@@ -376,9 +385,8 @@ func TestRankSemanticMemoryMatchesUsesCompositeSignals(t *testing.T) {
 				ID:        "unit-memory",
 				CreatedAt: now.Add(-6 * time.Hour),
 				Profile: ai.SemanticProfile{
-					Kind:           ai.SemanticKindUnit,
-					Importance:     3,
-					LastAccessedAt: now.Add(-72 * time.Hour),
+					Kind:       ai.SemanticKindUnit,
+					Importance: 3,
 				},
 			},
 			Similarity: 0.93,
@@ -388,10 +396,9 @@ func TestRankSemanticMemoryMatchesUsesCompositeSignals(t *testing.T) {
 				ID:        "synth-memory",
 				CreatedAt: now.Add(-2 * time.Hour),
 				Profile: ai.SemanticProfile{
-					Kind:           ai.SemanticKindSynthesized,
-					Importance:     9,
-					LastAccessedAt: now.Add(-90 * time.Minute),
-					SubjectActor:   &ai.SemanticActorRef{ID: "user-1", Name: "Alice"},
+					Kind:         ai.SemanticKindSynthesized,
+					Importance:   9,
+					SubjectActor: &ai.SemanticActorRef{ID: "user-1", Name: "Alice"},
 				},
 			},
 			Similarity: 0.81,
@@ -399,7 +406,7 @@ func TestRankSemanticMemoryMatchesUsesCompositeSignals(t *testing.T) {
 	}
 
 	ranked := rankSemanticMemoryMatches(
-		matches, 0.99, now,
+		matches,
 		ai.SemanticActorRef{ID: "user-1", Name: "Alice"},
 		map[string]struct{}{}, nil,
 	)
@@ -426,9 +433,8 @@ func TestRankSemanticMemoryMatchesKeywordBonus(t *testing.T) {
 				ID:        "mem-A",
 				CreatedAt: now.Add(-1 * time.Hour),
 				Profile: ai.SemanticProfile{
-					Kind:           ai.SemanticKindUnit,
-					Importance:     5,
-					LastAccessedAt: now.Add(-1 * time.Hour),
+					Kind:       ai.SemanticKindUnit,
+					Importance: 5,
 				},
 				Keywords: []string{"tea", "preference"},
 			},
@@ -439,9 +445,8 @@ func TestRankSemanticMemoryMatchesKeywordBonus(t *testing.T) {
 				ID:        "mem-B",
 				CreatedAt: now.Add(-1 * time.Hour),
 				Profile: ai.SemanticProfile{
-					Kind:           ai.SemanticKindUnit,
-					Importance:     5,
-					LastAccessedAt: now.Add(-1 * time.Hour),
+					Kind:       ai.SemanticKindUnit,
+					Importance: 5,
 				},
 			},
 			Similarity: 0.85,
@@ -449,7 +454,7 @@ func TestRankSemanticMemoryMatchesKeywordBonus(t *testing.T) {
 	}
 
 	ranked := rankSemanticMemoryMatches(
-		matches, 0.99, now,
+		matches,
 		ai.SemanticActorRef{}, nil,
 		[]string{"tea", "preference", "alice"},
 	)

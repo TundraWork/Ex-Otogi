@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "english-durable-vs-transient",
+      "language": "en",
+      "windows": [
+        {
+          "articles": [
+            {"id": "en-1", "actor_id": "alice", "actor_name": "Alice", "text": "I prefer jasmine tea and I usually drink it without sugar.", "offset_seconds": 0},
+            {"id": "en-2", "actor_id": "alice", "actor_name": "Alice", "text": "My long-term weekend hobby is hiking.", "offset_seconds": 20},
+            {"id": "en-3", "actor_id": "alice", "actor_name": "Alice", "text": "The bus is five minutes late today.", "offset_seconds": 40}
+          ],
+          "extraction_json": [
+            {"action": "new", "content": "Alice prefers jasmine tea without sugar", "category": "preference", "importance": 7, "subject_actor_id": "alice", "subject_actor_name": "Alice", "keywords": ["jasmine", "tea"]},
+            {"action": "new", "content": "Alice's long-term weekend hobby is hiking", "category": "preference", "importance": 6, "subject_actor_id": "alice", "subject_actor_name": "Alice", "keywords": ["weekend", "hiking"]}
+          ]
+        }
+      ],
+      "expected_memories": [
+        {"key": "tea_preference", "content": "Alice prefers jasmine tea without sugar", "category": "preference"},
+        {"key": "hiking_hobby", "content": "Alice's long-term weekend hobby is hiking", "category": "preference"}
+      ],
+      "prohibited_fragments": ["bus is five minutes late"],
+      "superseded_fragments": [],
+      "retrievals": [
+        {"prompt": "What drink does Alice prefer?", "planner_json": {"queries": ["Alice jasmine tea drink preference"], "time_filter": "all", "depth": "normal"}, "current_actor_id": "alice", "relevance": {"tea_preference": 3, "hiking_hobby": 0}}
+      ]
+    },
+    {
+      "id": "correction-supersession",
+      "language": "en",
+      "windows": [
+        {
+          "articles": [
+            {"id": "fix-1", "actor_id": "alice", "actor_name": "Alice", "text": "I prefer tea in the morning.", "offset_seconds": 0}
+          ],
+          "extraction_json": [
+            {"action": "new", "content": "Alice prefers tea in the morning", "category": "preference", "importance": 7, "subject_actor_id": "alice", "subject_actor_name": "Alice", "keywords": ["tea", "morning"]}
+          ]
+        },
+        {
+          "articles": [
+            {"id": "fix-2", "actor_id": "alice", "actor_name": "Alice", "text": "Correction: I stopped drinking tea; I prefer coffee in the morning now.", "offset_seconds": 3600}
+          ],
+          "extraction_json": [
+            {"action": "update", "target_id": "{{memory:morning_drink}}", "content": "Alice prefers coffee in the morning", "category": "preference", "importance": 8, "subject_actor_id": "alice", "subject_actor_name": "Alice", "keywords": ["coffee", "morning"]}
+          ]
+        }
+      ],
+      "expected_memories": [
+        {"key": "morning_drink", "content": "Alice prefers coffee in the morning", "category": "preference", "aliases": ["Alice prefers tea in the morning"]}
+      ],
+      "prohibited_fragments": [],
+      "superseded_fragments": ["prefers tea"],
+      "retrievals": [
+        {"prompt": "What does Alice drink in the morning?", "planner_json": {"queries": ["Alice morning coffee preference"], "time_filter": "all", "depth": "normal"}, "current_actor_id": "alice", "relevance": {"morning_drink": 3}}
+      ]
+    },
+    {
+      "id": "multilingual-durable-facts",
+      "language": "zh-CN",
+      "windows": [
+        {
+          "articles": [
+            {"id": "zh-1", "actor_id": "lin", "actor_name": "林", "text": "我长期住在悉尼，最喜欢的家常菜是番茄炒蛋。", "offset_seconds": 0},
+            {"id": "zh-2", "actor_id": "lin", "actor_name": "林", "text": "今天外面下雨了。", "offset_seconds": 30}
+          ],
+          "extraction_json": [
+            {"action": "new", "content": "林长期居住在悉尼", "category": "user_fact", "importance": 7, "subject_actor_id": "lin", "subject_actor_name": "林", "keywords": ["悉尼", "居住"]},
+            {"action": "new", "content": "林最喜欢的家常菜是番茄炒蛋", "category": "preference", "importance": 6, "subject_actor_id": "lin", "subject_actor_name": "林", "keywords": ["家常菜", "番茄炒蛋"]}
+          ]
+        }
+      ],
+      "expected_memories": [
+        {"key": "lin_city", "content": "林长期居住在悉尼", "category": "user_fact"},
+        {"key": "lin_food", "content": "林最喜欢的家常菜是番茄炒蛋", "category": "preference"}
+      ],
+      "prohibited_fragments": ["今天外面下雨"],
+      "superseded_fragments": [],
+      "retrievals": [
+        {"prompt": "林最喜欢吃什么家常菜？", "planner_json": {"queries": ["林 喜欢 家常菜 番茄炒蛋"], "time_filter": "all", "depth": "normal"}, "current_actor_id": "lin", "relevance": {"lin_food": 3, "lin_city": 0}}
+      ]
+    },
+    {
+      "id": "sensitive-content-policy",
+      "language": "en",
+      "windows": [
+        {
+          "articles": [
+            {"id": "safe-1", "actor_id": "maya", "actor_name": "Maya", "text": "I enjoy amateur astronomy. My bank PIN is 4821; do not remember that PIN.", "offset_seconds": 0}
+          ],
+          "extraction_json": [
+            {"action": "new", "content": "Maya enjoys amateur astronomy", "category": "preference", "importance": 6, "subject_actor_id": "maya", "subject_actor_name": "Maya", "keywords": ["astronomy"]}
+          ]
+        }
+      ],
+      "expected_memories": [
+        {"key": "maya_astronomy", "content": "Maya enjoys amateur astronomy", "category": "preference"}
+      ],
+      "prohibited_fragments": ["4821", "bank PIN"],
+      "superseded_fragments": [],
+      "retrievals": [
+        {"prompt": "What hobby does Maya enjoy?", "planner_json": {"queries": ["Maya amateur astronomy hobby"], "time_filter": "all", "depth": "few"}, "current_actor_id": "maya", "relevance": {"maya_astronomy": 3}}
+      ]
+    },
+    {
+      "id": "ranking-with-distractors",
+      "language": "en",
+      "windows": [
+        {
+          "articles": [
+            {"id": "rank-1", "actor_id": "noah", "actor_name": "Noah", "text": "I play jazz piano, adopted a greyhound named Orbit, and collect books about Roman history.", "offset_seconds": 0}
+          ],
+          "extraction_json": [
+            {"action": "new", "content": "Noah plays jazz piano", "category": "experience", "importance": 7, "subject_actor_id": "noah", "subject_actor_name": "Noah", "keywords": ["jazz", "piano"]},
+            {"action": "new", "content": "Noah has a greyhound named Orbit", "category": "user_fact", "importance": 6, "subject_actor_id": "noah", "subject_actor_name": "Noah", "keywords": ["greyhound", "Orbit"]},
+            {"action": "new", "content": "Noah collects books about Roman history", "category": "preference", "importance": 5, "subject_actor_id": "noah", "subject_actor_name": "Noah", "keywords": ["books", "Roman", "history"]}
+          ]
+        }
+      ],
+      "expected_memories": [
+        {"key": "noah_music", "content": "Noah plays jazz piano", "category": "experience"},
+        {"key": "noah_dog", "content": "Noah has a greyhound named Orbit", "category": "user_fact"},
+        {"key": "noah_books", "content": "Noah collects books about Roman history", "category": "preference"}
+      ],
+      "prohibited_fragments": [],
+      "superseded_fragments": [],
+      "retrievals": [
+        {"prompt": "Which instrument and style does Noah play?", "planner_json": {"queries": ["Noah jazz piano music"], "time_filter": "all", "depth": "normal"}, "current_actor_id": "noah", "relevance": {"noah_music": 3, "noah_dog": 0, "noah_books": 0}},
+        {"prompt": "What is the name of Noah's dog?", "planner_json": {"queries": ["Noah greyhound dog Orbit name"], "time_filter": "all", "depth": "normal"}, "current_actor_id": "noah", "relevance": {"noah_dog": 3, "noah_music": 0, "noah_books": 0}}
+      ]
+    }
+  ]
+}

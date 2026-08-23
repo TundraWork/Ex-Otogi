@@ -167,9 +167,6 @@ watch(
                 <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
                   {{ snapshot.Module }}
                 </span>
-                <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
-                  {{ snapshot.PayloadType }}
-                </span>
               </div>
               <div>
                 <h2 class="text-lg font-semibold text-slate-900">{{ snapshot.Key }}</h2>

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -63,7 +62,7 @@ func (m *Module) processWindow(
 	scope ai.SemanticScope,
 	articles []bufferedArticle,
 	reason FlushReason,
-) error {
+) (processErr error) {
 	if len(articles) == 0 {
 		return nil
 	}
@@ -74,14 +73,25 @@ func (m *Module) processWindow(
 		ctx = panel.WithRecorder(ctx, m.recorder)
 	}
 	startedAt := m.now()
-	articleCount, runeCount, bufferedMS := bufferedWindowMetrics(articles, startedAt)
-
-	m.emitManagementEvent(ctx, &scope, "memory.window.flushed", "flushed article window for extraction", windowFlushedDescription(reason, articles), panel.MemoryWindowFlushedPayload{
-		Reason:       string(reason),
-		ArticleCount: articleCount,
-		RuneCount:    runeCount,
-		BufferedMS:   bufferedMS,
-	})
+	articleCount, _, bufferedMS := bufferedWindowMetrics(articles, startedAt)
+	inputRunes := 0
+	extractedCount, appliedCount, failedCount := 0, 0, 0
+	defer func() {
+		payload := panel.MemoryExtractCompletedPayload{
+			Outcome: "completed", Reason: string(reason), ArticleCount: articleCount, InputRunes: inputRunes, BufferedMS: bufferedMS,
+			ExtractedCount: extractedCount, AppliedCount: appliedCount, FailedCount: failedCount,
+			ElapsedMS: m.now().Sub(startedAt).Milliseconds(),
+		}
+		levelKind := "memory.formation.completed"
+		summary := "completed memory formation"
+		if processErr != nil {
+			payload.Outcome, payload.Error = "failed", processErr.Error()
+			levelKind, summary = "memory.formation.failed", "memory formation failed"
+			m.emitManagementErrorEvent(ctx, &scope, "formation", levelKind, summary, panel.TruncateDescription(processErr.Error()), payload)
+			return
+		}
+		m.emitManagementInfoEvent(ctx, &scope, "formation", levelKind, summary, extractCompletedDescription(extractedCount, appliedCount, failedCount), payload)
+	}()
 
 	// 1. resolve reply quotes
 	lookups := collectPendingReplyLookups(scope, articles)
@@ -96,11 +106,8 @@ func (m *Module) processWindow(
 
 	// 2. serialize conversation
 	convText, _ := serializeWindowConversation(articles, quotes, m.cfg.ExtractionMaxInputRunes)
+	inputRunes = utf8.RuneCountInString(convText)
 	if strings.TrimSpace(convText) == "" {
-		m.emitManagementEvent(ctx, &scope, "memory.window.skipped", "skipped flushed article window", windowSkippedDescription("empty serialized conversation", articles), panel.MemoryWindowSkippedPayload{
-			Reason:       "empty_serialized_conversation",
-			ArticleCount: articleCount,
-		})
 		return nil
 	}
 
@@ -111,7 +118,7 @@ func (m *Module) processWindow(
 	}
 
 	// 3. embed window text + retrieve relevant existing memories
-	windowEmbedding, err := embedSingleText(ctx, m.embeddingProvider, convText, ai.EmbeddingTaskTypeDocument)
+	windowEmbedding, err := embedSingleText(ctx, m.embeddingProvider, m.cfg.EmbeddingModel, m.cfg.EmbeddingDimensions, convText, ai.EmbeddingTaskTypeDocument)
 	if err != nil {
 		return fmt.Errorf("process window embed context: %w", err)
 	}
@@ -125,25 +132,13 @@ func (m *Module) processWindow(
 		return fmt.Errorf("process window search existing: %w", err)
 	}
 
-	m.emitManagementEvent(ctx, &scope, "memory.extract.started", "started natural memory extraction", extractStartedDescription(latestWindowPreview(articles), len(relevantExisting)), panel.MemoryExtractStartedPayload{
-		SourceKind:          "window",
-		SegmentCount:        len(articles),
-		InputRunes:          utf8.RuneCountInString(convText),
-		ExistingMemoryCount: len(relevantExisting),
-	})
-
 	// 4. extraction-with-action LLM (the only LLM call per flush)
 	candidates, err := m.runExtractionLLM(ctx, scope, contextWindow, matchRecords(relevantExisting))
 	if err != nil {
 		return fmt.Errorf("process window extraction: %w", err)
 	}
-	if len(candidates) == 0 {
-		m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", extractCompletedDescription(nil, 0, 0), panel.MemoryExtractCompletedPayload{
-			ExtractedCount: 0,
-			AppliedCount:   0,
-			FailedCount:    0,
-			Consolidated:   false,
-		})
+	extractedCount = len(candidates)
+	if extractedCount == 0 {
 		return nil
 	}
 
@@ -156,8 +151,6 @@ func (m *Module) processWindow(
 
 	// 6. apply each action
 	embIdx := 0
-	appliedCount := 0
-	failedCount := 0
 	for _, c := range candidates {
 		var applyErr error
 		switch c.Action {
@@ -188,13 +181,6 @@ func (m *Module) processWindow(
 		}
 		appliedCount++
 	}
-
-	m.emitManagementEvent(ctx, &scope, "memory.extract.completed", "completed natural memory extraction", extractCompletedDescription(candidates, appliedCount, failedCount), panel.MemoryExtractCompletedPayload{
-		ExtractedCount: len(candidates),
-		AppliedCount:   appliedCount,
-		FailedCount:    failedCount,
-		Consolidated:   false,
-	})
 
 	return nil
 }
@@ -295,8 +281,10 @@ func (m *Module) embedCandidatesBatch(
 	}
 
 	response, err := m.embeddingProvider.Embed(ctx, ai.EmbeddingRequest{
-		Texts:    texts,
-		TaskType: ai.EmbeddingTaskTypeDocument,
+		Model:      m.cfg.EmbeddingModel,
+		Texts:      texts,
+		Dimensions: m.cfg.EmbeddingDimensions,
+		TaskType:   ai.EmbeddingTaskTypeDocument,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("embed candidates batch: %w", err)
@@ -320,16 +308,13 @@ func (m *Module) applyNew(
 	candidate extractedMemory,
 	embedding []float32,
 ) error {
-	profile := buildMemoryProfile(candidate, contextWindow, m.now())
-	metadata := buildProfileMetadata(profile)
-
+	profile := buildMemoryProfile(candidate, contextWindow)
 	_, err := m.semanticStore.Store(ctx, ai.SemanticEntry{
 		Scope:     scope,
 		Content:   candidate.Content,
 		Category:  candidate.Category,
 		Embedding: embedding,
 		Profile:   profile,
-		Metadata:  metadata,
 		Keywords:  candidate.Keywords,
 		Tags:      candidate.Tags,
 	})
@@ -367,19 +352,16 @@ func (m *Module) applyUpdate(
 		return m.applyNew(ctx, scope, contextWindow, candidate, embedding)
 	}
 
-	profile := buildMemoryProfile(candidate, contextWindow, m.now())
+	profile := buildMemoryProfile(candidate, contextWindow)
 	if existingRecord.Profile.Importance > profile.Importance {
 		profile.Importance = existingRecord.Profile.Importance
 	}
-	metadata := buildProfileMetadata(profile)
-
 	_, err := m.semanticStore.Update(ctx, ai.SemanticUpdate{
 		ID:        targetID,
 		Content:   candidate.Content,
 		Category:  candidate.Category,
 		Embedding: embedding,
 		Profile:   profile,
-		Metadata:  metadata,
 		Keywords:  candidate.Keywords,
 		Tags:      candidate.Tags,
 	})
@@ -555,6 +537,8 @@ func collectStreamText(ctx context.Context, stream ai.LLMStream) (string, error)
 func embedSingleText(
 	ctx context.Context,
 	embeddingProvider ai.EmbeddingProvider,
+	model string,
+	dimensions int,
 	text string,
 	taskType ai.EmbeddingTaskType,
 ) ([]float32, error) {
@@ -566,8 +550,10 @@ func embedSingleText(
 	}
 
 	response, err := embeddingProvider.Embed(ctx, ai.EmbeddingRequest{
-		Texts:    []string{strings.TrimSpace(text)},
-		TaskType: taskType,
+		Model:      model,
+		Texts:      []string{strings.TrimSpace(text)},
+		Dimensions: dimensions,
+		TaskType:   taskType,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("embed single text: %w", err)
@@ -625,13 +611,10 @@ func normalizeAnchorTime(event *platform.Event, fallback time.Time) time.Time {
 func buildMemoryProfile(
 	candidate extractedMemory,
 	contextWindow extractionContext,
-	now time.Time,
 ) ai.SemanticProfile {
 	profile := ai.SemanticProfile{
 		Kind:            ai.SemanticKindUnit,
 		Importance:      candidate.Importance,
-		LastAccessedAt:  now.UTC(),
-		AccessCount:     0,
 		Source:          "natural",
 		SourceArticleID: contextWindow.SourceArticleID,
 		SourceActor:     memoryActorRef(contextWindow.SourceActor),
@@ -702,38 +685,6 @@ func actorDisplayName(actor platform.Actor) string {
 	}
 
 	return ""
-}
-
-func buildProfileMetadata(profile ai.SemanticProfile) map[string]string {
-	metadata := map[string]string{
-		ai.SemanticMetadataAccessCount:  strconv.Itoa(profile.AccessCount),
-		ai.SemanticMetadataImportance:   strconv.Itoa(profile.Importance),
-		ai.SemanticMetadataLastAccessed: profile.LastAccessedAt.UTC().Format(time.RFC3339),
-		ai.SemanticMetadataSource:       strings.TrimSpace(profile.Source),
-	}
-	if sourceArticleID := strings.TrimSpace(profile.SourceArticleID); sourceArticleID != "" {
-		metadata[ai.SemanticMetadataSourceArticleID] = sourceArticleID
-	}
-	if profile.SourceActor != nil {
-		if profile.SourceActor.ID != "" {
-			metadata[ai.SemanticMetadataSourceActorID] = profile.SourceActor.ID
-		}
-		if profile.SourceActor.Name != "" {
-			metadata[ai.SemanticMetadataSourceActorName] = profile.SourceActor.Name
-		}
-		metadata[ai.SemanticMetadataSourceActorIsBot] = strconv.FormatBool(profile.SourceActor.IsBot)
-	}
-	if profile.SubjectActor != nil {
-		if profile.SubjectActor.ID != "" {
-			metadata[ai.SemanticMetadataSubjectActorID] = profile.SubjectActor.ID
-		}
-		if profile.SubjectActor.Name != "" {
-			metadata[ai.SemanticMetadataSubjectActorName] = profile.SubjectActor.Name
-		}
-		metadata[ai.SemanticMetadataSubjectActorIsBot] = strconv.FormatBool(profile.SubjectActor.IsBot)
-	}
-
-	return metadata
 }
 
 func cloneActorRef(actor *ai.SemanticActorRef) *ai.SemanticActorRef {

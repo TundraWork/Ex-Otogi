@@ -1942,8 +1942,8 @@ func TestOnRegisterFailsWithoutConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("OnRegister error = nil, want config load failure")
 	}
-	if !strings.Contains(err.Error(), "llmchat load config") {
-		t.Fatalf("OnRegister error = %q, want llmchat load config context", err.Error())
+	if !strings.Contains(err.Error(), "llmchat resolve runtime config") {
+		t.Fatalf("OnRegister error = %q, want runtime config service context", err.Error())
 	}
 }
 
@@ -3198,8 +3198,9 @@ func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
 	if len(sink.editRequests) != 1 {
 		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
 	}
-	if sink.editRequests[0].Text != placeholderFailureMessage {
-		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[0].Text, placeholderFailureMessage)
+	wantFailure := "The request took too long to complete. Please try again."
+	if sink.editRequests[0].Text != wantFailure {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[0].Text, wantFailure)
 	}
 }
 
@@ -3375,8 +3376,9 @@ func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
 	if sink.editRequests[1].MessageID != "msg-1" {
 		t.Fatalf("failure edit message id = %q, want msg-1", sink.editRequests[1].MessageID)
 	}
-	if sink.editRequests[1].Text != placeholderFailureMessage {
-		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[1].Text, placeholderFailureMessage)
+	wantFailure := "The AI service returned no answer. Please try again."
+	if sink.editRequests[1].Text != wantFailure {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[1].Text, wantFailure)
 	}
 }
 

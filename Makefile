@@ -39,7 +39,8 @@ WEB_DIR ?= $(CURDIR)/web
 .PHONY: tools doctor quality quality-core fmt fmt-check lint arch-check \
 	test test-race test-leak coverage-report security-warn agent-guard quality-pre-commit \
 	build dev generate hooks-install hooks-run \
-	web-install web-dev web-build web-lint web-format web-check
+	memory-eval \
+	web-install web-dev web-build web-lint web-check
 
 tools: ## Install pinned local development tooling under .cache/tools/bin
 	@mkdir -p $(TOOLS_BIN) $(TOOLS_VERSION_DIR) $(GOLANGCI_LINT_CACHE) $(GO_BUILD_CACHE) $(COVERAGE_DIR)
@@ -122,10 +123,10 @@ quality-core: ## Hard-fail quality gate for merges/commits
 	$(MAKE) test-leak
 
 fmt: ## Format Go source files with gofumpt
-	$(GOFUMPT) -w .
+	@find . -type d \( -name .git -o -name .cache -o -name node_modules \) -prune -o -type f -name '*.go' -print0 | xargs -0 $(GOFUMPT) -w
 
 fmt-check: ## Verify Go source formatting with gofumpt
-	@out="$$( $(GOFUMPT) -l . )"; \
+	@out="$$( find . -type d \( -name .git -o -name .cache -o -name node_modules \) -prune -o -type f -name '*.go' -print0 | xargs -0 $(GOFUMPT) -l )"; \
 	if [ -n "$$out" ]; then \
 		echo "gofumpt formatting issues found:"; \
 		echo "$$out"; \
@@ -182,6 +183,11 @@ generate: ## Run go:generate for mocks and generated code
 	PATH=$(TOOLS_BIN):$$PATH $(GO) generate ./...
 	$(SQLC) generate
 
+memory-eval: ## Run the deterministic production-path memory benchmark
+	$(GO) run ./cmd/memoryeval \
+		-json specs/2026-08-14-reliability-observability-memory/memory-evaluation-baseline.json \
+		-markdown specs/2026-08-14-reliability-observability-memory/memory-evaluation-baseline.md
+
 dev: ## Run with hot reload when air is available
 	@if command -v air >/dev/null 2>&1; then \
 		if [ -f .air.toml ]; then air -c .air.toml; else air; fi; \
@@ -205,9 +211,6 @@ web-build: ## Build web control panel for production
 
 web-lint: ## Lint web control panel source
 	cd $(WEB_DIR) && pnpm run lint
-
-web-format: ## Format web control panel source
-	cd $(WEB_DIR) && pnpm run format
 
 web-check: ## Run web control panel type checking
 	cd $(WEB_DIR) && pnpm run type-check

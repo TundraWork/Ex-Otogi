@@ -1,87 +1,61 @@
 package management
 
-// PlatformEventReceivedPayload describes one inbound platform event accepted by
-// the runtime.
-type PlatformEventReceivedPayload struct {
-	// EventKind is the inbound platform event kind.
-	EventKind string
-	// SourceID identifies the source runtime or driver instance.
-	SourceID string
-	// MessageID identifies the source platform message when present.
-	MessageID string
-}
-
-// PlatformEventPublishedPayload describes one business event published through
-// the kernel bus.
-type PlatformEventPublishedPayload struct {
-	// EventKind is the published internal event kind.
-	EventKind string
-	// SubscriberCount reports how many handlers matched the event.
-	SubscriberCount int
-}
-
-// MemoryRetrieveStartedPayload describes semantic retrieval startup details.
-type MemoryRetrieveStartedPayload struct {
-	// Provider is the embedding or retrieval provider name when applicable.
+// ChatRequestPayload describes one end-to-end chat request lifecycle event.
+type ChatRequestPayload struct {
+	// Agent identifies the selected chat agent.
+	Agent string
+	// Provider identifies the configured provider profile.
 	Provider string
-	// QueryCount is the number of retrieval queries prepared for the request.
-	QueryCount int
-}
-
-// MemoryRetrievePlanPayload describes a retrieval plan emitted before search.
-type MemoryRetrievePlanPayload struct {
-	// Queries lists the planned search queries.
-	Queries []string
-	// TimeFilter records the optional time filter strategy.
-	TimeFilter string
-	// Depth records the retrieval depth setting.
-	Depth string
-	// PlannerUsed reports whether a dedicated planner produced this plan.
-	PlannerUsed bool
-}
-
-// MemoryRetrieveSearchedPayload describes one retrieval search execution.
-type MemoryRetrieveSearchedPayload struct {
-	// CandidateCount is the number of candidates examined by the search.
-	CandidateCount int
-	// ReturnedCount is the number of ranked results produced.
-	ReturnedCount int
+	// Model identifies the requested model.
+	Model string
+	// Outcome is accepted, completed, failed, or canceled.
+	Outcome string
+	// State is the current request lifecycle state.
+	State string
+	// PreviousState is populated for state transition events.
+	PreviousState string
+	// ElapsedMS is the request duration for terminal events.
+	ElapsedMS int64
+	// FailureClass is a stable coarse failure category when the request failed.
+	FailureClass string
+	// Error is the wrapped internal failure detail when the request failed.
+	Error string
+	// MaxAttempts is the effective application-level provider attempt budget.
+	MaxAttempts int
 }
 
 // MemoryRetrieveCompletedPayload describes retrieval completion details.
 type MemoryRetrieveCompletedPayload struct {
+	// Outcome is completed, degraded, or failed.
+	Outcome string
+	// QueryCount is the number of semantic queries executed.
+	QueryCount int
+	// CandidateCount is the number of candidates considered before selection.
+	CandidateCount int
 	// ResultCount is the number of memories returned to the caller.
 	ResultCount int
+	// PlannerUsed reports whether an LLM retrieval planner was enabled.
+	PlannerUsed bool
+	// Degradation explains why heuristic planning replaced the LLM planner.
+	Degradation string
 	// ElapsedMS is the end-to-end retrieval duration in milliseconds.
 	ElapsedMS int64
-}
-
-// MemoryWindowEnqueuedPayload describes one article being queued into an
-// extraction window.
-type MemoryWindowEnqueuedPayload struct {
-	// ArticleID identifies the newly queued article.
-	ArticleID string
-	// WindowArticleCount is the number of articles currently buffered.
-	WindowArticleCount int
-	// WindowRuneCount is the total buffered article text size in runes.
-	WindowRuneCount int
-}
-
-// MemoryExtractStartedPayload describes one memory extraction request.
-type MemoryExtractStartedPayload struct {
-	// SourceKind identifies the source material being analyzed.
-	SourceKind string
-	// SegmentCount is the number of input segments considered.
-	SegmentCount int
-	// InputRunes is the serialized prompt input size in runes.
-	InputRunes int
-	// ExistingMemoryCount is the number of retrieved existing memories provided
-	// to the extractor for comparison.
-	ExistingMemoryCount int
+	// Error is the wrapped retrieval failure when Outcome is failed.
+	Error string
 }
 
 // MemoryExtractCompletedPayload describes the outcome of one extraction pass.
 type MemoryExtractCompletedPayload struct {
+	// Outcome is completed or failed.
+	Outcome string
+	// Reason describes why the source window was flushed.
+	Reason string
+	// ArticleCount is the number of buffered articles processed.
+	ArticleCount int
+	// InputRunes is the serialized conversation size processed by formation.
+	InputRunes int
+	// BufferedMS is the time from the first buffered article until processing.
+	BufferedMS int64
 	// ExtractedCount is the number of candidate memories produced.
 	ExtractedCount int
 	// AppliedCount is the number of candidate actions successfully applied.
@@ -90,28 +64,10 @@ type MemoryExtractCompletedPayload struct {
 	FailedCount int
 	// Consolidated reports whether post-processing consolidated the candidates.
 	Consolidated bool
-}
-
-// MemoryWindowFlushedPayload describes one window flush event.
-type MemoryWindowFlushedPayload struct {
-	// Reason describes why the window was flushed (quiet, max_count, max_runes, max_age, scope_drain, shutdown).
-	Reason string
-	// ArticleCount is the number of articles in the flushed window.
-	ArticleCount int
-	// RuneCount is the total buffered article text size in runes.
-	RuneCount int
-	// BufferedMS is the elapsed time from the first buffered receive until the
-	// window started processing.
-	BufferedMS int64
-}
-
-// MemoryWindowSkippedPayload describes one flushed window that was skipped
-// before extraction.
-type MemoryWindowSkippedPayload struct {
-	// Reason identifies why the flushed window was skipped.
-	Reason string
-	// ArticleCount is the number of articles in the skipped window.
-	ArticleCount int
+	// ElapsedMS is the end-to-end formation duration in milliseconds.
+	ElapsedMS int64
+	// Error is the wrapped formation failure when Outcome is failed.
+	Error string
 }
 
 // MemoryWindowProcessingFailedPayload describes one background window
@@ -180,24 +136,6 @@ type MemoryConsolidationCycleCompletedPayload struct {
 	ElapsedMS int64
 }
 
-// MemoryStoreUpsertedPayload describes one memory store write.
-type MemoryStoreUpsertedPayload struct {
-	// Store identifies the memory store implementation.
-	Store string
-	// UpsertedCount is the number of records written.
-	UpsertedCount int
-}
-
-// MemoryStoreOperationPayload describes one generic memory store operation.
-type MemoryStoreOperationPayload struct {
-	// Store identifies the memory store implementation.
-	Store string
-	// Operation is the stable store operation name.
-	Operation string
-	// AffectedCount reports how many records were affected.
-	AffectedCount int
-}
-
 // EmbeddingCallStartedPayload describes one embedding provider call start.
 type EmbeddingCallStartedPayload struct {
 	// Provider identifies the embedding provider.
@@ -208,6 +146,8 @@ type EmbeddingCallStartedPayload struct {
 	TaskType string
 	// InputCount is the number of input texts submitted.
 	InputCount int
+	// Attempt is the one-based application-level attempt number.
+	Attempt int
 }
 
 // EmbeddingCallCompletedPayload describes one successful embedding call.
@@ -224,6 +164,8 @@ type EmbeddingCallCompletedPayload struct {
 	Dimensions int
 	// ElapsedMS is the provider call duration in milliseconds.
 	ElapsedMS int64
+	// Attempt is the one-based application-level attempt number.
+	Attempt int
 }
 
 // EmbeddingCallFailedPayload describes one failed embedding call.
@@ -236,6 +178,10 @@ type EmbeddingCallFailedPayload struct {
 	TaskType string
 	// ElapsedMS is the provider call duration in milliseconds.
 	ElapsedMS int64
+	// Attempt is the one-based application-level attempt number.
+	Attempt int
+	// FailureClass is the stable coarse provider failure category.
+	FailureClass string
 	// Error is the wrapped provider failure message.
 	Error string
 }
@@ -250,6 +196,8 @@ type LLMCallStartedPayload struct {
 	MessageCount int
 	// ToolCount is the number of tool definitions attached to the request.
 	ToolCount int
+	// Attempt is the one-based application-level attempt number.
+	Attempt int
 }
 
 // LLMCallCompletedPayload describes one successful LLM generation request.
@@ -262,6 +210,8 @@ type LLMCallCompletedPayload struct {
 	ElapsedMS int64
 	// OutputMessageCount is the number of output messages or choices returned.
 	OutputMessageCount int
+	// Attempt is the one-based application-level attempt number.
+	Attempt int
 }
 
 // LLMCallFailedPayload describes one failed LLM generation request.
@@ -272,6 +222,10 @@ type LLMCallFailedPayload struct {
 	Model string
 	// ElapsedMS is the provider call duration in milliseconds.
 	ElapsedMS int64
+	// Attempt is the one-based application-level attempt number.
+	Attempt int
+	// FailureClass is the stable coarse provider failure category.
+	FailureClass string
 	// Error is the wrapped provider failure message.
 	Error string
 }

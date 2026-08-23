@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -17,8 +16,6 @@ import (
 
 	"ex-otogi/pkg/llm"
 	llmconfig "ex-otogi/pkg/llm/config"
-	"ex-otogi/pkg/llm/providers/gemini"
-	"ex-otogi/pkg/llm/providers/openai"
 )
 
 const llmchatHandlerTimeoutGrace = 5 * time.Second
@@ -26,12 +23,6 @@ const llmchatHandlerTimeoutGrace = 5 * time.Second
 const placeholderFailureMessage = "Sorry, I couldn't generate a response right now."
 
 const serviceLogger = "logger"
-
-// fileModuleConfig is the JSON layout for llmchat module configuration.
-type fileModuleConfig struct {
-	// ConfigFile is the path to the LLM configuration file.
-	ConfigFile string `json:"config_file"`
-}
 
 // Module provides keyword-triggered LLM chat behavior.
 type Module struct {
@@ -44,7 +35,6 @@ type Module struct {
 	mediaDownloader platform.MediaDownloader
 
 	providerRegistry  ai.LLMProviderRegistry
-	embeddingRegistry ai.EmbeddingProviderRegistry
 	semanticRetriever ai.SemanticRetriever
 	logger            *slog.Logger
 	recorder          panel.Recorder
@@ -119,9 +109,17 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 		return fmt.Errorf("llmchat resolve recorder: %w", err)
 	}
 
-	cfg, registry, embeddingRegistry, err := m.loadConfig(ctx, runtime)
+	llmCfg, err := core.ResolveAs[llmconfig.Config](runtime.Services(), llm.ServiceRuntimeConfig)
 	if err != nil {
-		return fmt.Errorf("llmchat load config: %w", err)
+		return fmt.Errorf("llmchat resolve runtime config: %w", err)
+	}
+	cfg := toLLMChatConfig(llmCfg)
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("llmchat validate config: %w", err)
+	}
+	registry, err := core.ResolveAs[ai.LLMProviderRegistry](runtime.Services(), ai.ServiceLLMProviderRegistry)
+	if err != nil {
+		return fmt.Errorf("llmchat resolve provider registry: %w", err)
 	}
 	m.cfg = cfg
 
@@ -196,7 +194,6 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	m.parser = markdownParser
 	m.mediaDownloader = mediaDownloader
 	m.providerRegistry = registry
-	m.embeddingRegistry = embeddingRegistry
 	m.providers = resolvedProviders
 
 	handlerTimeout := m.cfg.RequestTimeout + llmchatHandlerTimeoutGrace
@@ -209,182 +206,33 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 	}, m.handleArticle); err != nil {
 		return fmt.Errorf("llmchat subscribe: %w", err)
 	}
-	if err := runtime.Services().Register(ai.ServiceLLMProviderRegistry, registry); err != nil {
-		return fmt.Errorf("llmchat register provider registry service: %w", err)
-	}
-	if err := runtime.Services().Register(ai.ServiceEmbeddingProviderRegistry, embeddingRegistry); err != nil {
-		return fmt.Errorf("llmchat register embedding provider registry service: %w", err)
-	}
-
 	retriever, err := core.ResolveAs[ai.SemanticRetriever](runtime.Services(), ai.ServiceSemanticRetriever)
-	switch {
-	case err == nil:
+	if semanticRetrievalEnabled(m.cfg.Agents) {
+		if err != nil {
+			return fmt.Errorf("llmchat resolve required semantic retriever: %w", err)
+		}
 		m.semanticRetriever = retriever
-	case errors.Is(err, core.ErrServiceNotFound):
-		m.semanticRetriever = nil
-	default:
-		return fmt.Errorf("llmchat resolve semantic retriever: %w", err)
+	} else {
+		switch {
+		case err == nil:
+			m.semanticRetriever = retriever
+		case errors.Is(err, core.ErrServiceNotFound):
+			m.semanticRetriever = nil
+		default:
+			return fmt.Errorf("llmchat resolve semantic retriever: %w", err)
+		}
 	}
 
 	return nil
 }
 
-// loadConfig reads the module config from the registry and loads the LLM config file.
-func (m *Module) loadConfig(
-	ctx context.Context,
-	runtime core.ModuleRuntime,
-) (Config, ai.LLMProviderRegistry, ai.EmbeddingProviderRegistry, error) {
-	moduleCfg, err := core.ParseModuleConfig[fileModuleConfig](runtime.Config(), "llmchat")
-	if err != nil {
-		return Config{}, nil, nil, fmt.Errorf("parse module config: %w", err)
-	}
-
-	configFile := strings.TrimSpace(moduleCfg.ConfigFile)
-	if envPath := strings.TrimSpace(os.Getenv("OTOGI_LLM_CONFIG_FILE")); envPath != "" {
-		configFile = envPath
-	}
-	if configFile == "" {
-		return Config{}, nil, nil, fmt.Errorf("config_file is required")
-	}
-
-	llmCfg, err := llmconfig.LoadFile(configFile)
-	if err != nil {
-		return Config{}, nil, nil, fmt.Errorf("load llm config file %s: %w", configFile, err)
-	}
-
-	registry, err := buildProviderRegistry(ctx, llmCfg, m.logger)
-	if err != nil {
-		return Config{}, nil, nil, err
-	}
-	embeddingRegistry, err := buildEmbeddingProviderRegistry(ctx, llmCfg, m.logger)
-	if err != nil {
-		return Config{}, nil, nil, err
-	}
-
-	chatCfg := toLLMChatConfig(llmCfg)
-	if err := chatCfg.Validate(); err != nil {
-		return Config{}, nil, nil, fmt.Errorf("validate config: %w", err)
-	}
-
-	return chatCfg, registry, embeddingRegistry, nil
-}
-
-// buildProviderRegistry builds the provider registry from one runtime LLM config file.
-func buildProviderRegistry(
-	ctx context.Context,
-	cfg llmconfig.Config,
-	logger *slog.Logger,
-) (ai.LLMProviderRegistry, error) {
-	providers := make(map[string]ai.LLMProvider, len(cfg.Providers))
-	for profileKey, profile := range cfg.Providers {
-		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
-		switch providerType {
-		case "openai":
-			openAICfg := openai.ProviderConfig{
-				APIKey:  profile.APIKey,
-				BaseURL: profile.BaseURL,
-			}
-			if profile.OpenAI != nil {
-				openAICfg.Organization = profile.OpenAI.Organization
-				openAICfg.Project = profile.OpenAI.Project
-				openAICfg.MaxRetries = cloneOptionalInt(profile.OpenAI.MaxRetries)
-			}
-
-			provider, err := openai.New(openAICfg)
-			if err != nil {
-				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
-			}
-			providers[profileKey] = provider
-		case "gemini":
-			geminiCfg := gemini.ProviderConfig{
-				APIKey:  profile.APIKey,
-				BaseURL: profile.BaseURL,
-				Logger:  logger,
-			}
-			if profile.Gemini != nil {
-				geminiCfg.APIVersion = profile.Gemini.APIVersion
-				geminiCfg.GoogleSearch = cloneOptionalBool(profile.Gemini.RequestDefaults.GoogleSearch)
-				geminiCfg.URLContext = cloneOptionalBool(profile.Gemini.RequestDefaults.URLContext)
-				geminiCfg.ThinkingBudget = cloneOptionalInt(profile.Gemini.RequestDefaults.ThinkingBudget)
-				geminiCfg.IncludeThoughts = cloneOptionalBool(profile.Gemini.RequestDefaults.IncludeThoughts)
-				geminiCfg.ThinkingLevel = profile.Gemini.RequestDefaults.ThinkingLevel
-				geminiCfg.ResponseMIMEType = profile.Gemini.RequestDefaults.ResponseMIMEType
-				geminiCfg.SafetyFilterOff = cloneOptionalBool(profile.Gemini.RequestDefaults.SafetyFilterOff)
-			}
-
-			provider, err := gemini.New(ctx, geminiCfg)
-			if err != nil {
-				return nil, fmt.Errorf("provider profile %s: %w", profileKey, err)
-			}
-			providers[profileKey] = provider
-		default:
-			return nil, fmt.Errorf("provider profile %s: unsupported type %q", profileKey, profile.Type)
+func semanticRetrievalEnabled(agents []Agent) bool {
+	for _, agent := range agents {
+		if agent.MemoryEnabled {
+			return true
 		}
 	}
-
-	registry, err := llm.NewRegistry(providers)
-	if err != nil {
-		return nil, fmt.Errorf("new llm provider registry: %w", err)
-	}
-
-	return registry, nil
-}
-
-func buildEmbeddingProviderRegistry(
-	ctx context.Context,
-	cfg llmconfig.Config,
-	logger *slog.Logger,
-) (ai.EmbeddingProviderRegistry, error) {
-	providers := make(map[string]ai.EmbeddingProvider, len(cfg.Providers))
-	for profileKey, profile := range cfg.Providers {
-		providerType := strings.ToLower(strings.TrimSpace(profile.Type))
-		switch providerType {
-		case "openai":
-			embeddingCfg := openai.EmbeddingProviderConfig{
-				APIKey:            profile.APIKey,
-				BaseURL:           profile.BaseURL,
-				DefaultModel:      profile.EmbeddingModel,
-				DefaultDimensions: profile.EmbeddingDimensions,
-			}
-			if profile.OpenAI != nil {
-				embeddingCfg.Organization = profile.OpenAI.Organization
-				embeddingCfg.Project = profile.OpenAI.Project
-				embeddingCfg.MaxRetries = cloneOptionalInt(profile.OpenAI.MaxRetries)
-			}
-
-			provider, err := openai.NewEmbeddingProvider(embeddingCfg)
-			if err != nil {
-				return nil, fmt.Errorf("embedding provider profile %s: %w", profileKey, err)
-			}
-			providers[profileKey] = provider
-		case "gemini":
-			embeddingCfg := gemini.EmbeddingProviderConfig{
-				APIKey:            profile.APIKey,
-				BaseURL:           profile.BaseURL,
-				DefaultModel:      profile.EmbeddingModel,
-				DefaultDimensions: profile.EmbeddingDimensions,
-				Logger:            logger,
-			}
-			if profile.Gemini != nil {
-				embeddingCfg.APIVersion = profile.Gemini.APIVersion
-			}
-
-			provider, err := gemini.NewEmbeddingProvider(ctx, embeddingCfg)
-			if err != nil {
-				return nil, fmt.Errorf("embedding provider profile %s: %w", profileKey, err)
-			}
-			providers[profileKey] = provider
-		default:
-			return nil, fmt.Errorf("embedding provider profile %s: unsupported type %q", profileKey, profile.Type)
-		}
-	}
-
-	registry, err := llm.NewEmbeddingRegistry(providers)
-	if err != nil {
-		return nil, fmt.Errorf("new embedding provider registry: %w", err)
-	}
-
-	return registry, nil
+	return false
 }
 
 func toLLMChatConfig(cfg llmconfig.Config) Config {
@@ -395,7 +243,6 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 			Aliases:              cloneStringSlice(agent.Aliases),
 			Description:          agent.Description,
 			Provider:             agent.Provider,
-			EmbeddingProvider:    agent.EmbeddingProvider,
 			Model:                agent.Model,
 			SystemPromptTemplate: agent.SystemPromptTemplate,
 			TemplateVariables:    cloneStringMap(agent.TemplateVariables),
@@ -411,7 +258,7 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 				MaxMessageRunes:        agent.ContextPolicy.MaxMessageRunes,
 				QuoteReplyDepth:        agent.ContextPolicy.QuoteReplyDepth,
 			},
-			SemanticMemory: toSemanticMemoryPolicy(agent.SemanticMemory),
+			MemoryEnabled: agent.MemoryEnabled,
 			ImageInputs: ImageInputPolicy{
 				Enabled:       agent.ImageInputs.Enabled,
 				MaxImages:     agent.ImageInputs.MaxImages,
@@ -427,21 +274,6 @@ func toLLMChatConfig(cfg llmconfig.Config) Config {
 		RequestTimeout: cfg.RequestTimeout,
 		Agents:         agents,
 	}
-}
-
-func toSemanticMemoryPolicy(policy *llmconfig.SemanticMemoryPolicy) *SemanticMemoryPolicy {
-	if policy == nil {
-		return nil
-	}
-
-	return cloneSemanticMemoryPolicy(resolveSemanticMemoryPolicy(&SemanticMemoryPolicy{
-		Enabled: policy.Enabled,
-		SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
-			MaxRetrievedMemories: policy.MaxRetrievedMemories,
-			MinSimilarity:        policy.MinMemorySimilarity,
-			MaxMemoryRunes:       policy.MaxMemoryRunes,
-		},
-	}))
 }
 
 func toSubAgentConfigs(configs []llmconfig.SubAgentConfig) []SubAgentConfig {
@@ -468,22 +300,6 @@ func toSubAgentConfigs(configs []llmconfig.SubAgentConfig) []SubAgentConfig {
 	return result
 }
 
-func cloneOptionalInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-func cloneOptionalBool(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
 // OnStart starts the module lifecycle.
 func (m *Module) OnStart(_ context.Context) error {
 	return nil
@@ -494,7 +310,7 @@ func (m *Module) OnShutdown(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error {
+func (m *Module) handleArticle(ctx context.Context, event *platform.Event) (handlerErr error) {
 	if m.recorder != nil {
 		ctx = panel.WithRecorder(ctx, m.recorder)
 	}
@@ -524,6 +340,10 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 	if !matched {
 		return nil
 	}
+	startedAt := m.now()
+	ctx = m.beginChatRequest(ctx, event, agent)
+	ctx = withChatLifecycle(ctx, &chatLifecycle{state: chatStateAccepted, m: m, agent: agent})
+	defer func() { m.finishChatRequest(ctx, event, agent, startedAt, handlerErr) }()
 
 	provider, exists := m.providers[strings.TrimSpace(agent.Provider)]
 	if !exists || provider == nil {
@@ -542,11 +362,13 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 		ReplyToMessageID: event.Article.ID,
 	})
 	if err != nil {
-		return fmt.Errorf("llmchat send placeholder for agent %s: %w", agent.Name, err)
+		deliveryErr := fmt.Errorf("llmchat send placeholder for agent %s: %w", agent.Name, err)
+		return ai.NewLLMFailure(ai.LLMFailureDelivery, false, 0, deliveryErr)
 	}
 	if err := validateHandlerDeadlineBudget(ctx, agent.RequestTimeout); err != nil {
 		preflightErr := fmt.Errorf("llmchat preflight for agent %s: %w", agent.Name, err)
-		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, preflightErr)
+		timeoutErr := ai.NewLLMFailure(ai.LLMFailureTimeout, false, 0, preflightErr)
+		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, timeoutErr)
 	}
 
 	reqCtx := ctx
@@ -569,6 +391,7 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 		buildErr := fmt.Errorf("llmchat build request for agent %s: %w", agent.Name, err)
 		return m.finalizePlaceholderFailure(ctx, target, placeholder.ID, buildErr)
 	}
+	transitionChatState(ctx, chatStateContextReady)
 
 	if err := m.streamProviderReplyWithTools(reqCtx, ctx, target, placeholder.ID, provider, req, toolRegistry); err != nil {
 		streamErr := fmt.Errorf("llmchat stream response for agent %s: %w", agent.Name, err)
@@ -644,6 +467,10 @@ func (m *Module) finalizePlaceholderFailure(
 	if handlerErr == nil {
 		return nil
 	}
+	var streamErr *streamResponseError
+	if errors.As(handlerErr, &streamErr) && streamErr.answerDelivered {
+		return handlerErr
+	}
 	if strings.TrimSpace(placeholderMessageID) == "" {
 		return handlerErr
 	}
@@ -651,22 +478,64 @@ func (m *Module) finalizePlaceholderFailure(
 		return handlerErr
 	}
 
+	class := ai.ClassifyLLMFailure(handlerErr)
+	if class == ai.LLMFailureDelivery {
+		return handlerErr
+	}
+	transitionChatState(ctx, chatStateDelivering)
 	editErr := m.retryEditMessage(ctx, platform.EditMessageRequest{
 		Target:    target,
 		MessageID: placeholderMessageID,
-		Text:      placeholderFailureMessage,
+		Text:      chatFailureMessage(ctx, class),
 	})
 	if editErr == nil {
 		return handlerErr
 	}
 
-	return fmt.Errorf(
+	deliveryErr := fmt.Errorf(
 		"llmchat finalize placeholder failure: %w",
 		errors.Join(
 			handlerErr,
 			fmt.Errorf("llmchat finalize placeholder failure %s: %w", placeholderMessageID, editErr),
 		),
 	)
+	return ai.NewLLMFailure(ai.LLMFailureDelivery, false, 0, deliveryErr)
+}
+
+func chatFailureMessage(ctx context.Context, class ai.LLMFailureClass) string {
+	message := placeholderFailureMessage
+	switch class {
+	case ai.LLMFailureInvalidRequest:
+		message = "I couldn't process that request. Please revise it and try again."
+	case ai.LLMFailureAuthentication:
+		message = "The AI service is not configured correctly right now."
+	case ai.LLMFailureRateLimited:
+		message = "The AI service is busy right now. Please try again shortly."
+	case ai.LLMFailureProviderUnavailable:
+		message = "The AI service is temporarily unavailable. Please try again shortly."
+	case ai.LLMFailureTimeout:
+		message = "The request took too long to complete. Please try again."
+	case ai.LLMFailureCanceled:
+		message = "The request was canceled before it completed."
+	case ai.LLMFailureSafetyRefusal:
+		message = "I can't help with that request because of the AI service's safety rules."
+	case ai.LLMFailureEmptyResponse:
+		message = "The AI service returned no answer. Please try again."
+	case ai.LLMFailureTool:
+		message = "A required tool could not complete the request. Please try again."
+	case ai.LLMFailureDelivery:
+		message = "The response could not be delivered. Please try again."
+	case ai.LLMFailureInternal, "":
+		message = placeholderFailureMessage
+	}
+	if trace, ok := panel.TraceFromContext(ctx); ok && strings.TrimSpace(trace.TraceID) != "" {
+		traceID := strings.TrimSpace(trace.TraceID)
+		if len(traceID) > 8 {
+			traceID = traceID[len(traceID)-8:]
+		}
+		message += " Reference: " + traceID
+	}
+	return message
 }
 
 func (m *Module) matchTriggeredAgent(text string) (agent Agent, prompt string, matched bool) {

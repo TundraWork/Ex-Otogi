@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"slices"
 	"time"
 
 	"ex-otogi/internal/sqlc/management"
@@ -18,7 +19,10 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-const sqliteDefaultEventLimit = 100
+const (
+	sqliteDefaultEventLimit = 100
+	managementSchemaVersion = 1
+)
 
 // SQLiteStore persists management observability data in a SQLite database. It
 // implements both panel.Recorder and panel.Query without retaining data
@@ -40,6 +44,19 @@ func NewSQLiteStore(ctx context.Context, dbPath string) (*SQLiteStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("ping sqlite %s: %w", dbPath, err)
 	}
+	var hasEvents, hasSchemaMarker int
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events')").Scan(&hasEvents); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("inspect management schema %s: %w", dbPath, err)
+	}
+	if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'management_meta')").Scan(&hasSchemaMarker); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("inspect management schema marker %s: %w", dbPath, err)
+	}
+	if hasEvents != 0 && hasSchemaMarker == 0 {
+		db.Close()
+		return nil, fmt.Errorf("validate management schema: incompatible telemetry database; stop the bot and reset %s", dbPath)
+	}
 
 	migrationsDir, err := fs.Sub(MigrationsFS, "migrations")
 	if err != nil {
@@ -54,6 +71,15 @@ func NewSQLiteStore(ctx context.Context, dbPath string) (*SQLiteStore, error) {
 	if _, err := provider.Up(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+	var schemaVersion int
+	if err := db.QueryRowContext(ctx, "SELECT schema_version FROM management_meta LIMIT 1").Scan(&schemaVersion); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("validate management schema: incompatible telemetry database; stop the bot and reset %s: %w", dbPath, err)
+	}
+	if schemaVersion != managementSchemaVersion {
+		db.Close()
+		return nil, fmt.Errorf("validate management schema: version %d, want %d; stop the bot and reset %s", schemaVersion, managementSchemaVersion, dbPath)
 	}
 
 	return &SQLiteStore{
@@ -100,11 +126,6 @@ func (s *SQLiteStore) RecordEvent(ctx context.Context, event panel.Event) (panel
 		parentEventID = sql.NullInt64{Int64: *record.ParentEventID, Valid: true}
 	}
 
-	payloadType := record.PayloadType
-	if payloadType == "" {
-		payloadType = fmt.Sprintf("%T", record.Payload)
-	}
-
 	inserted, err := s.queries.InsertEvent(ctx, managementsql.InsertEventParams{
 		OccurredAt:     record.OccurredAt,
 		TraceID:        record.TraceID,
@@ -120,7 +141,6 @@ func (s *SQLiteStore) RecordEvent(ctx context.Context, event panel.Event) (panel
 		ActorID:        record.ActorID,
 		Subject:        record.Subject,
 		Description:    record.Description,
-		PayloadType:    payloadType,
 		PayloadJson:    string(payloadJSON),
 	})
 	if err != nil {
@@ -188,18 +208,12 @@ func (s *SQLiteStore) UpsertSnapshot(ctx context.Context, snapshot panel.Snapsho
 		return panel.Snapshot{}, fmt.Errorf("upsert snapshot %s/%s: marshal payload: %w", record.Namespace, record.Key, err)
 	}
 
-	payloadType := record.PayloadType
-	if payloadType == "" {
-		payloadType = fmt.Sprintf("%T", record.Payload)
-	}
-
 	_, err = s.queries.UpsertSnapshot(ctx, managementsql.UpsertSnapshotParams{
 		Namespace:   record.Namespace,
 		Key:         record.Key,
 		Module:      record.Module,
 		UpdatedAt:   record.UpdatedAt,
 		Summary:     record.Summary,
-		PayloadType: payloadType,
 		PayloadJson: string(payloadJSON),
 	})
 	if err != nil {
@@ -209,7 +223,8 @@ func (s *SQLiteStore) UpsertSnapshot(ctx context.Context, snapshot panel.Snapsho
 	return record, nil
 }
 
-// ListEvents returns retained events newer than the requested cursor.
+// ListEvents returns one newest-first page. With no cursor it selects the
+// latest events; AfterID polls newer events and BeforeID pages into history.
 func (s *SQLiteStore) ListEvents(ctx context.Context, request panel.EventQuery) (panel.EventPage, error) {
 	if err := ctx.Err(); err != nil {
 		return panel.EventPage{}, fmt.Errorf("list events: %w", err)
@@ -217,29 +232,20 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, request panel.EventQuery) 
 	if request.AfterID < 0 {
 		return panel.EventPage{}, fmt.Errorf("list events: after_id %d: %w", request.AfterID, panel.ErrInvalidQuery)
 	}
+	if request.BeforeID < 0 {
+		return panel.EventPage{}, fmt.Errorf("list events: before_id %d: %w", request.BeforeID, panel.ErrInvalidQuery)
+	}
+	if request.AfterID > 0 && request.BeforeID > 0 {
+		return panel.EventPage{}, fmt.Errorf("list events: after_id and before_id are mutually exclusive: %w", panel.ErrInvalidQuery)
+	}
 
 	limit := int64(request.Limit)
 	if limit <= 0 {
 		limit = sqliteDefaultEventLimit
 	}
-	// Fetch one extra row to detect HasMore.
-	rows, err := s.queries.ListEvents(ctx, managementsql.ListEventsParams{
-		Category:       string(request.Category),
-		Kind:           request.Kind,
-		TraceID:        request.TraceID,
-		ConversationID: request.ConversationID,
-		Module:         request.Module,
-		Level:          string(request.Level),
-		AfterID:        request.AfterID,
-		Limit:          limit + 1,
-	})
+	rows, hasOlder, hasNewer, err := s.listEventRows(ctx, request, limit)
 	if err != nil {
 		return panel.EventPage{}, fmt.Errorf("list events: %w", err)
-	}
-
-	hasMore := len(rows) > int(limit)
-	if hasMore {
-		rows = rows[:limit]
 	}
 
 	items := make([]panel.Event, len(rows))
@@ -259,18 +265,75 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, request panel.EventQuery) 
 		return panel.EventPage{}, fmt.Errorf("list events: max id: %w", err)
 	}
 
-	lastID := windowEndID
+	firstID := int64(0)
+	lastID := request.AfterID
 	if len(items) > 0 {
-		lastID = items[len(items)-1].ID
+		lastID = items[0].ID
+		firstID = items[len(items)-1].ID
 	}
 
 	return panel.EventPage{
 		Items:         items,
-		LastID:        lastID,
+		OldestID:      firstID,
+		NewestID:      lastID,
 		WindowStartID: windowStartID,
 		WindowEndID:   windowEndID,
-		HasMore:       hasMore,
+		HasOlder:      hasOlder,
+		HasNewer:      hasNewer,
 	}, nil
+}
+
+func (s *SQLiteStore) listEventRows(
+	ctx context.Context,
+	request panel.EventQuery,
+	limit int64,
+) ([]managementsql.Event, bool, bool, error) {
+	queryLimit := limit + 1
+	switch {
+	case request.AfterID > 0:
+		rows, err := s.queries.ListNewerEvents(ctx, managementsql.ListNewerEventsParams{
+			Category: string(request.Category), Kind: request.Kind, TraceID: request.TraceID,
+			ConversationID: request.ConversationID, Module: request.Module, Level: string(request.Level),
+			AfterID: request.AfterID, Limit: queryLimit,
+		})
+		if err != nil {
+			return nil, false, false, fmt.Errorf("list newer events after %d: %w", request.AfterID, err)
+		}
+		hasNewer := len(rows) > int(limit)
+		if hasNewer {
+			rows = rows[:limit]
+		}
+		slices.Reverse(rows)
+		return rows, false, hasNewer, nil
+	case request.BeforeID > 0:
+		rows, err := s.queries.ListOlderEvents(ctx, managementsql.ListOlderEventsParams{
+			Category: string(request.Category), Kind: request.Kind, TraceID: request.TraceID,
+			ConversationID: request.ConversationID, Module: request.Module, Level: string(request.Level),
+			BeforeID: request.BeforeID, Limit: queryLimit,
+		})
+		if err != nil {
+			return nil, false, false, fmt.Errorf("list older events before %d: %w", request.BeforeID, err)
+		}
+		hasOlder := len(rows) > int(limit)
+		if hasOlder {
+			rows = rows[:limit]
+		}
+		return rows, hasOlder, false, nil
+	default:
+		rows, err := s.queries.ListLatestEvents(ctx, managementsql.ListLatestEventsParams{
+			Category: string(request.Category), Kind: request.Kind, TraceID: request.TraceID,
+			ConversationID: request.ConversationID, Module: request.Module, Level: string(request.Level),
+			Limit: queryLimit,
+		})
+		if err != nil {
+			return nil, false, false, fmt.Errorf("list latest events: %w", err)
+		}
+		hasOlder := len(rows) > int(limit)
+		if hasOlder {
+			rows = rows[:limit]
+		}
+		return rows, hasOlder, false, nil
+	}
 }
 
 // GetEvent returns one retained event by ID.
@@ -420,17 +483,12 @@ func (s *SQLiteStore) GetOverview(ctx context.Context) (panel.Overview, error) {
 	}, nil
 }
 
-// scanEvent converts one sqlc Event row into a panel.Event, including payload
-// deserialization and artifact ID reconstruction.
+// scanEvent converts one sqlc Event row into a panel.Event, including its raw
+// JSON payload and artifact ID reconstruction.
 func (s *SQLiteStore) scanEvent(ctx context.Context, row managementsql.Event) (panel.Event, error) {
 	var parentEventID *int64
 	if row.ParentEventID.Valid {
 		parentEventID = &row.ParentEventID.Int64
-	}
-
-	payload, err := deserializePayload(row.PayloadType, row.PayloadJson)
-	if err != nil {
-		payload = json.RawMessage(row.PayloadJson)
 	}
 
 	// Reconstruct ArtifactIDs from the artifacts table.
@@ -455,28 +513,20 @@ func (s *SQLiteStore) scanEvent(ctx context.Context, row managementsql.Event) (p
 		ActorID:        row.ActorID,
 		Subject:        row.Subject,
 		Description:    row.Description,
-		PayloadType:    row.PayloadType,
-		Payload:        payload,
+		Payload:        decodeJSONPayload(row.PayloadJson),
 		ArtifactIDs:    artifactIDs,
 	}, nil
 }
 
-// scanSnapshot converts one sqlc Snapshot row into a panel.Snapshot including
-// payload deserialization.
+// scanSnapshot converts one sqlc Snapshot row into a panel.Snapshot.
 func scanSnapshot(row managementsql.Snapshot) (panel.Snapshot, error) {
-	payload, err := deserializePayload(row.PayloadType, row.PayloadJson)
-	if err != nil {
-		payload = json.RawMessage(row.PayloadJson)
-	}
-
 	return panel.Snapshot{
-		Namespace:   row.Namespace,
-		Key:         row.Key,
-		Module:      row.Module,
-		UpdatedAt:   row.UpdatedAt,
-		Summary:     row.Summary,
-		PayloadType: row.PayloadType,
-		Payload:     payload,
+		Namespace: row.Namespace,
+		Key:       row.Key,
+		Module:    row.Module,
+		UpdatedAt: row.UpdatedAt,
+		Summary:   row.Summary,
+		Payload:   decodeJSONPayload(row.PayloadJson),
 	}, nil
 }
 
@@ -512,151 +562,13 @@ func (s *SQLiteStore) maxEventID(ctx context.Context) (int64, error) {
 	}
 }
 
-// deserializePayload reconstructs a typed payload struct from the stored type
-// name and JSON bytes. Unknown types fall back to json.RawMessage.
-func deserializePayload(payloadType string, payloadJSON string) (any, error) {
+func decodeJSONPayload(payloadJSON string) any {
 	if payloadJSON == "" || payloadJSON == "{}" {
-		return nil, nil
-	}
-
-	target := newPayloadByType(payloadType)
-	if target == nil {
-		return json.RawMessage(payloadJSON), nil
-	}
-
-	if err := json.Unmarshal([]byte(payloadJSON), target); err != nil {
-		return nil, fmt.Errorf("deserialize payload %s: %w", payloadType, err)
-	}
-
-	return derefPayload(target), nil
-}
-
-// newPayloadByType returns a pointer to a new zero-value payload struct
-// matching the given type name, or nil if the type is unknown.
-func newPayloadByType(payloadType string) any {
-	switch payloadType {
-	case "PlatformEventReceivedPayload":
-		return new(panel.PlatformEventReceivedPayload)
-	case "PlatformEventPublishedPayload":
-		return new(panel.PlatformEventPublishedPayload)
-	case "MemoryRetrieveStartedPayload":
-		return new(panel.MemoryRetrieveStartedPayload)
-	case "MemoryRetrievePlanPayload":
-		return new(panel.MemoryRetrievePlanPayload)
-	case "MemoryRetrieveSearchedPayload":
-		return new(panel.MemoryRetrieveSearchedPayload)
-	case "MemoryRetrieveCompletedPayload":
-		return new(panel.MemoryRetrieveCompletedPayload)
-	case "MemoryWindowEnqueuedPayload":
-		return new(panel.MemoryWindowEnqueuedPayload)
-	case "MemoryExtractStartedPayload":
-		return new(panel.MemoryExtractStartedPayload)
-	case "MemoryExtractCompletedPayload":
-		return new(panel.MemoryExtractCompletedPayload)
-	case "MemoryWindowFlushedPayload":
-		return new(panel.MemoryWindowFlushedPayload)
-	case "MemoryWindowSkippedPayload":
-		return new(panel.MemoryWindowSkippedPayload)
-	case "MemoryWindowProcessingFailedPayload":
-		return new(panel.MemoryWindowProcessingFailedPayload)
-	case "MemoryExtractParseFailedPayload":
-		return new(panel.MemoryExtractParseFailedPayload)
-	case "MemoryExtractApplyFailedPayload":
-		return new(panel.MemoryExtractApplyFailedPayload)
-	case "MemoryConsolidationPrunedPayload":
-		return new(panel.MemoryConsolidationPrunedPayload)
-	case "MemoryConsolidationCappedPayload":
-		return new(panel.MemoryConsolidationCappedPayload)
-	case "MemoryConsolidationCycleCompletedPayload":
-		return new(panel.MemoryConsolidationCycleCompletedPayload)
-	case "MemoryStoreUpsertedPayload":
-		return new(panel.MemoryStoreUpsertedPayload)
-	case "MemoryStoreOperationPayload":
-		return new(panel.MemoryStoreOperationPayload)
-	case "EmbeddingCallStartedPayload":
-		return new(panel.EmbeddingCallStartedPayload)
-	case "EmbeddingCallCompletedPayload":
-		return new(panel.EmbeddingCallCompletedPayload)
-	case "EmbeddingCallFailedPayload":
-		return new(panel.EmbeddingCallFailedPayload)
-	case "LLMCallStartedPayload":
-		return new(panel.LLMCallStartedPayload)
-	case "LLMCallCompletedPayload":
-		return new(panel.LLMCallCompletedPayload)
-	case "LLMCallFailedPayload":
-		return new(panel.LLMCallFailedPayload)
-	case "LLMToolDetectedPayload":
-		return new(panel.LLMToolDetectedPayload)
-	case "LLMToolExecutedPayload":
-		return new(panel.LLMToolExecutedPayload)
-	case "RuntimeAsyncErrorPayload":
-		return new(panel.RuntimeAsyncErrorPayload)
-	default:
 		return nil
 	}
-}
-
-// derefPayload dereferences a pointer payload to its value for the panel.Event
-// any field. Non-pointer values are returned as-is.
-func derefPayload(target any) any {
-	switch v := target.(type) {
-	case *panel.PlatformEventReceivedPayload:
-		return *v
-	case *panel.PlatformEventPublishedPayload:
-		return *v
-	case *panel.MemoryRetrieveStartedPayload:
-		return *v
-	case *panel.MemoryRetrievePlanPayload:
-		return *v
-	case *panel.MemoryRetrieveSearchedPayload:
-		return *v
-	case *panel.MemoryRetrieveCompletedPayload:
-		return *v
-	case *panel.MemoryWindowEnqueuedPayload:
-		return *v
-	case *panel.MemoryExtractStartedPayload:
-		return *v
-	case *panel.MemoryExtractCompletedPayload:
-		return *v
-	case *panel.MemoryWindowFlushedPayload:
-		return *v
-	case *panel.MemoryWindowSkippedPayload:
-		return *v
-	case *panel.MemoryWindowProcessingFailedPayload:
-		return *v
-	case *panel.MemoryExtractParseFailedPayload:
-		return *v
-	case *panel.MemoryExtractApplyFailedPayload:
-		return *v
-	case *panel.MemoryConsolidationPrunedPayload:
-		return *v
-	case *panel.MemoryConsolidationCappedPayload:
-		return *v
-	case *panel.MemoryConsolidationCycleCompletedPayload:
-		return *v
-	case *panel.MemoryStoreUpsertedPayload:
-		return *v
-	case *panel.MemoryStoreOperationPayload:
-		return *v
-	case *panel.EmbeddingCallStartedPayload:
-		return *v
-	case *panel.EmbeddingCallCompletedPayload:
-		return *v
-	case *panel.EmbeddingCallFailedPayload:
-		return *v
-	case *panel.LLMCallStartedPayload:
-		return *v
-	case *panel.LLMCallCompletedPayload:
-		return *v
-	case *panel.LLMCallFailedPayload:
-		return *v
-	case *panel.LLMToolDetectedPayload:
-		return *v
-	case *panel.LLMToolExecutedPayload:
-		return *v
-	case *panel.RuntimeAsyncErrorPayload:
-		return *v
-	default:
-		return target
+	var payload any
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return json.RawMessage(payloadJSON)
 	}
+	return payload
 }

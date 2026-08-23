@@ -53,11 +53,10 @@ func TestSemanticRetrievalRequestValidateHappyPath(t *testing.T) {
 	t.Parallel()
 
 	req := SemanticRetrievalRequest{
-		Scope:             SemanticScope{Platform: "test", ConversationID: "c1"},
-		Prompt:            "hello",
-		EmbeddingProvider: "openai",
-		Policy:            SemanticRetrievalPolicy{MaxRetrievedMemories: 5},
-		CurrentActor:      SemanticActorRef{ID: "a1"},
+		Scope:        SemanticScope{Platform: "test", ConversationID: "c1"},
+		Prompt:       "hello",
+		Policy:       SemanticRetrievalPolicy{MaxRetrievedMemories: 5},
+		CurrentActor: SemanticActorRef{ID: "a1"},
 	}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("valid request should pass: %v", err)
@@ -68,8 +67,7 @@ func TestSemanticRetrievalRequestValidateRejectsMissingScope(t *testing.T) {
 	t.Parallel()
 
 	req := SemanticRetrievalRequest{
-		Prompt:            "hello",
-		EmbeddingProvider: "openai",
+		Prompt: "hello",
 	}
 	if err := req.Validate(); err == nil {
 		t.Fatal("expected error for missing scope fields")
@@ -80,24 +78,11 @@ func TestSemanticRetrievalRequestValidateRejectsMissingPrompt(t *testing.T) {
 	t.Parallel()
 
 	req := SemanticRetrievalRequest{
-		Scope:             SemanticScope{Platform: "test", ConversationID: "c1"},
-		Prompt:            "",
-		EmbeddingProvider: "openai",
+		Scope:  SemanticScope{Platform: "test", ConversationID: "c1"},
+		Prompt: "",
 	}
 	if err := req.Validate(); err == nil {
 		t.Fatal("expected error for missing prompt")
-	}
-}
-
-func TestSemanticRetrievalRequestValidateRejectsMissingEmbeddingProvider(t *testing.T) {
-	t.Parallel()
-
-	req := SemanticRetrievalRequest{
-		Scope:  SemanticScope{Platform: "test", ConversationID: "c1"},
-		Prompt: "hello",
-	}
-	if err := req.Validate(); err == nil {
-		t.Fatal("expected error for missing embedding_provider")
 	}
 }
 
@@ -105,10 +90,9 @@ func TestSemanticRetrievalRequestValidateRejectsBadPolicy(t *testing.T) {
 	t.Parallel()
 
 	req := SemanticRetrievalRequest{
-		Scope:             SemanticScope{Platform: "test", ConversationID: "c1"},
-		Prompt:            "hello",
-		EmbeddingProvider: "openai",
-		Policy:            SemanticRetrievalPolicy{MinSimilarity: -1},
+		Scope:  SemanticScope{Platform: "test", ConversationID: "c1"},
+		Prompt: "hello",
+		Policy: SemanticRetrievalPolicy{MinSimilarity: -1},
 	}
 	if err := req.Validate(); err == nil {
 		t.Fatal("expected error for bad policy")
@@ -119,10 +103,9 @@ func TestSemanticRetrievalRequestValidateRejectsBadRelatedActor(t *testing.T) {
 	t.Parallel()
 
 	req := SemanticRetrievalRequest{
-		Scope:             SemanticScope{Platform: "test", ConversationID: "c1"},
-		Prompt:            "hello",
-		EmbeddingProvider: "openai",
-		RelatedActors:     []SemanticActorRef{{ID: "", Name: ""}},
+		Scope:         SemanticScope{Platform: "test", ConversationID: "c1"},
+		Prompt:        "hello",
+		RelatedActors: []SemanticActorRef{{ID: "", Name: ""}},
 	}
 	if err := req.Validate(); err == nil {
 		t.Fatal("expected error for invalid related actor")

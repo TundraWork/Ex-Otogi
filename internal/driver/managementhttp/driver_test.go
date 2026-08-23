@@ -3,6 +3,7 @@ package managementhttp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -47,7 +48,7 @@ func TestHandlerAuthorizedQueriesAndEventListing(t *testing.T) {
 		t.Fatalf("newHandler failed: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/panel/events?after_id=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/panel/events?limit=2", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
@@ -64,6 +65,17 @@ func TestHandlerAuthorizedQueriesAndEventListing(t *testing.T) {
 	}
 	if len(body.Items) == 0 {
 		t.Fatal("expected retained events in response")
+	}
+	if body.Items[0].Kind != "runtime.three" {
+		t.Fatalf("first event = %q, want newest runtime.three", body.Items[0].Kind)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/panel/events?before_id=%d&limit=1", body.OldestID), nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	resp = httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("older page status = %d, want 200", resp.Code)
 	}
 }
 

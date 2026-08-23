@@ -18,7 +18,6 @@ import (
 func TestNewOpenAIProviderConfigValidation(t *testing.T) {
 	t.Parallel()
 
-	retries := 1
 	tests := []struct {
 		name             string
 		cfg              ProviderConfig
@@ -27,9 +26,8 @@ func TestNewOpenAIProviderConfigValidation(t *testing.T) {
 		{
 			name: "valid config",
 			cfg: ProviderConfig{
-				APIKey:     "sk-test",
-				BaseURL:    "https://api.openai.com/v1",
-				MaxRetries: &retries,
+				APIKey:  "sk-test",
+				BaseURL: "https://api.openai.com/v1",
 			},
 		},
 		{
@@ -46,14 +44,6 @@ func TestNewOpenAIProviderConfigValidation(t *testing.T) {
 				BaseURL: "not a url",
 			},
 			wantErrSubstring: "parse base_url",
-		},
-		{
-			name: "negative retries",
-			cfg: ProviderConfig{
-				APIKey:     "sk-test",
-				MaxRetries: ptrInt(-1),
-			},
-			wantErrSubstring: "max_retries must be >= 0",
 		},
 	}
 
@@ -81,6 +71,8 @@ func TestNewOpenAIProviderConfigValidation(t *testing.T) {
 		})
 	}
 }
+
+func ptrInt(value int) *int { return &value }
 
 func TestOpenAIProviderGenerateStreamValidation(t *testing.T) {
 	t.Parallel()
@@ -732,10 +724,6 @@ func mustUnmarshalEvent(t *testing.T, raw string) responses.ResponseStreamEventU
 	}
 
 	return event
-}
-
-func ptrInt(value int) *int {
-	return &value
 }
 
 type openAIResponsesClientStub struct {

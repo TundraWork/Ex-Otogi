@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,14 +30,6 @@ const (
 	// maxKeywordBonusHits caps how many overlapping keywords can contribute to
 	// the keyword overlap bonus.
 	maxKeywordBonusHits = 4
-
-	// defaultMaxRetrievedMemories is the fallback cap for returned memories.
-	defaultMaxRetrievedMemories = 5
-	// defaultMinMemorySimilarity is the fallback minimum similarity score used
-	// when filtering search hits.
-	defaultMinMemorySimilarity = 0.3
-	// defaultMaxMemoryRunes is the fallback rendered-content rune cap.
-	defaultMaxMemoryRunes = 2000
 )
 
 // retrievalPlan captures one planner-produced search plan.
@@ -52,41 +42,36 @@ type retrievalPlan struct {
 // Retrieve plans, searches, ranks, and renders semantic memories for one
 // request.
 //
-// Retrieve returns an empty result without error when the module cannot
-// serve the request — specifically when the module is disabled, the
-// backing semantic store or embedding registry is not wired, the request
-// omits the prompt or embedding provider name, the planner yields no
-// queries, or ranking and filtering produce no selected matches. Failures
-// from configured-but-unavailable dependencies (resolving the embedding
-// provider, building the query plan, or searching the store) are returned
-// as errors so callers can distinguish misconfiguration from quiet misses.
+// An empty successful result means no records matched. Invalid requests or
+// unavailable configured dependencies fail explicitly. Planner failure alone
+// degrades to deterministic queries and is recorded as such.
 func (m *Module) Retrieve(
 	ctx context.Context,
 	req ai.SemanticRetrievalRequest,
-) (ai.SemanticRetrievalResult, error) {
-	if m == nil || m.semanticStore == nil || !m.cfg.Enabled {
-		return ai.SemanticRetrievalResult{}, nil
+) (result ai.SemanticRetrievalResult, retrieveErr error) {
+	if m == nil || !m.cfg.Enabled {
+		return ai.SemanticRetrievalResult{}, fmt.Errorf("semantic retrieve: retriever unavailable")
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		return ai.SemanticRetrievalResult{}, nil
+	if err := req.Validate(); err != nil {
+		return ai.SemanticRetrievalResult{}, fmt.Errorf("semantic retrieve: %w", err)
 	}
-	if strings.TrimSpace(req.EmbeddingProvider) == "" {
-		return ai.SemanticRetrievalResult{}, nil
+	if m.semanticStore == nil {
+		return ai.SemanticRetrievalResult{}, fmt.Errorf("semantic retrieve: semantic store unavailable")
 	}
 	if m.embeddingRegistry == nil {
-		return ai.SemanticRetrievalResult{}, nil
+		return ai.SemanticRetrievalResult{}, fmt.Errorf("semantic retrieve: embedding registry unavailable")
 	}
 
-	embeddingProvider, err := m.embeddingRegistry.Resolve(req.EmbeddingProvider)
+	embeddingProvider, err := m.embeddingRegistry.Resolve(m.cfg.EmbeddingProvider)
 	if err != nil {
 		return ai.SemanticRetrievalResult{}, fmt.Errorf(
 			"semantic retrieve resolve embedding provider %s: %w",
-			req.EmbeddingProvider,
+			m.cfg.EmbeddingProvider,
 			err,
 		)
 	}
 
-	policy := resolveRetrievalPolicy(req.Policy)
+	policy := m.resolveRetrievalPolicy(req.Policy)
 	scope := req.Scope
 	prompt := strings.TrimSpace(req.Prompt)
 
@@ -101,37 +86,34 @@ func (m *Module) Retrieve(
 	}
 
 	retrieveStart := m.now()
+	queryCount, candidateCount, resultCount := 0, 0, 0
+	degradation := ""
+	defer func() {
+		payload := panel.MemoryRetrieveCompletedPayload{
+			Outcome: "completed", QueryCount: queryCount, CandidateCount: candidateCount,
+			ResultCount: resultCount, PlannerUsed: m.cfg.RetrievalPlanningEnabled,
+			Degradation: degradation,
+			ElapsedMS:   m.now().Sub(retrieveStart).Milliseconds(),
+		}
+		description := fmt.Sprintf("%d queries, %d candidates, %d results in %dms", queryCount, candidateCount, resultCount, payload.ElapsedMS)
+		if retrieveErr != nil {
+			payload.Outcome, payload.Error = "failed", retrieveErr.Error()
+			m.emitManagementErrorEvent(ctx, &scope, "retrieval", "memory.retrieval.failed", "memory retrieval failed", panel.TruncateDescription(retrieveErr.Error()), payload)
+			return
+		}
+		if degradation != "" {
+			payload.Outcome = "degraded"
+			m.emitManagementWarningEvent(ctx, &scope, "retrieval", "memory.retrieval.degraded", "memory retrieval used heuristic planning", panel.TruncateDescription(degradation), payload)
+			return
+		}
+		m.emitManagementInfoEvent(ctx, &scope, "retrieval", "memory.retrieval.completed", "completed memory retrieval", description, payload)
+	}()
 	m.debugSemanticMemoryRetrieve(ctx, scope, prompt)
-	m.emitManagementEvent(
-		ctx,
-		&scope,
-		"memory.retrieve.started",
-		"started semantic memory retrieval",
-		panel.TruncateDescription(prompt),
-		panel.MemoryRetrieveStartedPayload{
-			Provider:   req.EmbeddingProvider,
-			QueryCount: 1,
-		},
-	)
 
-	plan, err := m.buildSemanticMemoryPlan(ctx, prompt, req.ReplyRootSummary)
-	if err != nil {
-		return ai.SemanticRetrievalResult{}, fmt.Errorf("semantic retrieve build queries: %w", err)
-	}
+	plan, planDegradation := m.buildSemanticMemoryPlan(ctx, prompt, req.ReplyRootSummary)
+	degradation = planDegradation
 	m.debugSemanticMemoryPlan(ctx, plan, m.cfg.RetrievalPlanningEnabled)
-	m.emitManagementEvent(
-		ctx,
-		&scope,
-		"memory.retrieve.planned",
-		"planned semantic memory retrieval",
-		panel.TruncateDescription(strings.Join(plan.Queries, ", ")),
-		panel.MemoryRetrievePlanPayload{
-			Queries:     append([]string(nil), plan.Queries...),
-			TimeFilter:  plan.TimeFilter,
-			Depth:       plan.Depth,
-			PlannerUsed: m.cfg.RetrievalPlanningEnabled,
-		},
-	)
+	queryCount = len(plan.Queries)
 	if len(plan.Queries) == 0 {
 		return ai.SemanticRetrievalResult{}, nil
 	}
@@ -143,21 +125,7 @@ func (m *Module) Retrieve(
 
 	searchLimit := maxSemanticMemorySearchLimit(policy.MaxRetrievedMemories, len(plan.Queries), plan.Depth)
 	m.debugSemanticMemorySearch(ctx, len(matches), searchLimit, plan.Depth)
-	returned := len(matches)
-	if returned > searchLimit {
-		returned = searchLimit
-	}
-	m.emitManagementEvent(
-		ctx,
-		&scope,
-		"memory.retrieve.searched",
-		"searched semantic memory candidates",
-		panel.TruncateDescription(fmt.Sprintf("%d candidates, %d returned", len(matches), returned)),
-		panel.MemoryRetrieveSearchedPayload{
-			CandidateCount: len(matches),
-			ReturnedCount:  returned,
-		},
-	)
+	candidateCount = len(matches)
 
 	if plan.TimeFilter != "" {
 		preFilterCount := len(matches)
@@ -169,29 +137,15 @@ func (m *Module) Retrieve(
 	}
 
 	queryTerms := extractQueryTerms(plan.Queries)
-	ranked := rankSemanticMemoryMatches(matches, m.cfg.DecayFactor, m.now(), req.CurrentActor, relatedActorSet, queryTerms)
+	ranked := rankSemanticMemoryMatches(matches, req.CurrentActor, relatedActorSet, queryTerms)
 	selected := selectSemanticMemoryMatches(ranked, policy.MaxMemoryRunes)
 	m.debugSemanticMemoryRank(ctx, len(ranked), len(selected), len(queryTerms))
 	if len(selected) == 0 {
 		return ai.SemanticRetrievalResult{}, nil
 	}
-	if err := m.reinforceSemanticMemoryMatches(ctx, selected); err != nil && m.logger != nil {
-		m.logger.WarnContext(ctx, "memory reinforce semantic memories", "error", err)
-	}
-
 	serialized := renderSemanticMemoryDocument(selected)
+	resultCount = len(selected)
 	m.debugSemanticMemoryRetrieveResult(ctx, scope, len(selected), len(serialized), 0, len(selected))
-	m.emitManagementEvent(
-		ctx,
-		&scope,
-		"memory.retrieve.completed",
-		"completed semantic memory retrieval",
-		panel.TruncateDescription(serialized),
-		panel.MemoryRetrieveCompletedPayload{
-			ResultCount: len(selected),
-			ElapsedMS:   m.now().Sub(retrieveStart).Milliseconds(),
-		},
-	)
 
 	return ai.SemanticRetrievalResult{
 		Content:    serialized,
@@ -204,17 +158,14 @@ func (m *Module) Retrieve(
 //
 // Callers use this to decide whether building heavier retrieval context is
 // worthwhile before issuing the request.
-func (m *Module) Available(embeddingProvider string) bool {
+func (m *Module) Available() bool {
 	if m == nil || !m.cfg.Enabled {
 		return false
 	}
 	if m.semanticStore == nil || m.embeddingRegistry == nil {
 		return false
 	}
-	if strings.TrimSpace(embeddingProvider) == "" {
-		return false
-	}
-	if _, err := m.embeddingRegistry.Resolve(embeddingProvider); err != nil {
+	if _, err := m.embeddingRegistry.Resolve(m.cfg.EmbeddingProvider); err != nil {
 		return false
 	}
 
@@ -222,16 +173,16 @@ func (m *Module) Available(embeddingProvider string) bool {
 }
 
 // resolveRetrievalPolicy fills zero-valued policy fields with package defaults.
-func resolveRetrievalPolicy(policy ai.SemanticRetrievalPolicy) ai.SemanticRetrievalPolicy {
+func (m *Module) resolveRetrievalPolicy(policy ai.SemanticRetrievalPolicy) ai.SemanticRetrievalPolicy {
 	resolved := policy
 	if resolved.MaxRetrievedMemories <= 0 {
-		resolved.MaxRetrievedMemories = defaultMaxRetrievedMemories
+		resolved.MaxRetrievedMemories = m.cfg.MaxRetrievedMemories
 	}
 	if resolved.MinSimilarity <= 0 {
-		resolved.MinSimilarity = defaultMinMemorySimilarity
+		resolved.MinSimilarity = m.cfg.MinMemorySimilarity
 	}
 	if resolved.MaxMemoryRunes <= 0 {
-		resolved.MaxMemoryRunes = defaultMaxMemoryRunes
+		resolved.MaxMemoryRunes = m.cfg.MaxMemoryRunes
 	}
 
 	return resolved
@@ -244,17 +195,22 @@ func (m *Module) buildSemanticMemoryPlan(
 	ctx context.Context,
 	prompt string,
 	replyRootSummary string,
-) (retrievalPlan, error) {
+) (retrievalPlan, string) {
 	if m.cfg.RetrievalPlanningEnabled {
-		if plan, err := m.planSemanticMemoryQueries(ctx, prompt, replyRootSummary); err == nil && len(plan.Queries) > 0 {
+		plan, err := m.planSemanticMemoryQueries(ctx, prompt, replyRootSummary)
+		if err == nil && len(plan.Queries) > 0 {
 			plan.Queries = dedupeQueries(plan.Queries)
-			return plan, nil
+			return plan, ""
 		}
+		if err == nil {
+			err = fmt.Errorf("planner returned no queries")
+		}
+		return retrievalPlan{Queries: heuristicSemanticMemoryQueries(prompt, replyRootSummary)}, err.Error()
 	}
 
 	return retrievalPlan{
 		Queries: heuristicSemanticMemoryQueries(prompt, replyRootSummary),
-	}, nil
+	}, ""
 }
 
 // planSemanticMemoryQueries asks the planner LLM for a structured retrieval
@@ -297,13 +253,13 @@ func (m *Module) planSemanticMemoryQueries(
 		m.logger,
 		"semantic memory retrieval planner",
 		provider,
-		func() (string, error) {
-			stream, err := provider.GenerateStream(requestCtx, req)
+		func(attemptCtx context.Context) (string, error) {
+			stream, err := provider.GenerateStream(attemptCtx, req)
 			if err != nil {
 				return "", fmt.Errorf("generate retrieval plan: %w", err)
 			}
 
-			responseText, err := collectStreamText(requestCtx, stream)
+			responseText, err := collectStreamText(attemptCtx, stream)
 			closeErr := stream.Close()
 			if err != nil {
 				if closeErr != nil {
@@ -447,7 +403,7 @@ func (m *Module) searchSemanticMemoryQueries(
 	limit := maxSemanticMemorySearchLimit(policy.MaxRetrievedMemories, len(queries), depth)
 
 	for _, query := range queries {
-		queryEmbedding, err := embedSingleText(ctx, embeddingProvider, query, ai.EmbeddingTaskTypeQuery)
+		queryEmbedding, err := embedSingleText(ctx, embeddingProvider, m.cfg.EmbeddingModel, m.cfg.EmbeddingDimensions, query, ai.EmbeddingTaskTypeQuery)
 		if err != nil {
 			return nil, fmt.Errorf("embed semantic memory query %q: %w", query, err)
 		}
@@ -478,11 +434,9 @@ func (m *Module) searchSemanticMemoryQueries(
 }
 
 // rankSemanticMemoryMatches sorts matches by a composite score combining
-// similarity, importance, recency decay, actor weighting, and keyword overlap.
+// similarity, typed importance, actor weighting, and keyword overlap.
 func rankSemanticMemoryMatches(
 	matches []ai.SemanticMatch,
-	decayFactor float64,
-	now time.Time,
 	currentActor ai.SemanticActorRef,
 	relatedActors map[string]struct{},
 	queryTerms []string,
@@ -495,10 +449,8 @@ func rankSemanticMemoryMatches(
 	scored := make([]scoredMatch, 0, len(matches))
 	for _, match := range matches {
 		importanceWeight := 0.5 + (float64(semanticMemoryImportance(match.Record)) / 20.0)
-		recencyWeight := math.Pow(decayFactor, now.Sub(semanticMemoryLastAccessed(match.Record)).Hours())
 		finalScore := float64(match.Similarity) *
 			importanceWeight *
-			recencyWeight *
 			semanticMemoryActorWeight(match.Record, currentActor, relatedActors)
 
 		scored = append(scored, scoredMatch{match: match, finalScore: finalScore})
@@ -652,71 +604,12 @@ func renderSemanticMemoryMatch(match ai.SemanticMatch) string {
 	)
 }
 
-// reinforceSemanticMemoryMatches bumps the last-accessed and access-count
-// fields for each selected match so that successful retrievals count as
-// reinforcement.
-func (m *Module) reinforceSemanticMemoryMatches(ctx context.Context, matches []ai.SemanticMatch) error {
-	if m == nil || m.semanticStore == nil || len(matches) == 0 {
-		return nil
-	}
-
-	var errs []error
-	now := m.now()
-	for _, match := range matches {
-		profile := match.Record.Profile
-		if profile.Kind == "" {
-			profile.Kind = match.Record.Profile.Kind
-		}
-		profile.LastAccessedAt = now
-		profile.AccessCount++
-
-		if _, err := m.semanticStore.Update(ctx, ai.SemanticUpdate{
-			ID:        match.Record.ID,
-			Content:   match.Record.Content,
-			Category:  match.Record.Category,
-			Embedding: append([]float32(nil), match.Record.Embedding...),
-			Profile:   profile,
-			Metadata:  semanticMemoryMetadata(match.Record.Metadata, profile),
-			Keywords:  append([]string(nil), match.Record.Keywords...),
-			Tags:      append([]string(nil), match.Record.Tags...),
-			Links:     append([]ai.SemanticLink(nil), match.Record.Links...),
-		}); err != nil {
-			errs = append(errs, fmt.Errorf("reinforce semantic memory %s: %w", match.Record.ID, err))
-		}
-	}
-
-	return errors.Join(errs...)
-}
-
-// semanticMemoryImportance returns the normalized importance score for the
-// record, falling back to legacy metadata and finally a midpoint default.
+// semanticMemoryImportance returns the typed score or a midpoint default.
 func semanticMemoryImportance(record ai.SemanticRecord) int {
 	if record.Profile.Importance > 0 {
 		return record.Profile.Importance
 	}
-	if raw := strings.TrimSpace(record.Metadata[ai.SemanticMetadataImportance]); raw != "" {
-		if value, err := strconv.Atoi(raw); err == nil {
-			return value
-		}
-	}
-
 	return 5
-}
-
-// semanticMemoryLastAccessed returns the most trustworthy last-access time for
-// the record in UTC, falling back to legacy metadata and finally the creation
-// time.
-func semanticMemoryLastAccessed(record ai.SemanticRecord) time.Time {
-	if !record.Profile.LastAccessedAt.IsZero() {
-		return record.Profile.LastAccessedAt.UTC()
-	}
-	if raw := strings.TrimSpace(record.Metadata[ai.SemanticMetadataLastAccessed]); raw != "" {
-		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
-			return parsed.UTC()
-		}
-	}
-
-	return record.CreatedAt.UTC()
 }
 
 // semanticMemoryActorWeight returns the actor-based score multiplier for a
@@ -774,48 +667,6 @@ func semanticMemoryActorInSet(ref *ai.SemanticActorRef, values map[string]struct
 	}
 
 	return false
-}
-
-// semanticMemoryMetadata rebuilds the legacy metadata map from the typed
-// profile so that downstream consumers that only read metadata see fresh
-// values after reinforcement.
-func semanticMemoryMetadata(existing map[string]string, profile ai.SemanticProfile) map[string]string {
-	metadata := cloneStringMap(existing)
-	if metadata == nil {
-		metadata = make(map[string]string)
-	}
-	metadata[ai.SemanticMetadataImportance] = fmt.Sprintf("%d", semanticMemoryImportance(ai.SemanticRecord{Profile: profile}))
-	metadata[ai.SemanticMetadataAccessCount] = fmt.Sprintf("%d", profile.AccessCount)
-	metadata[ai.SemanticMetadataLastAccessed] = profile.LastAccessedAt.UTC().Format(time.RFC3339)
-	if strings.TrimSpace(profile.Source) != "" {
-		metadata[ai.SemanticMetadataSource] = strings.TrimSpace(profile.Source)
-	}
-	if strings.TrimSpace(profile.SourceArticleID) != "" {
-		metadata[ai.SemanticMetadataSourceArticleID] = strings.TrimSpace(profile.SourceArticleID)
-	}
-	if profile.SourceActor != nil {
-		if profile.SourceActor.ID != "" {
-			metadata[ai.SemanticMetadataSourceActorID] = profile.SourceActor.ID
-		}
-		if profile.SourceActor.Name != "" {
-			metadata[ai.SemanticMetadataSourceActorName] = profile.SourceActor.Name
-		}
-		metadata[ai.SemanticMetadataSourceActorIsBot] = fmt.Sprintf("%t", profile.SourceActor.IsBot)
-	}
-	if profile.SubjectActor != nil {
-		if profile.SubjectActor.ID != "" {
-			metadata[ai.SemanticMetadataSubjectActorID] = profile.SubjectActor.ID
-		}
-		if profile.SubjectActor.Name != "" {
-			metadata[ai.SemanticMetadataSubjectActorName] = profile.SubjectActor.Name
-		}
-		metadata[ai.SemanticMetadataSubjectActorIsBot] = fmt.Sprintf("%t", profile.SubjectActor.IsBot)
-	}
-	if len(profile.EvidenceRecordIDs) > 0 {
-		metadata[ai.SemanticMetadataSourceRecordIDs] = strings.Join(profile.EvidenceRecordIDs, ",")
-	}
-
-	return metadata
 }
 
 // maxSemanticMemorySearchLimit returns the per-query search cap given the base

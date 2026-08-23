@@ -2,14 +2,11 @@ package kernel
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"ex-otogi/pkg/otogi/core"
-	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -183,8 +180,6 @@ func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *platform
 	if err != nil {
 		return fmt.Errorf("publish command deriving sink: %w", err)
 	}
-	s.recordInboundEvent(tracedCtx, event)
-
 	if !s.allowlist.IsConversationAllowed(event.Source.ID, event.Conversation.ID) {
 		return s.publishBypassOnly(tracedCtx, event)
 	}
@@ -194,119 +189,6 @@ func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *platform
 	}
 
 	return s.deriveCommand(tracedCtx, event)
-}
-
-func (s *commandDerivingDispatcher) recordInboundEvent(ctx context.Context, event *platform.Event) {
-	if s == nil || event == nil {
-		return
-	}
-	recorder, err := core.ResolveAs[panel.Recorder](s.serviceLookup, panel.ServiceRecorder)
-	if err != nil {
-		return
-	}
-	recordedEvent, err := recorder.RecordEvent(ctx, panel.Event{
-		Category:       panel.EventCategoryBusinessEvent,
-		Kind:           "platform.event.received",
-		Level:          panel.EventLevelDebug,
-		Module:         "kernel",
-		Component:      "driver-dispatcher",
-		Platform:       string(event.Source.Platform),
-		ConversationID: event.Conversation.ID,
-		ActorID:        event.Actor.ID,
-		Subject:        "received inbound platform event",
-		Description:    inboundPlatformEventDescription(event),
-		PayloadType:    "PlatformEventReceivedPayload",
-		Payload: panel.PlatformEventReceivedPayload{
-			EventKind: string(event.Kind),
-			SourceID:  event.Source.ID,
-			MessageID: commandReplyToMessageID(event),
-		},
-	})
-	if err != nil {
-		return
-	}
-	content, err := json.Marshal(event)
-	if err != nil || len(content) == 0 {
-		return
-	}
-	_, err = recorder.RecordArtifact(ctx, panel.Artifact{
-		ID:        fmt.Sprintf("art_%d_%d", recordedEvent.ID, time.Now().UnixNano()),
-		EventID:   recordedEvent.ID,
-		Kind:      panel.ArtifactKindStructuredDebug,
-		CreatedAt: time.Now().UTC(),
-		Content:   string(content),
-	})
-	if err != nil {
-		return
-	}
-}
-
-func inboundPlatformEventDescription(event *platform.Event) string {
-	if event == nil {
-		return ""
-	}
-
-	switch {
-	case event.Article != nil && strings.TrimSpace(event.Article.Text) != "":
-		return panel.TruncateDescription(event.Article.Text)
-	case event.Command != nil && strings.TrimSpace(event.Command.RawInput) != "":
-		return panel.TruncateDescription(event.Command.RawInput)
-	case event.Mutation != nil:
-		if event.Mutation.After != nil && strings.TrimSpace(event.Mutation.After.Text) != "" {
-			return panel.TruncateDescription(event.Mutation.After.Text)
-		}
-		if event.Mutation.Before != nil && strings.TrimSpace(event.Mutation.Before.Text) != "" {
-			return panel.TruncateDescription(event.Mutation.Before.Text)
-		}
-		if strings.TrimSpace(event.Mutation.TargetArticleID) != "" {
-			return panel.TruncateDescription(fmt.Sprintf("%s article %s", event.Mutation.Type, event.Mutation.TargetArticleID))
-		}
-	case event.Reaction != nil && strings.TrimSpace(event.Reaction.Emoji) != "":
-		return panel.TruncateDescription(fmt.Sprintf("%s on article %s", event.Reaction.Emoji, event.Reaction.ArticleID))
-	case event.StateChange != nil:
-		return panel.TruncateDescription(stateChangeDescription(event.StateChange))
-	}
-
-	return ""
-}
-
-func stateChangeDescription(change *platform.StateChange) string {
-	if change == nil {
-		return ""
-	}
-
-	switch {
-	case change.Member != nil:
-		return fmt.Sprintf("%s member %s", change.Member.Action, actorLabel(change.Member.Member))
-	case change.Role != nil:
-		return fmt.Sprintf(
-			"role update for %s: %s -> %s",
-			change.Role.MemberID,
-			change.Role.OldRole,
-			change.Role.NewRole,
-		)
-	case change.Migration != nil:
-		return fmt.Sprintf(
-			"conversation migrated %s -> %s",
-			change.Migration.FromConversationID,
-			change.Migration.ToConversationID,
-		)
-	default:
-		return ""
-	}
-}
-
-func actorLabel(actor platform.Actor) string {
-	switch {
-	case strings.TrimSpace(actor.DisplayName) != "":
-		return actor.DisplayName
-	case strings.TrimSpace(actor.Username) != "":
-		return "@" + actor.Username
-	case strings.TrimSpace(actor.ID) != "":
-		return actor.ID
-	default:
-		return "unknown"
-	}
 }
 
 // publishBypassOnly handles events from non-allowlisted conversations.

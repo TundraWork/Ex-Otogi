@@ -334,7 +334,7 @@ func TestLoadConfig(t *testing.T) {
 			],
 			"modules":{
 				"sleep":{"signing_key":"test-key"},
-				"llmchat":{"config_file":"/tmp/llm.json"}
+				"llmruntime":{"config_file":"/tmp/llm.json"}
 			}
 		}`)
 		t.Setenv(envConfigFile, configPath)
@@ -361,9 +361,9 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("sleep signing_key = %q, want test-key", sleepCfg.SigningKey)
 		}
 
-		llmchatRaw, ok := cfg.moduleConfigs["llmchat"]
+		llmchatRaw, ok := cfg.moduleConfigs["llmruntime"]
 		if !ok {
-			t.Fatal("expected llmchat module config")
+			t.Fatal("expected llmruntime module config")
 		}
 		var llmchatCfg struct {
 			ConfigFile string `json:"config_file"`
@@ -372,7 +372,7 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("unmarshal llmchat config: %v", err)
 		}
 		if llmchatCfg.ConfigFile != "/tmp/llm.json" {
-			t.Fatalf("llmchat config_file = %q, want /tmp/llm.json", llmchatCfg.ConfigFile)
+			t.Fatalf("llmruntime config_file = %q, want /tmp/llm.json", llmchatCfg.ConfigFile)
 		}
 	})
 }
@@ -381,6 +381,7 @@ func TestBuildKernelRuntimeRegistersManagementServicesWhenEnabled(t *testing.T) 
 	cfg := defaultAppConfig()
 	cfg.management.enabled = true
 	cfg.management.bearerToken = "test-token"
+	cfg.management.databasePath = filepath.Join(t.TempDir(), "management.db")
 
 	kernelRuntime, managementStore, err := buildKernelRuntime(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
 	if err != nil {

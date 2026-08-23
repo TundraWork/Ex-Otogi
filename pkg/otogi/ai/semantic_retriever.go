@@ -24,23 +24,16 @@ type SemanticRetriever interface {
 	// Retrieve plans, searches, ranks, and renders relevant semantic memories
 	// for one request.
 	//
-	// Implementations must return an empty result without error when the
-	// retriever is not configured to serve the request — for example when
-	// retrieval is disabled, the request omits the prompt or embedding
-	// provider name, the backing store or embedding registry is not wired,
-	// or planning and filtering legitimately produce zero matches — so
-	// callers can continue without memory context.
-	//
-	// Errors are reserved for configured-but-failed operations, such as a
-	// named embedding provider that fails to resolve, a planner call that
-	// fails after its retry budget, or a backing store search that fails.
+	// An empty successful result means no records matched. Invalid requests and
+	// unavailable configured dependencies return errors. Implementations may
+	// degrade a failed optional planner to deterministic retrieval when that
+	// outcome is explicitly observable.
 	Retrieve(ctx context.Context, req SemanticRetrievalRequest) (SemanticRetrievalResult, error)
-	// Available reports whether the retriever can serve a request that would
-	// use the named embedding provider.
+	// Available reports whether the retriever is configured to serve requests.
 	//
 	// Callers use this to decide whether a request is viable before building
 	// heavier context.
-	Available(embeddingProvider string) bool
+	Available() bool
 }
 
 // SemanticRetrievalPolicy configures per-call retrieval bounds.
@@ -76,9 +69,6 @@ type SemanticRetrievalRequest struct {
 	Scope SemanticScope
 	// Prompt is the current user message text used to derive search queries.
 	Prompt string
-	// EmbeddingProvider names which embedding provider profile the retriever
-	// should use for this request.
-	EmbeddingProvider string
 	// Policy carries the per-call retrieval bounds.
 	Policy SemanticRetrievalPolicy
 	// CurrentActor identifies the active speaker. Used for actor-weighted
@@ -100,9 +90,6 @@ func (r SemanticRetrievalRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.Prompt) == "" {
 		return fmt.Errorf("validate semantic retrieval request: missing prompt")
-	}
-	if strings.TrimSpace(r.EmbeddingProvider) == "" {
-		return fmt.Errorf("validate semantic retrieval request: missing embedding_provider")
 	}
 	if err := r.Policy.Validate(); err != nil {
 		return fmt.Errorf("validate semantic retrieval request: %w", err)

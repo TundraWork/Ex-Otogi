@@ -44,8 +44,6 @@ type Agent struct {
 	Description string
 	// Provider identifies which LLM provider profile to resolve.
 	Provider string
-	// EmbeddingProvider identifies which embedding provider profile to resolve.
-	EmbeddingProvider string
 	// Model identifies which provider model name to call.
 	Model string
 	// SystemPromptTemplate is the system prompt template for this agent.
@@ -63,8 +61,8 @@ type Agent struct {
 	// ContextPolicy controls how llmchat reconstructs and trims conversation
 	// context before sending it to one provider.
 	ContextPolicy ContextPolicy
-	// SemanticMemory controls semantic retrieval for this agent.
-	SemanticMemory *SemanticMemoryPolicy
+	// MemoryEnabled controls semantic retrieval for this agent.
+	MemoryEnabled bool
 	// ImageInputs controls whether llmchat downloads current-event images and
 	// includes them as multimodal user input.
 	//
@@ -124,15 +122,6 @@ type ContextPolicy struct {
 	// resolved and inlined as quoted context when the referenced article is not
 	// already present in the conversation context. 0 disables quoting.
 	QuoteReplyDepth int
-}
-
-// SemanticMemoryPolicy controls semantic memory retrieval for one agent.
-type SemanticMemoryPolicy struct {
-	// Enabled turns on semantic retrieval.
-	Enabled bool
-	// SemanticRetrievalPolicy carries per-call retrieval bounds delegated to the
-	// SemanticRetriever service.
-	ai.SemanticRetrievalPolicy
 }
 
 // ImageInputPolicy controls how one agent reads current-event image attachments.
@@ -197,9 +186,6 @@ func validateAgent(agent Agent) error {
 	if strings.TrimSpace(agent.Provider) == "" {
 		return fmt.Errorf("missing provider")
 	}
-	if strings.TrimSpace(agent.EmbeddingProvider) == "" && agent.SemanticMemory != nil && agent.SemanticMemory.Enabled {
-		return fmt.Errorf("embedding_provider is required when semantic_memory.enabled=true")
-	}
 	if strings.TrimSpace(agent.Model) == "" {
 		return fmt.Errorf("missing model")
 	}
@@ -220,9 +206,6 @@ func validateAgent(agent Agent) error {
 	}
 	if err := validateContextPolicy(resolveContextPolicy(agent.ContextPolicy)); err != nil {
 		return fmt.Errorf("context_policy: %w", err)
-	}
-	if err := validateSemanticMemoryPolicy(agent.SemanticMemory); err != nil {
-		return fmt.Errorf("semantic_memory: %w", err)
 	}
 	if err := validateImageInputPolicy(resolveImageInputPolicy(agent.ImageInputs)); err != nil {
 		return fmt.Errorf("image_inputs: %w", err)
@@ -272,30 +255,6 @@ func validateContextPolicy(policy ContextPolicy) error {
 	}
 	if policy.QuoteReplyDepth < 0 {
 		return fmt.Errorf("quote_reply_depth must be >= 0")
-	}
-
-	return nil
-}
-
-func resolveSemanticMemoryPolicy(policy *SemanticMemoryPolicy) *SemanticMemoryPolicy {
-	if policy == nil {
-		return nil
-	}
-
-	resolved := *policy
-	return &resolved
-}
-
-func validateSemanticMemoryPolicy(policy *SemanticMemoryPolicy) error {
-	if policy == nil {
-		return nil
-	}
-	if !policy.Enabled {
-		return nil
-	}
-
-	if err := policy.SemanticRetrievalPolicy.Validate(); err != nil {
-		return fmt.Errorf("validate semantic memory policy: %w", err)
 	}
 
 	return nil
@@ -405,7 +364,6 @@ func cloneConfig(cfg Config) Config {
 				Aliases:              cloneStringSlice(agent.Aliases),
 				Description:          agent.Description,
 				Provider:             agent.Provider,
-				EmbeddingProvider:    agent.EmbeddingProvider,
 				Model:                agent.Model,
 				SystemPromptTemplate: agent.SystemPromptTemplate,
 				TemplateVariables:    cloneStringMap(agent.TemplateVariables),
@@ -414,7 +372,7 @@ func cloneConfig(cfg Config) Config {
 				RequestTimeout:       agent.RequestTimeout,
 				RequestMetadata:      cloneStringMap(agent.RequestMetadata),
 				ContextPolicy:        resolveContextPolicy(agent.ContextPolicy),
-				SemanticMemory:       cloneSemanticMemoryPolicy(resolveSemanticMemoryPolicy(agent.SemanticMemory)),
+				MemoryEnabled:        agent.MemoryEnabled,
 				ImageInputs:          resolveImageInputPolicy(agent.ImageInputs),
 				SubAgents:            cloneSubAgentConfigs(agent.SubAgents),
 			})
@@ -466,15 +424,6 @@ func cloneStringMap(values map[string]string) map[string]string {
 	}
 
 	return cloned
-}
-
-func cloneSemanticMemoryPolicy(policy *SemanticMemoryPolicy) *SemanticMemoryPolicy {
-	if policy == nil {
-		return nil
-	}
-
-	cloned := *policy
-	return &cloned
 }
 
 func cloneStringSlice(values []string) []string {

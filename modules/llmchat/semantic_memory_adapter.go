@@ -18,13 +18,13 @@ func (m *Module) retrieveSemanticMemoriesViaService(
 	if m == nil || m.semanticRetriever == nil {
 		return "", nil
 	}
-	if agent.SemanticMemory == nil || !agent.SemanticMemory.Enabled {
+	if !agent.MemoryEnabled {
 		return "", nil
 	}
 	if event == nil || strings.TrimSpace(prompt) == "" {
 		return "", nil
 	}
-	if !m.semanticRetriever.Available(agent.EmbeddingProvider) {
+	if !m.semanticRetriever.Available() {
 		return "", nil
 	}
 	req := ai.SemanticRetrievalRequest{
@@ -33,12 +33,11 @@ func (m *Module) retrieveSemanticMemoriesViaService(
 			Platform:       string(event.Source.Platform),
 			ConversationID: event.Conversation.ID,
 		},
-		Prompt:            prompt,
-		EmbeddingProvider: agent.EmbeddingProvider,
-		Policy:            agent.SemanticMemory.SemanticRetrievalPolicy,
-		CurrentActor:      toSemanticActor(event.Actor),
-		RelatedActors:     m.replyChainSemanticActors(ctx, event),
-		ReplyRootSummary:  m.replyRootSummary(ctx, event),
+		Prompt:           prompt,
+		Policy:           ai.SemanticRetrievalPolicy{},
+		CurrentActor:     toSemanticActor(event.Actor),
+		RelatedActors:    m.replyChainSemanticActors(ctx, event),
+		ReplyRootSummary: m.replyRootSummary(ctx, event),
 	}
 	result, err := m.semanticRetriever.Retrieve(ctx, req)
 	if err != nil {

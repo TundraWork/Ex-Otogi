@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"ex-otogi/pkg/llm"
+	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
 	panel "ex-otogi/pkg/otogi/management"
@@ -106,7 +108,11 @@ func (m *Module) OnRegister(ctx context.Context, runtime core.ModuleRuntime) err
 		return fmt.Errorf("memory resolve recorder: %w", err)
 	}
 
-	cfg, err := loadConfig(runtime.Config())
+	llmCfg, err := core.ResolveAs[llmconfig.Config](runtime.Services(), llm.ServiceRuntimeConfig)
+	if err != nil {
+		return fmt.Errorf("memory resolve runtime config: %w", err)
+	}
+	cfg, err := loadConfig(llmCfg)
 	if err != nil {
 		return fmt.Errorf("memory load config: %w", err)
 	}
@@ -238,18 +244,13 @@ func (m *Module) handleArticle(ctx context.Context, event *platform.Event) error
 		Platform:       string(event.Source.Platform),
 		ConversationID: event.Conversation.ID,
 	}
-	snapshot := m.windowManager.Enqueue(scope, bufferedArticle{
+	m.windowManager.Enqueue(scope, bufferedArticle{
 		Article:    *event.Article,
 		Actor:      event.Actor,
 		OccurredAt: normalizeAnchorTime(event, m.now()),
 		ReceivedAt: m.now(),
 	})
 	m.debugWindowEnqueue(ctx, scope, event.Article.ID)
-	m.emitManagementEvent(ctx, &scope, "memory.window.enqueued", "queued article into extraction window", windowEnqueuedDescription(event.Article.Text, snapshot.articleCount), panel.MemoryWindowEnqueuedPayload{
-		ArticleID:          event.Article.ID,
-		WindowArticleCount: snapshot.articleCount,
-		WindowRuneCount:    snapshot.runeCount,
-	})
 
 	return nil
 }

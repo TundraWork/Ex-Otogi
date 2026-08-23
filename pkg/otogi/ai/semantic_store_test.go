@@ -3,7 +3,6 @@ package ai
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestSemanticLinkValidate(t *testing.T) {
@@ -77,11 +76,9 @@ func TestSemanticUpdateValidate(t *testing.T) {
 		Category:  "preference",
 		Embedding: []float32{1, 0},
 		Profile: SemanticProfile{
-			Kind:           SemanticKindUnit,
-			Importance:     7,
-			LastAccessedAt: time.Unix(100, 0).UTC(),
-			AccessCount:    2,
-			Source:         "natural",
+			Kind:       SemanticKindUnit,
+			Importance: 7,
+			Source:     "natural",
 			SourceActor: &SemanticActorRef{
 				ID:   "user-1",
 				Name: "Alice",
@@ -111,13 +108,6 @@ func TestSemanticUpdateValidate(t *testing.T) {
 				update.Profile.Kind = "mystery"
 			},
 			wantErr: "unsupported kind",
-		},
-		{
-			name: "negative access count",
-			mutate: func(update *SemanticUpdate) {
-				update.Profile.AccessCount = -1
-			},
-			wantErr: "access_count must be >= 0",
 		},
 	}
 

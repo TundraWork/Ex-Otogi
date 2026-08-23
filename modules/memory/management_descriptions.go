@@ -32,53 +32,12 @@ func latestWindowPreview(articles []bufferedArticle) string {
 	return ""
 }
 
-func windowEnqueuedDescription(text string, articleCount int) string {
-	return joinManagementDescriptionParts(fmt.Sprintf("window=%d", articleCount), text)
-}
-
-func windowFlushedDescription(reason FlushReason, articles []bufferedArticle) string {
+func extractCompletedDescription(extractedCount int, appliedCount int, failedCount int) string {
 	return joinManagementDescriptionParts(
-		fmt.Sprintf("%s after %d articles", reason, len(articles)),
-		latestWindowPreview(articles),
-	)
-}
-
-func windowSkippedDescription(reason string, articles []bufferedArticle) string {
-	return joinManagementDescriptionParts(
-		fmt.Sprintf("%s after %d articles", reason, len(articles)),
-		latestWindowPreview(articles),
-	)
-}
-
-func extractStartedDescription(previewText string, existingCount int) string {
-	return joinManagementDescriptionParts(
-		fmt.Sprintf("%d existing memories", existingCount),
-		previewText,
-	)
-}
-
-func extractCompletedDescription(candidates []extractedMemory, appliedCount int, failedCount int) string {
-	parts := []string{
-		fmt.Sprintf("%d extracted", len(candidates)),
+		fmt.Sprintf("%d extracted", extractedCount),
 		fmt.Sprintf("%d applied", appliedCount),
 		fmt.Sprintf("%d failed", failedCount),
-	}
-	previews := make([]string, 0, 2)
-	for _, candidate := range candidates {
-		description := candidateDescription(candidate)
-		if strings.TrimSpace(description) == "" {
-			continue
-		}
-		previews = append(previews, description)
-		if len(previews) == 2 {
-			break
-		}
-	}
-	if len(previews) > 0 {
-		parts = append(parts, strings.Join(previews, " | "))
-	}
-
-	return joinManagementDescriptionParts(parts...)
+	)
 }
 
 func extractApplyFailureDescription(candidate extractedMemory, err error) string {
@@ -102,13 +61,6 @@ func consolidationPrunedDescription(expiredCount int, prunedCount int, keptCount
 		fmt.Sprintf("%d expired", expiredCount),
 		fmt.Sprintf("%d low-score pruned", prunedCount),
 		fmt.Sprintf("%d kept", keptCount),
-	)
-}
-
-func consolidationCappedDescription(overflow int, maxAllowed int, removedPreview string) string {
-	return joinManagementDescriptionParts(
-		fmt.Sprintf("removed %d to enforce cap %d", overflow, maxAllowed),
-		removedPreview,
 	)
 }
 

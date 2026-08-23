@@ -22,4 +22,4 @@ func (s *semanticRetrieverStub) Retrieve(_ context.Context, req ai.SemanticRetri
 	return ai.SemanticRetrievalResult{Content: s.content, MatchCount: s.matchCount}, nil
 }
 
-func (s *semanticRetrieverStub) Available(string) bool { return s.available }
+func (s *semanticRetrieverStub) Available() bool { return s.available }

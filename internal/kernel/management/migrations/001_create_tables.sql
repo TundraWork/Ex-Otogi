@@ -1,4 +1,10 @@
 -- +goose Up
+CREATE TABLE management_meta (
+  schema_version INTEGER NOT NULL
+);
+
+INSERT INTO management_meta (schema_version) VALUES (1);
+
 CREATE TABLE events (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   occurred_at     DATETIME NOT NULL,
@@ -13,8 +19,8 @@ CREATE TABLE events (
   platform        TEXT NOT NULL DEFAULT '',
   conversation_id TEXT NOT NULL DEFAULT '',
   actor_id        TEXT NOT NULL DEFAULT '',
-  summary         TEXT NOT NULL DEFAULT '',
-  payload_type    TEXT NOT NULL DEFAULT '',
+  subject         TEXT NOT NULL DEFAULT '',
+  description     TEXT NOT NULL DEFAULT '',
   payload_json    TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -32,7 +38,6 @@ CREATE TABLE snapshots (
   module       TEXT NOT NULL DEFAULT '',
   updated_at   DATETIME NOT NULL,
   summary      TEXT NOT NULL DEFAULT '',
-  payload_type TEXT NOT NULL DEFAULT '',
   payload_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (namespace, key)
 );
@@ -51,3 +56,4 @@ CREATE INDEX idx_snapshots_module ON snapshots(module);
 DROP TABLE IF EXISTS artifacts;
 DROP TABLE IF EXISTS events;
 DROP TABLE IF EXISTS snapshots;
+DROP TABLE IF EXISTS management_meta;

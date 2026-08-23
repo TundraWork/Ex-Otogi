@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"reflect"
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
@@ -27,6 +26,18 @@ func (m *Module) emitManagementEvent(
 		description,
 		payload,
 	)
+}
+
+func (m *Module) emitManagementInfoEvent(
+	ctx context.Context,
+	scope *ai.SemanticScope,
+	component string,
+	kind string,
+	summary string,
+	description string,
+	payload any,
+) {
+	m.recordManagementEvent(ctx, scope, panel.EventLevelInfo, component, kind, summary, description, payload)
 }
 
 func (m *Module) emitManagementWarningEvent(
@@ -119,7 +130,6 @@ func newNaturalMemoryEvent(
 		Component:   component,
 		Subject:     summary,
 		Description: description,
-		PayloadType: naturalMemoryPayloadTypeName(payload),
 		Payload:     payload,
 	}
 	if scope == nil {
@@ -131,16 +141,4 @@ func newNaturalMemoryEvent(
 	event.ConversationID = scope.ConversationID
 
 	return event
-}
-
-func naturalMemoryPayloadTypeName(payload any) string {
-	if payload == nil {
-		return ""
-	}
-	typ := reflect.TypeOf(payload)
-	if typ.Kind() == reflect.Pointer {
-		typ = typ.Elem()
-	}
-
-	return typ.Name()
 }

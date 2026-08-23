@@ -1,25 +1,10 @@
 {
   "request_timeout": "90s",
-  "natural_memory": {
-    "enabled": true,
+  "memory": {
     "extraction_provider": "openai-main",
     "extraction_model": "gpt-4.1-mini",
     "embedding_provider": "openai-main",
-    "extraction_timeout": "30s",
-    "extraction_max_input_runes": 4000,
-    "consolidation_interval": "1h",
-    "max_memories_per_scope": 200,
-    "decay_factor": 0.995,
-    "min_importance": 3,
-    "duplicate_similarity_threshold": 0.85,
-    "retrieval_planning_enabled": true,
-    "retrieval_planning_timeout": "10s",
-    "buffer_quiet_period": "2m",
-    "buffer_max_runes": 3000,
-    "buffer_max_articles": 30,
-    "buffer_max_age": "10m",
-    "buffer_check_interval": "15s",
-    "retrieval_search_limit": 20
+    "database_file": "data/memory.db"
   },
   "providers": {
     "openai-main": {
@@ -31,7 +16,7 @@
       "openai": {
         "organization": "",
         "project": "",
-        "max_retries": 2
+        "embedding_max_retries": 2
       }
     },
     "gemini-main": {
@@ -57,15 +42,9 @@
       "aliases": ["Oto"],
       "description": "General assistant persona",
       "provider": "openai-main",
-      "embedding_provider": "openai-main",
       "model": "gpt-5-mini",
       "system_prompt_template": "You are {{.AgentName}}. Current UTC time: {{.DateTimeUTC}}.",
-      "semantic_memory": {
-        "enabled": true,
-        "max_retrieved_memories": 5,
-        "min_memory_similarity": 0.3,
-        "max_memory_runes": 2000
-      },
+      "memory_enabled": true,
       "template_variables": {
         "locale": "en-US"
       },
@@ -93,15 +72,9 @@
       "aliases": ["OtoGemini"],
       "description": "Gemini assistant persona",
       "provider": "gemini-main",
-      "embedding_provider": "gemini-main",
       "model": "gemini-2.5-flash",
       "system_prompt_template": "You are {{.AgentName}}. Current UTC time: {{.DateTimeUTC}}.",
-      "semantic_memory": {
-        "enabled": true,
-        "max_retrieved_memories": 5,
-        "min_memory_similarity": 0.3,
-        "max_memory_runes": 2000
-      },
+      "memory_enabled": true,
       "context": {
         "reply_chain_max_messages": 12,
         "leading_context_messages": 4,

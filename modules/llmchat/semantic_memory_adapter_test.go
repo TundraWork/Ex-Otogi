@@ -15,15 +15,7 @@ func TestRetrieveSemanticMemoriesViaServiceShortCircuits(t *testing.T) {
 	baseEvent := testLLMChatEvent("Otogi hi")
 	enabledAgent := func() Agent {
 		agent := validModuleConfig().Agents[0]
-		agent.EmbeddingProvider = "embed-main"
-		agent.SemanticMemory = &SemanticMemoryPolicy{
-			Enabled: true,
-			SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
-				MaxRetrievedMemories: 3,
-				MinSimilarity:        0.4,
-				MaxMemoryRunes:       1000,
-			},
-		}
+		agent.MemoryEnabled = true
 		return agent
 	}
 
@@ -43,22 +35,11 @@ func TestRetrieveSemanticMemoriesViaServiceShortCircuits(t *testing.T) {
 			prompt:      "hi",
 		},
 		{
-			name:      "agent has no semantic memory policy",
+			name:      "agent memory disabled",
 			retriever: &semanticRetrieverStub{available: true, content: "unexpected"},
 			agent: func() Agent {
 				agent := validModuleConfig().Agents[0]
-				agent.SemanticMemory = nil
-				return agent
-			},
-			event:  baseEvent,
-			prompt: "hi",
-		},
-		{
-			name:      "agent semantic memory disabled",
-			retriever: &semanticRetrieverStub{available: true, content: "unexpected"},
-			agent: func() Agent {
-				agent := enabledAgent()
-				agent.SemanticMemory.Enabled = false
+				agent.MemoryEnabled = false
 				return agent
 			},
 			event:  baseEvent,
@@ -120,16 +101,7 @@ func TestRetrieveSemanticMemoriesViaServicePopulatesRequest(t *testing.T) {
 	module.semanticRetriever = retriever
 
 	agent := validModuleConfig().Agents[0]
-	agent.EmbeddingProvider = "embed-main"
-	policy := ai.SemanticRetrievalPolicy{
-		MaxRetrievedMemories: 4,
-		MinSimilarity:        0.5,
-		MaxMemoryRunes:       800,
-	}
-	agent.SemanticMemory = &SemanticMemoryPolicy{
-		Enabled:                 true,
-		SemanticRetrievalPolicy: policy,
-	}
+	agent.MemoryEnabled = true
 
 	event := testLLMChatEvent("Otogi hi")
 	event.TenantID = "tenant-42"
@@ -144,9 +116,6 @@ func TestRetrieveSemanticMemoriesViaServicePopulatesRequest(t *testing.T) {
 	if req.Prompt != "hi" {
 		t.Fatalf("Prompt = %q, want hi", req.Prompt)
 	}
-	if req.EmbeddingProvider != "embed-main" {
-		t.Fatalf("EmbeddingProvider = %q, want embed-main", req.EmbeddingProvider)
-	}
 	if req.Scope.TenantID != "tenant-42" ||
 		req.Scope.Platform != string(platform.PlatformTelegram) ||
 		req.Scope.ConversationID != event.Conversation.ID {
@@ -156,8 +125,8 @@ func TestRetrieveSemanticMemoriesViaServicePopulatesRequest(t *testing.T) {
 		t.Fatalf("CurrentActor = %+v, want id=%s name=%s",
 			req.CurrentActor, event.Actor.ID, event.Actor.DisplayName)
 	}
-	if req.Policy != policy {
-		t.Fatalf("Policy = %+v, want %+v", req.Policy, policy)
+	if req.Policy != (ai.SemanticRetrievalPolicy{}) {
+		t.Fatalf("Policy = %+v, want implementation defaults", req.Policy)
 	}
 }
 
@@ -172,15 +141,7 @@ func TestRetrieveSemanticMemoriesViaServicePropagatesError(t *testing.T) {
 	module.semanticRetriever = retriever
 
 	agent := validModuleConfig().Agents[0]
-	agent.EmbeddingProvider = "embed-main"
-	agent.SemanticMemory = &SemanticMemoryPolicy{
-		Enabled: true,
-		SemanticRetrievalPolicy: ai.SemanticRetrievalPolicy{
-			MaxRetrievedMemories: 3,
-			MinSimilarity:        0.4,
-			MaxMemoryRunes:       1000,
-		},
-	}
+	agent.MemoryEnabled = true
 
 	_, err := module.retrieveSemanticMemoriesViaService(
 		context.Background(), testLLMChatEvent("Otogi hi"), agent, "hi",

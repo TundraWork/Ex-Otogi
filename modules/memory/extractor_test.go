@@ -302,7 +302,7 @@ func TestBuildMemoryProfileWithValidUntil(t *testing.T) {
 				Importance: 5,
 				ValidUntil: testCase.validUntil,
 			}
-			profile := buildMemoryProfile(candidate, extractionContext{AnchorTime: now}, now)
+			profile := buildMemoryProfile(candidate, extractionContext{AnchorTime: now})
 			if testCase.wantNil && profile.ValidUntil != nil {
 				t.Fatalf("profile.ValidUntil = %v, want nil", profile.ValidUntil)
 			}
@@ -371,25 +371,21 @@ func TestProcessWindowStoresNewMemory(t *testing.T) {
 	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
 	memoryStore := &recordingSemanticStore{}
 	module := New(withClock(func() time.Time { return now }), withConfig(Config{
-		Enabled:                      true,
-		ExtractionProvider:           "openai-main",
-		ExtractionModel:              "gpt-4.1-mini",
-		EmbeddingProvider:            "openai-main",
-		ExtractionTimeout:            time.Second,
-		ExtractionMaxInputRunes:      4000,
-		ConsolidationInterval:        0,
-		MaxMemoriesPerScope:          10,
-		DecayFactor:                  0.99,
-		MinImportance:                1,
-		DuplicateSimilarityThreshold: 0.85,
-		BufferQuietPeriod:            2 * time.Minute,
-		BufferMaxRunes:               3000,
-		BufferMaxArticles:            30,
-		BufferMaxAge:                 10 * time.Minute,
-		BufferCheckInterval:          15 * time.Second,
-		RetrievalSearchLimit:         20,
-		RetrievalPlanningEnabled:     true,
-		RetrievalPlanningTimeout:     10 * time.Second,
+		Enabled:                  true,
+		ExtractionProvider:       "openai-main",
+		ExtractionModel:          "gpt-4.1-mini",
+		EmbeddingProvider:        "openai-main",
+		ExtractionTimeout:        time.Second,
+		ExtractionMaxInputRunes:  4000,
+		ConsolidationInterval:    0,
+		BufferQuietPeriod:        2 * time.Minute,
+		BufferMaxRunes:           3000,
+		BufferMaxArticles:        30,
+		BufferMaxAge:             10 * time.Minute,
+		BufferCheckInterval:      15 * time.Second,
+		RetrievalSearchLimit:     20,
+		RetrievalPlanningEnabled: true,
+		RetrievalPlanningTimeout: 10 * time.Second,
 	}))
 	module.semanticStore = memoryStore
 	module.memory = &memoryContextStub{}

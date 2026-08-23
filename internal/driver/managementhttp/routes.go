@@ -11,6 +11,7 @@ import (
 
 type eventsInput struct {
 	AfterID        int64               `query:"after_id"`
+	BeforeID       int64               `query:"before_id"`
 	Limit          int                 `query:"limit"`
 	Category       panel.EventCategory `query:"category"`
 	Kind           string              `query:"kind"`
@@ -72,6 +73,7 @@ func registerRoutes(api huma.API, query panel.Query) {
 	huma.Get(api, "/panel/events", func(ctx context.Context, input *eventsInput) (*pageOutput, error) {
 		page, err := query.ListEvents(ctx, panel.EventQuery{
 			AfterID:        input.AfterID,
+			BeforeID:       input.BeforeID,
 			Limit:          input.Limit,
 			Category:       input.Category,
 			Kind:           input.Kind,

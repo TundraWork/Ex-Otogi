@@ -2,11 +2,12 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
 
+	"ex-otogi/pkg/llm"
+	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
 	"ex-otogi/pkg/otogi/platform"
@@ -15,11 +16,16 @@ import (
 func TestOnRegisterLoadsConfigAndSubscribes(t *testing.T) {
 	t.Parallel()
 
-	llmConfigPath := writeNaturalMemoryLLMConfigFile(t)
+	llmConfigPath := writeMemoryLLMConfigFile(t)
+	llmCfg, err := llmconfig.LoadFile(llmConfigPath)
+	if err != nil {
+		t.Fatalf("load LLM config: %v", err)
+	}
 	services := newRecordingServiceRegistry(map[string]any{
-		serviceLogger:           slog.Default(),
-		ai.ServiceSemanticStore: &recordingSemanticStore{},
-		core.ServiceMemory:      &memoryContextStub{},
+		serviceLogger:            slog.Default(),
+		llm.ServiceRuntimeConfig: llmCfg,
+		ai.ServiceSemanticStore:  &recordingSemanticStore{},
+		core.ServiceMemory:       &memoryContextStub{},
 		ai.ServiceLLMProviderRegistry: &llmProviderRegistryStub{providers: map[string]ai.LLMProvider{
 			"openai-main":          &llmProviderStub{stream: &llmStreamStub{}},
 			"openai-consolidation": &llmProviderStub{stream: &llmStreamStub{}},
@@ -35,7 +41,7 @@ func TestOnRegisterLoadsConfigAndSubscribes(t *testing.T) {
 	)
 	runtime := registrationRuntimeStub{
 		registry: services,
-		configs:  testNaturalMemoryConfigRegistry(t, llmConfigPath),
+		configs:  newConfigRegistryStub(),
 		subscribe: func(
 			_ context.Context,
 			interest core.InterestSet,
@@ -89,7 +95,8 @@ func TestOnRegisterWithoutConfigLeavesModuleDisabled(t *testing.T) {
 	t.Parallel()
 
 	services := newRecordingServiceRegistry(map[string]any{
-		serviceLogger: slog.Default(),
+		serviceLogger:            slog.Default(),
+		llm.ServiceRuntimeConfig: llmconfig.Config{},
 	})
 	subscribed := false
 	runtime := registrationRuntimeStub{
@@ -118,25 +125,21 @@ func TestHandleArticleEnqueuesIntoWindowManager(t *testing.T) {
 
 	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
 	cfg := Config{
-		Enabled:                      true,
-		ExtractionProvider:           "openai-main",
-		ExtractionModel:              "gpt-4.1-mini",
-		EmbeddingProvider:            "openai-main",
-		ExtractionTimeout:            time.Second,
-		ExtractionMaxInputRunes:      4000,
-		ConsolidationInterval:        0,
-		MaxMemoriesPerScope:          10,
-		DecayFactor:                  0.99,
-		MinImportance:                1,
-		DuplicateSimilarityThreshold: 0.85,
-		BufferQuietPeriod:            2 * time.Minute,
-		BufferMaxRunes:               3000,
-		BufferMaxArticles:            30,
-		BufferMaxAge:                 10 * time.Minute,
-		BufferCheckInterval:          15 * time.Second,
-		RetrievalSearchLimit:         20,
-		RetrievalPlanningEnabled:     true,
-		RetrievalPlanningTimeout:     10 * time.Second,
+		Enabled:                  true,
+		ExtractionProvider:       "openai-main",
+		ExtractionModel:          "gpt-4.1-mini",
+		EmbeddingProvider:        "openai-main",
+		ExtractionTimeout:        time.Second,
+		ExtractionMaxInputRunes:  4000,
+		ConsolidationInterval:    0,
+		BufferQuietPeriod:        2 * time.Minute,
+		BufferMaxRunes:           3000,
+		BufferMaxArticles:        30,
+		BufferMaxAge:             10 * time.Minute,
+		BufferCheckInterval:      15 * time.Second,
+		RetrievalSearchLimit:     20,
+		RetrievalPlanningEnabled: true,
+		RetrievalPlanningTimeout: 10 * time.Second,
 	}
 	module := New(withClock(func() time.Time { return now }), withConfig(cfg))
 	module.windowManager = newWindowManager(cfg, func() time.Time { return now })
@@ -179,22 +182,18 @@ func TestOnStartAndShutdownManageConsolidationLifecycle(t *testing.T) {
 	t.Parallel()
 
 	cfg := Config{
-		Enabled:                      true,
-		ExtractionTimeout:            time.Second,
-		ExtractionMaxInputRunes:      4000,
-		ConsolidationInterval:        10 * time.Millisecond,
-		MaxMemoriesPerScope:          10,
-		DecayFactor:                  0.99,
-		MinImportance:                1,
-		DuplicateSimilarityThreshold: 0.85,
-		BufferQuietPeriod:            2 * time.Minute,
-		BufferMaxRunes:               3000,
-		BufferMaxArticles:            30,
-		BufferMaxAge:                 10 * time.Minute,
-		BufferCheckInterval:          15 * time.Second,
-		RetrievalSearchLimit:         20,
-		RetrievalPlanningEnabled:     true,
-		RetrievalPlanningTimeout:     10 * time.Second,
+		Enabled:                  true,
+		ExtractionTimeout:        time.Second,
+		ExtractionMaxInputRunes:  4000,
+		ConsolidationInterval:    10 * time.Millisecond,
+		BufferQuietPeriod:        2 * time.Minute,
+		BufferMaxRunes:           3000,
+		BufferMaxArticles:        30,
+		BufferMaxAge:             10 * time.Minute,
+		BufferCheckInterval:      15 * time.Second,
+		RetrievalSearchLimit:     20,
+		RetrievalPlanningEnabled: true,
+		RetrievalPlanningTimeout: 10 * time.Second,
 	}
 	module := New(withConfig(cfg))
 	module.semanticStore = &recordingSemanticStore{}
@@ -214,21 +213,5 @@ func TestOnStartAndShutdownManageConsolidationLifecycle(t *testing.T) {
 	}
 	if module.stopCh != nil || module.flushDone != nil {
 		t.Fatal("expected consolidation channels to be cleared")
-	}
-}
-
-func TestConfigRegistryMarshalRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	raw, err := json.Marshal(fileModuleConfig{ConfigFile: "config/llm.json"})
-	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
-	}
-	var cfg fileModuleConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatalf("Unmarshal failed: %v", err)
-	}
-	if cfg.ConfigFile != "config/llm.json" {
-		t.Fatalf("config_file = %q, want config/llm.json", cfg.ConfigFile)
 	}
 }

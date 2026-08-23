@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"ex-otogi/pkg/llm"
 	"ex-otogi/pkg/otogi/ai"
 )
 
@@ -37,7 +38,7 @@ func retryLLMOperation[T any](
 	logger *slog.Logger,
 	operation string,
 	provider ai.LLMProvider,
-	execute func() (T, error),
+	execute func(context.Context) (T, error),
 ) (T, error) {
 	var zero T
 	if execute == nil {
@@ -53,7 +54,8 @@ func retryLLMOperation[T any](
 	var result T
 	var err error
 	for attempt := 1; attempt <= llmRetryMaxAttempts; attempt++ {
-		result, err = execute()
+		attemptCtx := llm.WithAttempt(ctx, attempt)
+		result, err = execute(attemptCtx)
 		if err == nil {
 			return result, nil
 		}

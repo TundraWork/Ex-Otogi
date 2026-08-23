@@ -3,7 +3,6 @@ package llmchat
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -11,6 +10,91 @@ import (
 	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
+
+func (m *Module) beginChatRequest(ctx context.Context, event *platform.Event, agent Agent) context.Context {
+	if m == nil || m.recorder == nil {
+		return ctx
+	}
+	recorded, err := m.recorder.RecordEvent(ctx, panel.Event{
+		OccurredAt:     m.now(),
+		Category:       panel.EventCategoryLLM,
+		Kind:           "chat.request.accepted",
+		Level:          panel.EventLevelInfo,
+		Module:         m.Name(),
+		Component:      "orchestrator",
+		Platform:       string(event.Source.Platform),
+		ConversationID: event.Conversation.ID,
+		ActorID:        event.Actor.ID,
+		Subject:        "accepted chat request",
+		Description:    panel.TruncateDescription(fmt.Sprintf("%s using %s/%s", agent.Name, agent.Provider, agent.Model)),
+		Payload: panel.ChatRequestPayload{
+			Agent: agent.Name, Provider: agent.Provider, Model: agent.Model, Outcome: "accepted",
+			State: string(chatStateAccepted), MaxAttempts: llmRetryMaxAttempts,
+		},
+	})
+	if err != nil || recorded.ID == 0 {
+		return ctx
+	}
+
+	trace, _ := panel.TraceFromContext(ctx)
+	parentID := recorded.ID
+	trace.ParentEventID = &parentID
+
+	return panel.WithTrace(ctx, trace)
+}
+
+func (m *Module) finishChatRequest(
+	ctx context.Context,
+	event *platform.Event,
+	agent Agent,
+	startedAt time.Time,
+	handlerErr error,
+) {
+	if m == nil || m.recorder == nil {
+		return
+	}
+
+	outcome := "completed"
+	kind := "chat.request.completed"
+	level := panel.EventLevelInfo
+	failureClass := ""
+	terminalState := chatStateCompleted
+	if handlerErr != nil {
+		failureClass = string(ai.ClassifyLLMFailure(handlerErr))
+		outcome, kind, level, terminalState = "failed", "chat.request.failed", panel.EventLevelError, chatStateFailed
+		if ai.ClassifyLLMFailure(handlerErr) == ai.LLMFailureCanceled {
+			outcome, kind, level, terminalState = "canceled", "chat.request.canceled", panel.EventLevelWarn, chatStateCanceled
+		}
+	}
+	transitionChatState(ctx, terminalState)
+
+	payload := panel.ChatRequestPayload{
+		Agent: agent.Name, Provider: agent.Provider, Model: agent.Model, Outcome: outcome, State: string(terminalState),
+		ElapsedMS: m.now().Sub(startedAt).Milliseconds(), FailureClass: failureClass,
+		MaxAttempts: llmRetryMaxAttempts,
+	}
+	description := fmt.Sprintf("%s in %dms", outcome, payload.ElapsedMS)
+	if handlerErr != nil {
+		payload.Error = handlerErr.Error()
+		description = handlerErr.Error()
+	}
+	if _, err := m.recorder.RecordEvent(ctx, panel.Event{
+		OccurredAt:     m.now(),
+		Category:       panel.EventCategoryLLM,
+		Kind:           kind,
+		Level:          level,
+		Module:         m.Name(),
+		Component:      "orchestrator",
+		Platform:       string(event.Source.Platform),
+		ConversationID: event.Conversation.ID,
+		ActorID:        event.Actor.ID,
+		Subject:        "chat request " + outcome,
+		Description:    panel.TruncateDescription(description),
+		Payload:        payload,
+	}); err != nil && m.logger != nil {
+		m.logger.ErrorContext(ctx, "record chat request terminal event", "error", err)
+	}
+}
 
 func (m *Module) emitManagementEvent(
 	ctx context.Context,
@@ -32,7 +116,6 @@ func (m *Module) emitManagementEvent(
 		Component:   "semantic-memory",
 		Subject:     summary,
 		Description: description,
-		PayloadType: llmchatPayloadTypeName(payload),
 		Payload:     payload,
 	}
 	if stringsHasLLMPrefix(kind) {
@@ -70,26 +153,26 @@ func (m *Module) recordToolExecuted(
 	if !success {
 		successLabel = "failure"
 	}
-	m.emitManagementEvent(
-		ctx,
-		event,
-		"llm.tool.executed",
-		"executed tool call",
-		toolExecutionDescription(toolCall, successLabel, elapsed, err),
-		payload,
-	)
-}
-
-func llmchatPayloadTypeName(payload any) string {
-	if payload == nil {
-		return ""
+	level := panel.EventLevelInfo
+	if !success {
+		level = panel.EventLevelWarn
 	}
-	typ := reflect.TypeOf(payload)
-	if typ.Kind() == reflect.Pointer {
-		typ = typ.Elem()
+	managedEvent := panel.Event{
+		Category: panel.EventCategoryTool, Kind: "tool.call.completed", Level: level,
+		Module: m.Name(), Component: "tool-execution", Subject: "tool call " + successLabel,
+		Description: toolExecutionDescription(toolCall, successLabel, elapsed, err),
+		Payload:     payload,
 	}
-
-	return typ.Name()
+	if event != nil {
+		managedEvent.Platform = string(event.Source.Platform)
+		managedEvent.ConversationID = event.Conversation.ID
+		managedEvent.ActorID = event.Actor.ID
+	}
+	if m != nil && m.recorder != nil {
+		if _, recordErr := m.recorder.RecordEvent(ctx, managedEvent); recordErr != nil && m.logger != nil {
+			m.logger.ErrorContext(ctx, "record tool call event", "error", recordErr)
+		}
+	}
 }
 
 func stringsHasLLMPrefix(kind string) bool {

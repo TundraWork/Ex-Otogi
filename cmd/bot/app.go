@@ -22,6 +22,7 @@ import (
 	"ex-otogi/modules/eventcache"
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/llmchat"
+	"ex-otogi/modules/llmruntime"
 	"ex-otogi/modules/memory"
 	"ex-otogi/modules/nbnhhsh"
 	"ex-otogi/modules/pingpong"
@@ -52,6 +53,7 @@ const (
 
 var runtimeModules = []func() core.Module{
 	func() core.Module { return eventcache.New() },
+	func() core.Module { return llmruntime.New() },
 	func() core.Module { return semanticstore.New() },
 	func() core.Module { return quotehelper.New() },
 	func() core.Module { return duel.New() },
@@ -59,8 +61,8 @@ var runtimeModules = []func() core.Module{
 	func() core.Module { return pingpong.New() },
 	func() core.Module { return help.New() },
 	func() core.Module { return sleep.New() },
-	func() core.Module { return llmchat.New() },
 	func() core.Module { return memory.New() },
+	func() core.Module { return llmchat.New() },
 	func() core.Module { return whoami.New() },
 }
 
@@ -514,6 +516,11 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 			return fmt.Errorf("routing.modules.%s: unknown module", moduleName)
 		}
 	}
+	for _, deprecatedConfig := range []string{"llmchat", "memory", "semanticstore"} {
+		if _, exists := cfg.moduleConfigs[deprecatedConfig]; exists {
+			return fmt.Errorf("modules.%s is no longer supported; configure modules.llmruntime.config_file and the top-level memory section in the LLM config", deprecatedConfig)
+		}
+	}
 
 	for moduleName, route := range cfg.moduleRoutes {
 		if err := validateRouteRefs(route, enabledByName, fmt.Sprintf("routing.modules.%s", moduleName)); err != nil {
@@ -600,7 +607,6 @@ func parseLogLevel(raw string) (slog.Level, error) {
 func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *kernelmanagement.SQLiteStore, error) {
 	var managementStore *kernelmanagement.SQLiteStore
 	var asyncErrorHandler func(context.Context, string, error)
-	var publishObserver func(context.Context, *platform.Event, int)
 	if cfg.management.enabled {
 		if err := os.MkdirAll(filepath.Dir(cfg.management.databasePath), 0o755); err != nil {
 			return nil, nil, fmt.Errorf("create management database directory: %w", err)
@@ -622,32 +628,9 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *ke
 				Component:   "event-bus",
 				Subject:     "asynchronous runtime error",
 				Description: panel.TruncateDescription(fmt.Sprintf("%s: %s", scope, err.Error())),
-				PayloadType: "RuntimeAsyncErrorPayload",
 				Payload: panel.RuntimeAsyncErrorPayload{
 					Operation: scope,
 					Error:     err.Error(),
-				},
-			})
-		}
-		publishObserver = func(ctx context.Context, event *platform.Event, subscriberCount int) {
-			if event == nil {
-				return
-			}
-			recordManagementEvent(ctx, managementStore, panel.Event{
-				Category:       panel.EventCategoryBusinessEvent,
-				Kind:           "platform.event.published",
-				Level:          panel.EventLevelDebug,
-				Module:         "kernel",
-				Component:      "event-bus",
-				Platform:       string(event.Source.Platform),
-				ConversationID: event.Conversation.ID,
-				ActorID:        event.Actor.ID,
-				Subject:        "published platform event to matching subscribers",
-				Description:    publishedPlatformEventDescription(event, subscriberCount),
-				PayloadType:    "PlatformEventPublishedPayload",
-				Payload: panel.PlatformEventPublishedPayload{
-					EventKind:       string(event.Kind),
-					SubscriberCount: subscriberCount,
 				},
 			})
 		}
@@ -655,7 +638,6 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *ke
 	kernelRuntime, err := kernel.New(
 		kernel.WithLogger(logger),
 		kernel.WithAsyncErrorHandler(asyncErrorHandler),
-		kernel.WithPublishObserver(publishObserver),
 		kernel.WithModuleHookTimeout(cfg.moduleLifecycleTimeout),
 		kernel.WithDefaultHandlerTimeout(cfg.moduleHandlerTimeout),
 		kernel.WithShutdownTimeout(cfg.shutdownTimeout),
@@ -686,22 +668,6 @@ func recordManagementEvent(ctx context.Context, recorder panel.Recorder, event p
 	_, err := recorder.RecordEvent(ctx, event)
 	if err != nil {
 		return
-	}
-}
-
-func publishedPlatformEventDescription(event *platform.Event, subscriberCount int) string {
-	if event == nil {
-		return ""
-	}
-
-	summary := fmt.Sprintf("%s to %d subscribers", event.Kind, subscriberCount)
-	switch {
-	case event.Article != nil && strings.TrimSpace(event.Article.Text) != "":
-		return panel.TruncateDescription(summary + ": " + event.Article.Text)
-	case event.Command != nil && strings.TrimSpace(event.Command.RawInput) != "":
-		return panel.TruncateDescription(summary + ": " + event.Command.RawInput)
-	default:
-		return panel.TruncateDescription(summary)
 	}
 }
 

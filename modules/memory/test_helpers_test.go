@@ -139,7 +139,6 @@ func (s *recordingSemanticStore) Store(_ context.Context, entry ai.SemanticEntry
 		Category:  entry.Category,
 		Embedding: append([]float32(nil), entry.Embedding...),
 		Profile:   entry.Profile,
-		Metadata:  cloneStringMap(entry.Metadata),
 	}
 	s.listResp = append(s.listResp, record)
 
@@ -170,7 +169,6 @@ func (s *recordingSemanticStore) Update(
 		Category:  update.Category,
 		Embedding: append([]float32(nil), update.Embedding...),
 		Profile:   update.Profile,
-		Metadata:  cloneStringMap(update.Metadata),
 	}
 	for index := range s.listResp {
 		if s.listResp[index].ID != update.ID {
@@ -348,22 +346,20 @@ func (r *configRegistryStub) Resolve(moduleName string) (json.RawMessage, error)
 	return append(json.RawMessage(nil), raw...), nil
 }
 
-func writeNaturalMemoryLLMConfigFile(t testingT) string {
+func writeMemoryLLMConfigFile(t testingT) string {
 	t.Helper()
 
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("memory-%d.json", time.Now().UnixNano()))
 	body := `{
 		"request_timeout":"90s",
 		"providers":{
-			"openai-main":{"type":"openai","api_key":"sk-test"}
+			"openai-main":{"type":"openai","api_key":"sk-test","embedding_model":"text-embedding-3-small","embedding_dimensions":2}
 		},
-		"natural_memory":{
-			"enabled":true,
+		"memory":{
 			"extraction_provider":"openai-main",
 			"extraction_model":"gpt-4.1-mini",
 			"embedding_provider":"openai-main",
-			"extraction_timeout":"30s",
-			"consolidation_interval":"1h"
+			"database_file":"data/test-memory.db"
 		},
 		"agents":[
 			{
@@ -382,22 +378,6 @@ func writeNaturalMemoryLLMConfigFile(t testingT) string {
 	t.Cleanup(func() { _ = os.Remove(path) })
 
 	return path
-}
-
-func testNaturalMemoryConfigRegistry(t testingT, configFile string) core.ConfigRegistry {
-	t.Helper()
-
-	raw, err := json.Marshal(fileModuleConfig{ConfigFile: configFile})
-	if err != nil {
-		t.Fatalf("marshal module config: %v", err)
-	}
-
-	registry := newConfigRegistryStub()
-	if err := registry.Register("memory", raw); err != nil {
-		t.Fatalf("register module config: %v", err)
-	}
-
-	return registry
 }
 
 type testingT interface {

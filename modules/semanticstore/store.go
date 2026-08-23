@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,25 +14,20 @@ import (
 )
 
 const (
-	defaultSearchLimit       = 5
-	defaultMinSimilarity     = 0.3
-	defaultProfileImportance = 5
+	defaultSearchLimit   = 5
+	defaultMinSimilarity = 0.3
 )
 
 // Store is a concurrency-safe in-memory semantic memory store.
 type Store struct {
-	mu         sync.RWMutex
-	records    map[string]*ai.SemanticRecord
-	scopes     map[ai.SemanticScope][]string
-	clock      func() time.Time
-	newID      func() string
-	maxEntries int
+	mu      sync.RWMutex
+	records map[string]*ai.SemanticRecord
+	scopes  map[ai.SemanticScope][]string
+	clock   func() time.Time
+	newID   func() string
 }
 
-func newStore(maxEntries int, clock func() time.Time, newID func() string) *Store {
-	if maxEntries <= 0 {
-		maxEntries = defaultMaxEntries
-	}
+func newStore(clock func() time.Time, newID func() string) *Store {
 	if clock == nil {
 		clock = time.Now
 	}
@@ -42,11 +36,10 @@ func newStore(maxEntries int, clock func() time.Time, newID func() string) *Stor
 	}
 
 	return &Store{
-		records:    make(map[string]*ai.SemanticRecord),
-		scopes:     make(map[ai.SemanticScope][]string),
-		clock:      clock,
-		newID:      newID,
-		maxEntries: maxEntries,
+		records: make(map[string]*ai.SemanticRecord),
+		scopes:  make(map[ai.SemanticScope][]string),
+		clock:   clock,
+		newID:   newID,
 	}
 }
 
@@ -66,8 +59,7 @@ func (s *Store) Store(ctx context.Context, entry ai.SemanticEntry) (ai.SemanticR
 		Content:   strings.TrimSpace(entry.Content),
 		Category:  strings.TrimSpace(entry.Category),
 		Embedding: cloneEmbedding(entry.Embedding),
-		Profile:   normalizeProfile(entry.Profile, entry.Metadata, now),
-		Metadata:  cloneMetadata(entry.Metadata),
+		Profile:   cloneProfile(entry.Profile),
 		Keywords:  cloneStrings(entry.Keywords),
 		Tags:      cloneStrings(entry.Tags),
 		Links:     cloneLinks(entry.Links),
@@ -80,10 +72,6 @@ func (s *Store) Store(ctx context.Context, entry ai.SemanticEntry) (ai.SemanticR
 
 	s.records[record.ID] = &record
 	s.scopes[record.Scope] = append(s.scopes[record.Scope], record.ID)
-	if s.maxEntries > 0 && len(s.scopes[record.Scope]) > s.maxEntries {
-		oldestID := s.scopes[record.Scope][0]
-		s.removeRecordLocked(oldestID)
-	}
 
 	return cloneRecord(record), nil
 }
@@ -163,8 +151,7 @@ func (s *Store) Update(ctx context.Context, update ai.SemanticUpdate) (ai.Semant
 	record.Content = strings.TrimSpace(update.Content)
 	record.Category = strings.TrimSpace(update.Category)
 	record.Embedding = cloneEmbedding(update.Embedding)
-	record.Profile = normalizeProfile(update.Profile, update.Metadata, s.now())
-	record.Metadata = cloneMetadata(update.Metadata)
+	record.Profile = cloneProfile(update.Profile)
 	record.Keywords = cloneStrings(update.Keywords)
 	record.Tags = cloneStrings(update.Tags)
 	record.Links = cloneLinks(update.Links)
@@ -255,32 +242,6 @@ func (s *Store) removeRecordLocked(id string) {
 	delete(s.records, id)
 }
 
-func (s *Store) recordCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return len(s.records)
-}
-
-func (s *Store) lookupScope(id string) (ai.SemanticScope, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	record := s.records[strings.TrimSpace(id)]
-	if record == nil {
-		return ai.SemanticScope{}, false
-	}
-
-	return record.Scope, true
-}
-
-func (s *Store) scopeCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	return len(s.scopes)
-}
-
 func (s *Store) now() time.Time {
 	return s.clock().UTC()
 }
@@ -313,7 +274,6 @@ func dotProduct(a, b []float32) float32 {
 func cloneRecord(record ai.SemanticRecord) ai.SemanticRecord {
 	record.Embedding = cloneEmbedding(record.Embedding)
 	record.Profile = cloneProfile(record.Profile)
-	record.Metadata = cloneMetadata(record.Metadata)
 	record.Keywords = cloneStrings(record.Keywords)
 	record.Tags = cloneStrings(record.Tags)
 	record.Links = cloneLinks(record.Links)
@@ -321,7 +281,6 @@ func cloneRecord(record ai.SemanticRecord) ai.SemanticRecord {
 }
 
 func cloneProfile(profile ai.SemanticProfile) ai.SemanticProfile {
-	profile.LastAccessedAt = profile.LastAccessedAt.UTC()
 	profile.SourceActor = cloneActorRef(profile.SourceActor)
 	profile.SubjectActor = cloneActorRef(profile.SubjectActor)
 	if len(profile.EvidenceRecordIDs) > 0 {
@@ -354,19 +313,6 @@ func cloneEmbedding(embedding []float32) []float32 {
 	return append([]float32(nil), embedding...)
 }
 
-func cloneMetadata(metadata map[string]string) map[string]string {
-	if len(metadata) == 0 {
-		return nil
-	}
-
-	cloned := make(map[string]string, len(metadata))
-	for key, value := range metadata {
-		cloned[key] = value
-	}
-
-	return cloned
-}
-
 func cloneStrings(values []string) []string {
 	if len(values) == 0 {
 		return nil
@@ -381,151 +327,6 @@ func cloneLinks(links []ai.SemanticLink) []ai.SemanticLink {
 	}
 
 	return append([]ai.SemanticLink(nil), links...)
-}
-
-func normalizeProfile(
-	profile ai.SemanticProfile,
-	metadata map[string]string,
-	fallbackAccess time.Time,
-) ai.SemanticProfile {
-	normalized := cloneProfile(profile)
-	if normalized.Kind == "" {
-		normalized.Kind = ai.SemanticKindUnit
-	}
-	if normalized.Importance == 0 {
-		normalized.Importance = parseMetadataInt(metadata, ai.SemanticMetadataImportance, defaultProfileImportance)
-	}
-	if normalized.LastAccessedAt.IsZero() {
-		normalized.LastAccessedAt = parseMetadataTime(metadata, ai.SemanticMetadataLastAccessed, fallbackAccess)
-	}
-	normalized.LastAccessedAt = normalized.LastAccessedAt.UTC()
-	if normalized.AccessCount == 0 {
-		normalized.AccessCount = parseMetadataInt(metadata, ai.SemanticMetadataAccessCount, 0)
-	}
-	if strings.TrimSpace(normalized.Source) == "" {
-		normalized.Source = strings.TrimSpace(metadata[ai.SemanticMetadataSource])
-	}
-	if strings.TrimSpace(normalized.SourceArticleID) == "" {
-		normalized.SourceArticleID = strings.TrimSpace(metadata[ai.SemanticMetadataSourceArticleID])
-	}
-	if normalized.SourceActor == nil {
-		normalized.SourceActor = parseActorRef(
-			metadata,
-			ai.SemanticMetadataSourceActorID,
-			ai.SemanticMetadataSourceActorName,
-			ai.SemanticMetadataSourceActorIsBot,
-		)
-	}
-	if normalized.SubjectActor == nil {
-		normalized.SubjectActor = parseActorRef(
-			metadata,
-			ai.SemanticMetadataSubjectActorID,
-			ai.SemanticMetadataSubjectActorName,
-			ai.SemanticMetadataSubjectActorIsBot,
-		)
-	}
-	if len(normalized.EvidenceRecordIDs) == 0 {
-		normalized.EvidenceRecordIDs = parseMetadataCSV(metadata, ai.SemanticMetadataSourceRecordIDs)
-	}
-
-	return normalized
-}
-
-func parseMetadataInt(metadata map[string]string, key string, defaultValue int) int {
-	if len(metadata) == 0 {
-		return defaultValue
-	}
-
-	raw := strings.TrimSpace(metadata[key])
-	if raw == "" {
-		return defaultValue
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return defaultValue
-	}
-
-	return value
-}
-
-func parseMetadataTime(metadata map[string]string, key string, defaultValue time.Time) time.Time {
-	if len(metadata) == 0 {
-		return defaultValue.UTC()
-	}
-
-	raw := strings.TrimSpace(metadata[key])
-	if raw == "" {
-		return defaultValue.UTC()
-	}
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return defaultValue.UTC()
-	}
-
-	return parsed.UTC()
-}
-
-func parseMetadataCSV(metadata map[string]string, key string) []string {
-	if len(metadata) == 0 {
-		return nil
-	}
-
-	raw := strings.TrimSpace(metadata[key])
-	if raw == "" {
-		return nil
-	}
-
-	parts := strings.Split(raw, ",")
-	ids := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		ids = append(ids, trimmed)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-
-	return ids
-}
-
-func parseActorRef(metadata map[string]string, idKey string, nameKey string, isBotKey string) *ai.SemanticActorRef {
-	if len(metadata) == 0 {
-		return nil
-	}
-
-	actor := &ai.SemanticActorRef{
-		ID:   strings.TrimSpace(metadata[idKey]),
-		Name: strings.TrimSpace(metadata[nameKey]),
-	}
-	if actor.ID == "" && actor.Name == "" {
-		return nil
-	}
-	if raw := strings.TrimSpace(metadata[isBotKey]); raw != "" {
-		if parsed, err := strconv.ParseBool(raw); err == nil {
-			actor.IsBot = parsed
-		}
-	}
-
-	return actor
-}
-
-func validateMemoryEmbedding(embedding []float32) error {
-	if err := (ai.SemanticEntry{
-		Scope: ai.SemanticScope{
-			Platform:       "validation",
-			ConversationID: "validation",
-		},
-		Content:   "validation",
-		Category:  "validation",
-		Embedding: embedding,
-	}).Validate(); err != nil {
-		return fmt.Errorf("validate memory embedding: %w", err)
-	}
-
-	return nil
 }
 
 var _ ai.SemanticStore = (*Store)(nil)

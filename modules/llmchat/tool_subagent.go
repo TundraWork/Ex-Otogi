@@ -114,8 +114,8 @@ func (t *subAgentTool) Execute(ctx context.Context, args json.RawMessage) (strin
 		t.logger,
 		fmt.Sprintf("sub-agent tool %s", t.cfg.Name),
 		t.provider,
-		func() (string, error) {
-			return t.executeOnce(ctx, req)
+		func(attemptCtx context.Context) (string, error) {
+			return t.executeOnce(attemptCtx, req)
 		},
 	)
 	if err != nil {

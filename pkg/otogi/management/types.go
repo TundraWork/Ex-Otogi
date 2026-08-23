@@ -80,9 +80,8 @@ type Event struct {
 	// payload. Maximum 140 Unicode characters. Empty when no relevant content
 	// is available.
 	Description string
-	// PayloadType names the concrete DTO stored in Payload.
-	PayloadType string
-	// Payload carries the kind-specific event DTO.
+	// Payload carries kind-specific JSON-compatible data. Kind is the semantic
+	// discriminator; Go type names are not part of the observability contract.
 	Payload any
 	// ArtifactIDs links the event to retained debugging artifacts.
 	ArtifactIDs []string
@@ -114,26 +113,29 @@ type Snapshot struct {
 	UpdatedAt time.Time
 	// Summary provides one short human-readable description.
 	Summary string
-	// PayloadType names the concrete DTO stored in Payload.
-	PayloadType string
-	// Payload stores the snapshot-specific structured value.
+	// Payload stores namespace-specific JSON-compatible data.
 	Payload any
 }
 
-// EventPage is the polling response shape for incremental event queries.
+// EventPage is one newest-first page of the management event timeline.
 type EventPage struct {
-	// Items contains retained events in ascending event ID order.
+	// Items contains retained events in descending event ID order.
 	Items []Event
-	// LastID is the newest event ID returned or retained by the query result.
-	LastID int64
+	// OldestID is the oldest event ID returned by this page.
+	OldestID int64
+	// NewestID is the newest event ID returned, or the unchanged AfterID cursor
+	// when a newer query returns no matches.
+	NewestID int64
 	// WindowStartID is the oldest currently retained event ID.
 	WindowStartID int64
 	// WindowEndID is the newest currently retained event ID.
 	WindowEndID int64
 	// CursorResetRequired indicates that the caller's cursor predates retention.
 	CursorResetRequired bool
-	// HasMore indicates that additional matching retained events remain.
-	HasMore bool
+	// HasOlder indicates that additional matching events exist below OldestID.
+	HasOlder bool
+	// HasNewer indicates that additional matching events exist above NewestID.
+	HasNewer bool
 }
 
 // TraceView returns one retained event timeline for a specific trace.

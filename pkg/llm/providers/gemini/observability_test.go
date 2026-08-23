@@ -12,7 +12,7 @@ import (
 	"google.golang.org/genai"
 )
 
-func TestGeminiProviderObservabilityEmitsEventsAndArtifacts(t *testing.T) {
+func TestGeminiProviderObservabilityEmitsMetadataOnlyEvents(t *testing.T) {
 	t.Parallel()
 
 	recorder := &managementRecorderStub{}
@@ -51,14 +51,14 @@ func TestGeminiProviderObservabilityEmitsEventsAndArtifacts(t *testing.T) {
 	if recorder.events[0].Kind != "llm.call.started" || recorder.events[1].Kind != "llm.call.completed" {
 		t.Fatalf("event kinds = [%q,%q], want llm.call.started/completed", recorder.events[0].Kind, recorder.events[1].Kind)
 	}
-	if recorder.events[0].Description != "1 messages, 0 tools: hello" {
-		t.Fatalf("start description = %q, want request preview", recorder.events[0].Description)
+	if recorder.events[0].Description != "gemini-2.5-flash: 1 messages, 0 tools" {
+		t.Fatalf("start description = %q, want metadata summary", recorder.events[0].Description)
 	}
-	if recorder.events[1].Description != "hello" {
-		t.Fatalf("completed description = %q, want hello", recorder.events[1].Description)
+	if recorder.events[1].Level != panel.EventLevelInfo {
+		t.Fatalf("completed level = %q, want info", recorder.events[1].Level)
 	}
-	if len(recorder.artifacts) < 2 {
-		t.Fatalf("artifact count = %d, want at least 2", len(recorder.artifacts))
+	if len(recorder.artifacts) != 0 {
+		t.Fatalf("artifact count = %d, want no implicit prompt/response retention", len(recorder.artifacts))
 	}
 }
 
@@ -88,8 +88,8 @@ func TestGeminiEmbeddingObservabilityEmitsFailureEvent(t *testing.T) {
 	if recorder.events[1].Kind != "embedding.call.failed" {
 		t.Fatalf("last event kind = %q, want embedding.call.failed", recorder.events[1].Kind)
 	}
-	if recorder.events[0].Description != "1 input: hello" {
-		t.Fatalf("start description = %q, want embedding request preview", recorder.events[0].Description)
+	if recorder.events[0].Description != "1 input" {
+		t.Fatalf("start description = %q, want metadata summary", recorder.events[0].Description)
 	}
 	if recorder.events[1].Description != "1 input: boom" {
 		t.Fatalf("failure description = %q, want request summary with error", recorder.events[1].Description)

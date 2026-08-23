@@ -3,14 +3,11 @@ package memory
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
 	panel "ex-otogi/pkg/otogi/management"
 )
-
-const consolidationPruneScoreThreshold = 1.0
 
 func (m *Module) startConsolidation(ctx context.Context) {
 	stopCh := make(chan struct{})
@@ -129,9 +126,7 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.SemanticScope) e
 	}
 
 	now := m.now()
-	kept := make([]ai.SemanticRecord, 0, len(records))
 	expiredCount := 0
-	prunedCount := 0
 	for _, record := range records {
 		if record.Profile.ValidUntil != nil && record.Profile.ValidUntil.Before(now) {
 			if err := m.semanticStore.Delete(ctx, record.ID); err != nil {
@@ -140,62 +135,17 @@ func (m *Module) consolidateScope(ctx context.Context, scope ai.SemanticScope) e
 			expiredCount++
 			continue
 		}
-		importance := memoryImportance(record)
-		if importance < m.cfg.MinImportance || effectiveScore(record, m.cfg.DecayFactor, now) < consolidationPruneScoreThreshold {
-			if err := m.semanticStore.Delete(ctx, record.ID); err != nil {
-				return fmt.Errorf("delete pruned memory %s: %w", record.ID, err)
-			}
-			prunedCount++
-			continue
-		}
-		kept = append(kept, record)
 	}
-	m.debugConsolidationScopeStart(ctx, scope, len(records), expiredCount, prunedCount, len(kept))
+	keptCount := len(records) - expiredCount
+	m.debugConsolidationScopeStart(ctx, scope, len(records), expiredCount, 0, keptCount)
 
-	if expiredCount > 0 || prunedCount > 0 {
-		m.emitManagementEvent(ctx, &scope, "memory.consolidation.pruned", "pruned expired and low-score memories", consolidationPrunedDescription(expiredCount, prunedCount, len(kept)), panel.MemoryConsolidationPrunedPayload{
+	if expiredCount > 0 {
+		m.emitManagementEvent(ctx, &scope, "memory.consolidation.pruned", "removed expired memories", consolidationPrunedDescription(expiredCount, 0, keptCount), panel.MemoryConsolidationPrunedPayload{
 			TotalRecords:     len(records),
 			ExpiredCount:     expiredCount,
-			DecayPrunedCount: prunedCount,
-			KeptCount:        len(kept),
+			DecayPrunedCount: 0,
+			KeptCount:        keptCount,
 		})
 	}
-
-	if len(kept) <= m.cfg.MaxMemoriesPerScope {
-		return nil
-	}
-
-	sortMemoriesByScore(kept, m.cfg.DecayFactor, now)
-
-	overflow := len(kept) - m.cfg.MaxMemoriesPerScope
-	removed := kept[m.cfg.MaxMemoriesPerScope:]
-	for _, record := range removed {
-		if err := m.semanticStore.Delete(ctx, record.ID); err != nil {
-			return fmt.Errorf("delete capped memory %s: %w", record.ID, err)
-		}
-	}
-	m.debugConsolidationCapOverflow(ctx, len(kept), m.cfg.MaxMemoriesPerScope, overflow)
-	removedPreview := strings.Join(firstMemoryContents(removed, 2), " | ")
-	m.emitManagementEvent(ctx, &scope, "memory.consolidation.capped", "enforced per-scope memory cap", consolidationCappedDescription(overflow, m.cfg.MaxMemoriesPerScope, removedPreview), panel.MemoryConsolidationCappedPayload{
-		TotalRecords: len(kept),
-		MaxAllowed:   m.cfg.MaxMemoriesPerScope,
-		RemovedCount: overflow,
-	})
-
 	return nil
-}
-
-func firstMemoryContents(records []ai.SemanticRecord, limit int) []string {
-	previews := make([]string, 0, limit)
-	for _, record := range records {
-		if strings.TrimSpace(record.Content) == "" {
-			continue
-		}
-		previews = append(previews, record.Content)
-		if len(previews) == limit {
-			break
-		}
-	}
-
-	return previews
 }

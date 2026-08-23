@@ -195,7 +195,6 @@ export interface components {
             /** Format: int64 */
             ParentEventID: number | null;
             Payload: unknown;
-            PayloadType: string;
             Platform: string;
             Subject: string;
             TenantID: string;
@@ -209,10 +208,13 @@ export interface components {
              */
             readonly $schema?: string;
             CursorResetRequired: boolean;
-            HasMore: boolean;
+            HasNewer: boolean;
+            HasOlder: boolean;
             Items: components["schemas"]["Event"][] | null;
             /** Format: int64 */
-            LastID: number;
+            NewestID: number;
+            /** Format: int64 */
+            OldestID: number;
             /** Format: int64 */
             WindowEndID: number;
             /** Format: int64 */
@@ -247,7 +249,6 @@ export interface components {
             Module: string;
             Namespace: string;
             Payload: unknown;
-            PayloadType: string;
             Summary: string;
             /** Format: date-time */
             UpdatedAt: string;
@@ -315,6 +316,7 @@ export interface operations {
         parameters: {
             query?: {
                 after_id?: number;
+                before_id?: number;
                 limit?: number;
                 category?: string;
                 kind?: string;

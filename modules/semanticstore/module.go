@@ -2,69 +2,47 @@ package semanticstore
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
+	"ex-otogi/pkg/llm"
+	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
-	panel "ex-otogi/pkg/otogi/management"
 
 	"github.com/google/uuid"
 )
 
-const (
-	defaultFlushInterval = 5 * time.Minute
-	defaultMaxEntries    = 1000
-	serviceLogger        = "logger"
-)
+const serviceLogger = "logger"
 
 // Config configures semanticstore module behavior.
 type Config struct {
-	// PersistenceFile is the optional JSON file used to persist stored memory
-	// records across restarts.
-	PersistenceFile string
-	// FlushInterval controls how often the in-memory store is flushed to
-	// PersistenceFile while the module is running.
-	//
-	// Zero disables periodic flush while still allowing final shutdown flush.
-	FlushInterval time.Duration
-	// MaxEntries caps the number of stored records per scope.
-	MaxEntries int
+	// DatabaseFile is the current-schema SQLite store path.
+	DatabaseFile string
+	// EmbeddingFingerprint identifies the only vector space accepted by the store.
+	EmbeddingFingerprint EmbeddingFingerprint
 }
 
 // Validate checks semanticstore configuration coherence.
 func (cfg Config) Validate() error {
-	if cfg.FlushInterval < 0 {
-		return fmt.Errorf("validate semanticstore config: flush_interval must be >= 0")
+	if strings.TrimSpace(cfg.DatabaseFile) == "" {
+		return fmt.Errorf("validate semanticstore config: database_file is required")
 	}
-	if cfg.MaxEntries <= 0 {
-		return fmt.Errorf("validate semanticstore config: max_entries must be > 0")
-	}
-
-	return nil
-}
-
-type fileConfig struct {
-	PersistenceFile string `json:"persistence_file"`
-	FlushInterval   string `json:"flush_interval"`
-	MaxEntries      int    `json:"max_entries"`
+	return cfg.EmbeddingFingerprint.Validate()
 }
 
 // Module provides a lifecycle-managed semantic memory service.
 type Module struct {
-	store     *Store
-	cfg       Config
-	logger    *slog.Logger
-	clock     func() time.Time
-	newID     func() string
-	recorder  panel.Recorder
-	stopCh    chan struct{}
-	flushDone chan struct{}
+	store    ai.SemanticStore
+	database *SQLiteStore
+	cfg      Config
+	enabled  bool
+	logger   *slog.Logger
+	clock    func() time.Time
+	newID    func() string
 }
 
 // Option mutates semanticstore module construction behavior.
@@ -82,7 +60,7 @@ func WithLogger(logger *slog.Logger) Option {
 // New creates one semanticstore module instance.
 func New(options ...Option) *Module {
 	module := &Module{
-		cfg:    defaultConfig(),
+		cfg:    Config{},
 		logger: slog.Default(),
 		clock:  time.Now,
 		newID:  uuid.NewString,
@@ -90,7 +68,7 @@ func New(options ...Option) *Module {
 	for _, option := range options {
 		option(module)
 	}
-	module.store = newStore(module.cfg.MaxEntries, module.clock, module.newID)
+	module.store = newStore(module.clock, module.newID)
 
 	return module
 }
@@ -116,21 +94,20 @@ func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error
 	default:
 		return fmt.Errorf("semanticstore resolve logger: %w", err)
 	}
-	recorder, err := core.ResolveAs[panel.Recorder](runtime.Services(), panel.ServiceRecorder)
-	switch {
-	case err == nil:
-		m.recorder = recorder
-	case errors.Is(err, core.ErrServiceNotFound):
-	default:
-		return fmt.Errorf("semanticstore resolve recorder: %w", err)
+	runtimeCfg, err := core.ResolveAs[llmconfig.Config](runtime.Services(), llm.ServiceRuntimeConfig)
+	if err != nil {
+		return fmt.Errorf("semanticstore resolve runtime config: %w", err)
 	}
-
-	cfg, err := loadConfig(runtime.Config())
+	cfg, err := loadConfig(runtimeCfg)
 	if err != nil {
 		return fmt.Errorf("semanticstore load config: %w", err)
 	}
 	m.cfg = cfg
-	m.store = newStore(m.cfg.MaxEntries, m.clock, m.newID)
+	if runtimeCfg.Memory == nil {
+		m.enabled = false
+		return nil
+	}
+	m.enabled = true
 
 	if err := runtime.Services().Register(ai.ServiceSemanticStore, m); err != nil {
 		return fmt.Errorf("semanticstore register service %s: %w", ai.ServiceSemanticStore, err)
@@ -139,54 +116,36 @@ func (m *Module) OnRegister(_ context.Context, runtime core.ModuleRuntime) error
 	return nil
 }
 
-// OnStart loads persisted state and starts periodic flushing when configured.
+// OnStart opens the transactional current-schema memory database.
 func (m *Module) OnStart(ctx context.Context) error {
 	if m == nil {
 		return fmt.Errorf("semanticstore start: nil module")
 	}
-	if m.store == nil {
-		m.store = newStore(m.cfg.MaxEntries, m.clock, m.newID)
+	if !m.enabled {
+		return nil
 	}
-	if strings.TrimSpace(m.cfg.PersistenceFile) != "" {
-		if err := m.store.LoadFromFile(m.cfg.PersistenceFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-			m.logger.WarnContext(ctx, "semanticstore load persistence", "error", err)
-		} else {
-			m.debugPersistenceLoad(ctx, m.cfg.PersistenceFile)
-			m.emitManagementEvent(ctx, nil, "memory.store.persistence_loaded", "loaded semantic store persistence", memoryStorePersistenceDescription("loaded", m.cfg.PersistenceFile, m.store.recordCount()), panel.MemoryStoreOperationPayload{
-				Store:         m.Name(),
-				Operation:     "persistence.load",
-				AffectedCount: m.store.recordCount(),
-			})
-		}
+	database, err := OpenSQLiteStore(ctx, m.cfg.DatabaseFile, m.cfg.EmbeddingFingerprint, m.clock, m.newID)
+	if err != nil {
+		return fmt.Errorf("semanticstore open database: %w", err)
 	}
-	if m.cfg.FlushInterval > 0 && strings.TrimSpace(m.cfg.PersistenceFile) != "" {
-		m.startPeriodicFlush(ctx)
-	}
-
+	m.database = database
+	m.store = database
 	return nil
 }
 
-// OnShutdown stops the periodic flusher and persists the latest state.
+// OnShutdown closes the transactional memory database.
 func (m *Module) OnShutdown(ctx context.Context) error {
 	if m == nil {
 		return fmt.Errorf("semanticstore shutdown: nil module")
 	}
 
-	if err := m.stopPeriodicFlush(ctx); err != nil {
-		return err
+	if m.database == nil {
+		return nil
 	}
-	if strings.TrimSpace(m.cfg.PersistenceFile) != "" {
-		if err := m.store.SaveToFile(m.cfg.PersistenceFile); err != nil {
-			return fmt.Errorf("semanticstore final flush: %w", err)
-		}
-		m.debugPersistenceSave(ctx, m.cfg.PersistenceFile)
-		m.emitManagementEvent(ctx, nil, "memory.store.persistence_saved", "saved semantic store persistence", memoryStorePersistenceDescription("saved", m.cfg.PersistenceFile, m.store.recordCount()), panel.MemoryStoreOperationPayload{
-			Store:         m.Name(),
-			Operation:     "persistence.save",
-			AffectedCount: m.store.recordCount(),
-		})
+	if err := m.database.Close(ctx); err != nil {
+		return fmt.Errorf("semanticstore close database: %w", err)
 	}
-
+	m.database = nil
 	return nil
 }
 
@@ -199,13 +158,9 @@ func (m *Module) Store(ctx context.Context, entry ai.SemanticEntry) (ai.Semantic
 	m.debugStore(ctx, entry)
 	record, err := m.store.Store(ctx, entry)
 	if err != nil {
-		return ai.SemanticRecord{}, err
+		return ai.SemanticRecord{}, fmt.Errorf("semanticstore store record: %w", err)
 	}
 	m.debugStoreResult(ctx, record)
-	m.emitManagementEvent(ctx, &entry.Scope, "memory.store.upserted", "stored semantic memory record", memoryStoreRecordDescription(record.ID, record.Category, record.Content), panel.MemoryStoreUpsertedPayload{
-		Store:         m.Name(),
-		UpsertedCount: 1,
-	})
 
 	return record, nil
 }
@@ -219,14 +174,9 @@ func (m *Module) Search(ctx context.Context, query ai.SemanticQuery) ([]ai.Seman
 	m.debugSearch(ctx, query)
 	matches, err := m.store.Search(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("semanticstore search records: %w", err)
 	}
 	m.debugSearchResult(ctx, query, matches)
-	m.emitManagementEvent(ctx, &query.Scope, "memory.store.searched", "searched semantic memory store", memoryStoreSearchDescription(query.Limit, len(matches)), panel.MemoryStoreOperationPayload{
-		Store:         m.Name(),
-		Operation:     "search",
-		AffectedCount: len(matches),
-	})
 
 	return matches, nil
 }
@@ -240,13 +190,8 @@ func (m *Module) Update(ctx context.Context, update ai.SemanticUpdate) (ai.Seman
 	m.debugUpdate(ctx, update)
 	record, err := m.store.Update(ctx, update)
 	if err != nil {
-		return ai.SemanticRecord{}, err
+		return ai.SemanticRecord{}, fmt.Errorf("semanticstore update record: %w", err)
 	}
-	m.emitManagementEvent(ctx, &record.Scope, "memory.store.updated", "updated semantic memory record", memoryStoreRecordDescription(record.ID, record.Category, record.Content), panel.MemoryStoreOperationPayload{
-		Store:         m.Name(),
-		Operation:     "update",
-		AffectedCount: 1,
-	})
 
 	return record, nil
 }
@@ -257,21 +202,10 @@ func (m *Module) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("semanticstore delete: store unavailable")
 	}
 
-	scope, _ := m.store.lookupScope(id)
 	m.debugDelete(ctx, id)
 	if err := m.store.Delete(ctx, id); err != nil {
-		return err
+		return fmt.Errorf("semanticstore delete record: %w", err)
 	}
-	var deleteScope *ai.SemanticScope
-	if scope != (ai.SemanticScope{}) {
-		deleteScope = &scope
-	}
-	m.emitManagementEvent(ctx, deleteScope, "memory.store.deleted", "deleted semantic memory record", panel.TruncateDescription(id), panel.MemoryStoreOperationPayload{
-		Store:         m.Name(),
-		Operation:     "delete",
-		AffectedCount: 1,
-	})
-
 	return nil
 }
 
@@ -284,133 +218,34 @@ func (m *Module) ListByScope(ctx context.Context, scope ai.SemanticScope, limit 
 	m.debugListByScope(ctx, scope, limit)
 	records, err := m.store.ListByScope(ctx, scope, limit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("semanticstore list records: %w", err)
 	}
 	m.debugListByScopeResult(ctx, scope, len(records))
 
 	return records, nil
 }
 
-func defaultConfig() Config {
-	return Config{
-		FlushInterval: defaultFlushInterval,
-		MaxEntries:    defaultMaxEntries,
+func loadConfig(runtime llmconfig.Config) (Config, error) {
+	if runtime.Memory == nil {
+		return Config{}, nil
 	}
-}
-
-func loadConfig(registry core.ConfigRegistry) (Config, error) {
-	cfg := defaultConfig()
-	if registry == nil {
-		return Config{}, fmt.Errorf("nil config registry")
+	provider, exists := runtime.Providers[strings.TrimSpace(runtime.Memory.EmbeddingProvider)]
+	if !exists {
+		return Config{}, fmt.Errorf("embedding provider %s is not configured", runtime.Memory.EmbeddingProvider)
 	}
-
-	raw, err := registry.Resolve("semanticstore")
-	switch {
-	case err == nil:
-	case errors.Is(err, core.ErrConfigNotFound):
-		return cfg, nil
-	default:
-		return Config{}, fmt.Errorf("resolve module config: %w", err)
-	}
-
-	var parsed fileConfig
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return Config{}, fmt.Errorf("unmarshal: %w", err)
-	}
-
-	cfg.PersistenceFile = strings.TrimSpace(parsed.PersistenceFile)
-	if strings.TrimSpace(parsed.FlushInterval) != "" {
-		duration, err := time.ParseDuration(strings.TrimSpace(parsed.FlushInterval))
-		if err != nil {
-			return Config{}, fmt.Errorf("parse flush_interval: %w", err)
-		}
-		cfg.FlushInterval = duration
-	}
-	if parsed.MaxEntries != 0 {
-		cfg.MaxEntries = parsed.MaxEntries
+	cfg := Config{
+		DatabaseFile: strings.TrimSpace(runtime.Memory.DatabaseFile),
+		EmbeddingFingerprint: EmbeddingFingerprint{
+			Provider:   strings.TrimSpace(runtime.Memory.EmbeddingProvider),
+			Model:      strings.TrimSpace(provider.EmbeddingModel),
+			Dimensions: provider.EmbeddingDimensions,
+		},
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 
 	return cfg, nil
-}
-
-func (m *Module) startPeriodicFlush(ctx context.Context) {
-	stopCh := make(chan struct{})
-	doneCh := make(chan struct{})
-	m.stopCh = stopCh
-	m.flushDone = doneCh
-
-	go func() {
-		defer close(doneCh)
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				m.logger.ErrorContext(ctx, "semanticstore periodic flush panic", "recover", recovered)
-			}
-		}()
-
-		ticker := time.NewTicker(m.cfg.FlushInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-stopCh:
-				return
-			case <-ticker.C:
-				if err := m.store.SaveToFile(m.cfg.PersistenceFile); err != nil {
-					m.logger.ErrorContext(ctx, "semanticstore periodic flush", "error", err)
-				}
-			}
-		}
-	}()
-}
-
-func (m *Module) stopPeriodicFlush(ctx context.Context) error {
-	if m.stopCh == nil {
-		return nil
-	}
-
-	stopCh := m.stopCh
-	doneCh := m.flushDone
-	m.stopCh = nil
-	m.flushDone = nil
-	close(stopCh)
-
-	if doneCh == nil {
-		return nil
-	}
-
-	select {
-	case <-doneCh:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("semanticstore stop periodic flush: %w", ctx.Err())
-	}
-}
-
-func withClock(clock func() time.Time) Option {
-	return func(module *Module) {
-		if clock != nil {
-			module.clock = clock
-		}
-	}
-}
-
-func withIDGenerator(generator func() string) Option {
-	return func(module *Module) {
-		if generator != nil {
-			module.newID = generator
-		}
-	}
-}
-
-func withConfig(cfg Config) Option {
-	return func(module *Module) {
-		module.cfg = cfg
-	}
 }
 
 var (

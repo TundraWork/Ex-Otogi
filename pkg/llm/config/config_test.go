@@ -21,6 +21,17 @@ func writeLLMConfigFile(t *testing.T, body string) string {
 	return path
 }
 
+func TestExampleConfigLoads(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "config", "llm.example.json")
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("load example config: %v", err)
+	}
+	if cfg.Memory == nil {
+		t.Fatal("example config must enable memory")
+	}
+}
+
 func TestLoadFile(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -32,26 +43,11 @@ func TestLoadFile(t *testing.T) {
 			name: "valid openai and gemini config",
 			fileBody: `{
 				"request_timeout":"45s",
-				"natural_memory":{
-					"enabled":true,
+				"memory":{
 					"extraction_provider":"openai-main",
 					"extraction_model":"gpt-4.1-mini",
 					"embedding_provider":"openai-main",
-					"extraction_timeout":"25s",
-					"extraction_max_input_runes":5000,
-					"consolidation_interval":"2h",
-					"max_memories_per_scope":250,
-					"decay_factor":0.99,
-					"min_importance":4,
-					"duplicate_similarity_threshold":0.9,
-					"retrieval_planning_enabled":false,
-					"retrieval_planning_timeout":"12s",
-					"buffer_quiet_period":"3m",
-					"buffer_max_runes":2500,
-					"buffer_max_articles":25,
-					"buffer_max_age":"8m",
-					"buffer_check_interval":"10s",
-					"retrieval_search_limit":15
+					"database_file":"data/memory.db"
 				},
 					"providers":{
 						"openai-main":{
@@ -63,7 +59,7 @@ func TestLoadFile(t *testing.T) {
 							"openai":{
 								"organization":"org-test",
 								"project":"project-test",
-							"max_retries":3
+							"embedding_max_retries":3
 						}
 					},
 						"gemini-main":{
@@ -86,17 +82,11 @@ func TestLoadFile(t *testing.T) {
 							"aliases":["Oto"],
 							"description":"OpenAI agent",
 							"provider":"openai-main",
-							"embedding_provider":"openai-main",
 							"model":"gpt-5-mini",
 							"system_prompt_template":"You are {{.AgentName}}",
 							"request_timeout":"30s",
 							"request_metadata":{"trace_id":"main"},
-							"semantic_memory":{
-								"enabled":true,
-								"max_retrieved_memories":4,
-								"min_memory_similarity":0.45,
-								"max_memory_runes":1500
-							},
+							"memory_enabled":true,
 							"context":{
 								"reply_chain_max_messages":8,
 								"leading_context_messages":2,
@@ -133,110 +123,29 @@ func TestLoadFile(t *testing.T) {
 				if len(cfg.Providers) != 2 {
 					t.Fatalf("providers len = %d, want 2", len(cfg.Providers))
 				}
-				if cfg.NaturalMemory == nil {
-					t.Fatal("natural_memory = nil, want populated config")
+				if cfg.Memory == nil {
+					t.Fatal("memory = nil, want populated config")
 				}
-				if !cfg.NaturalMemory.Enabled {
-					t.Fatal("natural_memory.enabled = false, want true")
-				}
-				if cfg.NaturalMemory.ExtractionProvider != "openai-main" {
+				if cfg.Memory.ExtractionProvider != "openai-main" {
 					t.Fatalf(
-						"natural_memory extraction_provider = %q, want openai-main",
-						cfg.NaturalMemory.ExtractionProvider,
+						"memory extraction_provider = %q, want openai-main",
+						cfg.Memory.ExtractionProvider,
 					)
 				}
-				if cfg.NaturalMemory.ExtractionModel != "gpt-4.1-mini" {
+				if cfg.Memory.ExtractionModel != "gpt-4.1-mini" {
 					t.Fatalf(
-						"natural_memory extraction_model = %q, want gpt-4.1-mini",
-						cfg.NaturalMemory.ExtractionModel,
+						"memory extraction_model = %q, want gpt-4.1-mini",
+						cfg.Memory.ExtractionModel,
 					)
 				}
-				if cfg.NaturalMemory.EmbeddingProvider != "openai-main" {
+				if cfg.Memory.EmbeddingProvider != "openai-main" {
 					t.Fatalf(
-						"natural_memory embedding_provider = %q, want openai-main",
-						cfg.NaturalMemory.EmbeddingProvider,
+						"memory embedding_provider = %q, want openai-main",
+						cfg.Memory.EmbeddingProvider,
 					)
 				}
-				if cfg.NaturalMemory.ExtractionTimeout != 25*time.Second {
-					t.Fatalf(
-						"natural_memory extraction_timeout = %s, want 25s",
-						cfg.NaturalMemory.ExtractionTimeout,
-					)
-				}
-				if cfg.NaturalMemory.ExtractionMaxInputRunes != 5000 {
-					t.Fatalf(
-						"natural_memory extraction_max_input_runes = %d, want 5000",
-						cfg.NaturalMemory.ExtractionMaxInputRunes,
-					)
-				}
-				if cfg.NaturalMemory.ConsolidationInterval != 2*time.Hour {
-					t.Fatalf(
-						"natural_memory consolidation_interval = %s, want 2h",
-						cfg.NaturalMemory.ConsolidationInterval,
-					)
-				}
-				if cfg.NaturalMemory.MaxMemoriesPerScope != 250 {
-					t.Fatalf(
-						"natural_memory max_memories_per_scope = %d, want 250",
-						cfg.NaturalMemory.MaxMemoriesPerScope,
-					)
-				}
-				if cfg.NaturalMemory.DecayFactor != 0.99 {
-					t.Fatalf("natural_memory decay_factor = %f, want 0.99", cfg.NaturalMemory.DecayFactor)
-				}
-				if cfg.NaturalMemory.MinImportance != 4 {
-					t.Fatalf("natural_memory min_importance = %d, want 4", cfg.NaturalMemory.MinImportance)
-				}
-				if cfg.NaturalMemory.DuplicateSimilarityThreshold != 0.9 {
-					t.Fatalf(
-						"natural_memory duplicate_similarity_threshold = %f, want 0.9",
-						cfg.NaturalMemory.DuplicateSimilarityThreshold,
-					)
-				}
-				if cfg.NaturalMemory.RetrievalPlanningEnabled {
-					t.Fatal("natural_memory retrieval_planning_enabled = true, want false")
-				}
-				if cfg.NaturalMemory.RetrievalPlanningTimeout != 12*time.Second {
-					t.Fatalf(
-						"natural_memory retrieval_planning_timeout = %s, want 12s",
-						cfg.NaturalMemory.RetrievalPlanningTimeout,
-					)
-				}
-				if cfg.NaturalMemory.BufferQuietPeriod != 3*time.Minute {
-					t.Fatalf(
-						"natural_memory buffer_quiet_period = %s, want 3m",
-						cfg.NaturalMemory.BufferQuietPeriod,
-					)
-				}
-				if cfg.NaturalMemory.BufferMaxRunes != 2500 {
-					t.Fatalf(
-						"natural_memory buffer_max_runes = %d, want 2500",
-						cfg.NaturalMemory.BufferMaxRunes,
-					)
-				}
-				if cfg.NaturalMemory.BufferMaxArticles != 25 {
-					t.Fatalf(
-						"natural_memory buffer_max_articles = %d, want 25",
-						cfg.NaturalMemory.BufferMaxArticles,
-					)
-				}
-				if cfg.NaturalMemory.BufferMaxAge != 8*time.Minute {
-					t.Fatalf(
-						"natural_memory buffer_max_age = %s, want 8m",
-						cfg.NaturalMemory.BufferMaxAge,
-					)
-				}
-				if cfg.NaturalMemory.BufferCheckInterval != 10*time.Second {
-					t.Fatalf(
-						"natural_memory buffer_check_interval = %s, want 10s",
-						cfg.NaturalMemory.BufferCheckInterval,
-					)
-				}
-				if cfg.NaturalMemory.RetrievalSearchLimit != 15 {
-					t.Fatalf(
-						"natural_memory retrieval_search_limit = %d, want 15",
-						cfg.NaturalMemory.RetrievalSearchLimit,
-					)
+				if cfg.Memory.DatabaseFile != "data/memory.db" {
+					t.Fatalf("memory database_file = %q", cfg.Memory.DatabaseFile)
 				}
 
 				openaiProfile := cfg.Providers["openai-main"]
@@ -252,8 +161,8 @@ func TestLoadFile(t *testing.T) {
 				if openaiProfile.EmbeddingDimensions != 512 {
 					t.Fatalf("openai embedding_dimensions = %d, want 512", openaiProfile.EmbeddingDimensions)
 				}
-				if openaiProfile.OpenAI.MaxRetries == nil || *openaiProfile.OpenAI.MaxRetries != 3 {
-					t.Fatalf("openai max retries = %v, want 3", openaiProfile.OpenAI.MaxRetries)
+				if openaiProfile.OpenAI.EmbeddingMaxRetries == nil || *openaiProfile.OpenAI.EmbeddingMaxRetries != 3 {
+					t.Fatalf("openai embedding max retries = %v, want 3", openaiProfile.OpenAI.EmbeddingMaxRetries)
 				}
 
 				geminiProfile := cfg.Providers["gemini-main"]
@@ -301,29 +210,8 @@ func TestLoadFile(t *testing.T) {
 				if cfg.Agents[0].RequestTimeout != 30*time.Second {
 					t.Fatalf("agent[0] request_timeout = %s, want 30s", cfg.Agents[0].RequestTimeout)
 				}
-				if cfg.Agents[0].EmbeddingProvider != "openai-main" {
-					t.Fatalf("agent[0] embedding_provider = %q, want openai-main", cfg.Agents[0].EmbeddingProvider)
-				}
-				if cfg.Agents[0].SemanticMemory == nil || !cfg.Agents[0].SemanticMemory.Enabled {
-					t.Fatal("agent[0] semantic_memory = nil/disabled, want enabled")
-				}
-				if cfg.Agents[0].SemanticMemory.MaxRetrievedMemories != 4 {
-					t.Fatalf(
-						"agent[0] max_retrieved_memories = %d, want 4",
-						cfg.Agents[0].SemanticMemory.MaxRetrievedMemories,
-					)
-				}
-				if cfg.Agents[0].SemanticMemory.MinMemorySimilarity != 0.45 {
-					t.Fatalf(
-						"agent[0] min_memory_similarity = %f, want 0.45",
-						cfg.Agents[0].SemanticMemory.MinMemorySimilarity,
-					)
-				}
-				if cfg.Agents[0].SemanticMemory.MaxMemoryRunes != 1500 {
-					t.Fatalf(
-						"agent[0] max_memory_runes = %d, want 1500",
-						cfg.Agents[0].SemanticMemory.MaxMemoryRunes,
-					)
+				if !cfg.Agents[0].MemoryEnabled {
+					t.Fatal("agent[0] memory_enabled = false")
 				}
 				if cfg.Agents[0].ContextPolicy.ReplyChainMaxMessages != 8 {
 					t.Fatalf(
@@ -395,135 +283,7 @@ func TestLoadFile(t *testing.T) {
 			},
 		},
 		{
-			name: "natural memory defaults are applied",
-			fileBody: `{
-				"providers":{
-					"openai-main":{"type":"openai","api_key":"sk-test"}
-				},
-				"natural_memory":{
-					"enabled":true,
-					"extraction_provider":"openai-main",
-					"extraction_model":"gpt-4.1-mini",
-					"embedding_provider":"openai-main"
-				},
-				"agents":[
-					{
-						"name":"Otogi",
-						"description":"d",
-						"provider":"openai-main",
-						"model":"m",
-						"system_prompt_template":"ok",
-						"request_timeout":"10s"
-					}
-				]
-			}`,
-			assert: func(t *testing.T, cfg Config) {
-				t.Helper()
-
-				if cfg.NaturalMemory == nil {
-					t.Fatal("natural_memory = nil, want defaults")
-				}
-				if cfg.NaturalMemory.ExtractionTimeout != defaultNaturalMemoryExtractionTimeout {
-					t.Fatalf(
-						"extraction_timeout = %s, want %s",
-						cfg.NaturalMemory.ExtractionTimeout,
-						defaultNaturalMemoryExtractionTimeout,
-					)
-				}
-				if cfg.NaturalMemory.ExtractionMaxInputRunes != defaultNaturalMemoryExtractionMaxInputRunes {
-					t.Fatalf(
-						"extraction_max_input_runes = %d, want %d",
-						cfg.NaturalMemory.ExtractionMaxInputRunes,
-						defaultNaturalMemoryExtractionMaxInputRunes,
-					)
-				}
-				if cfg.NaturalMemory.ConsolidationInterval != defaultNaturalMemoryConsolidationInterval {
-					t.Fatalf(
-						"consolidation_interval = %s, want %s",
-						cfg.NaturalMemory.ConsolidationInterval,
-						defaultNaturalMemoryConsolidationInterval,
-					)
-				}
-				if cfg.NaturalMemory.MaxMemoriesPerScope != defaultNaturalMemoryMaxMemoriesPerScope {
-					t.Fatalf(
-						"max_memories_per_scope = %d, want %d",
-						cfg.NaturalMemory.MaxMemoriesPerScope,
-						defaultNaturalMemoryMaxMemoriesPerScope,
-					)
-				}
-				if cfg.NaturalMemory.DecayFactor != defaultNaturalMemoryDecayFactor {
-					t.Fatalf("decay_factor = %f, want %f", cfg.NaturalMemory.DecayFactor, defaultNaturalMemoryDecayFactor)
-				}
-				if cfg.NaturalMemory.MinImportance != defaultNaturalMemoryMinImportance {
-					t.Fatalf("min_importance = %d, want %d", cfg.NaturalMemory.MinImportance, defaultNaturalMemoryMinImportance)
-				}
-				if cfg.NaturalMemory.DuplicateSimilarityThreshold != defaultNaturalMemoryDuplicateSimilarityThreshold {
-					t.Fatalf(
-						"duplicate_similarity_threshold = %f, want %f",
-						cfg.NaturalMemory.DuplicateSimilarityThreshold,
-						defaultNaturalMemoryDuplicateSimilarityThreshold,
-					)
-				}
-				if cfg.NaturalMemory.RetrievalPlanningEnabled != defaultNaturalMemoryRetrievalPlanningEnabled {
-					t.Fatalf(
-						"retrieval_planning_enabled = %t, want %t",
-						cfg.NaturalMemory.RetrievalPlanningEnabled,
-						defaultNaturalMemoryRetrievalPlanningEnabled,
-					)
-				}
-				if cfg.NaturalMemory.RetrievalPlanningTimeout != defaultNaturalMemoryRetrievalPlanningTimeout {
-					t.Fatalf(
-						"retrieval_planning_timeout = %s, want %s",
-						cfg.NaturalMemory.RetrievalPlanningTimeout,
-						defaultNaturalMemoryRetrievalPlanningTimeout,
-					)
-				}
-				if cfg.NaturalMemory.BufferQuietPeriod != defaultNaturalMemoryBufferQuietPeriod {
-					t.Fatalf(
-						"buffer_quiet_period = %s, want %s",
-						cfg.NaturalMemory.BufferQuietPeriod,
-						defaultNaturalMemoryBufferQuietPeriod,
-					)
-				}
-				if cfg.NaturalMemory.BufferMaxRunes != defaultNaturalMemoryBufferMaxRunes {
-					t.Fatalf(
-						"buffer_max_runes = %d, want %d",
-						cfg.NaturalMemory.BufferMaxRunes,
-						defaultNaturalMemoryBufferMaxRunes,
-					)
-				}
-				if cfg.NaturalMemory.BufferMaxArticles != defaultNaturalMemoryBufferMaxArticles {
-					t.Fatalf(
-						"buffer_max_articles = %d, want %d",
-						cfg.NaturalMemory.BufferMaxArticles,
-						defaultNaturalMemoryBufferMaxArticles,
-					)
-				}
-				if cfg.NaturalMemory.BufferMaxAge != defaultNaturalMemoryBufferMaxAge {
-					t.Fatalf(
-						"buffer_max_age = %s, want %s",
-						cfg.NaturalMemory.BufferMaxAge,
-						defaultNaturalMemoryBufferMaxAge,
-					)
-				}
-				if cfg.NaturalMemory.BufferCheckInterval != defaultNaturalMemoryBufferCheckInterval {
-					t.Fatalf(
-						"buffer_check_interval = %s, want %s",
-						cfg.NaturalMemory.BufferCheckInterval,
-						defaultNaturalMemoryBufferCheckInterval,
-					)
-				}
-				if cfg.NaturalMemory.RetrievalSearchLimit != defaultNaturalMemoryRetrievalSearchLimit {
-					t.Fatalf(
-						"retrieval_search_limit = %d, want %d",
-						cfg.NaturalMemory.RetrievalSearchLimit,
-						defaultNaturalMemoryRetrievalSearchLimit,
-					)
-				}
-			},
-		},
-		{
-			name: "natural memory bad extraction timeout",
+			name: "legacy natural memory is rejected",
 			fileBody: `{
 				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
 				"natural_memory":{
@@ -544,18 +304,17 @@ func TestLoadFile(t *testing.T) {
 					}
 				]
 			}`,
-			wantErrSubstring: "natural_memory: parse extraction_timeout",
+			wantErrSubstring: "unknown field \"natural_memory\"",
 		},
 		{
-			name: "natural memory unknown extraction provider",
+			name: "memory unknown extraction provider",
 			fileBody: `{
 				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
-				"natural_memory":{
-					"enabled":true,
+				"memory":{
 					"extraction_provider":"missing",
 					"extraction_model":"gpt-4.1-mini",
 					"embedding_provider":"openai-main",
-					"consolidation_interval":"0s"
+					"database_file":"data/memory.db"
 				},
 				"agents":[
 					{
@@ -568,50 +327,24 @@ func TestLoadFile(t *testing.T) {
 					}
 				]
 			}`,
-			wantErrSubstring: "natural_memory: extraction_provider missing is not configured",
+			wantErrSubstring: "memory: extraction_provider missing is not configured",
 		},
 		{
-			name: "natural memory bad retrieval planning timeout",
+			name: "legacy agent semantic memory is rejected",
 			fileBody: `{
 				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
-				"natural_memory":{
-					"enabled":true,
-					"extraction_provider":"openai-main",
-					"extraction_model":"gpt-4.1-mini",
-					"embedding_provider":"openai-main",
-					"consolidation_interval":"0s",
-					"retrieval_planning_timeout":"never"
-				},
-				"agents":[
-					{
-						"name":"Otogi",
-						"description":"d",
-						"provider":"openai-main",
-						"model":"m",
-						"system_prompt_template":"ok",
-						"request_timeout":"10s"
-					}
-				]
+				"agents":[{"name":"Otogi","description":"d","provider":"openai-main","model":"m","system_prompt_template":"ok","request_timeout":"10s","semantic_memory":{"enabled":true}}]
 			}`,
-			wantErrSubstring: "natural_memory: parse retrieval_planning_timeout",
+			wantErrSubstring: "unknown field \"semantic_memory\"",
 		},
 		{
-			name: "semantic memory requires embedding provider",
+			name: "removed duplicate threshold is rejected",
 			fileBody: `{
 				"providers":{"openai-main":{"type":"openai","api_key":"sk-test"}},
-				"agents":[
-					{
-						"name":"Otogi",
-						"description":"d",
-						"provider":"openai-main",
-						"model":"m",
-						"system_prompt_template":"ok",
-						"request_timeout":"10s",
-						"semantic_memory":{"enabled":true}
-					}
-				]
+				"memory":{"extraction_provider":"openai-main","extraction_model":"m","embedding_provider":"openai-main","database_file":"data/memory.db","duplicate_similarity_threshold":0.85},
+				"agents":[{"name":"Otogi","description":"d","provider":"openai-main","model":"m","system_prompt_template":"ok","request_timeout":"10s"}]
 			}`,
-			wantErrSubstring: "embedding_provider is required when semantic_memory.enabled=true",
+			wantErrSubstring: "unknown field \"duplicate_similarity_threshold\"",
 		},
 		{
 			name: "invalid context max age",
@@ -827,13 +560,13 @@ func TestLoadFile(t *testing.T) {
 			wantErrSubstring: "invalid api_version",
 		},
 		{
-			name: "invalid openai max retries",
+			name: "invalid openai embedding max retries",
 			fileBody: `{
 				"providers":{
 					"openai-main":{
 						"type":"openai",
 						"api_key":"sk",
-						"openai":{"max_retries":-1}
+						"openai":{"embedding_max_retries":-1}
 					}
 				},
 				"agents":[
@@ -846,7 +579,7 @@ func TestLoadFile(t *testing.T) {
 					}
 				]
 			}`,
-			wantErrSubstring: "max_retries must be >= 0",
+			wantErrSubstring: "embedding_max_retries must be >= 0",
 		},
 		{
 			name: "provider timeout field is rejected",

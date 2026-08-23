@@ -44,7 +44,17 @@ type streamIterationResult struct {
 	answerText           string
 	toolCalls            []ai.LLMToolCall
 	lastDeliveredPayload editPayload
+	answerDelivered      bool
 }
+
+type streamResponseError struct {
+	err                  error
+	lastDeliveredPayload editPayload
+	answerDelivered      bool
+}
+
+func (e *streamResponseError) Error() string { return e.err.Error() }
+func (e *streamResponseError) Unwrap() error { return e.err }
 
 func (m *Module) streamProviderReplyWithTools(
 	streamCtx context.Context,
@@ -76,15 +86,16 @@ func (m *Module) streamProviderReplyWithTools(
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		m.debugToolIteration(streamCtx, iteration, len(req.Messages))
 
-		result, iterationErr := retryLLMOperation(
+		transitionChatState(streamCtx, chatStateGenerating)
+		result, iterationErr := retryLLMOperationWhen(
 			streamCtx,
 			m.sleep,
 			m.logger,
 			fmt.Sprintf("stream provider reply iteration %d placeholder %s", iteration+1, placeholderMessageID),
 			provider,
-			func() (streamIterationResult, error) {
+			func(attemptCtx context.Context) (streamIterationResult, error) {
 				return m.streamProviderReplyIteration(
-					streamCtx,
+					attemptCtx,
 					target,
 					placeholderMessageID,
 					provider,
@@ -94,14 +105,21 @@ func (m *Module) streamProviderReplyWithTools(
 					lastDeliveredPayload,
 				)
 			},
+			func(result streamIterationResult, _ error) bool {
+				return !result.answerDelivered
+			},
 		)
 		if iterationErr != nil {
-			return iterationErr
+			return &streamResponseError{
+				err: iterationErr, lastDeliveredPayload: result.lastDeliveredPayload,
+				answerDelivered: result.answerDelivered,
+			}
 		}
 		lastDeliveredPayload = result.lastDeliveredPayload
 
 		finalText := strings.TrimSpace(result.answerText)
 		if finalText != "" {
+			transitionChatState(deliveryCtx, chatStateDelivering)
 			finalPayload, parseErr := m.parseEditPayload(deliveryCtx, finalText)
 			if parseErr != nil {
 				m.warnMarkdownParseFallback(deliveryCtx, target, placeholderMessageID, parseErr)
@@ -117,7 +135,8 @@ func (m *Module) streamProviderReplyWithTools(
 				Entities:  finalPayload.Entities,
 			})
 			if finalEditErr != nil {
-				return fmt.Errorf("stream provider reply finalize placeholder %s: %w", placeholderMessageID, finalEditErr)
+				deliveryErr := fmt.Errorf("stream provider reply finalize placeholder %s: %w", placeholderMessageID, finalEditErr)
+				return ai.NewLLMFailure(ai.LLMFailureDelivery, false, 0, deliveryErr)
 			}
 
 			return nil
@@ -128,12 +147,13 @@ func (m *Module) streamProviderReplyWithTools(
 				return fmt.Errorf("stream provider reply canceled: %w", ctxErr)
 			}
 
-			return fmt.Errorf(
+			emptyErr := fmt.Errorf(
 				"stream provider reply: no output text received (thinking_chunks=%d output_chunks=%d deadline_remaining=%s)",
 				result.thinkingChunks,
 				result.outputChunks,
 				describeContextDeadlineRemaining(streamCtx),
 			)
+			return ai.NewLLMFailure(ai.LLMFailureEmptyResponse, false, 0, emptyErr)
 		}
 		if toolRegistry == nil || !toolRegistry.HasTools() {
 			return fmt.Errorf("stream provider reply: model requested tools but no tool registry is configured")
@@ -152,6 +172,7 @@ func (m *Module) streamProviderReplyWithTools(
 			Count:     len(toolNames),
 		})
 
+		transitionChatState(streamCtx, chatStateExecutingTools)
 		toolMessages, nextPayload, toolErr := m.executeToolCalls(
 			streamCtx,
 			target,
@@ -162,7 +183,7 @@ func (m *Module) streamProviderReplyWithTools(
 			result.toolCalls,
 		)
 		if toolErr != nil {
-			return fmt.Errorf("stream provider reply execute tools: %w", toolErr)
+			return ai.NewLLMFailure(ai.LLMFailureTool, false, 0, fmt.Errorf("stream provider reply execute tools: %w", toolErr))
 		}
 		lastDeliveredPayload = nextPayload
 
@@ -221,7 +242,7 @@ func (m *Module) streamProviderReplyIteration(
 				break
 			}
 
-			return streamIterationResult{}, fmt.Errorf("stream provider reply receive chunk: %w", recvErr)
+			return result, fmt.Errorf("stream provider reply receive chunk: %w", recvErr)
 		}
 
 		switch chunk.Kind.Normalize() {
@@ -277,6 +298,9 @@ func (m *Module) streamProviderReplyIteration(
 		}
 		pacer.RecordEditSuccess(now)
 		result.lastDeliveredPayload = payload
+		if answerBuilder.Len() > 0 {
+			result.answerDelivered = true
+		}
 	}
 
 	finalToolCalls, err := finalizeAccumulatedToolCalls(toolCalls, toolCallOrder)

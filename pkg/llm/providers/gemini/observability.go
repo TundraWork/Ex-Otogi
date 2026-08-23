@@ -2,7 +2,6 @@ package gemini
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"ex-otogi/pkg/llm"
 	"ex-otogi/pkg/otogi/ai"
 	panel "ex-otogi/pkg/otogi/management"
 )
@@ -22,9 +22,9 @@ type observedLLMStream struct {
 	model     string
 	startedAt time.Time
 
-	mu          sync.Mutex
-	finished    bool
-	responseBuf strings.Builder
+	mu             sync.Mutex
+	finished       bool
+	outputObserved bool
 }
 
 func newObservedLLMStream(
@@ -50,7 +50,7 @@ func (s *observedLLMStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, erro
 	if err == nil {
 		if chunk.Kind.Normalize() == ai.LLMGenerateChunkKindOutputText || chunk.Kind.Normalize() == ai.LLMGenerateChunkKindThinkingSummary {
 			s.mu.Lock()
-			s.responseBuf.WriteString(chunk.Delta)
+			s.outputObserved = s.outputObserved || strings.TrimSpace(chunk.Delta) != ""
 			s.mu.Unlock()
 		}
 		return chunk, nil
@@ -79,29 +79,29 @@ func (s *observedLLMStream) finishSuccess() {
 		return
 	}
 	s.finished = true
-	responseText := s.responseBuf.String()
+	outputObserved := s.outputObserved
 	s.mu.Unlock()
 
-	event, err := s.recorder.RecordEvent(s.ctx, panel.Event{
+	elapsedMS := time.Since(s.startedAt).Milliseconds()
+	_, err := s.recorder.RecordEvent(s.ctx, panel.Event{
 		Category:    panel.EventCategoryLLM,
 		Kind:        "llm.call.completed",
-		Level:       panel.EventLevelDebug,
+		Level:       panel.EventLevelInfo,
 		Module:      "llm-provider",
 		Component:   s.provider,
 		Subject:     "completed llm provider call",
-		Description: panel.TruncateDescription(responseText),
-		PayloadType: "LLMCallCompletedPayload",
+		Description: panel.TruncateDescription(fmt.Sprintf("%s/%s completed in %dms", s.provider, s.model, elapsedMS)),
 		Payload: panel.LLMCallCompletedPayload{
 			Provider:           s.provider,
 			Model:              s.model,
-			ElapsedMS:          time.Since(s.startedAt).Milliseconds(),
-			OutputMessageCount: boolToCount(strings.TrimSpace(responseText) != ""),
+			ElapsedMS:          elapsedMS,
+			OutputMessageCount: boolToCount(outputObserved),
+			Attempt:            llm.AttemptFromContext(s.ctx),
 		},
 	})
 	if err != nil {
 		return
 	}
-	recordArtifact(s.ctx, s.recorder, event.ID, panel.ArtifactKindPromptResponse, responseText)
 }
 
 func (s *observedLLMStream) finishFailure(streamErr error) {
@@ -121,12 +121,12 @@ func (s *observedLLMStream) finishFailure(streamErr error) {
 		Component:   s.provider,
 		Subject:     "llm provider call failed",
 		Description: panel.TruncateDescription(fmt.Sprintf("%s/%s: %s", s.provider, s.model, streamErr.Error())),
-		PayloadType: "LLMCallFailedPayload",
 		Payload: panel.LLMCallFailedPayload{
 			Provider:  s.provider,
 			Model:     s.model,
 			ElapsedMS: time.Since(s.startedAt).Milliseconds(),
-			Error:     streamErr.Error(),
+			Attempt:   llm.AttemptFromContext(s.ctx), FailureClass: llm.ProviderFailureClass(streamErr),
+			Error: streamErr.Error(),
 		},
 	})
 	if err != nil {
@@ -141,7 +141,7 @@ func recordLLMStart(
 	req ai.LLMGenerateRequest,
 	startedAt time.Time,
 ) {
-	event, err := recorder.RecordEvent(ctx, panel.Event{
+	_, err := recorder.RecordEvent(ctx, panel.Event{
 		OccurredAt:  startedAt.UTC(),
 		Category:    panel.EventCategoryLLM,
 		Kind:        "llm.call.started",
@@ -150,22 +150,15 @@ func recordLLMStart(
 		Component:   provider,
 		Subject:     "started llm provider call",
 		Description: llmRequestDescription(req),
-		PayloadType: "LLMCallStartedPayload",
 		Payload: panel.LLMCallStartedPayload{
 			Provider:     provider,
 			Model:        req.Model,
 			MessageCount: len(req.Messages),
 			ToolCount:    len(req.Tools),
+			Attempt:      llm.AttemptFromContext(ctx),
 		},
 	})
-	if err != nil {
-		return
-	}
-	requestArtifact, marshalErr := json.Marshal(req)
-	if marshalErr != nil {
-		return
-	}
-	recordArtifact(ctx, recorder, event.ID, panel.ArtifactKindPromptFull, string(requestArtifact))
+	_ = err
 }
 
 func recordEmbeddingStart(
@@ -175,7 +168,7 @@ func recordEmbeddingStart(
 	req ai.EmbeddingRequest,
 	startedAt time.Time,
 ) {
-	event, err := recorder.RecordEvent(ctx, panel.Event{
+	_, err := recorder.RecordEvent(ctx, panel.Event{
 		OccurredAt:  startedAt.UTC(),
 		Category:    panel.EventCategoryEmbedding,
 		Kind:        "embedding.call.started",
@@ -184,20 +177,16 @@ func recordEmbeddingStart(
 		Component:   provider,
 		Subject:     "started embedding provider call",
 		Description: embeddingRequestDescription(req),
-		PayloadType: "EmbeddingCallStartedPayload",
 		Payload: panel.EmbeddingCallStartedPayload{
 			Provider:   provider,
 			Model:      req.Model,
 			TaskType:   string(req.TaskType),
 			InputCount: len(req.Texts),
+			Attempt:    llm.AttemptFromContext(ctx),
 		},
 	})
 	if err != nil {
 		return
-	}
-	requestArtifact, marshalErr := json.Marshal(req.Texts)
-	if marshalErr == nil {
-		recordArtifact(ctx, recorder, event.ID, panel.ArtifactKindEmbeddingInput, string(requestArtifact))
 	}
 }
 
@@ -221,7 +210,6 @@ func recordEmbeddingCompleted(
 		Component:   provider,
 		Subject:     "completed embedding provider call",
 		Description: embeddingCompletionDescription(req, dimensions, time.Since(startedAt).Milliseconds()),
-		PayloadType: "EmbeddingCallCompletedPayload",
 		Payload: panel.EmbeddingCallCompletedPayload{
 			Provider:   provider,
 			Model:      req.Model,
@@ -229,6 +217,7 @@ func recordEmbeddingCompleted(
 			InputCount: len(req.Texts),
 			Dimensions: dimensions,
 			ElapsedMS:  time.Since(startedAt).Milliseconds(),
+			Attempt:    llm.AttemptFromContext(ctx),
 		},
 	})
 	if err != nil {
@@ -252,36 +241,14 @@ func recordEmbeddingFailed(
 		Component:   provider,
 		Subject:     "embedding provider call failed",
 		Description: embeddingFailureDescription(req, callErr),
-		PayloadType: "EmbeddingCallFailedPayload",
 		Payload: panel.EmbeddingCallFailedPayload{
 			Provider:  provider,
 			Model:     req.Model,
 			TaskType:  string(req.TaskType),
 			ElapsedMS: time.Since(startedAt).Milliseconds(),
-			Error:     callErr.Error(),
+			Attempt:   llm.AttemptFromContext(ctx), FailureClass: llm.ProviderFailureClass(callErr),
+			Error: callErr.Error(),
 		},
-	})
-	if err != nil {
-		return
-	}
-}
-
-func recordArtifact(
-	ctx context.Context,
-	recorder panel.Recorder,
-	eventID int64,
-	kind panel.ArtifactKind,
-	content string,
-) {
-	if strings.TrimSpace(content) == "" {
-		return
-	}
-	_, err := recorder.RecordArtifact(ctx, panel.Artifact{
-		ID:        fmt.Sprintf("art_%d_%d", eventID, time.Now().UnixNano()),
-		EventID:   eventID,
-		Kind:      kind,
-		CreatedAt: time.Now().UTC(),
-		Content:   content,
 	})
 	if err != nil {
 		return
@@ -296,70 +263,15 @@ func boolToCount(value bool) int {
 }
 
 func llmRequestDescription(req ai.LLMGenerateRequest) string {
-	summary := fmt.Sprintf("%d messages, %d tools", len(req.Messages), len(req.Tools))
-	preview := llmMessagePreview(req.Messages)
-	if preview == "" {
-		return panel.TruncateDescription(summary)
-	}
-
-	return panel.TruncateDescription(summary + ": " + preview)
-}
-
-func llmMessagePreview(messages []ai.LLMMessage) string {
-	for index := len(messages) - 1; index >= 0; index-- {
-		if preview := llmMessageText(messages[index]); preview != "" {
-			return preview
-		}
-	}
-
-	return ""
-}
-
-func llmMessageText(message ai.LLMMessage) string {
-	if strings.TrimSpace(message.Content) != "" {
-		return message.Content
-	}
-	for _, part := range message.ContentParts() {
-		if part.Type == ai.LLMMessagePartTypeText && strings.TrimSpace(part.Text) != "" {
-			return part.Text
-		}
-	}
-	if len(message.ToolCalls) == 0 {
-		return ""
-	}
-
-	names := make([]string, 0, len(message.ToolCalls))
-	for _, toolCall := range message.ToolCalls {
-		if strings.TrimSpace(toolCall.Name) == "" {
-			continue
-		}
-		names = append(names, toolCall.Name)
-	}
-	if len(names) == 0 {
-		return ""
-	}
-
-	return "tool calls: " + strings.Join(names, ", ")
+	return panel.TruncateDescription(fmt.Sprintf("%s: %d messages, %d tools", req.Model, len(req.Messages), len(req.Tools)))
 }
 
 func embeddingRequestDescription(req ai.EmbeddingRequest) string {
-	summary := embeddingInputSummary(req)
-	preview := firstNonEmptyText(req.Texts)
-	if preview == "" {
-		return panel.TruncateDescription(summary)
-	}
-
-	return panel.TruncateDescription(summary + ": " + preview)
+	return panel.TruncateDescription(embeddingInputSummary(req))
 }
 
 func embeddingCompletionDescription(req ai.EmbeddingRequest, dimensions int, elapsedMS int64) string {
-	summary := fmt.Sprintf("%s -> %d dims in %dms", embeddingInputSummary(req), dimensions, elapsedMS)
-	preview := firstNonEmptyText(req.Texts)
-	if preview == "" {
-		return panel.TruncateDescription(summary)
-	}
-
-	return panel.TruncateDescription(summary + ": " + preview)
+	return panel.TruncateDescription(fmt.Sprintf("%s -> %d dims in %dms", embeddingInputSummary(req), dimensions, elapsedMS))
 }
 
 func embeddingFailureDescription(req ai.EmbeddingRequest, callErr error) string {
@@ -387,14 +299,4 @@ func embeddingInputSummary(req ai.EmbeddingRequest) string {
 	default:
 		return fmt.Sprintf("%d %s inputs", len(req.Texts), taskType)
 	}
-}
-
-func firstNonEmptyText(texts []string) string {
-	for _, text := range texts {
-		if strings.TrimSpace(text) != "" {
-			return text
-		}
-	}
-
-	return ""
 }

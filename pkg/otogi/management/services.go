@@ -35,8 +35,8 @@ type Recorder interface {
 // Implementations should return immutable DTO copies so caller mutation cannot
 // affect retained process state.
 type Query interface {
-	// ListEvents returns retained events newer than the requested cursor and
-	// applies any optional filters from the request.
+	// ListEvents returns a newest-first latest, newer, or older page and applies
+	// optional filters from the request. Unfiltered queries omit debug events.
 	ListEvents(ctx context.Context, request EventQuery) (EventPage, error)
 	// GetEvent returns one retained event by global ID.
 	GetEvent(ctx context.Context, id int64) (Event, error)

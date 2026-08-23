@@ -12,26 +12,22 @@ import (
 
 func validConsolidationConfig() Config {
 	return Config{
-		Enabled:                      true,
-		DecayFactor:                  0.99,
-		MinImportance:                1,
-		MaxMemoriesPerScope:          10,
-		DuplicateSimilarityThreshold: 0.85,
-		ExtractionTimeout:            time.Second,
-		ExtractionMaxInputRunes:      4000,
-		ConsolidationInterval:        time.Hour,
-		BufferQuietPeriod:            2 * time.Minute,
-		BufferMaxRunes:               3000,
-		BufferMaxArticles:            30,
-		BufferMaxAge:                 10 * time.Minute,
-		BufferCheckInterval:          15 * time.Second,
-		RetrievalSearchLimit:         20,
-		RetrievalPlanningEnabled:     true,
-		RetrievalPlanningTimeout:     10 * time.Second,
+		Enabled:                  true,
+		ExtractionTimeout:        time.Second,
+		ExtractionMaxInputRunes:  4000,
+		ConsolidationInterval:    time.Hour,
+		BufferQuietPeriod:        2 * time.Minute,
+		BufferMaxRunes:           3000,
+		BufferMaxArticles:        30,
+		BufferMaxAge:             10 * time.Minute,
+		BufferCheckInterval:      15 * time.Second,
+		RetrievalSearchLimit:     20,
+		RetrievalPlanningEnabled: true,
+		RetrievalPlanningTimeout: 10 * time.Second,
 	}
 }
 
-func TestConsolidateScopePrunesDecayedMemories(t *testing.T) {
+func TestConsolidateScopePreservesDurableMemories(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
@@ -41,38 +37,6 @@ func TestConsolidateScopePrunesDecayedMemories(t *testing.T) {
 		newScopedRecord(scope, "prune", 3, now.Add(-8*time.Hour), []float32{0, 1}),
 	})
 	cfg := validConsolidationConfig()
-	cfg.DecayFactor = 0.7
-	cfg.MinImportance = 3
-	module := New(withClock(func() time.Time { return now }), withConfig(cfg))
-	module.semanticStore = store
-	module.windowManager = newWindowManager(cfg, func() time.Time { return now })
-
-	if err := module.consolidateScope(context.Background(), scope); err != nil {
-		t.Fatalf("consolidateScope failed: %v", err)
-	}
-
-	records, err := store.ListByScope(context.Background(), scope, 0)
-	if err != nil {
-		t.Fatalf("ListByScope failed: %v", err)
-	}
-	if len(records) != 1 || records[0].ID != "keep" {
-		t.Fatalf("records = %+v, want only keep", records)
-	}
-}
-
-func TestConsolidateScopeCapsLowestScores(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
-	scope := ai.SemanticScope{Platform: "telegram", ConversationID: "chat-1"}
-	store := newMemoryServiceStub([]ai.SemanticRecord{
-		newScopedRecord(scope, "a", 8, now.Add(-1*time.Hour), []float32{1, 0}),
-		newScopedRecord(scope, "b", 7, now.Add(-2*time.Hour), []float32{0, 1}),
-		newScopedRecord(scope, "c", 3, now.Add(-3*time.Hour), []float32{0, 0.5}),
-	})
-	cfg := validConsolidationConfig()
-	cfg.DecayFactor = 1
-	cfg.MaxMemoriesPerScope = 2
 	module := New(withClock(func() time.Time { return now }), withConfig(cfg))
 	module.semanticStore = store
 	module.windowManager = newWindowManager(cfg, func() time.Time { return now })
@@ -86,13 +50,41 @@ func TestConsolidateScopeCapsLowestScores(t *testing.T) {
 		t.Fatalf("ListByScope failed: %v", err)
 	}
 	if len(records) != 2 {
-		t.Fatalf("record count = %d, want 2", len(records))
+		t.Fatalf("records = %+v, want both durable memories", records)
+	}
+}
+
+func TestConsolidateScopeDoesNotEnforceImplicitCap(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
+	scope := ai.SemanticScope{Platform: "telegram", ConversationID: "chat-1"}
+	store := newMemoryServiceStub([]ai.SemanticRecord{
+		newScopedRecord(scope, "a", 8, now.Add(-1*time.Hour), []float32{1, 0}),
+		newScopedRecord(scope, "b", 7, now.Add(-2*time.Hour), []float32{0, 1}),
+		newScopedRecord(scope, "c", 3, now.Add(-3*time.Hour), []float32{0, 0.5}),
+	})
+	cfg := validConsolidationConfig()
+	module := New(withClock(func() time.Time { return now }), withConfig(cfg))
+	module.semanticStore = store
+	module.windowManager = newWindowManager(cfg, func() time.Time { return now })
+
+	if err := module.consolidateScope(context.Background(), scope); err != nil {
+		t.Fatalf("consolidateScope failed: %v", err)
 	}
 
-	ids := []string{records[0].ID, records[1].ID}
+	records, err := store.ListByScope(context.Background(), scope, 0)
+	if err != nil {
+		t.Fatalf("ListByScope failed: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("record count = %d, want 3", len(records))
+	}
+
+	ids := []string{records[0].ID, records[1].ID, records[2].ID}
 	sort.Strings(ids)
-	if ids[0] != "a" || ids[1] != "b" {
-		t.Fatalf("ids = %v, want [a b]", ids)
+	if ids[0] != "a" || ids[1] != "b" || ids[2] != "c" {
+		t.Fatalf("ids = %v, want [a b c]", ids)
 	}
 }
 
@@ -162,7 +154,6 @@ func (s *memoryServiceStub) Store(_ context.Context, entry ai.SemanticEntry) (ai
 		Category:  entry.Category,
 		Embedding: append([]float32(nil), entry.Embedding...),
 		Profile:   entry.Profile,
-		Metadata:  entry.Metadata,
 		Keywords:  entry.Keywords,
 		Tags:      entry.Tags,
 		Links:     entry.Links,
@@ -187,7 +178,6 @@ func (s *memoryServiceStub) Update(_ context.Context, update ai.SemanticUpdate) 
 	record.Category = update.Category
 	record.Embedding = append([]float32(nil), update.Embedding...)
 	record.Profile = update.Profile
-	record.Metadata = update.Metadata
 	record.Keywords = update.Keywords
 	record.Tags = update.Tags
 	record.Links = update.Links
@@ -231,12 +221,7 @@ func newScopedRecord(scope ai.SemanticScope, id string, importance int, lastAcce
 		Category:  "knowledge",
 		Embedding: embedding,
 		Profile: ai.SemanticProfile{
-			Importance:     importance,
-			LastAccessedAt: lastAccessed,
-		},
-		Metadata: map[string]string{
-			"importance":    fmt.Sprintf("%d", importance),
-			"last_accessed": lastAccessed.Format(time.RFC3339),
+			Importance: importance,
 		},
 		CreatedAt: lastAccessed,
 		UpdatedAt: lastAccessed,

@@ -147,7 +147,7 @@ func (s *geminiStream) nextResponse(ctx context.Context) (*genai.GenerateContent
 			return nil, fmt.Errorf("gemini stream canceled: %w", recvErr)
 		}
 		s.logReceiveError(ctx, recvErr)
-		return nil, fmt.Errorf("gemini stream next: %w", recvErr)
+		return nil, classifyGeminiFailure(fmt.Errorf("gemini stream next: %w", recvErr))
 	}
 
 	return response, nil
@@ -532,7 +532,8 @@ func checkPromptFeedback(feedback *genai.GenerateContentResponsePromptFeedback) 
 	}
 	details = append(details, formatSafetyRatings(feedback.SafetyRatings)...)
 
-	return fmt.Errorf("gemini prompt blocked: %s", strings.Join(details, " "))
+	blockedErr := fmt.Errorf("gemini prompt blocked: %s", strings.Join(details, " "))
+	return ai.NewLLMFailure(ai.LLMFailureSafetyRefusal, false, 0, blockedErr)
 }
 
 // checkCandidateFinishReason returns an error when a candidate was terminated
@@ -554,7 +555,14 @@ func checkCandidateFinishReason(candidate *genai.Candidate) error {
 	}
 	details = append(details, formatSafetyRatings(candidate.SafetyRatings)...)
 
-	return fmt.Errorf("gemini candidate blocked: %s", strings.Join(details, " "))
+	blockedErr := fmt.Errorf("gemini candidate blocked: %s", strings.Join(details, " "))
+	switch reason {
+	case genai.FinishReasonSafety, genai.FinishReasonRecitation, genai.FinishReasonBlocklist,
+		genai.FinishReasonProhibitedContent, genai.FinishReasonSPII:
+		return ai.NewLLMFailure(ai.LLMFailureSafetyRefusal, false, 0, blockedErr)
+	default:
+		return ai.NewLLMFailure(ai.LLMFailureInternal, false, 0, blockedErr)
+	}
 }
 
 // formatSafetyRatings formats safety rating details for error messages.

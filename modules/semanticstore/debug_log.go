@@ -111,27 +111,3 @@ func (m *Module) debugListByScopeResult(ctx context.Context, scope ai.SemanticSc
 		"record_count", recordCount,
 	)
 }
-
-func (m *Module) debugPersistenceLoad(ctx context.Context, file string) {
-	if m == nil || m.logger == nil || m.store == nil {
-		return
-	}
-
-	m.logger.DebugContext(ctx, "semanticstore persistence loaded",
-		"file", file,
-		"record_count", m.store.recordCount(),
-		"scope_count", m.store.scopeCount(),
-	)
-}
-
-func (m *Module) debugPersistenceSave(ctx context.Context, file string) {
-	if m == nil || m.logger == nil || m.store == nil {
-		return
-	}
-
-	m.logger.DebugContext(ctx, "semanticstore persistence saved",
-		"file", file,
-		"record_count", m.store.recordCount(),
-		"scope_count", m.store.scopeCount(),
-	)
-}

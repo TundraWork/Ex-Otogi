@@ -32,8 +32,12 @@ const filterForm = reactive({
 
 const events = ref<EventItem[]>([])
 const pageState = ref<EventPage | null>(null)
+const highCursor = ref(0)
+const lowCursor = ref(0)
+const hasOlderEvents = ref(false)
 const isLoading = ref(false)
 const isLoadingMore = ref(false)
+const isPolling = ref(false)
 const errorMessage = ref<string | null>(null)
 const pollingEnabled = ref(true)
 const pollingIntervalMs = ref(5000)
@@ -93,15 +97,22 @@ function mergeEvents(nextItems: EventItem[]) {
   events.value = Array.from(eventMap.values()).sort((left, right) => right.ID - left.ID)
 }
 
-async function fetchEvents(options?: { append?: boolean }) {
-  const append = options?.append ?? false
+type FetchMode = 'latest' | 'newer' | 'older'
 
-  if (append) {
-    if (!pageState.value?.LastID || isLoadingMore.value || cursorResetRequired.value) {
+async function fetchEvents(mode: FetchMode = 'latest') {
+  const loadingOlder = mode === 'older'
+
+  if (loadingOlder) {
+    if (!lowCursor.value || isLoadingMore.value || cursorResetRequired.value) {
       return
     }
     isLoadingMore.value = true
-  } else {
+  } else if (mode === 'newer') {
+    if (isPolling.value || cursorResetRequired.value) {
+      return
+    }
+    isPolling.value = true
+  } else if (mode === 'latest') {
     isLoading.value = true
     cursorResetRequired.value = false
   }
@@ -111,7 +122,8 @@ async function fetchEvents(options?: { append?: boolean }) {
   try {
     const response = await getEvents({
       ...activeQuery.value,
-      after_id: append ? pageState.value?.LastID : undefined,
+      after_id: mode === 'newer' && highCursor.value ? highCursor.value : undefined,
+      before_id: loadingOlder && lowCursor.value ? lowCursor.value : undefined,
     })
 
     if (response.CursorResetRequired) {
@@ -120,16 +132,28 @@ async function fetchEvents(options?: { append?: boolean }) {
     }
 
     pageState.value = response
-    if (append) {
-      mergeEvents(response.Items ?? [])
+    if (mode === 'latest') {
+      events.value = [...(response.Items ?? [])]
+      highCursor.value = response.NewestID
+      lowCursor.value = response.OldestID
+      hasOlderEvents.value = response.HasOlder
     } else {
-      events.value = [...(response.Items ?? [])].sort((left, right) => right.ID - left.ID)
+      mergeEvents(response.Items ?? [])
+      if (mode === 'newer') {
+        highCursor.value = Math.max(highCursor.value, response.NewestID)
+      } else {
+        if (response.OldestID) {
+          lowCursor.value = response.OldestID
+        }
+        hasOlderEvents.value = response.HasOlder
+      }
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Unable to load events.'
   } finally {
     isLoading.value = false
     isLoadingMore.value = false
+    isPolling.value = false
   }
 }
 
@@ -137,7 +161,7 @@ async function reloadEvents() {
   selectedEventId.value = null
   selectedEvent.value = null
   isEventDrawerOpen.value = false
-  await fetchEvents()
+  await fetchEvents('latest')
 }
 
 async function applyFilters() {
@@ -201,11 +225,11 @@ function schedulePolling() {
   }
 
   pollTimer = window.setInterval(async () => {
-    if (isLoading.value || isLoadingMore.value || cursorResetRequired.value) {
+    if (isLoading.value || isLoadingMore.value || isPolling.value || cursorResetRequired.value) {
       return
     }
 
-    await fetchEvents({ append: true })
+    await fetchEvents('newer')
   }, pollingIntervalMs.value)
 }
 
@@ -238,7 +262,7 @@ onBeforeUnmount(() => {
             <p class="text-sm uppercase tracking-[0.3em] text-slate-400">Events</p>
             <h1 class="mt-3 text-3xl font-semibold">Event explorer</h1>
             <p class="mt-4 max-w-2xl text-slate-600">
-              Filter live event traffic, continue from the current cursor, and inspect payloads without leaving the workspace.
+              Start from the latest activity, poll for new events, and load older history only when needed.
             </p>
           </div>
 
@@ -334,8 +358,8 @@ onBeforeUnmount(() => {
           <p class="mt-4 text-3xl font-semibold text-sky-300">{{ formatNumber(events.length) }}</p>
         </article>
         <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/80">
-          <p class="text-sm uppercase tracking-[0.2em] text-slate-500">Last cursor</p>
-          <p class="mt-4 text-3xl font-semibold text-emerald-300">{{ formatNumber(pageState?.LastID) }}</p>
+          <p class="text-sm uppercase tracking-[0.2em] text-slate-500">Newest seen</p>
+          <p class="mt-4 text-3xl font-semibold text-emerald-300">{{ formatNumber(highCursor) }}</p>
         </article>
         <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/80">
           <p class="text-sm uppercase tracking-[0.2em] text-slate-500">Window range</p>
@@ -419,11 +443,11 @@ onBeforeUnmount(() => {
 
       <div class="flex justify-center">
         <Button
-          v-if="pageState?.HasMore"
-          label="Load more from cursor"
+          v-if="hasOlderEvents"
+          label="Load older events"
           severity="secondary"
           :loading="isLoadingMore"
-          @click="fetchEvents({ append: true })"
+          @click="fetchEvents('older')"
         />
       </div>
     </div>
