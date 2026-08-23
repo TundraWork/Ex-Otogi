@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "corpus_version": 1,
+  "retrieval_planning_enabled": true,
+  "metrics": {
+    "formation_precision": 1,
+    "formation_recall": 1,
+    "formation_f1": 1,
+    "supersession_correctness": 1,
+    "duplicate_rate": 0,
+    "prohibited_memory_rate": 0,
+    "recall_at_5": 1,
+    "mrr": 1,
+    "ndcg_at_5": 1,
+    "formation_p50_ms": 0.047166,
+    "formation_p95_ms": 0.244334,
+    "retrieval_p50_ms": 0.029084,
+    "retrieval_p95_ms": 0.060792,
+    "extraction_calls_per_100_articles": 66.66666666666667,
+    "planning_calls_per_chat_request": 1,
+    "formation_embedding_calls_per_100_articles": 133.33333333333334,
+    "retrieval_embedding_calls_per_chat_request": 1,
+    "consolidation_calls_per_100_articles": 0,
+    "stored_records_per_1000_articles": 1000,
+    "stored_bytes_per_1000_articles": 1418777.7777777778,
+    "article_count": 9,
+    "retrieval_count": 6,
+    "stored_record_count": 9,
+    "extraction_call_count": 6,
+    "planning_call_count": 6,
+    "formation_embedding_call_count": 12,
+    "retrieval_embedding_call_count": 6,
+    "consolidation_call_count": 0
+  },
+  "scenarios": [
+    {
+      "id": "english-durable-vs-transient",
+      "language": "en",
+      "stored_memories": [
+        {
+          "key": "hiking_hobby",
+          "content": "Alice's long-term weekend hobby is hiking",
+          "category": "preference"
+        },
+        {
+          "key": "tea_preference",
+          "content": "Alice prefers jasmine tea without sugar",
+          "category": "preference"
+        }
+      ],
+      "retrievals": [
+        {
+          "prompt": "What drink does Alice prefer?",
+          "retrieved_keys": [
+            "tea_preference",
+            "hiking_hobby"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "correction-supersession",
+      "language": "en",
+      "stored_memories": [
+        {
+          "key": "morning_drink",
+          "content": "Alice prefers coffee in the morning",
+          "category": "preference"
+        }
+      ],
+      "retrievals": [
+        {
+          "prompt": "What does Alice drink in the morning?",
+          "retrieved_keys": [
+            "morning_drink"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multilingual-durable-facts",
+      "language": "zh-CN",
+      "stored_memories": [
+        {
+          "key": "lin_food",
+          "content": "林最喜欢的家常菜是番茄炒蛋",
+          "category": "preference"
+        },
+        {
+          "key": "lin_city",
+          "content": "林长期居住在悉尼",
+          "category": "user_fact"
+        }
+      ],
+      "retrievals": [
+        {
+          "prompt": "林最喜欢吃什么家常菜？",
+          "retrieved_keys": [
+            "lin_food"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sensitive-content-policy",
+      "language": "en",
+      "stored_memories": [
+        {
+          "key": "maya_astronomy",
+          "content": "Maya enjoys amateur astronomy",
+          "category": "preference"
+        }
+      ],
+      "retrievals": [
+        {
+          "prompt": "What hobby does Maya enjoy?",
+          "retrieved_keys": [
+            "maya_astronomy"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ranking-with-distractors",
+      "language": "en",
+      "stored_memories": [
+        {
+          "key": "noah_books",
+          "content": "Noah collects books about Roman history",
+          "category": "preference"
+        },
+        {
+          "key": "noah_dog",
+          "content": "Noah has a greyhound named Orbit",
+          "category": "user_fact"
+        },
+        {
+          "key": "noah_music",
+          "content": "Noah plays jazz piano",
+          "category": "experience"
+        }
+      ],
+      "retrievals": [
+        {
+          "prompt": "Which instrument and style does Noah play?",
+          "retrieved_keys": [
+            "noah_music",
+            "noah_dog",
+            "noah_books"
+          ]
+        },
+        {
+          "prompt": "What is the name of Noah's dog?",
+          "retrieved_keys": [
+            "noah_dog",
+            "noah_music",
+            "noah_books"
+          ]
+        }
+      ]
+    }
+  ]
+}

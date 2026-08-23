@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-08-14T00:00:00Z",
+  "effective_generation_attempt_budget": 3,
+  "provider_sdk_generation_retries": {
+    "openai": 0,
+    "gemini": 0
+  },
+  "generic_fallback_policy": "internal_only",
+  "scenarios": [
+    {"name": "transient_pre_output_retry", "result": "pass", "provider_attempts": 2},
+    {"name": "partial_visible_output_failure", "result": "pass", "provider_attempts": 1, "answer_preserved": true},
+    {"name": "timeout_outcome", "result": "pass", "failure_class": "timeout"},
+    {"name": "rate_limit_outcome", "result": "pass", "failure_class": "rate_limited"},
+    {"name": "safety_refusal_outcome", "result": "pass", "failure_class": "safety_refusal"},
+    {"name": "empty_stream_outcome", "result": "pass", "failure_class": "empty_response"},
+    {"name": "tool_failure_outcome", "result": "pass", "failure_class": "tool_failure"},
+    {"name": "post_tool_transient_retry", "result": "pass", "tool_executions": 1, "follow_up_attempts": 2},
+    {"name": "delivery_failure_outcome", "result": "pass", "failure_class": "delivery_failure"},
+    {"name": "known_failure_user_messages", "result": "pass", "generic_fallback_count": 0}
+  ]
+}
