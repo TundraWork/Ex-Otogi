@@ -26,6 +26,7 @@ type config struct {
 	handlerTimeout     time.Duration
 	logger             *slog.Logger
 	onAsyncError       func(context.Context, string, error)
+	onEventPublished   func(context.Context, *platform.Event, int)
 	routing            routingConfig
 	allowlist          ChatAllowlistConfig
 	bootstrapServices  []bootstrapServiceRegistration
@@ -131,6 +132,16 @@ func WithAsyncErrorHandler(handler func(context.Context, string, error)) Option 
 	return func(cfg *config) {
 		if handler != nil {
 			cfg.onAsyncError = handler
+		}
+	}
+}
+
+// WithPublishObserver configures a best-effort callback invoked after one
+// successful event publish fan-out.
+func WithPublishObserver(observer func(context.Context, *platform.Event, int)) Option {
+	return func(cfg *config) {
+		if observer != nil {
+			cfg.onEventPublished = observer
 		}
 	}
 }

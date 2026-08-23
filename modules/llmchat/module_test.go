@@ -1942,8 +1942,8 @@ func TestOnRegisterFailsWithoutConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("OnRegister error = nil, want config load failure")
 	}
-	if !strings.Contains(err.Error(), "llmchat load config") {
-		t.Fatalf("OnRegister error = %q, want llmchat load config context", err.Error())
+	if !strings.Contains(err.Error(), "llmchat resolve runtime config") {
+		t.Fatalf("OnRegister error = %q, want runtime config service context", err.Error())
 	}
 }
 
@@ -2531,6 +2531,75 @@ func TestStreamProviderReplyFinalEditExhaustsAtHandlerDeadline(t *testing.T) {
 	}
 }
 
+func TestStreamProviderReplyRetriesTransientProviderStreamError(t *testing.T) {
+	module := newTestModule(validModuleConfig())
+
+	sink := &sinkDispatcherStub{}
+	module.dispatcher = sink
+	module.clock = sequenceClock([]time.Time{
+		time.Unix(0, 0).UTC(),
+		time.Unix(0, 0).UTC(),
+	})
+	sleeps := make([]time.Duration, 0, 1)
+	module.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+
+	provider := &providerStub{
+		streams: []ai.LLMStream{
+			&streamStub{
+				recvErr: errors.New("transient stream failure"),
+			},
+			&streamStub{
+				chunks: []ai.LLMGenerateChunk{
+					{Delta: "hello world"},
+				},
+			},
+		},
+		retryDelay: func(err error) (time.Duration, bool) {
+			if !strings.Contains(err.Error(), "transient stream failure") {
+				return 0, false
+			}
+			return llmRetryBaseInterval, true
+		},
+	}
+	req := ai.LLMGenerateRequest{
+		Model: "gpt-test",
+		Messages: []ai.LLMMessage{
+			{Role: ai.LLMMessageRoleSystem, Content: "sys"},
+			{Role: ai.LLMMessageRoleUser, Content: "u"},
+		},
+	}
+
+	if err := module.streamProviderReply(
+		context.Background(),
+		context.Background(),
+		platform.OutboundTarget{Conversation: platform.Conversation{ID: "chat-1", Type: platform.ConversationTypeGroup}},
+		"placeholder-1",
+		provider,
+		req,
+	); err != nil {
+		t.Fatalf("streamProviderReply failed: %v", err)
+	}
+
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(provider.requests))
+	}
+	if len(sleeps) != 1 {
+		t.Fatalf("sleep count = %d, want 1", len(sleeps))
+	}
+	if sleeps[0] != llmRetryBaseInterval {
+		t.Fatalf("retry sleep = %s, want %s", sleeps[0], llmRetryBaseInterval)
+	}
+	if len(sink.editRequests) != 1 {
+		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
+	}
+	if sink.editRequests[0].Text != "hello world" {
+		t.Fatalf("final edit text = %q, want hello world", sink.editRequests[0].Text)
+	}
+}
+
 func TestStreamProviderReplyWarnsOncePerFailureStreak(t *testing.T) {
 	module := newTestModule(validModuleConfig())
 
@@ -2706,7 +2775,7 @@ func TestStreamProviderReplyShowsThinkingThenFinalAnswer(t *testing.T) {
 	if len(sink.editRequests) < 2 {
 		t.Fatalf("edit request count = %d, want at least 2", len(sink.editRequests))
 	}
-	if sink.editRequests[0].Text != "Thinking...\n\nPlan steps" {
+	if sink.editRequests[0].Text != "Step 1: Thinking\n\nPlan steps" {
 		t.Fatalf("first edit text = %q, want thinking preview", sink.editRequests[0].Text)
 	}
 
@@ -2784,13 +2853,13 @@ func TestStreamProviderReplyThinkingOnlyReturnsError(t *testing.T) {
 	}
 
 	thinkingText := sink.editRequests[len(sink.editRequests)-1].Text
-	prefix := defaultThinkingPlaceholder + "\n\n"
+	prefix := "Step 1: Thinking\n\n"
 	if !strings.HasPrefix(thinkingText, prefix) {
 		t.Fatalf("thinking text prefix = %q, want %q", thinkingText, prefix)
 	}
 	preview := strings.TrimPrefix(thinkingText, prefix)
-	if len([]rune(preview)) != maxThinkingPreviewRunes {
-		t.Fatalf("preview rune length = %d, want %d", len([]rune(preview)), maxThinkingPreviewRunes)
+	if len([]rune(preview)) != maxPlaceholderRunes {
+		t.Fatalf("preview rune length = %d, want %d", len([]rune(preview)), maxPlaceholderRunes)
 	}
 	if !strings.HasSuffix(preview, "...") {
 		t.Fatalf("preview should be truncated with ellipsis, got %q", preview)
@@ -3129,8 +3198,9 @@ func TestHandleArticleDeadlinePreflightFailureEditsPlaceholder(t *testing.T) {
 	if len(sink.editRequests) != 1 {
 		t.Fatalf("edit request count = %d, want 1", len(sink.editRequests))
 	}
-	if sink.editRequests[0].Text != placeholderFailureMessage {
-		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[0].Text, placeholderFailureMessage)
+	wantFailure := "The request took too long to complete. Please try again."
+	if sink.editRequests[0].Text != wantFailure {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[0].Text, wantFailure)
 	}
 }
 
@@ -3300,14 +3370,15 @@ func TestHandleArticleThinkingOnlyStreamEditsPlaceholderFailure(t *testing.T) {
 	if len(sink.editRequests) != 2 {
 		t.Fatalf("edit request count = %d, want 2", len(sink.editRequests))
 	}
-	if sink.editRequests[0].Text != "Thinking...\n\ndraft steps" {
-		t.Fatalf("thinking edit text = %q, want %q", sink.editRequests[0].Text, "Thinking...\n\ndraft steps")
+	if sink.editRequests[0].Text != "Step 1: Thinking\n\ndraft steps" {
+		t.Fatalf("thinking edit text = %q, want %q", sink.editRequests[0].Text, "Step 1: Thinking\n\ndraft steps")
 	}
 	if sink.editRequests[1].MessageID != "msg-1" {
 		t.Fatalf("failure edit message id = %q, want msg-1", sink.editRequests[1].MessageID)
 	}
-	if sink.editRequests[1].Text != placeholderFailureMessage {
-		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[1].Text, placeholderFailureMessage)
+	wantFailure := "The AI service returned no answer. Please try again."
+	if sink.editRequests[1].Text != wantFailure {
+		t.Fatalf("failure edit text = %q, want %q", sink.editRequests[1].Text, wantFailure)
 	}
 }
 
@@ -3491,6 +3562,7 @@ type providerStub struct {
 	streams          []ai.LLMStream
 	streamErr        error
 	onGenerateStream func()
+	retryDelay       func(error) (time.Duration, bool)
 	lastRequest      ai.LLMGenerateRequest
 	requests         []ai.LLMGenerateRequest
 }
@@ -3579,6 +3651,14 @@ func (p *providerStub) GenerateStream(
 	p.lastRequest = cloneGenerateRequestForTest(req)
 	p.requests = append(p.requests, cloneGenerateRequestForTest(req))
 	return p.stream, nil
+}
+
+func (p *providerStub) RetryDelay(err error) (time.Duration, bool) {
+	if p == nil || p.retryDelay == nil {
+		return 0, false
+	}
+
+	return p.retryDelay(err)
 }
 
 type streamStub struct {

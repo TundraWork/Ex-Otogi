@@ -176,16 +176,19 @@ func (s *commandDerivingDispatcher) Publish(ctx context.Context, event *platform
 	if s.base == nil {
 		return fmt.Errorf("publish command deriving sink: nil base sink")
 	}
-
+	tracedCtx, _, err := ensureTraceContext(ctx)
+	if err != nil {
+		return fmt.Errorf("publish command deriving sink: %w", err)
+	}
 	if !s.allowlist.IsConversationAllowed(event.Source.ID, event.Conversation.ID) {
-		return s.publishBypassOnly(ctx, event)
+		return s.publishBypassOnly(tracedCtx, event)
 	}
 
-	if err := s.base.Publish(ctx, event); err != nil {
+	if err := s.base.Publish(tracedCtx, event); err != nil {
 		return fmt.Errorf("publish source event %s: %w", event.Kind, err)
 	}
 
-	return s.deriveCommand(ctx, event)
+	return s.deriveCommand(tracedCtx, event)
 }
 
 // publishBypassOnly handles events from non-allowlisted conversations.

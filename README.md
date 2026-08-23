@@ -4,7 +4,16 @@ Ex-Otogi is an event-driven, high-concurrency Go framework for IM workflows. It 
 
 The project name is inspired by "Ex-おとぎ話 (Ex-Otogibanashi)", the opening song of "超かぐや姫！ (Cosmic Princess Kaguya!)".
 
-## Architecture
+## Repository Structure
+
+This is a monorepo containing both the Go bot framework and the web control panel.
+
+| Workspace | Stack | Description |
+|-----------|-------|-------------|
+| `/` (root) | Go | Bot framework — event-driven IM runtime |
+| `web/` | Vue | Control panel — realtime monitoring dashboard |
+
+### Bot Framework (Go)
 
 - `pkg/otogi`: stable public contracts, events, and interfaces.
 - `internal/kernel`: runtime lifecycle, orchestration, and dispatch.
@@ -13,6 +22,10 @@ The project name is inspired by "Ex-おとぎ話 (Ex-Otogibanashi)", the opening
 - `pkg/llm`: LLM provider contracts and implementations.
 
 Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
+
+### Web Control Panel (Vue)
+
+The `web/` directory is the workspace for the realtime control panel. Planned features include driver and conversation monitoring, realtime event flow, log view and query, memory processing tracking, and LLM usage tracking.
 
 ## Quick Start
 
@@ -49,6 +62,8 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 
 ## Development
 
+### Bot (Go)
+
 - `make tools` installs pinned local tooling to `.cache/tools/bin`.
 - `make quality` is the canonical local quality gate.
 - `make hooks-install` installs the pre-commit hook (`make quality`).
@@ -56,3 +71,10 @@ Dependency direction: `pkg/otogi -> internal/kernel -> internal/driver`.
 - `make dev` runs local hot reload when `air` is available.
 
 See [Local Quality](docs/quality/LOCAL_QUALITY.md) for gate composition and policy details.
+
+### Web Control Panel
+
+- `make web-install` installs frontend dependencies.
+- `make web-dev` starts the development server.
+- `make web-build` creates a production build.
+- `make web-lint` runs the frontend linter.

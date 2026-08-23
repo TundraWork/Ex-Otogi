@@ -491,6 +491,161 @@ func TestSubAgentToolRecvAndCloseErrors(t *testing.T) {
 	}
 }
 
+func TestSubAgentToolExecuteRetriesTransientProviderStreamError(t *testing.T) {
+	t.Parallel()
+
+	provider := &providerStub{
+		streams: []ai.LLMStream{
+			&streamStub{
+				recvErr: fmt.Errorf("transient overloaded provider"),
+			},
+			&streamStub{
+				chunks: []ai.LLMGenerateChunk{
+					{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "search result"},
+				},
+			},
+		},
+		retryDelay: func(err error) (time.Duration, bool) {
+			if !containsSubstring(err.Error(), "transient overloaded provider") {
+				return 0, false
+			}
+			return llmRetryBaseInterval, true
+		},
+	}
+	toolHandler, err := newSubAgentTool(validSubAgentConfig(), provider, nil)
+	if err != nil {
+		t.Fatalf("newSubAgentTool failed: %v", err)
+	}
+
+	tool, ok := toolHandler.(*subAgentTool)
+	if !ok {
+		t.Fatal("tool is not *subAgentTool")
+	}
+	sleeps := make([]time.Duration, 0, 1)
+	tool.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+	result, execErr := tool.Execute(context.Background(), json.RawMessage(`{"query":"test"}`))
+	if execErr != nil {
+		t.Fatalf("Execute failed: %v", execErr)
+	}
+	if result != "search result" {
+		t.Fatalf("result = %q, want search result", result)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(provider.requests))
+	}
+	if len(sleeps) != 1 {
+		t.Fatalf("sleep call count = %d, want 1", len(sleeps))
+	}
+	if sleeps[0] != llmRetryBaseInterval {
+		t.Fatalf("retry sleep = %s, want %s", sleeps[0], llmRetryBaseInterval)
+	}
+}
+
+func TestSubAgentToolExecuteDoesNotRetryNonTransientStreamError(t *testing.T) {
+	t.Parallel()
+
+	provider := &providerStub{
+		streams: []ai.LLMStream{
+			&streamStub{recvErr: fmt.Errorf("bad request")},
+			&streamStub{
+				chunks: []ai.LLMGenerateChunk{
+					{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "should not be used"},
+				},
+			},
+		},
+	}
+	toolHandler, err := newSubAgentTool(validSubAgentConfig(), provider, nil)
+	if err != nil {
+		t.Fatalf("newSubAgentTool failed: %v", err)
+	}
+
+	tool, ok := toolHandler.(*subAgentTool)
+	if !ok {
+		t.Fatal("tool is not *subAgentTool")
+	}
+	sleepCalls := 0
+	tool.sleep = func(_ context.Context, _ time.Duration) error {
+		sleepCalls++
+		return nil
+	}
+
+	_, execErr := tool.Execute(context.Background(), json.RawMessage(`{"query":"test"}`))
+	if execErr == nil {
+		t.Fatal("expected error")
+	}
+	if !containsSubstring(execErr.Error(), "bad request") {
+		t.Fatalf("error = %v, want bad request", execErr)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider request count = %d, want 1", len(provider.requests))
+	}
+	if sleepCalls != 0 {
+		t.Fatalf("sleep calls = %d, want 0", sleepCalls)
+	}
+}
+
+func TestSubAgentToolExecuteRetriesTransientProviderGenerateStreamError(t *testing.T) {
+	t.Parallel()
+
+	provider := &providerStub{
+		stream: &streamStub{
+			chunks: []ai.LLMGenerateChunk{
+				{Kind: ai.LLMGenerateChunkKindOutputText, Delta: "search result"},
+			},
+		},
+	}
+	generateCalls := 0
+	provider.onGenerateStream = func() {
+		generateCalls++
+		if generateCalls == 1 {
+			provider.streamErr = errors.New("transient generate failure")
+			return
+		}
+		provider.streamErr = nil
+	}
+	provider.retryDelay = func(err error) (time.Duration, bool) {
+		if !containsSubstring(err.Error(), "transient generate failure") {
+			return 0, false
+		}
+		return llmRetryBaseInterval, true
+	}
+
+	toolHandler, err := newSubAgentTool(validSubAgentConfig(), provider, nil)
+	if err != nil {
+		t.Fatalf("newSubAgentTool failed: %v", err)
+	}
+
+	tool, ok := toolHandler.(*subAgentTool)
+	if !ok {
+		t.Fatal("tool is not *subAgentTool")
+	}
+	sleeps := make([]time.Duration, 0, 1)
+	tool.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+
+	result, execErr := tool.Execute(context.Background(), json.RawMessage(`{"query":"test"}`))
+	if execErr != nil {
+		t.Fatalf("Execute failed: %v", execErr)
+	}
+	if result != "search result" {
+		t.Fatalf("result = %q, want search result", result)
+	}
+	if generateCalls != 2 {
+		t.Fatalf("generate stream calls = %d, want 2", generateCalls)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("successful provider request count = %d, want 1", len(provider.requests))
+	}
+	if len(sleeps) != 1 {
+		t.Fatalf("sleep call count = %d, want 1", len(sleeps))
+	}
+}
+
 func validSubAgentConfig() SubAgentConfig {
 	return SubAgentConfig{
 		Name:            "web_search",

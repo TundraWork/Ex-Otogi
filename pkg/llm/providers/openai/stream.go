@@ -124,7 +124,7 @@ func (s *openAIStream) nextEvent(ctx context.Context) (responses.ResponseStreamE
 			return responses.ResponseStreamEventUnion{}, fmt.Errorf("openai stream canceled: %w", err)
 		}
 
-		return responses.ResponseStreamEventUnion{}, fmt.Errorf("openai stream next: %w", err)
+		return responses.ResponseStreamEventUnion{}, classifyOpenAIFailure(fmt.Errorf("openai stream next: %w", err))
 	}
 
 	event := stream.Current()
@@ -252,7 +252,10 @@ func mapOpenAIStreamEvent(
 		if status == "" {
 			status = "unknown"
 		}
-		return ai.LLMGenerateChunk{}, false, fmt.Errorf("openai stream response failed: status=%s", status)
+		code := strings.TrimSpace(string(event.Response.Error.Code))
+		message := strings.TrimSpace(event.Response.Error.Message)
+		streamErr := fmt.Errorf("openai stream response failed: status=%s code=%s message=%s", status, code, message)
+		return ai.LLMGenerateChunk{}, false, classifyOpenAIStreamCode(code, streamErr)
 	case openAIEventError:
 		if !event.JSON.Message.Valid() {
 			return ai.LLMGenerateChunk{}, false, openAIEventParseError(eventType, "missing message")
@@ -263,9 +266,11 @@ func mapOpenAIStreamEvent(
 		}
 		code := strings.TrimSpace(event.Code)
 		if code != "" {
-			return ai.LLMGenerateChunk{}, false, fmt.Errorf("openai stream error %s: %s", code, message)
+			streamErr := fmt.Errorf("openai stream error %s: %s", code, message)
+			return ai.LLMGenerateChunk{}, false, classifyOpenAIStreamCode(code, streamErr)
 		}
-		return ai.LLMGenerateChunk{}, false, fmt.Errorf("openai stream error: %s", message)
+		streamErr := fmt.Errorf("openai stream error: %s", message)
+		return ai.LLMGenerateChunk{}, false, ai.NewLLMFailure(ai.LLMFailureInternal, false, 0, streamErr)
 	default:
 		// Keep non-text events forward-compatible.
 		return ai.LLMGenerateChunk{}, false, nil

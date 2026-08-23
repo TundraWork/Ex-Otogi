@@ -197,7 +197,7 @@ func (m *Module) buildGenerateRequestWithTools(
 	if err != nil {
 		return ai.LLMGenerateRequest{}, fmt.Errorf("build llm request render system prompt: %w", err)
 	}
-	memoriesContent, err := m.retrieveSemanticMemories(ctx, event, agent, currentPrompt)
+	memoriesContent, err := m.retrieveSemanticMemoriesViaService(ctx, event, agent, currentPrompt)
 	if err != nil {
 		return ai.LLMGenerateRequest{}, fmt.Errorf("build llm request retrieve semantic memories: %w", err)
 	}
@@ -803,20 +803,13 @@ func (m *Module) renderSystemPrompt(agent Agent, event *platform.Event, now time
 }
 
 func (m *Module) agentHasSemanticMemory(agent Agent) (bool, error) {
-	policy := resolveSemanticMemoryPolicy(agent.SemanticMemory)
-	if policy == nil || !policy.Enabled {
+	if !agent.MemoryEnabled {
 		return false, nil
 	}
-	if m == nil || m.llmMemory == nil {
+	if m == nil || m.semanticRetriever == nil {
 		return false, nil
 	}
-
-	_, usable, err := m.resolveSemanticMemoryEmbeddingProvider(agent)
-	if err != nil {
-		return false, err
-	}
-
-	return usable, nil
+	return m.semanticRetriever.Available(), nil
 }
 
 func renderSystemPromptWithSemanticMemory(

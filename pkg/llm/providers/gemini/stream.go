@@ -16,6 +16,8 @@ import (
 	"google.golang.org/genai"
 )
 
+const syntheticGeminiToolCallIDPrefix = "gemini.synthetic.call-"
+
 type geminiStream struct {
 	mu sync.Mutex
 
@@ -32,6 +34,7 @@ type geminiStream struct {
 	seenResponses           int
 	observedOutputTextParts int
 	lastResponseDiagnostics geminiResponseDiagnostics
+	syntheticToolCallSeq    int
 }
 
 func newGeminiStream(
@@ -83,6 +86,7 @@ func (s *geminiStream) Recv(ctx context.Context) (ai.LLMGenerateChunk, error) {
 		if len(chunks) == 0 {
 			continue
 		}
+		chunks = s.ensureToolCallIDs(chunks)
 		if len(chunks) > 1 {
 			s.enqueuePending(chunks[1:])
 		}
@@ -143,7 +147,7 @@ func (s *geminiStream) nextResponse(ctx context.Context) (*genai.GenerateContent
 			return nil, fmt.Errorf("gemini stream canceled: %w", recvErr)
 		}
 		s.logReceiveError(ctx, recvErr)
-		return nil, fmt.Errorf("gemini stream next: %w", recvErr)
+		return nil, classifyGeminiFailure(fmt.Errorf("gemini stream next: %w", recvErr))
 	}
 
 	return response, nil
@@ -176,6 +180,31 @@ func (s *geminiStream) enqueuePending(chunks []ai.LLMGenerateChunk) {
 	s.mu.Lock()
 	s.pending = append(s.pending, chunks...)
 	s.mu.Unlock()
+}
+
+func (s *geminiStream) ensureToolCallIDs(chunks []ai.LLMGenerateChunk) []ai.LLMGenerateChunk {
+	normalized := append([]ai.LLMGenerateChunk(nil), chunks...)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for index := range normalized {
+		if normalized[index].Kind.Normalize() != ai.LLMGenerateChunkKindToolCall {
+			continue
+		}
+		if strings.TrimSpace(normalized[index].ToolCallID) != "" {
+			continue
+		}
+
+		s.syntheticToolCallSeq++
+		normalized[index].ToolCallID = fmt.Sprintf("%s%d", syntheticGeminiToolCallIDPrefix, s.syntheticToolCallSeq)
+	}
+
+	return normalized
+}
+
+func isSyntheticGeminiToolCallID(id string) bool {
+	return strings.HasPrefix(strings.TrimSpace(id), syntheticGeminiToolCallIDPrefix)
 }
 
 func (s *geminiStream) recordResponse(summary geminiResponseDiagnostics) {
@@ -503,7 +532,8 @@ func checkPromptFeedback(feedback *genai.GenerateContentResponsePromptFeedback) 
 	}
 	details = append(details, formatSafetyRatings(feedback.SafetyRatings)...)
 
-	return fmt.Errorf("gemini prompt blocked: %s", strings.Join(details, " "))
+	blockedErr := fmt.Errorf("gemini prompt blocked: %s", strings.Join(details, " "))
+	return ai.NewLLMFailure(ai.LLMFailureSafetyRefusal, false, 0, blockedErr)
 }
 
 // checkCandidateFinishReason returns an error when a candidate was terminated
@@ -525,7 +555,14 @@ func checkCandidateFinishReason(candidate *genai.Candidate) error {
 	}
 	details = append(details, formatSafetyRatings(candidate.SafetyRatings)...)
 
-	return fmt.Errorf("gemini candidate blocked: %s", strings.Join(details, " "))
+	blockedErr := fmt.Errorf("gemini candidate blocked: %s", strings.Join(details, " "))
+	switch reason {
+	case genai.FinishReasonSafety, genai.FinishReasonRecitation, genai.FinishReasonBlocklist,
+		genai.FinishReasonProhibitedContent, genai.FinishReasonSPII:
+		return ai.NewLLMFailure(ai.LLMFailureSafetyRefusal, false, 0, blockedErr)
+	default:
+		return ai.NewLLMFailure(ai.LLMFailureInternal, false, 0, blockedErr)
+	}
 }
 
 // formatSafetyRatings formats safety rating details for error messages.

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -42,10 +44,6 @@ type ProviderConfig struct {
 	Organization string
 	// Project optionally sets the OpenAI project header.
 	Project string
-	// MaxRetries optionally overrides the SDK retry count.
-	//
-	// Nil keeps the SDK default behavior.
-	MaxRetries *int
 }
 
 // Provider is an otogi LLM provider backed by OpenAI Responses streaming.
@@ -87,9 +85,7 @@ func New(cfg ProviderConfig) (*Provider, error) {
 	if normalized.Project != "" {
 		options = append(options, option.WithProject(normalized.Project))
 	}
-	if normalized.MaxRetries != nil {
-		options = append(options, option.WithMaxRetries(*normalized.MaxRetries))
-	}
+	options = append(options, option.WithMaxRetries(0))
 
 	client := openai.NewClient(options...)
 
@@ -120,13 +116,22 @@ func (p *Provider) GenerateStream(
 	if err != nil {
 		return nil, fmt.Errorf("openai generate stream map request: %w", err)
 	}
+	startedAt := time.Now()
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		recordLLMStart(ctx, recorder, "openai", req, startedAt)
+	}
 
 	stream := p.responses.NewStreaming(ctx, params)
 	if stream == nil {
 		return nil, fmt.Errorf("openai generate stream: openai stream is nil")
 	}
 
-	return newOpenAIStream(stream), nil
+	wrapped := ai.LLMStream(newOpenAIStream(stream))
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		wrapped = newObservedLLMStream(ctx, wrapped, recorder, "openai", strings.TrimSpace(req.Model), startedAt)
+	}
+
+	return wrapped, nil
 }
 
 func mapGenerateRequest(req ai.LLMGenerateRequest) (responses.ResponseNewParams, error) {
@@ -416,10 +421,6 @@ func normalizeProviderConfig(cfg ProviderConfig) (ProviderConfig, error) {
 			return ProviderConfig{}, fmt.Errorf("parse base_url: must include scheme and host")
 		}
 	}
-	if cfg.MaxRetries != nil && *cfg.MaxRetries < 0 {
-		return ProviderConfig{}, fmt.Errorf("max_retries must be >= 0")
-	}
-
 	return cfg, nil
 }
 

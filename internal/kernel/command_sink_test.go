@@ -15,7 +15,7 @@ import (
 func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -76,7 +76,7 @@ func TestCommandDerivingSinkPublishesSourceAndDerivedCreatedEvent(t *testing.T) 
 func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -142,7 +142,7 @@ func TestCommandDerivingSinkDoesNotReTriggerCommandsOnEditedSourceEvent(t *testi
 func TestCommandDerivingSinkUnregisteredCommandPublishesOnlySourceEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -183,7 +183,7 @@ func TestCommandDerivingSinkUnregisteredCommandPublishesOnlySourceEvent(t *testi
 func TestCommandDerivingSinkCommandBindingErrorRepliesAndSkipsDerivedEvent(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -488,7 +488,7 @@ func TestChatAllowlistConfig(t *testing.T) {
 func TestCommandDerivingDispatcherAllowlistDropsNonAllowlistedEvents(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -536,7 +536,7 @@ func TestCommandDerivingDispatcherAllowlistDropsNonAllowlistedEvents(t *testing.
 func TestCommandDerivingDispatcherAllowlistPassesAllowlistedChat(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -588,7 +588,7 @@ func TestCommandDerivingDispatcherAllowlistPassesAllowlistedChat(t *testing.T) {
 func TestCommandDerivingDispatcherAllowlistBypassSystemCommand(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -646,7 +646,7 @@ func TestCommandDerivingDispatcherAllowlistBypassSystemCommand(t *testing.T) {
 func TestCommandDerivingDispatcherAllowlistBypassRejectsNonBypassSystemCommand(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -695,7 +695,7 @@ func TestCommandDerivingDispatcherAllowlistBypassRejectsNonBypassSystemCommand(t
 func TestCommandDerivingDispatcherAllowlistBypassRejectsOrdinaryCommand(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})

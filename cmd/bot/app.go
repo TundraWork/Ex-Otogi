@@ -9,24 +9,29 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"ex-otogi/internal/driver"
+	managementhttp "ex-otogi/internal/driver/managementhttp"
 	"ex-otogi/internal/kernel"
+	kernelmanagement "ex-otogi/internal/kernel/management"
 	"ex-otogi/modules/duel"
 	"ex-otogi/modules/eventcache"
 	"ex-otogi/modules/help"
 	"ex-otogi/modules/llmchat"
-	"ex-otogi/modules/llmmemory"
-	"ex-otogi/modules/naturalmemory"
+	"ex-otogi/modules/llmruntime"
+	"ex-otogi/modules/memory"
 	"ex-otogi/modules/nbnhhsh"
 	"ex-otogi/modules/pingpong"
 	"ex-otogi/modules/quotehelper"
+	"ex-otogi/modules/semanticstore"
 	"ex-otogi/modules/sleep"
 	"ex-otogi/modules/whoami"
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -39,6 +44,8 @@ const (
 	defaultShutdownTimeout        = 10 * time.Second
 	defaultSubscriptionBuffer     = 256
 	defaultSubscriptionWorker     = 2
+	defaultManagementListenAddr   = "127.0.0.1"
+	defaultManagementDatabasePath = "data/management.db"
 	stdlibLogSource               = "stdlib"
 	stdlibLogComponent            = "google_genai_sdk"
 	stdlibLogKindContextCanceled  = "context_canceled"
@@ -46,15 +53,16 @@ const (
 
 var runtimeModules = []func() core.Module{
 	func() core.Module { return eventcache.New() },
-	func() core.Module { return llmmemory.New() },
+	func() core.Module { return llmruntime.New() },
+	func() core.Module { return semanticstore.New() },
 	func() core.Module { return quotehelper.New() },
 	func() core.Module { return duel.New() },
 	func() core.Module { return nbnhhsh.New() },
 	func() core.Module { return pingpong.New() },
 	func() core.Module { return help.New() },
 	func() core.Module { return sleep.New() },
+	func() core.Module { return memory.New() },
 	func() core.Module { return llmchat.New() },
-	func() core.Module { return naturalmemory.New() },
 	func() core.Module { return whoami.New() },
 }
 
@@ -73,16 +81,32 @@ type appConfig struct {
 
 	allowlistConversationIDs []string
 	allowlistBypassCommands  []string
+	management               managementConfig
 
 	moduleConfigs map[string]json.RawMessage
 }
 
+type managementConfig struct {
+	enabled       bool
+	listenAddress string
+	bearerToken   string
+	databasePath  string
+}
+
 type fileConfig struct {
-	LogLevel string                     `json:"log_level"`
-	Kernel   fileKernelConfig           `json:"kernel"`
-	Drivers  []fileDriverEntry          `json:"drivers"`
-	Routing  fileRoutingConfig          `json:"routing"`
-	Modules  map[string]json.RawMessage `json:"modules"`
+	LogLevel   string                     `json:"log_level"`
+	Kernel     fileKernelConfig           `json:"kernel"`
+	Management *fileManagementConfig      `json:"management"`
+	Drivers    []fileDriverEntry          `json:"drivers"`
+	Routing    fileRoutingConfig          `json:"routing"`
+	Modules    map[string]json.RawMessage `json:"modules"`
+}
+
+type fileManagementConfig struct {
+	Enabled       *bool  `json:"enabled"`
+	ListenAddress string `json:"listen_address"`
+	BearerToken   string `json:"bearer_token"`
+	DatabasePath  string `json:"database_path"`
 }
 
 type fileKernelConfig struct {
@@ -139,12 +163,16 @@ func run() error {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.logLevel}))
 	configureStdlibLogBridge(logger)
-	kernelRuntime, err := buildKernelRuntime(logger, cfg)
+	kernelRuntime, managementStore, err := buildKernelRuntime(logger, cfg)
 	if err != nil {
 		return fmt.Errorf("build kernel runtime: %w", err)
 	}
 
 	runtimes, err := buildDriverRuntime(context.Background(), logger, cfg, registry)
+	if err != nil {
+		return err
+	}
+	runtimes, err = appendManagementDriver(cfg, kernelRuntime, runtimes)
 	if err != nil {
 		return err
 	}
@@ -166,7 +194,16 @@ func run() error {
 	defer stop()
 
 	if err := kernelRuntime.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if managementStore != nil {
+			managementStore.Close()
+		}
 		return fmt.Errorf("run kernel: %w", err)
+	}
+
+	if managementStore != nil {
+		if closeErr := managementStore.Close(); closeErr != nil {
+			return fmt.Errorf("close management store: %w", closeErr)
+		}
 	}
 
 	return nil
@@ -267,8 +304,12 @@ func defaultAppConfig() appConfig {
 		subscriptionBuffer:     defaultSubscriptionBuffer,
 		subscriptionWorkers:    defaultSubscriptionWorker,
 
-		drivers:       make([]driver.Definition, 0),
-		moduleRoutes:  make(map[string]kernel.ModuleRoute),
+		drivers:      make([]driver.Definition, 0),
+		moduleRoutes: make(map[string]kernel.ModuleRoute),
+		management: managementConfig{
+			listenAddress: defaultManagementListenAddr,
+			databasePath:  defaultManagementDatabasePath,
+		},
 		moduleConfigs: make(map[string]json.RawMessage),
 	}
 }
@@ -344,6 +385,18 @@ func applyConfigFile(cfg *appConfig, path string) error {
 	if parsed.Kernel.ChatAllowlist != nil {
 		cfg.allowlistConversationIDs = append([]string(nil), parsed.Kernel.ChatAllowlist.ConversationIDs...)
 		cfg.allowlistBypassCommands = append([]string(nil), parsed.Kernel.ChatAllowlist.BypassCommands...)
+	}
+	if parsed.Management != nil {
+		if parsed.Management.Enabled != nil {
+			cfg.management.enabled = *parsed.Management.Enabled
+		}
+		if rawAddress := strings.TrimSpace(parsed.Management.ListenAddress); rawAddress != "" {
+			cfg.management.listenAddress = rawAddress
+		}
+		cfg.management.bearerToken = strings.TrimSpace(parsed.Management.BearerToken)
+		if rawPath := strings.TrimSpace(parsed.Management.DatabasePath); rawPath != "" {
+			cfg.management.databasePath = rawPath
+		}
 	}
 
 	cfg.drivers = make([]driver.Definition, 0, len(parsed.Drivers))
@@ -463,6 +516,11 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 			return fmt.Errorf("routing.modules.%s: unknown module", moduleName)
 		}
 	}
+	for _, deprecatedConfig := range []string{"llmchat", "memory", "semanticstore"} {
+		if _, exists := cfg.moduleConfigs[deprecatedConfig]; exists {
+			return fmt.Errorf("modules.%s is no longer supported; configure modules.llmruntime.config_file and the top-level memory section in the LLM config", deprecatedConfig)
+		}
+	}
 
 	for moduleName, route := range cfg.moduleRoutes {
 		if err := validateRouteRefs(route, enabledByName, fmt.Sprintf("routing.modules.%s", moduleName)); err != nil {
@@ -493,6 +551,9 @@ func validateAppConfig(cfg *appConfig, registry *driver.Registry) error {
 				return fmt.Errorf("routing.default is required in multi-driver mode unless all modules override")
 			}
 		}
+	}
+	if cfg.management.enabled && cfg.management.bearerToken == "" {
+		return fmt.Errorf("management.bearer_token is required when management.enabled is true")
 	}
 
 	return nil
@@ -543,9 +604,40 @@ func parseLogLevel(raw string) (slog.Level, error) {
 	}
 }
 
-func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, error) {
+func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, *kernelmanagement.SQLiteStore, error) {
+	var managementStore *kernelmanagement.SQLiteStore
+	var asyncErrorHandler func(context.Context, string, error)
+	if cfg.management.enabled {
+		if err := os.MkdirAll(filepath.Dir(cfg.management.databasePath), 0o755); err != nil {
+			return nil, nil, fmt.Errorf("create management database directory: %w", err)
+		}
+		var err error
+		managementStore, err = kernelmanagement.NewSQLiteStore(context.Background(), cfg.management.databasePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create management sqlite store: %w", err)
+		}
+		asyncErrorHandler = func(ctx context.Context, scope string, err error) {
+			if logger != nil {
+				logger.ErrorContext(ctx, "otogi async error", "scope", scope, "error", err)
+			}
+			recordManagementEvent(ctx, managementStore, panel.Event{
+				Category:    panel.EventCategoryRuntime,
+				Kind:        "runtime.async_error",
+				Level:       panel.EventLevelError,
+				Module:      "kernel",
+				Component:   "event-bus",
+				Subject:     "asynchronous runtime error",
+				Description: panel.TruncateDescription(fmt.Sprintf("%s: %s", scope, err.Error())),
+				Payload: panel.RuntimeAsyncErrorPayload{
+					Operation: scope,
+					Error:     err.Error(),
+				},
+			})
+		}
+	}
 	kernelRuntime, err := kernel.New(
 		kernel.WithLogger(logger),
+		kernel.WithAsyncErrorHandler(asyncErrorHandler),
 		kernel.WithModuleHookTimeout(cfg.moduleLifecycleTimeout),
 		kernel.WithDefaultHandlerTimeout(cfg.moduleHandlerTimeout),
 		kernel.WithShutdownTimeout(cfg.shutdownTimeout),
@@ -555,10 +647,28 @@ func buildKernelRuntime(logger *slog.Logger, cfg appConfig) (*kernel.Kernel, err
 		kernel.WithChatAllowlist(cfg.allowlistConversationIDs, cfg.allowlistBypassCommands),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("build kernel runtime: %w", err)
+		return nil, nil, fmt.Errorf("build kernel runtime: %w", err)
+	}
+	if managementStore != nil {
+		if err := kernelRuntime.RegisterService(panel.ServiceRecorder, managementStore); err != nil {
+			return nil, nil, fmt.Errorf("register management recorder service: %w", err)
+		}
+		if err := kernelRuntime.RegisterService(panel.ServiceQuery, managementStore); err != nil {
+			return nil, nil, fmt.Errorf("register management query service: %w", err)
+		}
 	}
 
-	return kernelRuntime, nil
+	return kernelRuntime, managementStore, nil
+}
+
+func recordManagementEvent(ctx context.Context, recorder panel.Recorder, event panel.Event) {
+	if recorder == nil {
+		return
+	}
+	_, err := recorder.RecordEvent(ctx, event)
+	if err != nil {
+		return
+	}
 }
 
 type driverRuntimes struct {
@@ -609,6 +719,26 @@ func buildDriverRuntime(
 		sinkDispatcher:       sinkDispatcher,
 		moderationDispatcher: moderationDispatcher,
 	}, nil
+}
+
+func appendManagementDriver(cfg appConfig, kernelRuntime *kernel.Kernel, runtimes driverRuntimes) (driverRuntimes, error) {
+	if !cfg.management.enabled {
+		return runtimes, nil
+	}
+	query, err := core.ResolveAs[panel.Query](kernelRuntime.Services(), panel.ServiceQuery)
+	if err != nil {
+		return driverRuntimes{}, fmt.Errorf("resolve management query service: %w", err)
+	}
+	driver, err := managementhttp.New(query, managementhttp.Config{
+		ListenAddress: cfg.management.listenAddress,
+		BearerToken:   cfg.management.bearerToken,
+	})
+	if err != nil {
+		return driverRuntimes{}, fmt.Errorf("build management http driver: %w", err)
+	}
+	runtimes.drivers = append(runtimes.drivers, driver)
+
+	return runtimes, nil
 }
 
 func registerRuntimeServices(

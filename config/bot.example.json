@@ -11,6 +11,15 @@
       "bypass_commands": ["whoami"]
     }
   },
+  "management": {
+    "enabled": false,
+    "listen_address": "127.0.0.1",
+    "bearer_token": "change-me",
+    "max_events": 2048,
+    "max_artifacts": 1024,
+    "max_artifact_bytes": 16777216,
+    "max_snapshots": 128
+  },
   "drivers": [
     {
       "name": "telegram-main",
@@ -26,8 +35,9 @@
         "download_threads": 4,
         "download_verify": false,
         "attachment_cache_entries": 2048,
-        "code": "",
+        "bot_token": "",
         "phone": "+15550001111",
+        "code": "",
         "password": "",
         "session_file": ".cache/telegram/session.json"
       }
@@ -66,15 +76,7 @@
     "sleep": {
       "signing_key": "MDEyMzQ1Njc4OWFiY2RlZmdoaWprbG1ub3BxcnN0dXY"
     },
-    "llmmemory": {
-      "persistence_file": "data/llm_memory.json",
-      "flush_interval": "5m",
-      "max_entries": 1000
-    },
-    "llmchat": {
-      "config_file": "config/llm.json"
-    },
-    "naturalmemory": {
+    "llmruntime": {
       "config_file": "config/llm.json"
     }
   }

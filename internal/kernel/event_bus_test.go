@@ -16,7 +16,7 @@ import (
 func TestEventBusPublishDeliversMatchingSubscriptions(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -74,7 +74,7 @@ func TestEventBusBackpressurePolicies(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			bus := NewEventBus(1, 1, time.Second, nil)
+			bus := NewEventBus(1, 1, time.Second, nil, nil)
 			t.Cleanup(func() {
 				_ = bus.Close(context.Background())
 			})
@@ -147,7 +147,7 @@ func TestEventBusBackpressureBlockSelfPublishDoesNotDeadlock(t *testing.T) {
 		case asyncErr <- err:
 		default:
 		}
-	})
+	}, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -227,7 +227,7 @@ func TestEventBusBackpressureBlockSelfPublishDoesNotDeadlock(t *testing.T) {
 func TestEventBusCloseDrainsBufferedEvents(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(4, 1, time.Second, nil)
+	bus := NewEventBus(4, 1, time.Second, nil, nil)
 
 	firstStarted := make(chan struct{}, 1)
 	unblockFirst := make(chan struct{})
@@ -300,7 +300,7 @@ func TestEventBusCloseDrainsBufferedEvents(t *testing.T) {
 func TestEventBusCloseRejectsNewPublish(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	if err := bus.Close(context.Background()); err != nil {
 		t.Fatalf("close failed: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestEventBusCloseRejectsNewPublish(t *testing.T) {
 func TestEventBusPublishNilEventReturnsError(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, time.Second, nil)
+	bus := NewEventBus(8, 1, time.Second, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -328,7 +328,7 @@ func TestEventBusPublishNilEventReturnsError(t *testing.T) {
 func TestEventBusHandlerTimeoutOverridePrecedence(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, 30*time.Millisecond, nil)
+	bus := NewEventBus(8, 1, 30*time.Millisecond, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -381,7 +381,7 @@ func TestEventBusHandlerTimeoutOverridePrecedence(t *testing.T) {
 func TestEventBusHandlerTimeoutDefaultsWhenUnset(t *testing.T) {
 	t.Parallel()
 
-	bus := NewEventBus(8, 1, 30*time.Millisecond, nil)
+	bus := NewEventBus(8, 1, 30*time.Millisecond, nil, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})
@@ -442,7 +442,7 @@ func TestEventBusHandlerErrorIncludesTimeoutDiagnostics(t *testing.T) {
 		case asyncErr <- err:
 		default:
 		}
-	})
+	}, nil)
 	t.Cleanup(func() {
 		_ = bus.Close(context.Background())
 	})

@@ -1,6 +1,8 @@
 SHELL := /bin/sh
 
 GO ?= go
+# Let the selected Go binary resolve its own stdlib even if the shell exports a stale GOROOT.
+unexport GOROOT
 MAIN_PKG ?= ./cmd/bot
 BUILD_OUT ?= $(CURDIR)/bin/bot
 TOOLS_DIR ?= $(CURDIR)/.cache/tools
@@ -32,9 +34,13 @@ AGENT_GUARD_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/agent_guard.sh
 PRE_COMMIT_QUALITY_SCRIPT ?= $(QUALITY_SCRIPTS_DIR)/pre_commit_quality.sh
 TEST_EXCEPTION_FILE ?= $(CURDIR)/config/quality/test_required_exceptions.txt
 
+WEB_DIR ?= $(CURDIR)/web
+
 .PHONY: tools doctor quality quality-core fmt fmt-check lint arch-check \
 	test test-race test-leak coverage-report security-warn agent-guard quality-pre-commit \
-	build dev generate hooks-install hooks-run
+	build dev generate hooks-install hooks-run \
+	memory-eval \
+	web-install web-dev web-build web-lint web-check
 
 tools: ## Install pinned local development tooling under .cache/tools/bin
 	@mkdir -p $(TOOLS_BIN) $(TOOLS_VERSION_DIR) $(GOLANGCI_LINT_CACHE) $(GO_BUILD_CACHE) $(COVERAGE_DIR)
@@ -117,10 +123,10 @@ quality-core: ## Hard-fail quality gate for merges/commits
 	$(MAKE) test-leak
 
 fmt: ## Format Go source files with gofumpt
-	$(GOFUMPT) -w .
+	@find . -type d \( -name .git -o -name .cache -o -name node_modules \) -prune -o -type f -name '*.go' -print0 | xargs -0 $(GOFUMPT) -w
 
 fmt-check: ## Verify Go source formatting with gofumpt
-	@out="$$( $(GOFUMPT) -l . )"; \
+	@out="$$( find . -type d \( -name .git -o -name .cache -o -name node_modules \) -prune -o -type f -name '*.go' -print0 | xargs -0 $(GOFUMPT) -l )"; \
 	if [ -n "$$out" ]; then \
 		echo "gofumpt formatting issues found:"; \
 		echo "$$out"; \
@@ -148,7 +154,7 @@ test-race: ## Run all tests with race detector (mandatory)
 
 test-leak: ## Run goroutine leak checks for concurrency-heavy packages
 	@mkdir -p $(GO_BUILD_CACHE)
-	GOCACHE=$(GO_BUILD_CACHE) $(GO) test -tags goleak ./internal/kernel ./internal/driver/telegram ./modules/llmchat ./modules/llmmemory
+	GOCACHE=$(GO_BUILD_CACHE) $(GO) test -tags goleak ./internal/kernel ./internal/driver/telegram ./modules/llmchat ./modules/semanticstore
 
 coverage-report: ## Generate report-only coverage artifacts under .cache/coverage
 	@mkdir -p $(COVERAGE_DIR) $(GO_BUILD_CACHE)
@@ -171,8 +177,16 @@ hooks-run: ## Run pre-commit on all files
 	@mkdir -p $(PRE_COMMIT_HOME_DIR)
 	PRE_COMMIT_HOME=$(PRE_COMMIT_HOME_DIR) $(PRE_COMMIT_CMD) run --all-files
 
+SQLC ?= sqlc
+
 generate: ## Run go:generate for mocks and generated code
 	PATH=$(TOOLS_BIN):$$PATH $(GO) generate ./...
+	$(SQLC) generate
+
+memory-eval: ## Run the deterministic production-path memory benchmark
+	$(GO) run ./cmd/memoryeval \
+		-json specs/2026-08-14-reliability-observability-memory/memory-evaluation-baseline.json \
+		-markdown specs/2026-08-14-reliability-observability-memory/memory-evaluation-baseline.md
 
 dev: ## Run with hot reload when air is available
 	@if command -v air >/dev/null 2>&1; then \
@@ -181,3 +195,22 @@ dev: ## Run with hot reload when air is available
 		echo "air not found; running without hot reload"; \
 		$(GO) run $(MAIN_PKG); \
 	fi
+
+# ---------------------------------------------------------------------------
+# Web control panel (web/)
+# ---------------------------------------------------------------------------
+
+web-install: ## Install web control panel dependencies
+	cd $(WEB_DIR) && pnpm install
+
+web-dev: ## Run web control panel dev server
+	cd $(WEB_DIR) && pnpm run dev
+
+web-build: ## Build web control panel for production
+	cd $(WEB_DIR) && pnpm run build
+
+web-lint: ## Lint web control panel source
+	cd $(WEB_DIR) && pnpm run lint
+
+web-check: ## Run web control panel type checking
+	cd $(WEB_DIR) && pnpm run type-check

@@ -1,0 +1,14 @@
+version: "2"
+sql:
+  - engine: "sqlite"
+    queries: "internal/kernel/management/queries/"
+    schema: "internal/kernel/management/migrations/"
+    gen:
+      go:
+        package: "managementsql"
+        out: "internal/sqlc/management"
+        emit_json_tags: false
+        emit_empty_slices: true
+        overrides:
+          - db_type: "DATETIME"
+            go_type: "time.Time"

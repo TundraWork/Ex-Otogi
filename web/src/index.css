@@ -1,0 +1,61 @@
+@import "tailwindcss";
+@import "tailwindcss-primeui";
+@plugin "@tailwindcss/typography";
+
+@import "primeicons/primeicons.css";
+
+/* Supports weights 100-900 */
+@import "@fontsource-variable/inter";
+
+body {
+  margin: 0;
+  font-family:
+    "Inter Variable", "Microsoft YaHei", "微软雅黑", "Segoe UI", "SimHei",
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji";
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--p-surface-500) 40%, transparent);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  :root {
+    font-size: 14px;
+    --scrollbar-color-thumb: var(--p-surface-300);
+    --scrollbar-color-track: var(--p-surface-50);
+    --scrollbar-size: calc(var(--spacing) * 2);
+    --scrollbar-radius: var(--radius-md);
+    --p-form-field-padding-x: 0.9rem; /* fix primevue iconfield padding */
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  ::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+    height: var(--scrollbar-size);
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--sb-track-color);
+    border-radius: var(--scrollbar-radius);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-color-thumb);
+    border-radius: var(--scrollbar-radius);
+  }
+
+  @supports not selector(::-webkit-scrollbar) {
+    :root {
+      scrollbar-color: var(--scrollbar-color-thumb) var(--scrollbar-color-track);
+    }
+  }
+}

@@ -1,0 +1,144 @@
+package memory
+
+import (
+	"context"
+	"time"
+
+	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
+)
+
+func (m *Module) emitManagementEvent(
+	ctx context.Context,
+	scope *ai.SemanticScope,
+	kind string,
+	summary string,
+	description string,
+	payload any,
+) {
+	m.recordManagementEvent(
+		ctx,
+		scope,
+		panel.EventLevelDebug,
+		"natural-memory",
+		kind,
+		summary,
+		description,
+		payload,
+	)
+}
+
+func (m *Module) emitManagementInfoEvent(
+	ctx context.Context,
+	scope *ai.SemanticScope,
+	component string,
+	kind string,
+	summary string,
+	description string,
+	payload any,
+) {
+	m.recordManagementEvent(ctx, scope, panel.EventLevelInfo, component, kind, summary, description, payload)
+}
+
+func (m *Module) emitManagementWarningEvent(
+	ctx context.Context,
+	scope *ai.SemanticScope,
+	component string,
+	kind string,
+	summary string,
+	description string,
+	payload any,
+) {
+	m.recordManagementEvent(
+		ctx,
+		scope,
+		panel.EventLevelWarn,
+		component,
+		kind,
+		summary,
+		description,
+		payload,
+	)
+}
+
+func (m *Module) emitManagementErrorEvent(
+	ctx context.Context,
+	scope *ai.SemanticScope,
+	component string,
+	kind string,
+	summary string,
+	description string,
+	payload any,
+) {
+	m.recordManagementEvent(
+		ctx,
+		scope,
+		panel.EventLevelError,
+		component,
+		kind,
+		summary,
+		description,
+		payload,
+	)
+}
+
+func (m *Module) recordManagementEvent(
+	ctx context.Context,
+	scope *ai.SemanticScope,
+	level panel.EventLevel,
+	component string,
+	kind string,
+	summary string,
+	description string,
+	payload any,
+) {
+	if m == nil || m.recorder == nil {
+		return
+	}
+	event := newNaturalMemoryEvent(
+		m.now(),
+		scope,
+		level,
+		component,
+		kind,
+		summary,
+		description,
+		payload,
+	)
+	_, err := m.recorder.RecordEvent(ctx, event)
+	if err != nil {
+		return
+	}
+}
+
+func newNaturalMemoryEvent(
+	occurredAt time.Time,
+	scope *ai.SemanticScope,
+	level panel.EventLevel,
+	component string,
+	kind string,
+	summary string,
+	description string,
+	payload any,
+) panel.Event {
+	event := panel.Event{
+		OccurredAt:  occurredAt.UTC(),
+		Category:    panel.EventCategoryMemory,
+		Kind:        kind,
+		Level:       level,
+		Module:      "memory",
+		Component:   component,
+		Subject:     summary,
+		Description: description,
+		Payload:     payload,
+	}
+	if scope == nil {
+		return event
+	}
+
+	event.TenantID = scope.TenantID
+	event.Platform = scope.Platform
+	event.ConversationID = scope.ConversationID
+
+	return event
+}

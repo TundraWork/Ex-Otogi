@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 
 	"google.golang.org/genai"
 )
@@ -163,6 +164,10 @@ func (p *Provider) GenerateStream(
 	if err != nil {
 		return nil, fmt.Errorf("gemini generate stream map request: %w", err)
 	}
+	startedAt := time.Now()
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		recordLLMStart(ctx, recorder, "gemini", req, startedAt)
+	}
 	// Force SDK request timeout off for streams so caller context is the only deadline authority.
 	streamTimeout := time.Duration(0)
 	config.HTTPOptions = &genai.HTTPOptions{Timeout: &streamTimeout}
@@ -172,12 +177,17 @@ func (p *Provider) GenerateStream(
 		return nil, fmt.Errorf("gemini generate stream: stream is nil")
 	}
 
-	return newGeminiStream(
+	wrapped := ai.LLMStream(newGeminiStream(
 		stream,
 		effective.includeThoughtsEnabled(),
 		p.logger,
 		newGeminiRequestDiagnostics(req, effective),
-	), nil
+	))
+	if recorder, ok := panel.RecorderFromContext(ctx); ok {
+		wrapped = newObservedLLMStream(ctx, wrapped, recorder, "gemini", strings.TrimSpace(req.Model), startedAt)
+	}
+
+	return wrapped, nil
 }
 
 func mapGenerateRequest(
@@ -319,12 +329,15 @@ func mapAssistantMessageParts(
 		if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
 			return nil, fmt.Errorf("tool_calls[%d] arguments: %w", index, err)
 		}
+		functionCall := &genai.FunctionCall{
+			Name: toolCall.Name,
+			Args: args,
+		}
+		if !isSyntheticGeminiToolCallID(toolCall.ID) {
+			functionCall.ID = toolCall.ID
+		}
 		part := &genai.Part{
-			FunctionCall: &genai.FunctionCall{
-				ID:   toolCall.ID,
-				Name: toolCall.Name,
-				Args: args,
-			},
+			FunctionCall: functionCall,
 		}
 		if len(toolCall.ThoughtSignature) > 0 {
 			part.ThoughtSignature = append([]byte(nil), toolCall.ThoughtSignature...)
@@ -347,13 +360,16 @@ func mapToolMessageContent(
 		return nil, fmt.Errorf("missing assistant tool call for id %s", message.ToolCallID)
 	}
 	response := mapToolResponse(message.Content)
+	functionResponse := &genai.FunctionResponse{
+		Name:     name,
+		Response: response,
+	}
+	if !isSyntheticGeminiToolCallID(message.ToolCallID) {
+		functionResponse.ID = message.ToolCallID
+	}
 
 	return genai.NewContentFromParts([]*genai.Part{{
-		FunctionResponse: &genai.FunctionResponse{
-			ID:       message.ToolCallID,
-			Name:     name,
-			Response: response,
-		},
+		FunctionResponse: functionResponse,
 	}}, genai.RoleUser), nil
 }
 

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"ex-otogi/pkg/llm"
+	llmconfig "ex-otogi/pkg/llm/config"
 	"ex-otogi/pkg/otogi/ai"
 	"ex-otogi/pkg/otogi/core"
 	"ex-otogi/pkg/otogi/platform"
@@ -19,8 +21,13 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	t.Parallel()
 
 	llmConfigPath := writeRuntimeLLMConfigFile(t, "45s", "openai-main")
+	llmCfg, providerRegistry := loadRuntimeServices(t, llmConfigPath, "openai-main")
+	retriever := &semanticRetrieverStub{available: true}
 	services := newRecordingServiceRegistry(map[string]any{
 		serviceLogger:                   slog.Default(),
+		llm.ServiceRuntimeConfig:        llmCfg,
+		ai.ServiceLLMProviderRegistry:   providerRegistry,
+		ai.ServiceSemanticRetriever:     retriever,
 		platform.ServiceSinkDispatcher:  &sinkDispatcherStub{},
 		core.ServiceMemory:              &memoryStub{},
 		platform.ServiceMarkdownParser:  markdownParserStub{},
@@ -33,7 +40,7 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	)
 	runtime := registrationRuntimeStub{
 		registry: services,
-		configs:  testLLMChatConfigRegistry(t, llmConfigPath),
+		configs:  newConfigRegistryStub(),
 		subscribe: func(
 			_ context.Context,
 			interest core.InterestSet,
@@ -73,8 +80,8 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 	if module.providerRegistry == nil {
 		t.Fatal("expected provider registry to be configured")
 	}
-	if module.embeddingRegistry == nil {
-		t.Fatal("expected embedding registry to be configured")
+	if module.semanticRetriever != retriever {
+		t.Fatal("expected registered semantic retriever")
 	}
 	if module.mediaDownloader == nil {
 		t.Fatal("expected media downloader to be configured")
@@ -100,47 +107,26 @@ func TestOnRegisterLoadsConfigBuildsProvidersAndSubscribes(t *testing.T) {
 		t.Fatalf("interest kinds = %v, want [%s]", gotInterest.Kinds, platform.EventKindArticleCreated)
 	}
 
-	resolved, err := services.Resolve(ai.ServiceLLMProviderRegistry)
-	if err != nil {
-		t.Fatalf("resolve provider registry failed: %v", err)
-	}
-	registry, ok := resolved.(ai.LLMProviderRegistry)
-	if !ok {
-		t.Fatalf("resolved provider registry type = %T, want ai.LLMProviderRegistry", resolved)
-	}
-	if _, err := registry.Resolve("openai-main"); err != nil {
+	if _, err := module.providerRegistry.Resolve("openai-main"); err != nil {
 		t.Fatalf("resolve openai-main failed: %v", err)
-	}
-
-	resolvedEmbedding, err := services.Resolve(ai.ServiceEmbeddingProviderRegistry)
-	if err != nil {
-		t.Fatalf("resolve embedding registry failed: %v", err)
-	}
-	embeddingRegistry, ok := resolvedEmbedding.(ai.EmbeddingProviderRegistry)
-	if !ok {
-		t.Fatalf("resolved embedding registry type = %T, want ai.EmbeddingProviderRegistry", resolvedEmbedding)
-	}
-	if _, err := embeddingRegistry.Resolve("openai-main"); err != nil {
-		t.Fatalf("resolve embedding provider openai-main failed: %v", err)
 	}
 }
 
-func TestOnRegisterUsesLLMConfigEnvOverride(t *testing.T) {
+func TestOnRegisterUsesSharedRuntimeConfig(t *testing.T) {
 	llmConfigPath := writeRuntimeLLMConfigFile(t, "75s", "openai-env")
-	t.Setenv("OTOGI_LLM_CONFIG_FILE", llmConfigPath)
+	llmCfg, providerRegistry := loadRuntimeServices(t, llmConfigPath, "openai-env")
 
 	services := newRecordingServiceRegistry(map[string]any{
 		serviceLogger:                  slog.Default(),
+		llm.ServiceRuntimeConfig:       llmCfg,
+		ai.ServiceLLMProviderRegistry:  providerRegistry,
 		platform.ServiceSinkDispatcher: &sinkDispatcherStub{},
 		core.ServiceMemory:             &memoryStub{},
 		platform.ServiceMarkdownParser: markdownParserStub{},
 	})
 	runtime := registrationRuntimeStub{
 		registry: services,
-		configs: testLLMChatConfigRegistry(
-			t,
-			filepath.Join(t.TempDir(), "ignored-by-env.json"),
-		),
+		configs:  newConfigRegistryStub(),
 	}
 
 	module := New()
@@ -194,20 +180,18 @@ func writeRuntimeLLMConfigFile(t *testing.T, requestTimeout string, providerKey 
 	return path
 }
 
-func testLLMChatConfigRegistry(t *testing.T, configFile string) core.ConfigRegistry {
+func loadRuntimeServices(t *testing.T, configFile string, providerKey string) (llmconfig.Config, ai.LLMProviderRegistry) {
 	t.Helper()
 
-	raw, err := json.Marshal(fileModuleConfig{ConfigFile: configFile})
+	cfg, err := llmconfig.LoadFile(configFile)
 	if err != nil {
-		t.Fatalf("marshal llmchat module config: %v", err)
+		t.Fatalf("load runtime config: %v", err)
 	}
-
-	registry := newConfigRegistryStub()
-	if err := registry.Register("llmchat", raw); err != nil {
-		t.Fatalf("register llmchat module config: %v", err)
+	registry, err := llm.NewRegistry(map[string]ai.LLMProvider{providerKey: &providerStub{}})
+	if err != nil {
+		t.Fatalf("create provider registry: %v", err)
 	}
-
-	return registry
+	return cfg, registry
 }
 
 type registrationRuntimeStub struct {

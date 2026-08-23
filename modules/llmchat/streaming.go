@@ -10,15 +10,13 @@ import (
 	"time"
 
 	"ex-otogi/pkg/otogi/ai"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
 const (
-	defaultThinkingPlaceholder = "Thinking..."
-	toolExecutionPlaceholder   = "Using tools..."
-	maxThinkingPreviewRunes    = 180
-	maxEditInterval            = 10 * time.Second
-	maxToolIterations          = 5
+	maxEditInterval   = 10 * time.Second
+	maxToolIterations = 5
 )
 
 func (m *Module) streamProviderReply(
@@ -46,7 +44,17 @@ type streamIterationResult struct {
 	answerText           string
 	toolCalls            []ai.LLMToolCall
 	lastDeliveredPayload editPayload
+	answerDelivered      bool
 }
+
+type streamResponseError struct {
+	err                  error
+	lastDeliveredPayload editPayload
+	answerDelivered      bool
+}
+
+func (e *streamResponseError) Error() string { return e.err.Error() }
+func (e *streamResponseError) Unwrap() error { return e.err }
 
 func (m *Module) streamProviderReplyWithTools(
 	streamCtx context.Context,
@@ -73,25 +81,45 @@ func (m *Module) streamProviderReplyWithTools(
 		return fmt.Errorf("stream provider reply validate request: %w", err)
 	}
 
+	progress := newPlaceholderProgress()
 	lastDeliveredPayload := plainEditPayload(defaultThinkingPlaceholder)
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		m.debugToolIteration(streamCtx, iteration, len(req.Messages))
 
-		result, iterationErr := m.streamProviderReplyIteration(
+		transitionChatState(streamCtx, chatStateGenerating)
+		result, iterationErr := retryLLMOperationWhen(
 			streamCtx,
-			target,
-			placeholderMessageID,
+			m.sleep,
+			m.logger,
+			fmt.Sprintf("stream provider reply iteration %d placeholder %s", iteration+1, placeholderMessageID),
 			provider,
-			req,
-			lastDeliveredPayload,
+			func(attemptCtx context.Context) (streamIterationResult, error) {
+				return m.streamProviderReplyIteration(
+					attemptCtx,
+					target,
+					placeholderMessageID,
+					provider,
+					iteration+1,
+					progress,
+					req,
+					lastDeliveredPayload,
+				)
+			},
+			func(result streamIterationResult, _ error) bool {
+				return !result.answerDelivered
+			},
 		)
 		if iterationErr != nil {
-			return iterationErr
+			return &streamResponseError{
+				err: iterationErr, lastDeliveredPayload: result.lastDeliveredPayload,
+				answerDelivered: result.answerDelivered,
+			}
 		}
 		lastDeliveredPayload = result.lastDeliveredPayload
 
 		finalText := strings.TrimSpace(result.answerText)
 		if finalText != "" {
+			transitionChatState(deliveryCtx, chatStateDelivering)
 			finalPayload, parseErr := m.parseEditPayload(deliveryCtx, finalText)
 			if parseErr != nil {
 				m.warnMarkdownParseFallback(deliveryCtx, target, placeholderMessageID, parseErr)
@@ -107,7 +135,8 @@ func (m *Module) streamProviderReplyWithTools(
 				Entities:  finalPayload.Entities,
 			})
 			if finalEditErr != nil {
-				return fmt.Errorf("stream provider reply finalize placeholder %s: %w", placeholderMessageID, finalEditErr)
+				deliveryErr := fmt.Errorf("stream provider reply finalize placeholder %s: %w", placeholderMessageID, finalEditErr)
+				return ai.NewLLMFailure(ai.LLMFailureDelivery, false, 0, deliveryErr)
 			}
 
 			return nil
@@ -118,12 +147,13 @@ func (m *Module) streamProviderReplyWithTools(
 				return fmt.Errorf("stream provider reply canceled: %w", ctxErr)
 			}
 
-			return fmt.Errorf(
+			emptyErr := fmt.Errorf(
 				"stream provider reply: no output text received (thinking_chunks=%d output_chunks=%d deadline_remaining=%s)",
 				result.thinkingChunks,
 				result.outputChunks,
 				describeContextDeadlineRemaining(streamCtx),
 			)
+			return ai.NewLLMFailure(ai.LLMFailureEmptyResponse, false, 0, emptyErr)
 		}
 		if toolRegistry == nil || !toolRegistry.HasTools() {
 			return fmt.Errorf("stream provider reply: model requested tools but no tool registry is configured")
@@ -132,20 +162,30 @@ func (m *Module) streamProviderReplyWithTools(
 			return fmt.Errorf("stream provider reply: exceeded max tool iterations (%d)", maxToolIterations)
 		}
 
-		lastDeliveredPayload = m.deliverPlaceholderText(
+		m.debugToolCallsDetected(streamCtx, iteration, result.toolCalls)
+		toolNames := make([]string, 0, len(result.toolCalls))
+		for _, toolCall := range result.toolCalls {
+			toolNames = append(toolNames, toolCall.Name)
+		}
+		m.emitManagementEvent(streamCtx, nil, "llm.tool.detected", "detected model tool calls", panel.TruncateDescription(strings.Join(toolNames, ", ")), panel.LLMToolDetectedPayload{
+			ToolNames: toolNames,
+			Count:     len(toolNames),
+		})
+
+		transitionChatState(streamCtx, chatStateExecutingTools)
+		toolMessages, nextPayload, toolErr := m.executeToolCalls(
 			streamCtx,
 			target,
 			placeholderMessageID,
-			toolExecutionPlaceholder,
 			lastDeliveredPayload,
+			progress,
+			toolRegistry,
+			result.toolCalls,
 		)
-
-		m.debugToolCallsDetected(streamCtx, iteration, result.toolCalls)
-
-		toolMessages, toolErr := m.executeToolCalls(streamCtx, toolRegistry, result.toolCalls)
 		if toolErr != nil {
-			return fmt.Errorf("stream provider reply execute tools: %w", toolErr)
+			return ai.NewLLMFailure(ai.LLMFailureTool, false, 0, fmt.Errorf("stream provider reply execute tools: %w", toolErr))
 		}
+		lastDeliveredPayload = nextPayload
 
 		req.Messages = append(req.Messages, ai.LLMMessage{
 			Role:      ai.LLMMessageRoleAssistant,
@@ -165,6 +205,8 @@ func (m *Module) streamProviderReplyIteration(
 	target platform.OutboundTarget,
 	placeholderMessageID string,
 	provider ai.LLMProvider,
+	iteration int,
+	progress *placeholderProgress,
 	req ai.LLMGenerateRequest,
 	lastDeliveredPayload editPayload,
 ) (result streamIterationResult, err error) {
@@ -200,7 +242,7 @@ func (m *Module) streamProviderReplyIteration(
 				break
 			}
 
-			return streamIterationResult{}, fmt.Errorf("stream provider reply receive chunk: %w", recvErr)
+			return result, fmt.Errorf("stream provider reply receive chunk: %w", recvErr)
 		}
 
 		switch chunk.Kind.Normalize() {
@@ -225,10 +267,7 @@ func (m *Module) streamProviderReplyIteration(
 
 		nextText := answerBuilder.String()
 		if answerBuilder.Len() == 0 {
-			nextText = renderThinkingMessage(thinkingBuilder.String())
-		}
-		if nextText == "" {
-			nextText = defaultThinkingPlaceholder
+			nextText = progress.RenderThinking(iteration, thinkingBuilder.String())
 		}
 
 		now := m.now()
@@ -259,6 +298,9 @@ func (m *Module) streamProviderReplyIteration(
 		}
 		pacer.RecordEditSuccess(now)
 		result.lastDeliveredPayload = payload
+		if answerBuilder.Len() > 0 {
+			result.answerDelivered = true
+		}
 	}
 
 	finalToolCalls, err := finalizeAccumulatedToolCalls(toolCalls, toolCallOrder)
@@ -362,27 +404,44 @@ func (m *Module) deliverPlaceholderText(
 
 func (m *Module) executeToolCalls(
 	ctx context.Context,
+	target platform.OutboundTarget,
+	placeholderMessageID string,
+	lastDeliveredPayload editPayload,
+	progress *placeholderProgress,
 	toolRegistry *ToolRegistry,
 	toolCalls []ai.LLMToolCall,
-) ([]ai.LLMMessage, error) {
+) ([]ai.LLMMessage, editPayload, error) {
 	results := make([]ai.LLMMessage, 0, len(toolCalls))
 	for index, toolCall := range toolCalls {
 		if err := toolCall.Validate(); err != nil {
-			return nil, fmt.Errorf("tool_calls[%d]: %w", index, err)
+			return nil, lastDeliveredPayload, fmt.Errorf("tool_calls[%d]: %w", index, err)
 		}
+
+		definition, _ := toolRegistry.definition(toolCall.Name)
+		lastDeliveredPayload = m.deliverPlaceholderText(
+			ctx,
+			target,
+			placeholderMessageID,
+			progress.RenderTool(toolCall, definition),
+			lastDeliveredPayload,
+		)
 
 		m.debugToolExecuteStart(ctx, toolCall)
 		execStart := m.now()
 
 		result, err := toolRegistry.Execute(ctx, toolCall.Name, json.RawMessage(toolCall.Arguments))
 		if err != nil {
-			return nil, fmt.Errorf("tool_calls[%d] execute %s: %w", index, toolCall.Name, err)
+			m.recordToolExecuted(ctx, nil, toolCall, false, m.now().Sub(execStart), err)
+			return nil, lastDeliveredPayload, fmt.Errorf("tool_calls[%d] execute %s: %w", index, toolCall.Name, err)
 		}
 		if strings.TrimSpace(result) == "" {
-			return nil, fmt.Errorf("tool_calls[%d] execute %s: empty result", index, toolCall.Name)
+			emptyErr := fmt.Errorf("empty result")
+			m.recordToolExecuted(ctx, nil, toolCall, false, m.now().Sub(execStart), emptyErr)
+			return nil, lastDeliveredPayload, fmt.Errorf("tool_calls[%d] execute %s: empty result", index, toolCall.Name)
 		}
 
 		m.debugToolExecuteEnd(ctx, toolCall, m.now().Sub(execStart), len(result))
+		m.recordToolExecuted(ctx, nil, toolCall, true, m.now().Sub(execStart), nil)
 
 		results = append(results, ai.LLMMessage{
 			Role:       ai.LLMMessageRoleTool,
@@ -391,25 +450,7 @@ func (m *Module) executeToolCalls(
 		})
 	}
 
-	return results, nil
-}
-
-func renderThinkingMessage(rawSummary string) string {
-	summary := shapeThinkingSummary(rawSummary)
-	if summary == "" {
-		return defaultThinkingPlaceholder
-	}
-
-	return defaultThinkingPlaceholder + "\n\n" + summary
-}
-
-func shapeThinkingSummary(raw string) string {
-	normalized := strings.Join(strings.Fields(raw), " ")
-	if normalized == "" {
-		return ""
-	}
-
-	return trimRunesWithEllipsis(normalized, maxThinkingPreviewRunes)
+	return results, lastDeliveredPayload, nil
 }
 
 func trimRunesWithEllipsis(raw string, maxRunes int) string {

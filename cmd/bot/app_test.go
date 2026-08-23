@@ -15,6 +15,7 @@ import (
 
 	driverpkg "ex-otogi/internal/driver"
 	"ex-otogi/internal/kernel"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -144,6 +145,39 @@ func TestLoadConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("loads management config when enabled", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "bot.json")
+		writeConfigFile(t, configPath, `{
+			"management":{
+				"enabled":true,
+				"listen_address":"127.0.0.1:9090",
+				"bearer_token":"test-token",
+				"database_path":"data/test.db"
+			},
+			"drivers":[
+				{"name":"tg-main","type":"telegram","config":{"app_id":123456,"app_hash":"sample_hash"}}
+			]
+		}`)
+		t.Setenv(envConfigFile, configPath)
+
+		cfg, err := loadConfig(mustBuiltinDriverRegistry(t))
+		if err != nil {
+			t.Fatalf("load config failed: %v", err)
+		}
+		if !cfg.management.enabled {
+			t.Fatal("management.enabled = false, want true")
+		}
+		if cfg.management.listenAddress != "127.0.0.1:9090" {
+			t.Fatalf("management.listenAddress = %q, want 127.0.0.1:9090", cfg.management.listenAddress)
+		}
+		if cfg.management.bearerToken != "test-token" {
+			t.Fatalf("management.bearerToken = %q, want test-token", cfg.management.bearerToken)
+		}
+		if cfg.management.databasePath != "data/test.db" {
+			t.Fatalf("management.databasePath = %q, want data/test.db", cfg.management.databasePath)
+		}
+	})
+
 	t.Run("single-driver mode infers default route", func(t *testing.T) {
 		configPath := filepath.Join(t.TempDir(), "bot.json")
 		writeConfigFile(t, configPath, `{
@@ -237,6 +271,11 @@ func TestLoadConfig(t *testing.T) {
 				fileJSON:   `{"drivers":[{"name":"legacy","type":"irc","config":{}}]}`,
 				wantErrSub: "unsupported type irc",
 			},
+			{
+				name:       "management enabled requires token",
+				fileJSON:   `{"management":{"enabled":true},"drivers":[{"name":"tg","type":"telegram","config":{"app_id":1,"app_hash":"hash"}}]}`,
+				wantErrSub: "management.bearer_token is required",
+			},
 		}
 
 		for _, testCase := range tests {
@@ -295,7 +334,7 @@ func TestLoadConfig(t *testing.T) {
 			],
 			"modules":{
 				"sleep":{"signing_key":"test-key"},
-				"llmchat":{"config_file":"/tmp/llm.json"}
+				"llmruntime":{"config_file":"/tmp/llm.json"}
 			}
 		}`)
 		t.Setenv(envConfigFile, configPath)
@@ -322,9 +361,9 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("sleep signing_key = %q, want test-key", sleepCfg.SigningKey)
 		}
 
-		llmchatRaw, ok := cfg.moduleConfigs["llmchat"]
+		llmchatRaw, ok := cfg.moduleConfigs["llmruntime"]
 		if !ok {
-			t.Fatal("expected llmchat module config")
+			t.Fatal("expected llmruntime module config")
 		}
 		var llmchatCfg struct {
 			ConfigFile string `json:"config_file"`
@@ -333,9 +372,29 @@ func TestLoadConfig(t *testing.T) {
 			t.Fatalf("unmarshal llmchat config: %v", err)
 		}
 		if llmchatCfg.ConfigFile != "/tmp/llm.json" {
-			t.Fatalf("llmchat config_file = %q, want /tmp/llm.json", llmchatCfg.ConfigFile)
+			t.Fatalf("llmruntime config_file = %q, want /tmp/llm.json", llmchatCfg.ConfigFile)
 		}
 	})
+}
+
+func TestBuildKernelRuntimeRegistersManagementServicesWhenEnabled(t *testing.T) {
+	cfg := defaultAppConfig()
+	cfg.management.enabled = true
+	cfg.management.bearerToken = "test-token"
+	cfg.management.databasePath = filepath.Join(t.TempDir(), "management.db")
+
+	kernelRuntime, managementStore, err := buildKernelRuntime(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
+	if err != nil {
+		t.Fatalf("buildKernelRuntime failed: %v", err)
+	}
+	defer managementStore.Close()
+
+	if _, err := kernelRuntime.Services().Resolve(panel.ServiceRecorder); err != nil {
+		t.Fatalf("resolve management recorder failed: %v", err)
+	}
+	if _, err := kernelRuntime.Services().Resolve(panel.ServiceQuery); err != nil {
+		t.Fatalf("resolve management query failed: %v", err)
+	}
 }
 
 func TestRegisterRuntimeServices(t *testing.T) {

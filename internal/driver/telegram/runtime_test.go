@@ -9,12 +9,12 @@ import (
 func TestParseRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
-	_, err := parseRuntimeConfig([]byte(`{"app_id":1,"app_hash":"hash","publish_timeout":"bad"}`))
+	_, err := parseRuntimeConfig([]byte(`{"app_id":1,"app_hash":"hash","phone":"+1","publish_timeout":"bad"}`))
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
 
-	cfg, err := parseRuntimeConfig([]byte(`{"app_id":1,"app_hash":"hash"}`))
+	cfg, err := parseRuntimeConfig([]byte(`{"app_id":1,"app_hash":"hash","phone":"+1"}`))
 	if err != nil {
 		t.Fatalf("parse runtime config failed: %v", err)
 	}
@@ -41,6 +41,7 @@ func TestParseRuntimeConfigDownloadSettings(t *testing.T) {
 	cfg, err := parseRuntimeConfig([]byte(`{
 		"app_id":1,
 		"app_hash":"hash",
+		"phone":"+1",
 		"download_timeout":"45s",
 		"download_threads":8,
 		"download_verify":true,
@@ -60,6 +61,70 @@ func TestParseRuntimeConfigDownloadSettings(t *testing.T) {
 	}
 	if cfg.attachmentCacheEntries != 512 {
 		t.Fatalf("attachment cache entries = %d, want 512", cfg.attachmentCacheEntries)
+	}
+}
+
+func TestParseRuntimeConfigAuthMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		json      string
+		wantErr   string
+		wantBot   string
+		wantPhone string
+	}{
+		{
+			name:    "bot token only",
+			json:    `{"app_id":1,"app_hash":"hash","bot_token":"123:ABC"}`,
+			wantBot: "123:ABC",
+		},
+		{
+			name:      "phone only",
+			json:      `{"app_id":1,"app_hash":"hash","phone":"+15550001111"}`,
+			wantPhone: "+15550001111",
+		},
+		{
+			name:    "both bot token and phone",
+			json:    `{"app_id":1,"app_hash":"hash","bot_token":"123:ABC","phone":"+15550001111"}`,
+			wantErr: "bot_token and phone are mutually exclusive",
+		},
+		{
+			name:    "neither bot token nor phone",
+			json:    `{"app_id":1,"app_hash":"hash"}`,
+			wantErr: "either bot_token or phone is required",
+		},
+		{
+			name:    "bot token with whitespace trimmed",
+			json:    `{"app_id":1,"app_hash":"hash","bot_token":"  123:ABC  "}`,
+			wantBot: "123:ABC",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := parseRuntimeConfig([]byte(tt.json))
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if got := err.Error(); got != tt.wantErr {
+					t.Fatalf("error = %q, want %q", got, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if cfg.botToken != tt.wantBot {
+				t.Fatalf("botToken = %q, want %q", cfg.botToken, tt.wantBot)
+			}
+			if cfg.phone != tt.wantPhone {
+				t.Fatalf("phone = %q, want %q", cfg.phone, tt.wantPhone)
+			}
+		})
 	}
 }
 

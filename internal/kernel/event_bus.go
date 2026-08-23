@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ex-otogi/pkg/otogi/core"
+	panel "ex-otogi/pkg/otogi/management"
 	"ex-otogi/pkg/otogi/platform"
 )
 
@@ -22,9 +23,15 @@ type EventBus struct {
 	defaultWorkers        int
 	defaultHandlerTimeout time.Duration
 	onAsyncError          func(context.Context, string, error)
+	onEventPublished      func(context.Context, *platform.Event, int)
 }
 
 type publishOriginSubscriptionKey struct{}
+
+type queuedEvent struct {
+	event *platform.Event
+	trace panel.TraceContext
+}
 
 // NewEventBus creates an asynchronous event bus with bounded queues.
 func NewEventBus(
@@ -32,6 +39,7 @@ func NewEventBus(
 	defaultWorkers int,
 	defaultHandlerTimeout time.Duration,
 	onAsyncError func(context.Context, string, error),
+	onEventPublished func(context.Context, *platform.Event, int),
 ) *EventBus {
 	return &EventBus{
 		subscriptions:         make(map[int64]*busSubscription),
@@ -39,6 +47,7 @@ func NewEventBus(
 		defaultWorkers:        defaultWorkers,
 		defaultHandlerTimeout: defaultHandlerTimeout,
 		onAsyncError:          onAsyncError,
+		onEventPublished:      onEventPublished,
 	}
 }
 
@@ -56,10 +65,12 @@ func (b *EventBus) Publish(ctx context.Context, event *platform.Event) error {
 	}
 
 	var publishErrs []error
+	matchedCount := 0
 	for _, sub := range subs {
 		if !sub.interest.Matches(event) {
 			continue
 		}
+		matchedCount++
 		if err := sub.enqueue(ctx, event); err != nil {
 			if errors.Is(err, core.ErrEventDropped) || errors.Is(err, core.ErrSubscriptionClosed) {
 				b.reportAsyncError(ctx, sub.spec.Name, err)
@@ -71,6 +82,9 @@ func (b *EventBus) Publish(ctx context.Context, event *platform.Event) error {
 
 	if len(publishErrs) > 0 {
 		return fmt.Errorf("publish event %s: %w", eventKind, errors.Join(publishErrs...))
+	}
+	if b.onEventPublished != nil {
+		b.onEventPublished(ctx, event, matchedCount)
 	}
 
 	return nil
@@ -208,7 +222,7 @@ type busSubscription struct {
 	interest core.InterestSet
 	spec     core.SubscriptionSpec
 	handler  core.EventHandler
-	queue    chan *platform.Event
+	queue    chan queuedEvent
 	ctx      context.Context
 	cancel   context.CancelFunc
 	done     chan struct{}
@@ -231,7 +245,7 @@ func newBusSubscription(
 		interest: cloneInterestSet(interest),
 		spec:     spec,
 		handler:  handler,
-		queue:    make(chan *platform.Event, spec.Buffer),
+		queue:    make(chan queuedEvent, spec.Buffer),
 		ctx:      subCtx,
 		cancel:   cancel,
 		done:     make(chan struct{}),
@@ -278,20 +292,25 @@ func (s *busSubscription) enqueue(ctx context.Context, event *platform.Event) er
 		return fmt.Errorf("enqueue %s: %w", s.spec.Name, core.ErrSubscriptionClosed)
 	}
 
+	item := queuedEvent{event: event}
+	if trace, ok := panel.TraceFromContext(ctx); ok {
+		item.trace = trace
+	}
+
 	switch s.spec.Backpressure {
 	case core.BackpressureDropNewest:
-		return s.enqueueDropNewest(event)
+		return s.enqueueDropNewest(item)
 	case core.BackpressureDropOldest:
-		return s.enqueueDropOldest(event)
+		return s.enqueueDropOldest(item)
 	case core.BackpressureBlock:
-		return s.enqueueBlock(ctx, event)
+		return s.enqueueBlock(ctx, item)
 	default:
 		return fmt.Errorf("enqueue %s: %w", s.spec.Name, core.ErrInvalidSubscription)
 	}
 }
 
 // enqueueDropNewest drops the incoming event when the queue is full.
-func (s *busSubscription) enqueueDropNewest(event *platform.Event) error {
+func (s *busSubscription) enqueueDropNewest(event queuedEvent) error {
 	select {
 	case s.queue <- event:
 		return nil
@@ -301,7 +320,7 @@ func (s *busSubscription) enqueueDropNewest(event *platform.Event) error {
 }
 
 // enqueueDropOldest evicts one queued event before enqueueing the new event.
-func (s *busSubscription) enqueueDropOldest(event *platform.Event) error {
+func (s *busSubscription) enqueueDropOldest(event queuedEvent) error {
 	attemptLimit := cap(s.queue) + 1
 	if attemptLimit < 1 {
 		attemptLimit = 1
@@ -320,7 +339,7 @@ func (s *busSubscription) enqueueDropOldest(event *platform.Event) error {
 }
 
 // enqueueBlock waits for queue capacity or caller context cancellation.
-func (s *busSubscription) enqueueBlock(ctx context.Context, event *platform.Event) error {
+func (s *busSubscription) enqueueBlock(ctx context.Context, event queuedEvent) error {
 	if originSubID, ok := publishOriginSubscriptionID(ctx); ok && originSubID == s.id {
 		return fmt.Errorf("enqueue %s: self publish under block backpressure: %w", s.spec.Name, core.ErrEventDropped)
 	}
@@ -357,8 +376,8 @@ func (s *busSubscription) runWorker(workerWG *sync.WaitGroup, workerID int) {
 		select {
 		case <-s.ctx.Done():
 			return
-		case event := <-s.queue:
-			if err := s.handleEvent(s.ctx, workerID, event); err != nil {
+		case item := <-s.queue:
+			if err := s.handleEvent(s.ctx, workerID, item); err != nil {
 				s.bus.reportAsyncError(s.ctx, s.spec.Name, err)
 			}
 		}
@@ -366,8 +385,9 @@ func (s *busSubscription) runWorker(workerWG *sync.WaitGroup, workerID int) {
 }
 
 // handleEvent executes one handler call with optional timeout and panic recovery.
-func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *platform.Event) error {
+func (s *busSubscription) handleEvent(ctx context.Context, workerID int, item queuedEvent) error {
 	scope := fmt.Sprintf("subscription %s worker %d", s.spec.Name, workerID)
+	event := item.event
 	if err := event.Validate(); err != nil {
 		return fmt.Errorf("%s handle invalid event: %w", scope, err)
 	}
@@ -380,6 +400,9 @@ func (s *busSubscription) handleEvent(ctx context.Context, workerID int, event *
 		cancel = handlerCancel
 	}
 	handlerCtx = context.WithValue(handlerCtx, publishOriginSubscriptionKey{}, s.id)
+	if item.trace.TraceID != "" || item.trace.ParentEventID != nil {
+		handlerCtx = panel.WithTrace(handlerCtx, item.trace)
+	}
 	defer cancel()
 
 	hasDeadline, deadlineText, deadlineRemainingText := describeContextDeadline(handlerCtx)

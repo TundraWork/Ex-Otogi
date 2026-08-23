@@ -1,0 +1,421 @@
+package memory
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"ex-otogi/pkg/otogi/ai"
+	"ex-otogi/pkg/otogi/platform"
+)
+
+func TestParseExtractionResponse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantCount int
+		wantErr   bool
+	}{
+		{
+			name:      "plain json",
+			input:     `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7,"subject_actor_id":"user-1","subject_actor_name":"Alice"}]`,
+			wantCount: 1,
+		},
+		{
+			name: "markdown fence",
+			input: "```json\n" +
+				`[{"action":"new","content":"Alice is a student","category":"user_fact","importance":8}]` +
+				"\n```",
+			wantCount: 1,
+		},
+		{
+			name:      "json embedded in prose",
+			input:     `Memories: [{"action":"new","content":"Trip booked","category":"experience","importance":6}] end.`,
+			wantCount: 1,
+		},
+		{
+			name: "filters invalid entries",
+			input: `[
+				{"action":"new","content":"  ","category":"preference","importance":7},
+				{"action":"new","content":"Valid fact","category":"knowledge","importance":5},
+				{"action":"new","content":"Bad category","category":"misc","importance":8},
+				{"action":"new","content":"Bad importance","category":"knowledge","importance":11}
+			]`,
+			wantCount: 1,
+		},
+		{
+			name:    "invalid json",
+			input:   `{not-json}`,
+			wantErr: true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseExtractionResponse(testCase.input)
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseExtractionResponse failed: %v", err)
+			}
+			if len(got) != testCase.wantCount {
+				t.Fatalf("candidate count = %d, want %d", len(got), testCase.wantCount)
+			}
+		})
+	}
+}
+
+func TestParseExtractionResponseWithValidUntil(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		input          string
+		wantCount      int
+		wantValidUntil string
+	}{
+		{
+			name:           "valid_until present",
+			input:          `[{"action":"new","content":"Alice is visiting Tokyo until April","category":"experience","importance":6,"valid_until":"2026-04-01T00:00:00Z"}]`,
+			wantCount:      1,
+			wantValidUntil: "2026-04-01T00:00:00Z",
+		},
+		{
+			name:           "valid_until empty",
+			input:          `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7,"valid_until":""}]`,
+			wantCount:      1,
+			wantValidUntil: "",
+		},
+		{
+			name:           "valid_until missing",
+			input:          `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount:      1,
+			wantValidUntil: "",
+		},
+		{
+			name:           "valid_until invalid format stripped",
+			input:          `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7,"valid_until":"next week"}]`,
+			wantCount:      1,
+			wantValidUntil: "",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseExtractionResponse(testCase.input)
+			if err != nil {
+				t.Fatalf("parseExtractionResponse failed: %v", err)
+			}
+			if len(got) != testCase.wantCount {
+				t.Fatalf("candidate count = %d, want %d", len(got), testCase.wantCount)
+			}
+			if len(got) > 0 && got[0].ValidUntil != testCase.wantValidUntil {
+				t.Fatalf("valid_until = %q, want %q", got[0].ValidUntil, testCase.wantValidUntil)
+			}
+		})
+	}
+}
+
+func TestParseExtractionResponseWithKeywordsAndTags(t *testing.T) {
+	t.Parallel()
+
+	input := `[{"action":"new","content":"Alice likes jasmine tea","category":"preference","importance":7,"keywords":["tea","jasmine","preference"],"tags":["beverage"]}]`
+	got, err := parseExtractionResponse(input)
+	if err != nil {
+		t.Fatalf("parseExtractionResponse failed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("candidate count = %d, want 1", len(got))
+	}
+	if len(got[0].Keywords) != 3 || got[0].Keywords[0] != "tea" {
+		t.Fatalf("keywords = %v, want [tea jasmine preference]", got[0].Keywords)
+	}
+	if len(got[0].Tags) != 1 || got[0].Tags[0] != "beverage" {
+		t.Fatalf("tags = %v, want [beverage]", got[0].Tags)
+	}
+}
+
+func TestBuildEmbeddingTextIncludesKeywordsAndTags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		memory   extractedMemory
+		wantText string
+	}{
+		{
+			name:     "content only",
+			memory:   extractedMemory{Content: "Alice likes tea"},
+			wantText: "Alice likes tea",
+		},
+		{
+			name: "with keywords and tags",
+			memory: extractedMemory{
+				Content:  "Alice likes tea",
+				Keywords: []string{"tea", "jasmine"},
+				Tags:     []string{"beverage"},
+			},
+			wantText: "Alice likes tea tea jasmine beverage",
+		},
+		{
+			name: "empty keywords ignored",
+			memory: extractedMemory{
+				Content:  "Alice likes tea",
+				Keywords: []string{"tea", "  ", ""},
+				Tags:     []string{},
+			},
+			wantText: "Alice likes tea tea",
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := buildEmbeddingText(testCase.memory)
+			if got != testCase.wantText {
+				t.Fatalf("buildEmbeddingText = %q, want %q", got, testCase.wantText)
+			}
+		})
+	}
+}
+
+func TestParseExtractionResponseWithActions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		input      string
+		wantCount  int
+		wantAction extractionAction
+	}{
+		{
+			name:       "new action",
+			input:      `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount:  1,
+			wantAction: extractionActionNew,
+		},
+		{
+			name:       "update action",
+			input:      `[{"action":"update","target_id":"mem-1","content":"Alice loves tea","category":"preference","importance":8}]`,
+			wantCount:  1,
+			wantAction: extractionActionUpdate,
+		},
+		{
+			name:       "delete action",
+			input:      `[{"action":"delete","target_id":"mem-1"}]`,
+			wantCount:  1,
+			wantAction: extractionActionDelete,
+		},
+		{
+			name:      "noop action is filtered out",
+			input:     `[{"action":"noop","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount: 0,
+		},
+		{
+			name:      "empty action is filtered out",
+			input:     `[{"content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount: 0,
+		},
+		{
+			name:       "unknown action defaults to new",
+			input:      `[{"action":"unknown","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount:  1,
+			wantAction: extractionActionNew,
+		},
+		{
+			name:      "delete without target_id is filtered out",
+			input:     `[{"action":"delete"}]`,
+			wantCount: 0,
+		},
+		{
+			name:       "update without target_id becomes new",
+			input:      `[{"action":"update","content":"Alice likes tea","category":"preference","importance":7}]`,
+			wantCount:  1,
+			wantAction: extractionActionNew,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseExtractionResponse(testCase.input)
+			if err != nil {
+				t.Fatalf("parseExtractionResponse failed: %v", err)
+			}
+			if len(got) != testCase.wantCount {
+				t.Fatalf("candidate count = %d, want %d", len(got), testCase.wantCount)
+			}
+			if testCase.wantCount > 0 && got[0].Action != testCase.wantAction {
+				t.Fatalf("action = %q, want %q", got[0].Action, testCase.wantAction)
+			}
+		})
+	}
+}
+
+func TestBuildMemoryProfileWithValidUntil(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		validUntil string
+		wantNil    bool
+	}{
+		{
+			name:       "with valid_until",
+			validUntil: "2026-06-01T00:00:00Z",
+			wantNil:    false,
+		},
+		{
+			name:       "empty valid_until",
+			validUntil: "",
+			wantNil:    true,
+		},
+	}
+
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			candidate := extractedMemory{
+				Content:    "Some fact",
+				Category:   "knowledge",
+				Importance: 5,
+				ValidUntil: testCase.validUntil,
+			}
+			profile := buildMemoryProfile(candidate, extractionContext{AnchorTime: now})
+			if testCase.wantNil && profile.ValidUntil != nil {
+				t.Fatalf("profile.ValidUntil = %v, want nil", profile.ValidUntil)
+			}
+			if !testCase.wantNil && profile.ValidUntil == nil {
+				t.Fatal("profile.ValidUntil = nil, want non-nil")
+			}
+			if !testCase.wantNil {
+				expected, err := time.Parse(time.RFC3339, testCase.validUntil)
+				if err != nil {
+					t.Fatalf("parse expected valid_until: %v", err)
+				}
+				if !profile.ValidUntil.Equal(expected) {
+					t.Fatalf("profile.ValidUntil = %s, want %s", profile.ValidUntil, expected)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderExtractionPrompt(t *testing.T) {
+	t.Parallel()
+
+	prompt := renderExtractionPrompt(extractionContext{
+		ConversationText: "alice: I like jasmine tea",
+		AnchorTime:       time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC),
+		Participants: []ai.SemanticActorRef{
+			{ID: "user-1", Name: "Alice"},
+		},
+	}, []ai.SemanticRecord{
+		{ID: "mem-1", Category: "preference", Content: "Alice likes tea"},
+		{ID: "mem-2", Category: "knowledge", Content: "Alice studies chemistry"},
+	})
+
+	if !strings.Contains(prompt, "<anchor_time>") {
+		t.Fatalf("prompt = %q, want anchor time block", prompt)
+	}
+	if !strings.Contains(prompt, "<participants>") {
+		t.Fatalf("prompt = %q, want participants block", prompt)
+	}
+	if !strings.Contains(prompt, "<existing_memories>") {
+		t.Fatalf("prompt = %q, want existing memories block", prompt)
+	}
+	if !strings.Contains(prompt, `Alice likes tea`) {
+		t.Fatalf("prompt = %q, want first memory content", prompt)
+	}
+	if !strings.Contains(prompt, "<conversation>\nalice: I like jasmine tea\n</conversation>") {
+		t.Fatalf("prompt = %q, want conversation block", prompt)
+	}
+	if !strings.Contains(prompt, `"subject_actor_id":"..."`) {
+		t.Fatalf("prompt = %q, want subject actor output instructions", prompt)
+	}
+	if !strings.Contains(prompt, `"category":"user_fact|preference|knowledge|experience|reflection"`) {
+		t.Fatalf("prompt = %q, want json output instructions", prompt)
+	}
+	if !strings.Contains(prompt, `"valid_until":""`) {
+		t.Fatalf("prompt = %q, want valid_until in output format", prompt)
+	}
+	if !strings.Contains(prompt, "time-bounded") {
+		t.Fatalf("prompt = %q, want time-bounded extraction criteria", prompt)
+	}
+}
+
+func TestProcessWindowStoresNewMemory(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.March, 16, 12, 0, 0, 0, time.UTC)
+	memoryStore := &recordingSemanticStore{}
+	module := New(withClock(func() time.Time { return now }), withConfig(Config{
+		Enabled:                  true,
+		ExtractionProvider:       "openai-main",
+		ExtractionModel:          "gpt-4.1-mini",
+		EmbeddingProvider:        "openai-main",
+		ExtractionTimeout:        time.Second,
+		ExtractionMaxInputRunes:  4000,
+		ConsolidationInterval:    0,
+		BufferQuietPeriod:        2 * time.Minute,
+		BufferMaxRunes:           3000,
+		BufferMaxArticles:        30,
+		BufferMaxAge:             10 * time.Minute,
+		BufferCheckInterval:      15 * time.Second,
+		RetrievalSearchLimit:     20,
+		RetrievalPlanningEnabled: true,
+		RetrievalPlanningTimeout: 10 * time.Second,
+	}))
+	module.semanticStore = memoryStore
+	module.memory = &memoryContextStub{}
+	module.embeddingProvider = &embeddingProviderStub{
+		response: ai.EmbeddingResponse{Vectors: [][]float32{{1, 0}}},
+	}
+	module.extractionProvider = &llmProviderStub{
+		stream: &llmStreamStub{chunks: []ai.LLMGenerateChunk{
+			{Kind: ai.LLMGenerateChunkKindOutputText, Delta: `[{"action":"new","content":"Alice likes tea","category":"preference","importance":7}]`},
+		}},
+	}
+
+	err := module.processWindow(context.Background(), ai.SemanticScope{
+		Platform:       "telegram",
+		ConversationID: "chat-1",
+	}, []bufferedArticle{
+		{
+			Article:    platform.Article{ID: "a-1", Text: "I like tea"},
+			Actor:      platform.Actor{ID: "user-1", DisplayName: "Alice"},
+			OccurredAt: now,
+			ReceivedAt: now,
+		},
+	}, FlushReasonQuiet)
+	if err != nil {
+		t.Fatalf("processWindow failed: %v", err)
+	}
+	if len(memoryStore.storedEntries) != 1 {
+		t.Fatalf("stored entries len = %d, want 1", len(memoryStore.storedEntries))
+	}
+	if memoryStore.storedEntries[0].Category != "preference" {
+		t.Fatalf("category = %q, want preference", memoryStore.storedEntries[0].Category)
+	}
+}

@@ -36,6 +36,7 @@ type runtimeConfig struct {
 	DownloadThreads        int    `json:"download_threads"`
 	DownloadVerify         bool   `json:"download_verify"`
 	AttachmentCacheEntries int    `json:"attachment_cache_entries"`
+	BotToken               string `json:"bot_token"`
 	Code                   string `json:"code"`
 	Phone                  string `json:"phone"`
 	Password               string `json:"password"`
@@ -52,6 +53,7 @@ type parsedRuntimeConfig struct {
 	downloadThreads        int
 	downloadVerify         bool
 	attachmentCacheEntries int
+	botToken               string
 	code                   string
 	phone                  string
 	password               string
@@ -82,10 +84,16 @@ func BuildRuntimeFromConfig(
 		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd session storage: %w", err)
 	}
 
-	client := gotdtelegram.NewClient(cfg.appID, cfg.appHash, gotdtelegram.Options{
+	opts, err := gotdtelegram.OptionsFromEnvironment(gotdtelegram.Options{
 		UpdateHandler:  updateChannel,
 		SessionStorage: sessionStorage,
 	})
+	if err != nil {
+		return platform.EventSource{}, nil, nil, nil, fmt.Errorf("new gotd telegram options: %w", err)
+	}
+
+	client := gotdtelegram.NewClient(cfg.appID, cfg.appHash, opts)
+	logger.Info("gotd telegram client created")
 
 	peers := NewPeerCache()
 	mediaLocators := newMediaLocatorCache(cfg.attachmentCacheEntries)
@@ -177,6 +185,7 @@ func parseRuntimeConfig(raw []byte) (parsedRuntimeConfig, error) {
 		downloadThreads:        defaultMediaDownloadThreads,
 		downloadVerify:         parsed.DownloadVerify,
 		attachmentCacheEntries: defaultMediaLocatorCacheEntries,
+		botToken:               strings.TrimSpace(parsed.BotToken),
 		code:                   strings.TrimSpace(parsed.Code),
 		phone:                  strings.TrimSpace(parsed.Phone),
 		password:               strings.TrimSpace(parsed.Password),
@@ -238,6 +247,12 @@ func parseRuntimeConfig(raw []byte) (parsedRuntimeConfig, error) {
 	}
 	if cfg.appHash == "" {
 		return parsedRuntimeConfig{}, fmt.Errorf("app_hash is required")
+	}
+	if cfg.botToken != "" && cfg.phone != "" {
+		return parsedRuntimeConfig{}, fmt.Errorf("bot_token and phone are mutually exclusive")
+	}
+	if cfg.botToken == "" && cfg.phone == "" {
+		return parsedRuntimeConfig{}, fmt.Errorf("either bot_token or phone is required")
 	}
 
 	return cfg, nil
@@ -318,6 +333,14 @@ func authenticateGotdClient(
 	}
 	if status.Authorized {
 		logger.Info("telegram session restored from local storage", "session_file", cfg.sessionFile)
+		return nil
+	}
+
+	if cfg.botToken != "" {
+		if _, err := client.Auth().Bot(authCtx, cfg.botToken); err != nil {
+			return fmt.Errorf("authenticate bot: %w", err)
+		}
+		logger.Info("telegram authorized with bot token", "session_file", cfg.sessionFile)
 		return nil
 	}
 
