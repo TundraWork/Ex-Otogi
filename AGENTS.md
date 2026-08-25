@@ -1,109 +1,82 @@
-# Task Execution Rules
+# Ex-Otogi Engineering Rules
 
-Apply these rules to any task you judge to be non-trivial — including tasks that may be complex in scope, carry quality risks, or require sustained effort over time.
+This file is the executable index for work on Ex-Otogi. Detailed requirements live in `docs/`; do not duplicate or weaken them here.
 
-## 0. Overall requirement
-You are expected to run for very long time by each task: plan first, then implement milestone by milestone. Do not skip the planning phase.
+## Authority and conformance
 
-## 1. Read And Plan Before Acting
-Survey and complete a full planning phase before writing any code or taking any action. The plan must identify all milestones, their sequence, and their success criteria. Plan the milestones **after** you have gathered all necessary details.
+1. Direct user instructions control task intent.
+2. This file controls repository workflow and non-negotiable engineering rules.
+3. `docs/README.md` defines specification precedence; linked specifications control their domains.
+4. An accepted design or plan may add constraints, but may not violate higher-authority rules.
 
-## 2. Milestone Structure
-Break every task into discrete milestones. Each milestone must be:
-- **Self-contained**: workable independently, without requiring simultaneous progress on another milestone
-- **Verifiable**: has a clear, observable completion criterion
-- **Sequenced**: ordered to respect dependencies, but otherwise optimized for efficiency
+The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are normative as defined in BCP 14. A deviation from a MUST requires an approved specification change, not a local exception.
 
-Dependencies between milestones are expected and allowed.
+## Required workflow
 
-## 3. Sequential Execution
-Work on milestones one at a time, in order:
-1. Begin a milestone only after all preceding milestones are marked **[DONE]**
-2. Complete and verify the current milestone before moving on
-3. Mark the milestone **[DONE]** immediately upon verified completion
+For every non-trivial change:
 
-## 4. Verification
-At the end of each milestone, explicitly verify that the success criterion has been met before marking it done. Do not proceed if verification fails — reassess and retry within the current milestone.
+1. **Research:** read the governing documents and affected code paths; inspect callers before changing a contract.
+2. **Plan:** state milestones, dependencies, observable success criteria, and rollback implications before implementation.
+3. **Implement sequentially:** keep one milestone active; finish and verify it before starting the next.
+4. **Verify behavior:** exercise the changed path at its real boundary. Tests supplement this evidence; they do not replace it.
+5. **Review the whole change:** remove obsolete paths, update callers and operator material, and check architecture, security, reliability, and observability impacts.
+6. **Record evidence:** report exact commands or scenarios run and their outcomes. Never claim unobserved success.
 
-# Ex-Otogi Engineering Governance
+Do not ask a human for facts available from the repository, toolchain, or referenced primary sources. Stop only for a material product decision or an external prerequisite that cannot be obtained safely.
 
-## Scope
-This repository is a monorepo containing:
-- **Bot framework** (Go, repo root): high-concurrency, event-driven IM runtime.
-- **Web control panel** (Vue, `web/`): realtime monitoring dashboard.
+## Non-negotiable system invariants
 
-The Go engineering rules below apply to all Go code. The `web/` workspace follows its own frontend conventions once initialized.
+- Ex-Otogi is a single-node, statically composed Go modular monolith unless an approved specification demonstrates a need to distribute it.
+- Dependencies flow from contracts to kernel policy to adapters. Kernel packages MUST NOT import adapter implementations. See `docs/architecture.md`.
+- Every goroutine, queue, timer, subscription, and external resource has one explicit owner and a bounded termination path. See `docs/runtime.md`.
+- Work queues and concurrency are bounded. Overload produces an explicit admission, shedding, or backpressure decision; it never grows memory without limit.
+- Cancellation and deadlines propagate across every blocking boundary. Retry loops are bounded, cancellable, observable, and restricted to idempotent operations.
+- Panics are contained and reported at goroutine, task, and extension boundaries; panic is never expected control flow.
+- External input is untrusted. Authentication, authorization, resource limits, and sensitive-data handling follow `docs/security.md`.
+- Errors are handled exactly once: return, translate, compensate, or terminate the owning lifecycle. Logging alone is not handling.
+- Telemetry MUST NOT contain secrets or raw message content by default, and telemetry failure MUST NOT block core processing. See `docs/observability.md`.
+- Durable state follows `docs/operations.md`; code MUST NOT copy a live SQLite database file or assume WAL works across a network filesystem.
+- There is no compatibility promise to the pre-`next` implementation. Do not add shims, dual writes, legacy aliases, or migrations unless a future approved specification requires them.
 
-## Architecture (Non-Negotiable)
+## Go engineering rules
 
-### Bot Framework (Go)
-Dependency flow is strict:
-1. `pkg/otogi` (interfaces/contracts)
-2. `internal/kernel` (core logic, orchestration)
-3. `internal/driver` (Telegram/platform/plugin implementations)
+- Use a stable Go release covered by upstream security fixes, as defined in `docs/quality.md`.
+- Accept `context.Context` first for request-scoped, blocking, or long-lived operations. Do not store request contexts in structs.
+- Prefer clear ownership and synchronous code. Start concurrency only when it improves required behavior and its lifecycle can be proven.
+- Preserve error identity with `%w` when adding operation context. Use typed or sentinel errors only when callers need stable branching semantics.
+- Avoid hidden mutable global state. Construct dependencies explicitly at the composition root.
+- Public contracts use domain types rather than adapter payloads. Exported API has behavioral Godoc.
+- Avoid avoidable allocation, copying, reflection, and serialization on hot paths; require benchmark or profile evidence before complexity motivated solely by performance.
+- Generated code is reproducible and never edited by hand.
 
-Rules:
-- `pkg/otogi` must not import from `internal/*`.
-- `internal/kernel` must not import from `internal/driver`.
-- `internal/driver` may import `internal/kernel` and `pkg/otogi`.
-- Keep business logic in `internal/kernel`; drivers only adapt I/O and external SDKs.
+## Verification gates
 
-## Concurrency Safety
-- `context.Context` is required for all request-scoped, blocking, or long-lived operations.
-- Accept `ctx context.Context` as the first parameter for cancellable operations.
-- Never start a goroutine without a clear stop mechanism:
-  - context cancellation,
-  - closed channel,
-  - bounded worker lifecycle,
-  - or `errgroup.WithContext`.
-- Every goroutine entrypoint must guard against panics and report failure.
-- Prefer channels for ownership transfer and pipeline fan-out/fan-in.
-- Prefer `sync.Mutex`/`sync.RWMutex` for protecting shared mutable state.
-- Close channels only from the producer/owner; never close from receivers.
+Run the smallest relevant checks during development and the authoritative gates before completion. The implemented repository MUST provide stable commands for:
 
-## Error Handling
-- No silent failures. Handle every returned error.
-- Wrap errors with operation context using `%w`:
-  - `fmt.Errorf("publish event %s: %w", topic, err)`
-- Never use `panic` for expected control flow.
-- Logging an error is not handling an error unless propagation/retry/fallback is explicit.
+- formatting and generated-file consistency;
+- static analysis and architecture-boundary enforcement;
+- unit and integration tests;
+- race tests for concurrent code;
+- fuzz tests for parsers and trust-boundary decoders;
+- leak and shutdown tests for long-lived components;
+- vulnerability scanning and release-artifact verification.
 
-## Reliability and Recovery
-- Recover panics at goroutine/task boundaries and plugin boundaries.
-- Propagate cancellation and deadlines across kernel -> drivers.
-- External calls (Telegram/network/disk) must be bounded by context deadlines or timeouts.
+The exact gate contract is in `docs/quality.md`. A failing required gate blocks completion. Do not suppress, skip, or weaken a gate to make a change pass; fix the cause or amend the governing specification.
 
-## Testing Standards
-- Core logic tests must be table-driven.
-- Interface collaborators must be mocked (generate mocks from interfaces).
-- `go test -race ./...` is mandatory before merge.
-- Add leak protection in long-lived/concurrency-heavy tests (for example with `goleak`).
-- Tests for async/event bus code must assert cancellation/termination behavior.
+## Specification map
 
-## Code Style and Maintainability
-- Keep functions small and composable.
-- Avoid hidden global state.
-- Prefer explicit constructors and dependency injection.
-- Every exported symbol must have Godoc:
-  - exported package-level functions/types/vars/consts,
-  - exported methods,
-  - exported interface methods,
-  - exported struct fields.
-- Godoc must describe behavior and semantics, not restate obvious names.
-- Public APIs in `pkg/otogi` require doc comments and stable semantics.
+Start at `docs/README.md`.
 
-## Agent Ownership and Architectural Discretion
-- The agent must execute each task with project-owner responsibility, not just local patching.
-- Always evaluate impact on the full system architecture (`pkg/otogi` -> `internal/kernel` -> `internal/driver`) before changing code.
-- Prefer solutions that improve long-term maintainability, testability, and boundary clarity over short-term convenience.
-- When multiple implementations are possible, choose the option that is most architecture-safe and future-proof.
+- Product boundary: `docs/product.md`
+- Architecture: `docs/architecture.md`
+- Runtime semantics: `docs/runtime.md`
+- Extensions: `docs/extensions.md`
+- Reliability: `docs/reliability.md`
+- Security: `docs/security.md`
+- Observability: `docs/observability.md`
+- Quality and release: `docs/quality.md`
+- Configuration, persistence, and operations: `docs/operations.md`
+- Operator capabilities: `docs/management-plane.md`
+- External standards: `docs/standards.md`
 
-## Execution Checklist
-Before proposing or committing code, the agent must verify:
-1. Architecture dependency flow is preserved.
-2. Context propagation and goroutine shutdown paths are explicit.
-3. Errors are wrapped with `%w` and never dropped.
-4. Tests include table-driven coverage and race-safe behavior.
-5. Exported symbols follow required Godoc standards.
-6. After each task, quality checks are run via Makefile commands:
-   - `make quality`
+Long-term memory internals and control-panel UX are intentionally unspecified. Changes in those areas require their own approved specifications while respecting these core-runtime contracts.
