@@ -1,0 +1,109 @@
+# Task Execution Rules
+
+Apply these rules to any task you judge to be non-trivial — including tasks that may be complex in scope, carry quality risks, or require sustained effort over time.
+
+## 0. Overall requirement
+You are expected to run for very long time by each task: plan first, then implement milestone by milestone. Do not skip the planning phase.
+
+## 1. Read And Plan Before Acting
+Survey and complete a full planning phase before writing any code or taking any action. The plan must identify all milestones, their sequence, and their success criteria. Plan the milestones **after** you have gathered all necessary details.
+
+## 2. Milestone Structure
+Break every task into discrete milestones. Each milestone must be:
+- **Self-contained**: workable independently, without requiring simultaneous progress on another milestone
+- **Verifiable**: has a clear, observable completion criterion
+- **Sequenced**: ordered to respect dependencies, but otherwise optimized for efficiency
+
+Dependencies between milestones are expected and allowed.
+
+## 3. Sequential Execution
+Work on milestones one at a time, in order:
+1. Begin a milestone only after all preceding milestones are marked **[DONE]**
+2. Complete and verify the current milestone before moving on
+3. Mark the milestone **[DONE]** immediately upon verified completion
+
+## 4. Verification
+At the end of each milestone, explicitly verify that the success criterion has been met before marking it done. Do not proceed if verification fails — reassess and retry within the current milestone.
+
+# Ex-Otogi Engineering Governance
+
+## Scope
+This repository is a monorepo containing:
+- **Bot framework** (Go, repo root): high-concurrency, event-driven IM runtime.
+- **Web control panel** (Vue, `web/`): realtime monitoring dashboard.
+
+The Go engineering rules below apply to all Go code. The `web/` workspace follows its own frontend conventions once initialized.
+
+## Architecture (Non-Negotiable)
+
+### Bot Framework (Go)
+Dependency flow is strict:
+1. `pkg/otogi` (interfaces/contracts)
+2. `internal/kernel` (core logic, orchestration)
+3. `internal/driver` (Telegram/platform/plugin implementations)
+
+Rules:
+- `pkg/otogi` must not import from `internal/*`.
+- `internal/kernel` must not import from `internal/driver`.
+- `internal/driver` may import `internal/kernel` and `pkg/otogi`.
+- Keep business logic in `internal/kernel`; drivers only adapt I/O and external SDKs.
+
+## Concurrency Safety
+- `context.Context` is required for all request-scoped, blocking, or long-lived operations.
+- Accept `ctx context.Context` as the first parameter for cancellable operations.
+- Never start a goroutine without a clear stop mechanism:
+  - context cancellation,
+  - closed channel,
+  - bounded worker lifecycle,
+  - or `errgroup.WithContext`.
+- Every goroutine entrypoint must guard against panics and report failure.
+- Prefer channels for ownership transfer and pipeline fan-out/fan-in.
+- Prefer `sync.Mutex`/`sync.RWMutex` for protecting shared mutable state.
+- Close channels only from the producer/owner; never close from receivers.
+
+## Error Handling
+- No silent failures. Handle every returned error.
+- Wrap errors with operation context using `%w`:
+  - `fmt.Errorf("publish event %s: %w", topic, err)`
+- Never use `panic` for expected control flow.
+- Logging an error is not handling an error unless propagation/retry/fallback is explicit.
+
+## Reliability and Recovery
+- Recover panics at goroutine/task boundaries and plugin boundaries.
+- Propagate cancellation and deadlines across kernel -> drivers.
+- External calls (Telegram/network/disk) must be bounded by context deadlines or timeouts.
+
+## Testing Standards
+- Core logic tests must be table-driven.
+- Interface collaborators must be mocked (generate mocks from interfaces).
+- `go test -race ./...` is mandatory before merge.
+- Add leak protection in long-lived/concurrency-heavy tests (for example with `goleak`).
+- Tests for async/event bus code must assert cancellation/termination behavior.
+
+## Code Style and Maintainability
+- Keep functions small and composable.
+- Avoid hidden global state.
+- Prefer explicit constructors and dependency injection.
+- Every exported symbol must have Godoc:
+  - exported package-level functions/types/vars/consts,
+  - exported methods,
+  - exported interface methods,
+  - exported struct fields.
+- Godoc must describe behavior and semantics, not restate obvious names.
+- Public APIs in `pkg/otogi` require doc comments and stable semantics.
+
+## Agent Ownership and Architectural Discretion
+- The agent must execute each task with project-owner responsibility, not just local patching.
+- Always evaluate impact on the full system architecture (`pkg/otogi` -> `internal/kernel` -> `internal/driver`) before changing code.
+- Prefer solutions that improve long-term maintainability, testability, and boundary clarity over short-term convenience.
+- When multiple implementations are possible, choose the option that is most architecture-safe and future-proof.
+
+## Execution Checklist
+Before proposing or committing code, the agent must verify:
+1. Architecture dependency flow is preserved.
+2. Context propagation and goroutine shutdown paths are explicit.
+3. Errors are wrapped with `%w` and never dropped.
+4. Tests include table-driven coverage and race-safe behavior.
+5. Exported symbols follow required Godoc standards.
+6. After each task, quality checks are run via Makefile commands:
+   - `make quality`
