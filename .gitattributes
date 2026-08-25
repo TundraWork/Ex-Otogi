@@ -1,0 +1,46 @@
+* text=auto eol=lf
+
+# Windows command scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Images
+*.avif -text
+*.gif -text
+*.ico -text
+*.jpg -text
+*.jpeg -text
+*.png -text
+*.webp -text
+
+# Fonts
+*.eot -text
+*.otf -text
+*.ttf -text
+*.woff -text
+*.woff2 -text
+
+# Archives and compressed data
+*.7z -text
+*.br -text
+*.bz2 -text
+*.gz -text
+*.rar -text
+*.tar -text
+*.tgz -text
+*.xz -text
+*.zip -text
+*.zst -text
+
+# Executables and libraries
+*.a -text
+*.dll -text
+*.dylib -text
+*.exe -text
+*.o -text
+*.so -text
+
+# Databases
+*.db -text
+*.sqlite -text
+*.sqlite3 -text

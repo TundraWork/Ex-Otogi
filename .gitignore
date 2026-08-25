@@ -1,0 +1,48 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Repository-local caches and temporary files
+.cache/
+.tmp/
+tmp/
+*.tmp
+*.swp
+*~
+
+# Build and package output
+/bin/
+/dist/
+/build/
+/out/
+*.exe
+*.test
+
+# Go test, coverage, benchmark, and profiling output
+/coverage/
+*.cover
+*.coverage
+coverage.out
+*.prof
+*.pprof
+
+# Runtime state
+/data/
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+*.log
+
+# IDE-local state
+.idea/
+.vscode/
+*.code-workspace
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+desktop.ini
