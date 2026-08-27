@@ -146,7 +146,28 @@ func (k *Kernel) Drain(ctx context.Context) error {
 	default:
 	}
 	k.mu.Unlock()
-	return k.wait(ctx, true)
+	if err := k.wait(ctx); err != nil {
+		k.mu.Lock()
+		if k.state == stateDraining {
+			k.state = stateFailed
+			if k.terminalErr == nil {
+				k.terminalErr = err
+			}
+			if k.cancel != nil {
+				k.cancel()
+			}
+		}
+		retained := k.terminalErr
+		k.mu.Unlock()
+		if retained != nil {
+			return retained
+		}
+		return err
+	}
+	k.mu.Lock()
+	err := k.terminalErr
+	k.mu.Unlock()
+	return err
 }
 
 // Stop prevents admission, cancels active work, and waits for worker termination through ctx.
@@ -158,55 +179,49 @@ func (k *Kernel) Stop(ctx context.Context) error {
 		k.mu.Unlock()
 		return nil
 	}
-	if k.state == stateStopped {
-		err := k.terminalErr
-		k.mu.Unlock()
-		return err
+	if k.state != stateStopped {
+		if k.cancel != nil {
+			k.cancel()
+		}
+		k.state = stateStopped
 	}
-	if k.cancel != nil {
-		k.cancel()
-	}
-	k.state = stateStopped
 	k.mu.Unlock()
-	err := k.wait(ctx, false)
-	if err != nil {
+	if err := k.wait(ctx); err != nil {
 		k.mu.Lock()
 		if k.terminalErr == nil {
 			k.terminalErr = err
 		}
+		retained := k.terminalErr
 		k.mu.Unlock()
+		return retained
 	}
+	k.mu.Lock()
+	err := k.terminalErr
+	k.mu.Unlock()
 	return err
 }
 
 // Wait observes worker termination and returns the retained terminal cause.
-func (k *Kernel) Wait(ctx context.Context) error { return k.wait(ctx, false) }
+func (k *Kernel) Wait(ctx context.Context) error {
+	if err := k.wait(ctx); err != nil {
+		return err
+	}
+	k.mu.Lock()
+	err := k.terminalErr
+	k.mu.Unlock()
+	return err
+}
 
-func (k *Kernel) wait(ctx context.Context, drain bool) error {
+func (k *Kernel) wait(ctx context.Context) error {
 	select {
 	case <-k.done:
-		k.mu.Lock()
-		err := k.terminalErr
-		k.mu.Unlock()
-		return err
+		return nil
 	default:
 	}
 	select {
 	case <-k.done:
-		k.mu.Lock()
-		err := k.terminalErr
-		k.mu.Unlock()
-		return err
+		return nil
 	case <-ctx.Done():
-		if drain {
-			k.mu.Lock()
-			k.terminalErr = ctx.Err()
-			k.state = stateFailed
-			if k.cancel != nil {
-				k.cancel()
-			}
-			k.mu.Unlock()
-		}
 		return ctx.Err()
 	}
 }
@@ -248,6 +263,7 @@ func (k *Kernel) route(ctx context.Context, admitted event) {
 		moduleID := module.Descriptor().ID()
 		invocation := newInvocation(ctx, k.messenger, admitted, moduleID)
 		result, report := invokeModule(ctx, module, admitted, invocation)
+		result = validModuleResult(result)
 		k.mu.Lock()
 		if report != nil {
 			k.panics = appendBounded(k.panics, *report)
@@ -270,6 +286,17 @@ func invokeModule(ctx context.Context, module otogi.Module, admitted event, invo
 		}
 	}()
 	return module.Handle(ctx, admitted, invocation), nil
+}
+
+func validModuleResult(result otogi.Result) otogi.Result {
+	status := result.Status()
+	err := result.Err()
+	valid := (status == otogi.ResultSucceeded || status == otogi.ResultRejected) && err == nil
+	valid = valid || (status == otogi.ResultFailed || status == otogi.ResultCanceled) && err != nil
+	if !valid {
+		return otogi.NewFailedResult(otogi.ErrInvalid)
+	}
+	return result
 }
 
 func stableError(err error) error {

@@ -29,6 +29,14 @@ The lean kernel is implemented under `internal/kernel` with private validated co
 - Delivery history stores stable error identities rather than arbitrary module errors.
 - Completed workers win over already-canceled observer contexts, preserving repeatable `Wait` results.
 
+### Review fix round 1
+
+- Red: focused regressions failed because canceling one send canceled the invocation, a later Drain overwrote Stop's cause, stopped kernels returned before worker completion, and zero `Result` values were recorded unchanged.
+- Green: each send now owns a merged caller/invocation context, Drain and Stop preserve the first published terminal cause with stopped-state precedence, every Stop joins shared completion through its caller context, and invalid module results become failed/`ErrInvalid` without interrupting routing.
+- `go test ./internal/kernel -run 'TestSendCancellation|TestStopCause|TestConcurrentStop|TestInvalidModuleResult' -count=1 -timeout=30s`: passed.
+- `go test ./internal/kernel -count=1 -timeout=60s`: passed with goleak.
+- `go test -race ./internal/kernel -count=20 -timeout=120s`: passed with goleak stress coverage.
+
 ## Concerns
 
 None.

@@ -59,9 +59,13 @@ func (i *invocation) SendText(ctx context.Context, slot string, text otogi.Text)
 	if err != nil {
 		return fmt.Errorf("send text message: %w", err)
 	}
-	stopCallerCancel := context.AfterFunc(ctx, i.cancel)
-	defer stopCallerCancel()
-	if err := i.messenger.Send(i.ctx, message); err != nil {
+	sendCtx, cancelSend := context.WithCancel(ctx)
+	stopInvocationCancel := context.AfterFunc(i.ctx, cancelSend)
+	defer func() {
+		stopInvocationCancel()
+		cancelSend()
+	}()
+	if err := i.messenger.Send(sendCtx, message); err != nil {
 		return fmt.Errorf("send text: %w", err)
 	}
 	return nil
