@@ -24,6 +24,16 @@ Implemented the experimental structural Go quality baseline.
 - `GOROOT=/definitely/stale make quality` — passed, proving stale external GOROOT neutralization.
 - `go test ./scripts/quality` under Go 1.27.0 — passed; all negative fixtures failed for their intended diagnostics inside the test.
 
+### Review fix round 1
+
+- Added red-green regressions proving `fmt-check` preserves formatter parse failures and `smoke` preserves a nonzero command exit even after expected output.
+- Extended architecture fixtures and enforcement: contracts accept only standard-library imports; adapters reject kernel, modules, and sibling concrete adapters.
+- Extended field-aware Godoc checking through anonymous embedded `Ident`, `Selector`, `Star`, `Index`, `IndexList`, and `Paren` expressions.
+- Resolved the repository lint cache before fixture runners change directory, and proved a repository-relative cached binary is reused.
+- `go test ./scripts/quality` — passed.
+- `make fmt-check && make smoke && make arch-check && make lint` — passed; lint reported zero issues.
+- `GOROOT=/stale make quality` — passed, including unit, race, leak, architecture, lint, documentation, formatting, and smoke gates.
+
 ## Concerns
 
 The lint installer downloads the pinned tool on first use and caches it under ignored `.cache/`. Existing test-only lint debt is isolated by exact path, linter, and diagnostic text so unrelated or new findings remain fatal.

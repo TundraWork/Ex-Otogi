@@ -137,13 +137,38 @@ func inspectType(set *token.FileSet, expression ast.Expr) []finding {
 	}
 	var findings []finding
 	for _, field := range fields.List {
-		for _, name := range field.Names {
+		names := field.Names
+		if len(names) == 0 {
+			if name := embeddedName(field.Type); name != nil {
+				names = []*ast.Ident{name}
+			}
+		}
+		for _, name := range names {
 			if name.IsExported() && !startsWithName(field.Doc, name.Name) {
 				findings = append(findings, finding{set.Position(name.Pos()), "exported field or interface method " + name.Name + " has no Godoc beginning with its name"})
 			}
 		}
 	}
 	return findings
+}
+
+func embeddedName(expression ast.Expr) *ast.Ident {
+	switch node := expression.(type) {
+	case *ast.Ident:
+		return node
+	case *ast.SelectorExpr:
+		return node.Sel
+	case *ast.StarExpr:
+		return embeddedName(node.X)
+	case *ast.IndexExpr:
+		return embeddedName(node.X)
+	case *ast.IndexListExpr:
+		return embeddedName(node.X)
+	case *ast.ParenExpr:
+		return embeddedName(node.X)
+	default:
+		return nil
+	}
 }
 
 func exportedReceiver(receiver *ast.FieldList) bool {
