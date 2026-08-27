@@ -149,7 +149,13 @@ func exportedPackageNames() ([]string, error) {
 						names = append(names, specification.Name.Name)
 						if structure, ok := specification.Type.(*ast.StructType); ok {
 							for _, field := range structure.Fields.List {
-								for _, fieldName := range field.Names {
+								fieldNames := field.Names
+								if len(fieldNames) == 0 {
+									if embedded, ok := embeddedFieldName(field.Type); ok {
+										fieldNames = []*ast.Ident{ast.NewIdent(embedded)}
+									}
+								}
+								for _, fieldName := range fieldNames {
 									if ast.IsExported(fieldName.Name) {
 										names = append(names, specification.Name.Name+"."+fieldName.Name)
 									}
@@ -176,4 +182,23 @@ func receiverName(expression ast.Expr) string {
 		expression = pointer.X
 	}
 	return expression.(*ast.Ident).Name
+}
+
+func embeddedFieldName(expression ast.Expr) (string, bool) {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		return expression.Name, true
+	case *ast.SelectorExpr:
+		return expression.Sel.Name, true
+	case *ast.StarExpr:
+		return embeddedFieldName(expression.X)
+	case *ast.IndexExpr:
+		return embeddedFieldName(expression.X)
+	case *ast.IndexListExpr:
+		return embeddedFieldName(expression.X)
+	case *ast.ParenExpr:
+		return embeddedFieldName(expression.X)
+	default:
+		return "", false
+	}
 }

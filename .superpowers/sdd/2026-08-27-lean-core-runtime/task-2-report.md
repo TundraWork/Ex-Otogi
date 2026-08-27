@@ -21,6 +21,8 @@ Lean public contracts are implemented under `pkg/otogi` with private immutable v
 - Review fix green: focused API allowlist/interface-shape tests, full package unit tests, and uncached race tests passed after removing both mutations.
 - Follow-up red: adding a temporary exported `EventInputParams.Diagnostics` field made `TestPublicAPIHasOnlyLeanContracts` fail with that unexpected qualified field.
 - Follow-up green: the allowlist now includes every intentional exported struct field as `Type.Field`; focused, full unit, and uncached race tests passed after removing the mutation.
+- Second follow-up red: temporarily embedding the already-allowed `Result` type in `EventInputParams` made `TestPublicAPIHasOnlyLeanContracts` fail with unexpected `EventInputParams.Result`.
+- Second follow-up green: anonymous embedded names are derived through identifier, selector, pointer, generic index, generic index-list, and parenthesized AST forms and still require an explicit qualified allowlist entry.
 
 ## Module normalization
 
