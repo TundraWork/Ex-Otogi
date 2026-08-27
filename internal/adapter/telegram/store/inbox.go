@@ -34,34 +34,13 @@ func (s *Store) GetInbox(ctx context.Context, id string) (InboxRow, bool, error)
 	return scanInbox(s.db.QueryRowContext(ctx, "SELECT id,source_key,conversation,sequence,payload,available_at,status,coalesce(owner,''),lease_until,attempts,completed_at,coalesce(error,'') FROM inbox WHERE account_key=? AND id=?", s.accountKey, id))
 }
 
-// ClaimNext transactionally claims the oldest eligible conversation head.
+// ClaimNext atomically claims the oldest eligible conversation head.
 func (s *Store) ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (InboxRow, bool, error) {
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return InboxRow{}, false, e
-	}
-	defer func() { _ = tx.Rollback() }()
-	r, ok, e := scanInbox(tx.QueryRowContext(ctx, `SELECT i.id,i.source_key,i.conversation,i.sequence,i.payload,i.available_at,i.status,coalesce(i.owner,''),i.lease_until,i.attempts,i.completed_at,coalesce(i.error,'') FROM inbox i WHERE i.account_key=? AND i.status IN ('pending','claimed') AND i.available_at<=? AND (i.status='pending' OR i.lease_until<=?) AND NOT EXISTS (SELECT 1 FROM inbox h WHERE h.account_key=i.account_key AND h.conversation=i.conversation AND h.sequence<i.sequence AND h.status NOT IN ('terminal','failed')) ORDER BY i.available_at,i.conversation,i.sequence LIMIT 1`, s.accountKey, now.UnixNano(), now.UnixNano()))
-	if e != nil || !ok {
-		return r, ok, e
+	if err := validateText("claim owner", owner); err != nil {
+		return InboxRow{}, false, err
 	}
 	until := now.Add(lease)
-	res, e := tx.ExecContext(ctx, "UPDATE inbox SET status='claimed',owner=?,lease_until=?,attempts=attempts+1 WHERE account_key=? AND id=? AND (status='pending' OR lease_until<=?)", owner, until.UnixNano(), s.accountKey, r.ID, now.UnixNano())
-	if e != nil {
-		return r, false, e
-	}
-	n, _ := res.RowsAffected()
-	if n != 1 {
-		return r, false, nil
-	}
-	if e = tx.Commit(); e != nil {
-		return r, false, e
-	}
-	r.Status = "claimed"
-	r.Owner = owner
-	r.LeaseUntil = &until
-	r.Attempts++
-	return r, true, nil
+	return scanInbox(s.db.QueryRowContext(ctx, `UPDATE inbox SET status='claimed',owner=?,lease_until=?,attempts=attempts+1 WHERE account_key=? AND id=(SELECT i.id FROM inbox i WHERE i.account_key=? AND i.status IN ('pending','claimed') AND i.available_at<=? AND (i.status='pending' OR i.lease_until<=?) AND NOT EXISTS (SELECT 1 FROM inbox h WHERE h.account_key=i.account_key AND h.conversation=i.conversation AND h.sequence<i.sequence AND h.status NOT IN ('terminal','failed')) ORDER BY i.available_at,i.conversation,i.sequence LIMIT 1) AND (status='pending' OR lease_until<=?) RETURNING id,source_key,conversation,sequence,payload,available_at,status,coalesce(owner,''),lease_until,attempts,completed_at,coalesce(error,'')`, owner, until.UnixNano(), s.accountKey, s.accountKey, now.UnixNano(), now.UnixNano(), now.UnixNano()))
 }
 
 // ReleaseClaim returns a claimed row with a retry schedule.
@@ -107,10 +86,16 @@ func (s *Store) Compact(ctx context.Context, now time.Time) error {
 	if _, e = tx.ExecContext(ctx, "UPDATE quarantine SET payload=NULL WHERE account_key=? AND created_at<?", s.accountKey, compact); e != nil {
 		return e
 	}
+	if _, e = tx.ExecContext(ctx, "UPDATE locators SET payload=NULL WHERE account_key=? AND updated_at<?", s.accountKey, compact); e != nil {
+		return e
+	}
 	if _, e = tx.ExecContext(ctx, "DELETE FROM inbox WHERE account_key=? AND status IN ('terminal','failed') AND completed_at<?", s.accountKey, expire); e != nil {
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, "DELETE FROM quarantine WHERE account_key=? AND created_at<?", s.accountKey, expire); e != nil {
+		return e
+	}
+	if _, e = tx.ExecContext(ctx, "DELETE FROM locators WHERE account_key=? AND updated_at<?", s.accountKey, expire); e != nil {
 		return e
 	}
 	if _, e = tx.ExecContext(ctx, "DELETE FROM journal WHERE account_key=? AND normalized_at IS NOT NULL AND normalized_at<?", s.accountKey, journal); e != nil {
@@ -126,7 +111,7 @@ func (s *Store) EraseAccount(ctx context.Context) error {
 		return e
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, table := range []string{"update_state", "channel_state", "user_hash", "peers", "journal", "inbox", "quarantine", "locators", "consistency", "sends"} {
+	for _, table := range []string{"update_state", "channel_state", "channel_access_hash", "user_hash", "peers", "journal", "inbox", "quarantine", "locators", "consistency", "sends"} {
 		if _, e = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_key=?", s.accountKey); e != nil {
 			return e
 		}

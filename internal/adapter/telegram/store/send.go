@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -81,6 +82,15 @@ func scanSend(row interface{ Scan(...any) error }) (SendIntent, bool, error) {
 
 // CreateSendIntent creates or returns an idempotent intent and rejects digest conflicts.
 func (s *Store) CreateSendIntent(ctx context.Context, in SendIntent, at time.Time) (SendIntent, bool, error) {
+	if err := validateText("send key", in.Key); err != nil {
+		return in, false, err
+	}
+	if err := validateBytes("send digest", in.RequestDigest, MaxRawFieldBytes); err != nil {
+		return in, false, err
+	}
+	if err := validateBytes("send peer locator", in.PeerLocator, MaxLocatorPayloadBytes); err != nil {
+		return in, false, err
+	}
 	result, e := s.db.ExecContext(ctx, "INSERT INTO sends(account_key,key,digest,random_id,peer_locator,status,created_at,updated_at) VALUES(?,?,?,?,?,'created',?,?) ON CONFLICT(account_key,key) DO NOTHING", s.accountKey, in.Key, in.RequestDigest, in.RandomID, in.PeerLocator, at.UnixNano(), at.UnixNano())
 	if e != nil {
 		return in, false, e
@@ -97,7 +107,7 @@ func (s *Store) CreateSendIntent(ctx context.Context, in SendIntent, at time.Tim
 		return existing, false, errors.New("telegram store: inserted send intent not found")
 	}
 	if !bytes.Equal(existing.RequestDigest, in.RequestDigest) {
-		return existing, false, ErrSendConflict
+		return existing, false, fmt.Errorf("%w: key %q digest differs", ErrSendConflict, in.Key)
 	}
 	return existing, affected == 1, nil
 }
@@ -123,7 +133,19 @@ func validTransition(from, to SendStatus) bool {
 // TransitionSend atomically applies a valid compare-and-swap state transition.
 func (s *Store) TransitionSend(ctx context.Context, key string, from, to SendStatus, t SendTransition) error {
 	if !validTransition(from, to) {
-		return ErrInvalidTransition
+		return fmt.Errorf("%w: %s to %s", ErrInvalidTransition, from, to)
+	}
+	if to == SendRetryable && t.RetryAt == nil {
+		return fmt.Errorf("%w: retryable transition requires retry time", ErrInvalidTransition)
+	}
+	if to != SendRetryable && t.RetryAt != nil {
+		return fmt.Errorf("%w: %s transition forbids retry time", ErrInvalidTransition, to)
+	}
+	if err := validateText("send key", key); err != nil {
+		return err
+	}
+	if err := validateText("send error", t.Error); err != nil {
+		return err
 	}
 	var retry any
 	if t.RetryAt != nil {
@@ -141,9 +163,12 @@ func (s *Store) TransitionSend(ctx context.Context, key string, from, to SendSta
 	if e != nil {
 		return e
 	}
-	n, _ := r.RowsAffected()
+	n, e := r.RowsAffected()
+	if e != nil {
+		return e
+	}
 	if n != 1 {
-		return ErrSendConflict
+		return fmt.Errorf("%w: key %q expected status %s", ErrSendConflict, key, from)
 	}
 	return nil
 }

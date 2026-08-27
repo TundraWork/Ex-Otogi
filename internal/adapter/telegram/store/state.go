@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
+
 	"github.com/gotd/td/telegram/updates"
 )
 
@@ -98,20 +98,23 @@ func (s *Store) ForEachChannels(ctx context.Context, u int64, f func(context.Con
 	return rows.Err()
 }
 
-// SetChannelAccessHash upserts an account-scoped channel access hash.
+// SetChannelAccessHash upserts an account-scoped channel access hash without creating update state.
 func (s *Store) SetChannelAccessHash(ctx context.Context, u, c, h int64) error {
-	_, e := s.db.ExecContext(ctx, "INSERT INTO channel_state(account_key,user_id,channel_id,pts,access_hash) VALUES(?,?,?,0,?) ON CONFLICT(account_key,user_id,channel_id) DO UPDATE SET access_hash=excluded.access_hash", s.accountKey, u, c, h)
+	_, e := s.db.ExecContext(ctx, "INSERT INTO channel_access_hash(account_key,user_id,channel_id,access_hash) VALUES(?,?,?,?) ON CONFLICT(account_key,user_id,channel_id) DO UPDATE SET access_hash=excluded.access_hash", s.accountKey, u, c, h)
 	return e
 }
 
 // GetChannelAccessHash returns an account-scoped channel access hash.
 func (s *Store) GetChannelAccessHash(ctx context.Context, u, c int64) (int64, bool, error) {
 	var h sql.NullInt64
-	e := s.db.QueryRowContext(ctx, "SELECT access_hash FROM channel_state WHERE account_key=? AND user_id=? AND channel_id=?", s.accountKey, u, c).Scan(&h)
-	if errors.Is(e, sql.ErrNoRows) || !h.Valid {
+	e := s.db.QueryRowContext(ctx, "SELECT access_hash FROM channel_access_hash WHERE account_key=? AND user_id=? AND channel_id=?", s.accountKey, u, c).Scan(&h)
+	if errors.Is(e, sql.ErrNoRows) || e == nil && !h.Valid {
 		return 0, false, nil
 	}
-	return h.Int64, e == nil, e
+	if e != nil {
+		return 0, false, e
+	}
+	return h.Int64, true, nil
 }
 
 // SetUserAccessHash upserts an account-scoped user access hash.
@@ -129,5 +132,3 @@ func (s *Store) GetUserAccessHash(ctx context.Context, u, t int64) (int64, bool,
 	}
 	return h, e == nil, e
 }
-
-var _ = fmt.Sprint

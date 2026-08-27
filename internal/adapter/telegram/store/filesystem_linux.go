@@ -4,15 +4,19 @@ package store
 
 import (
 	"fmt"
+	"os"
 	"syscall"
 )
 
 const (
-	nfsSuperMagic   = 0x6969
-	smbSuperMagic   = 0x517B
-	cifsSuperMagic  = 0xFF534D42
-	ninePSuperMagic = 0x01021997
-	cephSuperMagic  = 0x00C36400
+	extSuperMagic     = 0xEF53
+	xfsSuperMagic     = 0x58465342
+	btrfsSuperMagic   = 0x9123683E
+	tmpfsSuperMagic   = 0x01021994
+	zfsSuperMagic     = 0x2FC12FC1
+	f2fsSuperMagic    = 0xF2F52010
+	ubifsSuperMagic   = 0x24051905
+	overlaySuperMagic = 0x794C7630
 )
 
 func validateLocalFilesystem(path string) error {
@@ -23,11 +27,16 @@ func validateLocalFilesystem(path string) error {
 	return validateFilesystemType(int64(stats.Type))
 }
 
+func ownedByCurrentUser(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Uid == uint32(os.Geteuid())
+}
+
 func validateFilesystemType(fsType int64) error {
 	switch uint64(fsType) {
-	case nfsSuperMagic, smbSuperMagic, cifsSuperMagic, ninePSuperMagic, cephSuperMagic:
-		return fmt.Errorf("network filesystem type %#x is not supported", fsType)
-	default:
+	case extSuperMagic, xfsSuperMagic, btrfsSuperMagic, tmpfsSuperMagic, zfsSuperMagic, f2fsSuperMagic, ubifsSuperMagic, overlaySuperMagic:
 		return nil
+	default:
+		return fmt.Errorf("filesystem type %#x is not positively identified as local", fsType)
 	}
 }

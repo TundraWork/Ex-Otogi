@@ -117,7 +117,11 @@ func TestCompactQuarantinePayloadBeforeDedupeTombstone(t *testing.T) {
 	s := openTestStore(t)
 	now := time.Now().UTC()
 	q := QuarantineInput{SourceKey: "unsupported:1", Kind: "new-layer", Payload: []byte("participant-payload")}
-	if _, err := s.Capture(ctx, Capture{Quarantine: &q}); err != nil {
+	journalID, err := s.AppendJournal(ctx, []byte("raw"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Capture(ctx, Capture{JournalID: journalID, Quarantine: &q}); err != nil {
 		t.Fatal(err)
 	}
 	created := now.Add(-8 * 24 * time.Hour).UnixNano()
@@ -135,7 +139,11 @@ func TestCompactQuarantinePayloadBeforeDedupeTombstone(t *testing.T) {
 	if payload != nil {
 		t.Fatalf("quarantine participant payload retained after 7 days: %q", payload)
 	}
-	if _, err := s.Capture(ctx, Capture{Quarantine: &q}); err != nil {
+	journalID, err = s.AppendJournal(ctx, []byte("raw-again"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Capture(ctx, Capture{JournalID: journalID, Quarantine: &q}); err != nil {
 		t.Fatal(err)
 	}
 	var count int

@@ -10,6 +10,28 @@ import (
 	"time"
 )
 
+const (
+	// MaxRawFieldBytes bounds raw update, peer, quarantine, and send fields.
+	MaxRawFieldBytes = 64 << 10
+	// MaxEventPayloadBytes bounds normalized event payloads.
+	MaxEventPayloadBytes = 1 << 20
+	// MaxLocatorPayloadBytes bounds locator refetch data.
+	MaxLocatorPayloadBytes = 16 << 10
+	maxTextBytes           = 4096
+	maxCaptureLocators     = 1024
+)
+
+func validateBytes(field string, value []byte, max int) error {
+	if len(value) > max {
+		return fmt.Errorf("%w: %s is %d bytes (max %d)", ErrInputTooLarge, field, len(value), max)
+	}
+	return nil
+}
+
+func validateText(field, value string) error {
+	return validateBytes(field, []byte(value), maxTextBytes)
+}
+
 // Peer is a durable Telegram peer record.
 type Peer struct {
 	// Kind is the Telegram peer kind.
@@ -88,6 +110,12 @@ type Locator struct {
 	Conversation string
 	// Payload is opaque refetch data.
 	Payload []byte
+	// PayloadHash retains the content hash after payload compaction.
+	PayloadHash []byte
+	// CreatedAt is the first observation time.
+	CreatedAt time.Time
+	// UpdatedAt is the most recent observation time.
+	UpdatedAt time.Time
 }
 
 // Capture is one atomic normalized-capture transaction.
@@ -104,10 +132,18 @@ type Capture struct {
 	Box string
 	// Position is the last normalized source position.
 	Position int64
+	// CapturedAt is the durable capture time; zero uses the current UTC time.
+	CapturedAt time.Time
 }
 
 // PutPeer upserts an account-scoped peer record.
 func (s *Store) PutPeer(ctx context.Context, p Peer) error {
+	if err := validateText("peer kind", p.Kind); err != nil {
+		return err
+	}
+	if err := validateBytes("peer payload", p.Payload, MaxRawFieldBytes); err != nil {
+		return err
+	}
 	_, e := s.db.ExecContext(ctx, "INSERT INTO peers(account_key,kind,peer_id,access_hash,payload) VALUES(?,?,?,?,?) ON CONFLICT(account_key,kind,peer_id) DO UPDATE SET access_hash=excluded.access_hash,payload=excluded.payload", s.accountKey, p.Kind, p.ID, p.AccessHash, p.Payload)
 	return e
 }
@@ -122,11 +158,14 @@ func (s *Store) GetPeer(ctx context.Context, k string, id int64) (Peer, bool, er
 	return p, e == nil, e
 }
 
-// AppendJournal durably appends a raw transport packet.
+// AppendJournal durably appends a bounded raw transport packet.
 func (s *Store) AppendJournal(ctx context.Context, p []byte, at time.Time) (int64, error) {
+	if err := validateBytes("journal payload", p, MaxRawFieldBytes); err != nil {
+		return 0, err
+	}
 	r, e := s.db.ExecContext(ctx, "INSERT INTO journal(account_key,payload,received_at) VALUES(?,?,?)", s.accountKey, p, at.UnixNano())
 	if e != nil {
-		return 0, e
+		return 0, fmt.Errorf("append journal for account %q: %w", s.accountKey, e)
 	}
 	return r.LastInsertId()
 }
@@ -171,15 +210,37 @@ func (s *Store) Journal(ctx context.Context, id int64) (JournalRow, bool, error)
 
 // MarkJournalNormalized records successful durable normalization.
 func (s *Store) MarkJournalNormalized(ctx context.Context, id int64, at time.Time) error {
-	_, e := s.db.ExecContext(ctx, "UPDATE journal SET normalized_at=? WHERE account_key=? AND id=?", at.UnixNano(), s.accountKey, id)
-	return e
+	result, err := s.db.ExecContext(ctx, "UPDATE journal SET normalized_at=? WHERE account_key=? AND id=?", at.UnixNano(), s.accountKey, id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("journal %d does not belong to account %q", id, s.accountKey)
+	}
+	return nil
 }
 
 type sqlExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
+func validateInbox(in InboxInput) error {
+	for field, value := range map[string]string{"inbox id": in.ID, "inbox source key": in.SourceKey, "inbox conversation": in.Conversation} {
+		if err := validateText(field, value); err != nil {
+			return err
+		}
+	}
+	return validateBytes("inbox payload", in.Payload, MaxEventPayloadBytes)
+}
+
 func insertInbox(ctx context.Context, x sqlExecer, a string, in InboxInput) (bool, error) {
+	if err := validateInbox(in); err != nil {
+		return false, err
+	}
 	r, e := x.ExecContext(ctx, "INSERT INTO inbox(id,account_key,source_key,conversation,sequence,payload,available_at,status) VALUES(?,?,?,?,?,?,?,'pending') ON CONFLICT(account_key,source_key) DO NOTHING", in.ID, a, in.SourceKey, in.Conversation, in.Sequence, in.Payload, in.AvailableAt.UnixNano())
 	if e != nil {
 		return false, e
@@ -195,11 +256,62 @@ func (s *Store) EnqueueInbox(ctx context.Context, in InboxInput) (bool, error) {
 
 // Capture atomically persists normalized capture data and progress.
 func (s *Store) Capture(ctx context.Context, c Capture) (bool, error) {
+	if c.JournalID <= 0 {
+		return false, fmt.Errorf("capture journal %d: must be positive", c.JournalID)
+	}
+	if len(c.Locators) > maxCaptureLocators {
+		return false, fmt.Errorf("%w: locator count %d", ErrInputTooLarge, len(c.Locators))
+	}
+	if err := validateText("consistency box", c.Box); err != nil {
+		return false, err
+	}
+	if c.Inbox != nil {
+		if err := validateInbox(*c.Inbox); err != nil {
+			return false, err
+		}
+	}
+	if c.Quarantine != nil {
+		if err := validateText("quarantine source key", c.Quarantine.SourceKey); err != nil {
+			return false, err
+		}
+		if err := validateText("quarantine kind", c.Quarantine.Kind); err != nil {
+			return false, err
+		}
+		if err := validateBytes("quarantine payload", c.Quarantine.Payload, MaxRawFieldBytes); err != nil {
+			return false, err
+		}
+	}
+	for _, l := range c.Locators {
+		if err := validateText("locator namespace", l.Namespace); err != nil {
+			return false, err
+		}
+		if err := validateText("locator conversation", l.Conversation); err != nil {
+			return false, err
+		}
+		if err := validateBytes("locator payload", l.Payload, MaxLocatorPayloadBytes); err != nil {
+			return false, err
+		}
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return false, e
 	}
 	defer func() { _ = tx.Rollback() }()
+	now := c.CapturedAt.UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	result, e := tx.ExecContext(ctx, "UPDATE journal SET normalized_at=? WHERE account_key=? AND id=?", now.UnixNano(), s.accountKey, c.JournalID)
+	if e != nil {
+		return false, e
+	}
+	affected, e := result.RowsAffected()
+	if e != nil || affected != 1 {
+		if e != nil {
+			return false, e
+		}
+		return false, fmt.Errorf("capture journal %d does not belong to account %q", c.JournalID, s.accountKey)
+	}
 	inserted := false
 	if c.Inbox != nil {
 		inserted, e = insertInbox(ctx, tx, s.accountKey, *c.Inbox)
@@ -207,7 +319,6 @@ func (s *Store) Capture(ctx context.Context, c Capture) (bool, error) {
 			return false, e
 		}
 	}
-	now := time.Now().UTC()
 	if c.Quarantine != nil {
 		_, e = tx.ExecContext(ctx, "INSERT INTO quarantine(account_key,source_key,kind,payload,created_at) VALUES(?,?,?,?,?) ON CONFLICT(account_key,source_key) DO NOTHING", s.accountKey, c.Quarantine.SourceKey, c.Quarantine.Kind, c.Quarantine.Payload, now.UnixNano())
 		if e != nil {
@@ -216,24 +327,9 @@ func (s *Store) Capture(ctx context.Context, c Capture) (bool, error) {
 	}
 	for _, l := range c.Locators {
 		h := sha256.Sum256(l.Payload)
-		_, e = tx.ExecContext(ctx, "INSERT INTO locators(account_key,namespace,message_id,conversation,payload,payload_hash) VALUES(?,?,?,?,?,?) ON CONFLICT(account_key,namespace,message_id) DO UPDATE SET conversation=excluded.conversation,payload=excluded.payload,payload_hash=excluded.payload_hash", s.accountKey, l.Namespace, l.MessageID, l.Conversation, l.Payload, h[:])
+		_, e = tx.ExecContext(ctx, "INSERT INTO locators(account_key,namespace,message_id,conversation,payload,payload_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_key,namespace,message_id,conversation) DO UPDATE SET payload=excluded.payload,payload_hash=excluded.payload_hash,updated_at=excluded.updated_at", s.accountKey, l.Namespace, l.MessageID, l.Conversation, l.Payload, h[:], now.UnixNano(), now.UnixNano())
 		if e != nil {
 			return false, e
-		}
-	}
-	if c.JournalID != 0 {
-		var result sql.Result
-		result, e = tx.ExecContext(ctx, "UPDATE journal SET normalized_at=? WHERE account_key=? AND id=?", now.UnixNano(), s.accountKey, c.JournalID)
-		if e != nil {
-			return false, e
-		}
-		var affected int64
-		affected, e = result.RowsAffected()
-		if e != nil {
-			return false, e
-		}
-		if affected != 1 {
-			return false, fmt.Errorf("capture journal %d does not belong to account", c.JournalID)
 		}
 	}
 	if c.Box != "" {
@@ -246,13 +342,19 @@ func (s *Store) Capture(ctx context.Context, c Capture) (bool, error) {
 }
 
 // GetLocator resolves an account-scoped provider message locator.
-func (s *Store) GetLocator(ctx context.Context, n string, id int64) (Locator, bool, error) {
-	l := Locator{Namespace: n, MessageID: id}
-	e := s.db.QueryRowContext(ctx, "SELECT conversation,payload FROM locators WHERE account_key=? AND namespace=? AND message_id=?", s.accountKey, n, id).Scan(&l.Conversation, &l.Payload)
+func (s *Store) GetLocator(ctx context.Context, namespace string, id int64, conversation string) (Locator, bool, error) {
+	l := Locator{Namespace: namespace, MessageID: id, Conversation: conversation}
+	var created, updated int64
+	e := s.db.QueryRowContext(ctx, "SELECT payload,payload_hash,created_at,updated_at FROM locators WHERE account_key=? AND namespace=? AND message_id=? AND conversation=?", s.accountKey, namespace, id, conversation).Scan(&l.Payload, &l.PayloadHash, &created, &updated)
 	if errors.Is(e, sql.ErrNoRows) {
 		return l, false, nil
 	}
-	return l, e == nil, e
+	if e != nil {
+		return l, false, e
+	}
+	l.CreatedAt = time.Unix(0, created).UTC()
+	l.UpdatedAt = time.Unix(0, updated).UTC()
+	return l, true, nil
 }
 
 // RecordGap marks a consistency box degraded at a durable boundary.

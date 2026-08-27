@@ -29,4 +29,21 @@ A dedicated review identified four Important findings: missing SQLite filesystem
 ## Concerns
 
 - Migrations intentionally support only the current experimental schema and reject unknown versions.
-- Linux explicitly rejects known network filesystem types. Other operating systems retain the portable path/type/mode checks because Go exposes no uniform filesystem-locality API.
+- Filesystem locality now fails closed: Linux uses a positive local-filesystem allowlist, and platforms without a positive verifier reject opening the store.
+
+## Blocking Review Fix Round
+
+- Hardened database creation and reopen validation: new files are exclusively created as `0600`; existing files must be regular, current-user-owned, exactly `0600`, and on a positively allowlisted local filesystem. Unknown, FUSE, network, and clustered filesystem types fail closed.
+- Schema version 2 is a clean current-only cutover. It separates channel access hashes from channel cursors, expands locator identity with conversation plus timestamps/hash retention, and rejects both prior versions and incompatible current layouts.
+- Reopen binding now compares account key, authorized user ID, gotd version, and Telegram layer. Capture requires a positive account-owned journal row before any writes or consistency advance. Channel hash reads preserve database errors.
+- Locator payloads compact after 7 days while hashes remain through 30-day deletion; account erasure includes every new table. Send retry timestamps obey status invariants, and claims use one atomic `UPDATE ... RETURNING` statement rather than a deferred transaction upgrade.
+- Explicit pre-SQL bounds cover journal, inbox, quarantine, peer, locator, send fields and capture batch count: raw/extension fields `64 KiB`, normalized events `1 MiB`, locators `16 KiB`.
+
+### Fix-Round TDD and Verification
+
+- Focused regressions were first observed failing at compile/runtime for the missing locator identity/API and size bounds, then passed after the production changes.
+- A follow-up regression constructed schema version 2 with the expected locator columns but a primary key omitting `conversation`; it failed red by reopening successfully, then passed after schema validation began checking ordered primary-key positions for every required table.
+- `./scripts/quality/go.sh test ./internal/adapter/telegram/store -count=1` — passed.
+- `./scripts/quality/go.sh test -race ./internal/adapter/telegram/store -count=1` — passed.
+- `./scripts/quality/golangci-lint.sh run ./internal/adapter/telegram/store` — passed with `0 issues`.
+- `./scripts/quality/go.sh run ./scripts/quality/cmd/doccheck internal/adapter/telegram/store` — passed.

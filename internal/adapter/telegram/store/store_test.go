@@ -156,7 +156,7 @@ func TestPeerJournalCaptureDedupeAndStartup(t *testing.T) {
 	if err != nil || !ok || row.NormalizedAt == nil {
 		t.Fatalf("journal %+v %v %v", row, ok, err)
 	}
-	loc, ok, err := s.GetLocator(ctx, "common", 5)
+	loc, ok, err := s.GetLocator(ctx, "common", 5, "chat:1")
 	if err != nil || !ok || loc.Conversation != "chat:1" {
 		t.Fatalf("locator %+v %v %v", loc, ok, err)
 	}
