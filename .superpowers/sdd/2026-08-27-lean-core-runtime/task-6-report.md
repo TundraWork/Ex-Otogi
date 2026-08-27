@@ -22,7 +22,7 @@ Completed final verification and operator documentation for the experimental lea
 - `./scripts/quality/go.sh build -o /tmp/ex-otogi ./cmd/otogi && /tmp/ex-otogi` — passed the documented build/run procedure and printed exactly `echo: hello`.
 - `./scripts/quality/go.sh run ./scripts/quality/cmd/doccheck` — passed, inspecting package comments, exported declarations, interface methods, and exported fields.
 - `./scripts/quality/go.sh list ./...` — enumerated all nine repository packages covered by the checks.
-- `GOROOT=/definitely/stale make quality` — passed formatting, lint/documentation, architecture, unit, race, leak, and smoke gates while proving the launchers ignore a stale external `GOROOT`.
+- `GOROOT=/definitely/stale make quality` — passed the `fmt-check` formatting check, lint/documentation, architecture, unit, race, leak, and smoke gates while proving the launchers ignore a stale external `GOROOT`.
 - `git diff --check` — passed.
 
 ## Deferred and non-conforming scope
@@ -32,3 +32,11 @@ This remains an experimental event-bridge milestone, not a production-ready or c
 ## Concerns
 
 The committed Go launchers may download Go 1.27.0, and the lint launcher may download pinned `golangci-lint` v2.13.1, on first use. These downloads require network access unless the relevant caches are already populated.
+
+### Review fix round 1
+
+- Corrected the governing milestone description to enumerate the actual `quality` dependencies without self-reference.
+- Recorded that `arch-check` implements the experimental milestone architecture contract and limited the absent full-release command list to `verify-generated`, `test-fuzz-smoke`, `security`, and `release-verify`.
+- Documented the smoke target's actual POSIX command-substitution semantics: trailing newlines are removed before the remaining standard output is compared, and a nonzero executable exit fails the target.
+- Corrected stale-`GOROOT` evidence to identify `fmt-check` as the formatting gate exercised by `quality`.
+- `git diff --check && make quality` — passed after the documentation corrections; lint reported `0 issues`, documentation and architecture checks passed, and unit, race, leak, and smoke gates passed.

@@ -39,7 +39,7 @@ make smoke
 make quality
 ```
 
-`make smoke` runs the executable and succeeds only when its complete output is `echo: hello`. `make quality` aggregates every listed nonmutating milestone gate; it does not run `make format`.
+`make smoke` captures standard output with POSIX command substitution, which removes all trailing newline characters, then requires the remaining text to equal `echo: hello`; a nonzero executable exit also fails the target. `make quality` runs `fmt-check`, `lint`, `arch-check`, `test`, `test-race`, `test-leak`, and `smoke`; it does not run `make format`.
 
 To verify that repository launchers reject a stale external toolchain root:
 
