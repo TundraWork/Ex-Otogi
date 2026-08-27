@@ -79,6 +79,35 @@ func TestStopCauseWinsOverOlderDrainCancellation(t *testing.T) {
 	}
 }
 
+func TestStopInterruptingDrainRetainsCancellation(t *testing.T) {
+	started := make(chan struct{})
+	module := newTestModule(t, "module", "message", func(ctx context.Context, _ otogi.Event, _ otogi.Invocation) otogi.Result {
+		close(started)
+		<-ctx.Done()
+		return otogi.NewFailedResult(ctx.Err())
+	})
+	k := startedKernel(t, module)
+	if _, err := k.Submit(context.Background(), newTestInput(t, "message", "active")); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if _, err := k.Submit(context.Background(), newTestInput(t, "message", "queued")); err != nil {
+		t.Fatal(err)
+	}
+	drainDone := make(chan error, 1)
+	go func() { drainDone <- k.Drain(context.Background()) }()
+	waitUntilNotReady(t, k)
+	if err := k.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := <-drainDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Drain() = %v, want cancellation", err)
+	}
+	if err := k.Stop(context.Background()); err != nil {
+		t.Fatalf("second Stop() = %v", err)
+	}
+}
+
 func TestConcurrentStopJoinsWorkerAfterEarlierStopTimeout(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})

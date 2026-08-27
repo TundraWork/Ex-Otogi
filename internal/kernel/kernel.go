@@ -25,22 +25,23 @@ const (
 
 // Kernel owns one bounded event worker and its lifecycle.
 type Kernel struct {
-	mu          sync.Mutex
-	state       state
-	terminalErr error
-	config      Config
-	modules     []otogi.Module
-	kinds       map[otogi.EventKind]struct{}
-	messenger   otogi.Messenger
-	generator   *otogi.EventIDGenerator
-	queue       chan event
-	workerCtx   context.Context
-	cancel      context.CancelFunc
-	wake        chan struct{}
-	done        chan struct{}
-	drain       bool
-	deliveries  []Delivery
-	panics      []PanicReport
+	mu               sync.Mutex
+	state            state
+	terminalErr      error
+	config           Config
+	modules          []otogi.Module
+	kinds            map[otogi.EventKind]struct{}
+	messenger        otogi.Messenger
+	generator        *otogi.EventIDGenerator
+	queue            chan event
+	workerCtx        context.Context
+	cancel           context.CancelFunc
+	wake             chan struct{}
+	done             chan struct{}
+	drain            bool
+	drainInterrupted bool
+	deliveries       []Delivery
+	panics           []PanicReport
 }
 
 // New validates dependencies and module descriptors and returns an inert kernel.
@@ -166,6 +167,9 @@ func (k *Kernel) Drain(ctx context.Context) error {
 	}
 	k.mu.Lock()
 	err := k.terminalErr
+	if err == nil && k.drainInterrupted {
+		err = context.Canceled
+	}
 	k.mu.Unlock()
 	return err
 }
@@ -180,6 +184,9 @@ func (k *Kernel) Stop(ctx context.Context) error {
 		return nil
 	}
 	if k.state != stateStopped {
+		if k.state == stateDraining {
+			k.drainInterrupted = true
+		}
 		if k.cancel != nil {
 			k.cancel()
 		}

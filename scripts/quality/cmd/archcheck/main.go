@@ -77,12 +77,8 @@ func forbidden(source, target string) string {
 	switch {
 	case strings.HasPrefix(source, "/pkg/otogi") && !isStandardLibrary(target):
 		return "contracts must import only the standard library"
-	case strings.HasPrefix(source, "/internal/kernel") && internal && (strings.HasPrefix(repositoryTarget, "internal/adapter/") || strings.HasPrefix(repositoryTarget, "modules/")):
-		return "kernel must not import adapters or modules"
-	case strings.HasPrefix(source, "/modules/") && internal && (strings.HasPrefix(repositoryTarget, "internal/") || strings.HasPrefix(repositoryTarget, "modules/")):
-		return "modules must depend only on contracts"
-	case strings.HasPrefix(source, "/internal/adapter/") && internal && adapterForbidden(source, repositoryTarget):
-		return "adapters must not import kernel, modules, or sibling adapters"
+	case contractOnlySource(source) && internal && repositoryTarget != "pkg/otogi":
+		return "kernel, modules, and adapters may import only repository contracts"
 	default:
 		return ""
 	}
@@ -96,21 +92,8 @@ func isStandardLibrary(importPath string) bool {
 	return !strings.Contains(first, ".")
 }
 
-func adapterForbidden(source, target string) bool {
-	if strings.HasPrefix(target, "internal/kernel") || strings.HasPrefix(target, "modules/") {
-		return true
-	}
-	if !strings.HasPrefix(target, "internal/adapter/") {
-		return false
-	}
-	sourceAdapter := firstPathComponent(strings.SplitAfter(source, "/internal/adapter/")[1])
-	targetAdapter := firstPathComponent(strings.TrimPrefix(target, "internal/adapter/"))
-	return sourceAdapter != targetAdapter
-}
-
-func firstPathComponent(path string) string {
-	if slash := strings.IndexByte(path, '/'); slash >= 0 {
-		return path[:slash]
-	}
-	return path
+func contractOnlySource(source string) bool {
+	return source == "/internal/kernel" || strings.HasPrefix(source, "/internal/kernel/") ||
+		source == "/modules" || strings.HasPrefix(source, "/modules/") ||
+		source == "/internal/adapter" || strings.HasPrefix(source, "/internal/adapter/")
 }
