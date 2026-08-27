@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
 )
 
@@ -52,6 +53,14 @@ func TestMapNewAndEditMessages(t *testing.T) {
 	}
 	if edited.SourceKey == result.SourceKey {
 		t.Fatal("edit source key did not include action/fingerprint")
+	}
+	createdID, ok := result.Event.SourceEventID()
+	if !ok || createdID.String() != "telegram:common:user:9:11" {
+		t.Fatalf("created source ID=%s,%v", createdID, ok)
+	}
+	editedID, ok := edited.Event.SourceEventID()
+	if !ok || editedID != createdID {
+		t.Fatalf("edited source ID=%s created=%s", editedID, createdID)
 	}
 }
 
@@ -109,5 +118,55 @@ func TestMapServiceEmptyAndUnsupported(t *testing.T) {
 	}
 	if mapped.Quarantine == nil || mapped.HasEvent {
 		t.Fatalf("unsupported=%+v", mapped)
+	}
+}
+
+func TestNegativePositionsAreNormalizedInResults(t *testing.T) {
+	message := &tg.Message{ID: 1, PeerID: &tg.PeerUser{UserID: 2}, Date: 100, Message: "position"}
+	mapped, err := New(testConfig(t)).Map(&tg.UpdateNewMessage{Message: message, Pts: -2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapped.Position != 0 {
+		t.Fatalf("message position=%d", mapped.Position)
+	}
+	deleted, err := New(testConfig(t)).Map(&tg.UpdateDeleteMessages{Messages: []int{1}, Pts: -2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Position != 0 {
+		t.Fatalf("delete position=%d", deleted.Position)
+	}
+}
+
+func TestServicePreservesCompleteMessageAndRelations(t *testing.T) {
+	service := &tg.MessageService{ID: 5, PeerID: &tg.PeerChat{ChatID: 3}, Date: 100, Action: &tg.MessageActionChatCreate{Title: "group", Users: []int64{1, 2}}, Silent: true}
+	service.SetReplyTo(&tg.MessageReplyHeader{ForumTopic: true, ReplyToMsgID: 4, ReplyToTopID: 2})
+	service.SetSavedPeerID(&tg.PeerUser{UserID: 7})
+	service.SetTTLPeriod(60)
+	service.SetReactions(tg.MessageReactions{Results: []tg.ReactionCount{{Reaction: &tg.ReactionEmoji{Emoticon: "x"}, Count: 1}}})
+	mapped, err := New(testConfig(t)).Map(&tg.UpdateNewMessage{Message: service, Pts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := mapped.Event.Message().Parts()[0]
+	value, ok := part.Value()
+	if !ok {
+		t.Fatal("service part not opaque")
+	}
+	if value.LocalName() != "message-service" {
+		t.Fatalf("extension=%s", value.LocalName())
+	}
+	var decoded tg.MessageService
+	buffer := bin.Buffer{Buf: value.Data()}
+	if err := decoded.Decode(&buffer); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Silent || decoded.TTLPeriod != 60 || decoded.SavedPeerID == nil || decoded.Reactions.Results == nil || decoded.ReplyTo == nil {
+		t.Fatalf("decoded service=%+v", decoded)
+	}
+	relations := mapped.Event.Message().Relations()
+	if len(relations) != 2 || relations[0].Kind() != otogi.RelationReply || relations[1].Kind() != otogi.RelationThread {
+		t.Fatalf("relations=%+v", relations)
 	}
 }

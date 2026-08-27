@@ -151,7 +151,7 @@ func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, n
 		}
 		messageAction = otogi.ActionMessageService
 		var err error
-		rich, err = opaqueMessage("service-action", value.Action)
+		rich, err = m.mapServiceMessage(value)
 		if err != nil {
 			return Result{}, err
 		}
@@ -184,7 +184,7 @@ func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, n
 	if err != nil {
 		return Result{}, err
 	}
-	sourceID, err := otogi.NewSourceEventID(sourceKey)
+	sourceID, err := otogi.NewSourceEventID(fmt.Sprintf("telegram:%s:%s:%d", namespace, conversation, id))
 	if err != nil {
 		return Result{}, err
 	}
@@ -219,7 +219,71 @@ func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, n
 	if namespace == NamespaceChannel {
 		box = conversation
 	}
-	return Result{Event: input, HasEvent: true, SourceKey: sourceKey, Box: box, Position: position, Locators: []LocatorRecord{{Namespace: namespace, MessageID: id, Conversation: conversation, Payload: locatorData}}}, nil
+	return Result{Event: input, HasEvent: true, SourceKey: sourceKey, Box: box, Position: normalizedPosition(position), Locators: []LocatorRecord{{Namespace: namespace, MessageID: id, Conversation: conversation, Payload: locatorData}}}, nil
+}
+
+func (m *Mapper) mapServiceMessage(message *tg.MessageService) (otogi.Message, error) {
+	ext, err := telegramExtension("message-service", message)
+	if err != nil {
+		return otogi.Message{}, err
+	}
+	id, _ := otogi.NewPartID("service")
+	part, err := otogi.NewOpaquePart(id, ext, nil, nil)
+	if err != nil {
+		return otogi.Message{}, err
+	}
+	relations := make([]otogi.Relation, 0, 2)
+	if header, ok := message.ReplyTo.(*tg.MessageReplyHeader); ok && header.ReplyToMsgID > 0 {
+		targetPeer := message.PeerID
+		if explicit, ok := header.GetReplyToPeerID(); ok {
+			targetPeer = explicit
+		}
+		conversation, err := PeerID(targetPeer)
+		if err != nil {
+			return otogi.Message{}, err
+		}
+		makeRelation := func(kind otogi.RelationKind, targetID int) (otogi.Relation, error) {
+			conversationID, err := otogi.NewConversationID(conversation)
+			if err != nil {
+				return otogi.Relation{}, err
+			}
+			namespace := namespaceForPeer(targetPeer)
+			sourceID, err := otogi.NewSourceEventID(fmt.Sprintf("telegram:%s:%s:%d", namespace, conversation, targetID))
+			if err != nil {
+				return otogi.Relation{}, err
+			}
+			locatorData, err := EncodeMessageLocator(MessageLocator{Namespace: namespace, Peer: conversation, MessageID: targetID})
+			if err != nil {
+				return otogi.Relation{}, err
+			}
+			locator, err := otogi.NewProviderLocator(extensionNamespace+"/message", 1, locatorData)
+			if err != nil {
+				return otogi.Relation{}, err
+			}
+			accountID, err := otogi.NewAccountID(m.accountScope())
+			if err != nil {
+				return otogi.Relation{}, err
+			}
+			ref, err := otogi.NewEventRef(otogi.EventRefParams{Platform: m.config.Platform, Account: accountID, Conversation: conversationID, SourceEvent: sourceID, Locator: locator})
+			if err != nil {
+				return otogi.Relation{}, err
+			}
+			return otogi.NewRelation(kind, ref, "", nil)
+		}
+		reply, err := makeRelation(otogi.RelationReply, header.ReplyToMsgID)
+		if err != nil {
+			return otogi.Message{}, err
+		}
+		relations = append(relations, reply)
+		if topID, ok := header.GetReplyToTopID(); ok && topID > 0 && topID != header.ReplyToMsgID {
+			thread, err := makeRelation(otogi.RelationThread, topID)
+			if err != nil {
+				return otogi.Message{}, err
+			}
+			relations = append(relations, thread)
+		}
+	}
+	return otogi.NewMessage([]otogi.PartID{id}, []otogi.Part{part}, relations, nil)
 }
 
 func (m *Mapper) mapRegularMessage(message *tg.Message) (otogi.Message, error) {
@@ -407,24 +471,11 @@ func projectedMediaPart(id otogi.PartID, role otogi.MediaRole, mediaType string,
 	return part, id, err
 }
 
-func opaqueMessage(name string, value interface{ Encode(*bin.Buffer) error }) (otogi.Message, error) {
-	ext, err := telegramExtension(name, value)
-	if err != nil {
-		return otogi.Message{}, err
-	}
-	id, _ := otogi.NewPartID("opaque")
-	part, err := otogi.NewOpaquePart(id, ext, nil, nil)
-	if err != nil {
-		return otogi.Message{}, err
-	}
-	return otogi.NewMessage([]otogi.PartID{id}, []otogi.Part{part}, nil, nil)
-}
-
 func (m *Mapper) mapDeletes(namespace string, channelID int64, ids []int, position int) (Result, error) {
 	if len(ids) > MaxDeleteMessages || namespace == NamespaceChannel && channelID <= 0 {
 		return Result{}, fmt.Errorf("invalid Telegram deletion update: %w", otogi.ErrCapacity)
 	}
-	result := Result{Box: NamespaceCommon, Position: position, Deletes: make([]DeleteRecord, 0, len(ids))}
+	result := Result{Box: NamespaceCommon, Position: normalizedPosition(position), Deletes: make([]DeleteRecord, 0, len(ids))}
 	conversation := ""
 	if namespace == NamespaceChannel {
 		conversation = fmt.Sprintf("channel:%d", channelID)

@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"fmt"
+	"reflect"
 	"unicode/utf8"
 
 	"github.com/gotd/td/bin"
@@ -27,7 +28,7 @@ func ConvertEntities(text string, entities []tg.MessageEntityClass) ([]otogi.Ann
 	annotations := make([]otogi.Annotation, 0, len(entities))
 	extensions := make([]otogi.Extension, 0)
 	for i, entity := range entities {
-		if entity == nil {
+		if entity == nil || reflect.ValueOf(entity).Kind() == reflect.Pointer && reflect.ValueOf(entity).IsNil() {
 			return nil, nil, fmt.Errorf("telegram entity %d is nil: %w", i, otogi.ErrInvalid)
 		}
 		kind, target, known := entityProjection(entity)

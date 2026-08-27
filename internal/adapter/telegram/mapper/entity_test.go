@@ -71,3 +71,10 @@ func FuzzConvertEntitiesUTF16(f *testing.F) {
 		}
 	})
 }
+
+func TestConvertEntitiesRejectsTypedNil(t *testing.T) {
+	var entity *tg.MessageEntityBold
+	if _, _, err := ConvertEntities("x", []tg.MessageEntityClass{entity}); err == nil {
+		t.Fatal("typed-nil entity accepted")
+	}
+}

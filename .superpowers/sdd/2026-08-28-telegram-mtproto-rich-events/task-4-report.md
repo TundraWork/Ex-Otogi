@@ -80,6 +80,15 @@ Known layer-228 constructors without a safe protocol-neutral projection remain c
 - The implementation does not claim recovery of deleted, TTL, inaccessible, or secret media/content.
 - Task 5 manager/journal integration and locator-backed resolution of common deletes remain outside Task 4 by plan.
 
+## Review Fix Round 1
+
+- Split canonical provider identity from delivery deduplication: `EventInput.SourceEventID` is now `telegram:<namespace>:<peer>:<message-id>` for both create and edit events and matches reply/thread `EventRef.SourceEvent`; `Result.SourceKey` remains the action/content/position fingerprint.
+- Added a red regression proving typed-nil generated entity pointers were accepted, then rejected them before projection/getter calls.
+- Normalized negative provider positions to zero in both message and deletion `Result.Position`, matching source-key normalization.
+- Service mapping now preserves deterministic bounded encoding of the complete `tg.MessageService` as `message-service`, including flags, saved peer, reply, reactions, TTL, and action. Reply and topic relations are projected when present.
+- Focused regressions were observed failing for all four review items, then passed after implementation.
+- Scope remains mapper-only and network-free; no manager, lifecycle, dispatcher, or RPC execution was added.
+
 ## Commit
 
 - Implementation: `6945e891 feat: map Telegram updates to rich events`
