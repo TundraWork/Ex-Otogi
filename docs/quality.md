@@ -8,6 +8,10 @@ CI and local authoritative checks resolve identical tool versions from committed
 
 Generated files record their generator and are reproducible from source. The gate fails when regeneration changes the tree.
 
+## Experimental milestone gates
+
+Until the implementation satisfies the full product boundary, commands introduced for the experimental vertical slice are milestone gates only, not the full release gate. They MUST NOT report deferred functionality as passing or be represented as satisfying the complete `quality` or `release-verify` contracts below. Every requirement in this document remains binding before a production-ready or conforming release claim.
+
 ## Stable commands
 
 The implementation repository provides discoverable, non-interactive commands with these contracts:

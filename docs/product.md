@@ -6,6 +6,10 @@ Ex-Otogi is a self-hosted runtime that receives events from instant-messaging pl
 
 The product optimizes for understandable behavior, bounded resource use, safe extension, and operator diagnosis on one node. Feature count and speculative distribution are subordinate to those qualities.
 
+## Experimental milestone status
+
+The current executable work is an experimental, non-conforming vertical slice, not a product release. Milestone acceptance demonstrates only the explicitly implemented slice; it does not satisfy or weaken the conforming runtime capabilities, workload envelope, service qualities, or release evidence required by this document.
+
 ## Actors
 
 - **Participant:** sends or receives content through an external messaging platform.

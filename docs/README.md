@@ -8,6 +8,12 @@ The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, 
 
 An implementation conforms only when it satisfies every applicable MUST and MUST NOT. A SHOULD may be violated only when the design records the concrete reason, consequences, and compensating evidence. Examples and rationale are non-normative.
 
+## Experimental milestone status
+
+The current executable work is an **experimental, non-conforming vertical slice**, not an Ex-Otogi release. It intentionally implements only the approved milestone scope. The full product requirements in `product.md` and full release gates in `quality.md` remain binding before any production-ready or conforming release claim.
+
+Commands introduced for this slice are milestone gates only. They MUST NOT be named or documented as satisfying deferred persistence, authenticated management, security scanning, telemetry, backup/restore, SBOM, signature, provenance, or release-verification requirements.
+
 ## Scope
 
 This suite specifies the core runtime, its statically linked extensions, platform adapters, operator boundary, engineering system, and single-node operations.
