@@ -30,7 +30,6 @@ type Kernel struct {
 	terminalErr      error
 	config           Config
 	modules          []otogi.Module
-	actions          map[otogi.EventAction]struct{}
 	messenger        otogi.Messenger
 	generator        *otogi.EventIDGenerator
 	queue            chan event
@@ -42,6 +41,8 @@ type Kernel struct {
 	drainInterrupted bool
 	deliveries       []Delivery
 	panics           []PanicReport
+	active           map[otogi.EventID]struct{}
+	completions      map[otogi.EventID]*completionSubscription
 }
 
 // New validates dependencies and module descriptors and returns an inert kernel.
@@ -51,7 +52,6 @@ func New(config Config, modules []otogi.Module, messenger otogi.Messenger, gener
 	}
 	owned := append([]otogi.Module(nil), modules...)
 	seen := make(map[otogi.ModuleID]struct{}, len(owned))
-	actions := make(map[otogi.EventAction]struct{})
 	for _, module := range owned {
 		if module == nil {
 			return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
@@ -68,11 +68,10 @@ func New(config Config, modules []otogi.Module, messenger otogi.Messenger, gener
 			if action.String() == "" {
 				return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
 			}
-			actions[action] = struct{}{}
 		}
 	}
 	sort.Slice(owned, func(i, j int) bool { return owned[i].Descriptor().ID().String() < owned[j].Descriptor().ID().String() })
-	return &Kernel{state: stateNew, config: config, modules: owned, actions: actions, messenger: messenger, generator: generator, queue: make(chan event, config.queueCapacity), wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
+	return &Kernel{state: stateNew, config: config, modules: owned, messenger: messenger, generator: generator, queue: make(chan event, config.queueCapacity), wake: make(chan struct{}, 1), done: make(chan struct{}), active: make(map[otogi.EventID]struct{}), completions: make(map[otogi.EventID]*completionSubscription)}, nil
 }
 
 // Start transitions a new kernel to ready and starts its sole worker.
@@ -97,7 +96,7 @@ func (k *Kernel) Start(ctx context.Context) error {
 	return nil
 }
 
-// Submit admits one supported event without blocking and returns its runtime ID.
+// Submit admits one supported event without blocking and returns its kernel-owned runtime ID.
 func (k *Kernel) Submit(ctx context.Context, input otogi.EventInput) (otogi.EventID, error) {
 	if err := ctx.Err(); err != nil {
 		return otogi.EventID{}, err
@@ -107,18 +106,45 @@ func (k *Kernel) Submit(ctx context.Context, input otogi.EventInput) (otogi.Even
 	if k.state != stateReady {
 		return otogi.EventID{}, fmt.Errorf("submit event: %w", otogi.ErrInvalidState)
 	}
-	if _, supported := k.actions[input.Action()]; !supported {
-		return otogi.EventID{}, fmt.Errorf("submit event action: %w", otogi.ErrInvalid)
-	}
 	id, err := k.generator.Next()
 	if err != nil {
 		return otogi.EventID{}, fmt.Errorf("submit event ID: %w", err)
 	}
+	if err := k.admitLocked(id, input); err != nil {
+		return otogi.EventID{}, err
+	}
+	return id, nil
+}
+
+// SubmitTrusted admits one supported event with a trusted deterministic runtime ID.
+func (k *Kernel) SubmitTrusted(ctx context.Context, id otogi.EventID, input otogi.EventInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id.String() == "" {
+		return fmt.Errorf("submit trusted event: %w", otogi.ErrInvalid)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.state != stateReady {
+		return fmt.Errorf("submit trusted event: %w", otogi.ErrInvalidState)
+	}
+	return k.admitLocked(id, input)
+}
+
+func (k *Kernel) admitLocked(id otogi.EventID, input otogi.EventInput) error {
+	if input.Action().String() == "" {
+		return fmt.Errorf("submit event action: %w", otogi.ErrInvalid)
+	}
+	if _, exists := k.active[id]; exists {
+		return fmt.Errorf("submit event duplicate: %w", otogi.ErrInvalidState)
+	}
 	select {
 	case k.queue <- event{id: id, input: input}:
-		return id, nil
+		k.active[id] = struct{}{}
+		return nil
 	default:
-		return otogi.EventID{}, fmt.Errorf("submit event: %w", otogi.ErrCapacity)
+		return fmt.Errorf("submit event: %w", otogi.ErrCapacity)
 	}
 }
 
@@ -234,7 +260,10 @@ func (k *Kernel) wait(ctx context.Context) error {
 }
 
 func (k *Kernel) run() {
-	defer close(k.done)
+	defer func() {
+		k.closeCompletions()
+		close(k.done)
+	}()
 	for {
 		select {
 		case <-k.workerCtx.Done():
@@ -278,6 +307,7 @@ func (k *Kernel) route(ctx context.Context, admitted event) {
 		k.deliveries = appendBounded(k.deliveries, Delivery{eventID: admitted.ID(), moduleID: moduleID, status: result.Status(), err: stableError(result.Err())})
 		k.mu.Unlock()
 	}
+	k.complete(admitted.ID())
 }
 
 func invokeModule(ctx context.Context, module otogi.Module, admitted event, invocation *invocation) (result otogi.Result, report *PanicReport) {

@@ -113,7 +113,7 @@ func TestStartAndBoundedAdmission(t *testing.T) {
 	}
 }
 
-func TestSubmitValidatesCancellationAndSupportedKind(t *testing.T) {
+func TestSubmitValidatesCancellationAndAcceptsUnroutedAction(t *testing.T) {
 	module := newTestModule(t, "module", "message", nil)
 	k := newTestKernel(t, DefaultConfig(), []otogi.Module{module}, &testMessenger{})
 	if err := k.Start(context.Background()); err != nil {
@@ -124,11 +124,14 @@ func TestSubmitValidatesCancellationAndSupportedKind(t *testing.T) {
 	if _, err := k.Submit(ctx, newTestInput(t, "message", "text")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled Submit() error = %v, want context.Canceled", err)
 	}
-	if _, err := k.Submit(context.Background(), newTestInput(t, "unknown", "text")); !errors.Is(err, otogi.ErrInvalid) {
-		t.Fatalf("unsupported Submit() error = %v, want ErrInvalid", err)
+	if _, err := k.Submit(context.Background(), newTestInput(t, "unknown", "text")); err != nil {
+		t.Fatalf("unrouted Submit() error = %v", err)
 	}
-	if err := k.Stop(context.Background()); err != nil {
+	if err := k.Drain(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if len(k.Deliveries()) != 0 {
+		t.Fatalf("unrouted deliveries = %d", len(k.Deliveries()))
 	}
 }
 
@@ -219,9 +222,12 @@ func newTestModule(t *testing.T, idValue, actionValue string, handle func(contex
 	t.Helper()
 	id, _ := otogi.NewModuleID(idValue)
 	var action otogi.EventAction
-	if actionValue == "message" {
+	switch actionValue {
+	case "message":
 		action = otogi.ActionMessageCreated
-	} else {
+	case "edited":
+		action = otogi.ActionMessageEdited
+	default:
 		action, _ = otogi.NewEventAction("https://example.test/" + actionValue)
 	}
 	descriptor, err := otogi.NewModuleDescriptor(id, []otogi.EventAction{action})
