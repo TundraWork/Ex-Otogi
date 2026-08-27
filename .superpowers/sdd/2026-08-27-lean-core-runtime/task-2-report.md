@@ -16,6 +16,9 @@ Lean public contracts are implemented under `pkg/otogi` with private immutable v
 - `go vet ./pkg/otogi`: passed.
 - `go doc -all ./pkg/otogi`: confirmed package and exported API documentation.
 - A forbidden-contract search under `pkg/otogi` returned no matches.
+- Review fix red: adding a temporary exported `EventSink` made `TestPublicAPIHasOnlyLeanContracts` fail with the unexpected export.
+- Review fix red: adding a temporary method to `Event` made `TestPublicInterfacesHaveExactMethodShapes/Event` fail with `has 15 methods, want 14`.
+- Review fix green: focused API allowlist/interface-shape tests, full package unit tests, and uncached race tests passed after removing both mutations.
 
 ## Module normalization
 
