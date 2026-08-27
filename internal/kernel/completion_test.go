@@ -10,10 +10,18 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
+type driverFacingAdmitter interface {
+	SubmitTrusted(context.Context, otogi.EventID, otogi.EventInput) error
+	SubscribeCompletion(context.Context, otogi.EventID) (<-chan otogi.EventID, error)
+}
+
+var _ driverFacingAdmitter = (*Kernel)(nil)
+
 func TestTrustedAdmissionCompletesAfterAllInterestedModules(t *testing.T) {
 	firstDone := make(chan struct{})
 	releaseSecond := make(chan struct{})
 	first := newTestModule(t, "a", "message", func(context.Context, otogi.Event, otogi.Invocation) otogi.Result {
+
 		close(firstDone)
 		return otogi.NewSucceededResult()
 	})
@@ -43,14 +51,14 @@ func TestTrustedAdmissionCompletesAfterAllInterestedModules(t *testing.T) {
 	<-firstDone
 	select {
 	case completion := <-completions:
-		t.Fatalf("completion before all modules finished: %q", completion.EventID().String())
+		t.Fatalf("completion before all modules finished: %q", completion.String())
 	default:
 	}
 	close(releaseSecond)
 	select {
 	case completion := <-completions:
-		if completion.EventID() != id {
-			t.Fatalf("completion ID = %q, want %q", completion.EventID().String(), id.String())
+		if completion != id {
+			t.Fatalf("completion ID = %q, want %q", completion.String(), id.String())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for completion")
@@ -110,8 +118,8 @@ func TestTrustedAdmissionRejectsActiveDuplicateAndAllowsReplayAfterCompletion(t 
 	release <- struct{}{}
 	select {
 	case completion := <-second:
-		if completion.EventID() != id {
-			t.Fatalf("replay completion ID = %q", completion.EventID().String())
+		if completion != id {
+			t.Fatalf("replay completion ID = %q", completion.String())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for replay completion")
@@ -226,8 +234,8 @@ func TestTrustedAdmissionCompletesValidUnroutedAction(t *testing.T) {
 	}
 	select {
 	case got := <-completion:
-		if got.EventID() != id {
-			t.Fatalf("completion ID = %q", got.EventID().String())
+		if got != id {
+			t.Fatalf("completion ID = %q", got.String())
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for unrouted completion")
@@ -263,6 +271,98 @@ func TestOrdinarySubmitRejectsActiveTrustedIDCollision(t *testing.T) {
 		t.Fatalf("colliding Submit() error = %v, want ErrInvalidState", err)
 	}
 	close(release)
+	if err := k.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompletionReservationBlocksOrdinaryIDAndActiveIDBlocksSubscription(t *testing.T) {
+	release := make(chan struct{})
+	module := newTestModule(t, "module", "message", func(ctx context.Context, _ otogi.Event, _ otogi.Invocation) otogi.Result {
+		select {
+		case <-release:
+			return otogi.NewSucceededResult()
+		case <-ctx.Done():
+			return otogi.NewCanceledResult(ctx.Err())
+		}
+	})
+	k := startedKernel(t, module)
+	generated, _ := otogi.NewEventID("evt_000000000000000000000000000000000000000000000001")
+	reserved, err := k.SubscribeCompletion(context.Background(), generated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Submit(context.Background(), newTestInput(t, "message", "ordinary")); !errors.Is(err, otogi.ErrInvalidState) {
+		t.Fatalf("Submit with reserved generated ID error = %v, want ErrInvalidState", err)
+	}
+	if err := k.SubmitTrusted(context.Background(), generated, newTestInput(t, "message", "trusted")); err != nil {
+		t.Fatal(err)
+	}
+	waitForCalls(t, module, 1)
+	other, _ := otogi.NewEventID("other-active")
+	if err := k.SubmitTrusted(context.Background(), other, newTestInput(t, "message", "other")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.SubscribeCompletion(context.Background(), other); !errors.Is(err, otogi.ErrInvalidState) {
+		t.Fatalf("SubscribeCompletion active ID error = %v, want ErrInvalidState", err)
+	}
+	close(release)
+	select {
+	case <-reserved:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reserved completion")
+	}
+	if err := k.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStopClosesCompletionWithoutAcknowledgingCanceledDelivery(t *testing.T) {
+	started := make(chan struct{})
+	module := newTestModule(t, "module", "message", func(ctx context.Context, _ otogi.Event, _ otogi.Invocation) otogi.Result {
+		close(started)
+		<-ctx.Done()
+		return otogi.NewCanceledResult(ctx.Err())
+	})
+	k := startedKernel(t, module)
+	id, _ := otogi.NewEventID("canceled-delivery")
+	completion, err := k.SubscribeCompletion(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.SubmitTrusted(context.Background(), id, newTestInput(t, "message", "payload")); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := k.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, open := <-completion; open {
+		t.Fatalf("shutdown acknowledged canceled delivery %q", got.String())
+	}
+}
+
+func TestCanceledModuleResultClosesCompletionWithoutAcknowledgement(t *testing.T) {
+	module := newTestModule(t, "module", "message", func(context.Context, otogi.Event, otogi.Invocation) otogi.Result {
+		return otogi.NewCanceledResult(context.Canceled)
+	})
+	k := startedKernel(t, module)
+	id, _ := otogi.NewEventID("canceled-result")
+	completion, err := k.SubscribeCompletion(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.SubmitTrusted(context.Background(), id, newTestInput(t, "message", "payload")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got, open := <-completion:
+		if open {
+			t.Fatalf("canceled result acknowledged %q", got.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled subscription closure")
+	}
 	if err := k.Drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}

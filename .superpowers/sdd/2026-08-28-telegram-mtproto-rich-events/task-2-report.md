@@ -6,10 +6,10 @@ Status: complete
 
 - Routes valid rich events by exact `EventAction`; valid actions without subscribers complete with no deliveries.
 - Preserves the complete rich `EventInput` projection presented to modules.
-- Adds narrow `kernel.TrustedAdmitter` deterministic-ID admission while ordinary `Submit` retains kernel-generated IDs.
-- Rejects duplicate active IDs across trusted and ordinary admission paths and permits replay after completion.
+- Adds narrow `kernel.TrustedAdmitter` deterministic-ID admission using only `pkg/otogi` values in its method signatures, while ordinary `Submit` retains kernel-generated IDs.
+- Completion subscriptions atomically reserve their `EventID`; ordinary admission cannot consume a reservation, trusted admission consumes it, and active/reserved duplicates are rejected.
 - Adds bounded, cancelable, one-shot volatile completion subscriptions keyed by `EventID`.
-- Emits completion only after every interested module finishes; cancellation and shutdown close subscriptions without blocking routing.
+- Emits completion only after every interested module finishes successfully enough to acknowledge; canceled results, routing cancellation, and shutdown close subscriptions without a value so durable callers replay.
 - Preserves at-least-once replay and stable idempotency derivation from the trusted runtime ID.
 
 ## Verification
@@ -21,7 +21,7 @@ Both commands passed on 2026-08-28. `make quality` covered formatting, lint/docc
 
 ## Review
 
-A focused reviewer found one important cross-path active-ID collision. A regression test reproduced it, the common admission path now rejects every active ID collision, and the kernel race and full quality gates passed afterward.
+A focused review found cross-path ID collisions, reservation ownership, package-boundary, and cancellation acknowledgement defects. Regression tests reproduced each issue; the common admission path now rejects active collisions, subscription reservations are atomic, the channel carries `otogi.EventID`, and canceled routing cannot acknowledge. Kernel race and full quality gates passed afterward.
 
 ## Concerns
 

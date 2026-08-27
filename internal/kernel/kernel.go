@@ -110,7 +110,7 @@ func (k *Kernel) Submit(ctx context.Context, input otogi.EventInput) (otogi.Even
 	if err != nil {
 		return otogi.EventID{}, fmt.Errorf("submit event ID: %w", err)
 	}
-	if err := k.admitLocked(id, input); err != nil {
+	if err := k.admitLocked(id, input, false); err != nil {
 		return otogi.EventID{}, err
 	}
 	return id, nil
@@ -129,15 +129,18 @@ func (k *Kernel) SubmitTrusted(ctx context.Context, id otogi.EventID, input otog
 	if k.state != stateReady {
 		return fmt.Errorf("submit trusted event: %w", otogi.ErrInvalidState)
 	}
-	return k.admitLocked(id, input)
+	return k.admitLocked(id, input, true)
 }
 
-func (k *Kernel) admitLocked(id otogi.EventID, input otogi.EventInput) error {
+func (k *Kernel) admitLocked(id otogi.EventID, input otogi.EventInput, trusted bool) error {
 	if input.Action().String() == "" {
 		return fmt.Errorf("submit event action: %w", otogi.ErrInvalid)
 	}
 	if _, exists := k.active[id]; exists {
 		return fmt.Errorf("submit event duplicate: %w", otogi.ErrInvalidState)
+	}
+	if _, reserved := k.completions[id]; reserved && !trusted {
+		return fmt.Errorf("submit event reserved ID: %w", otogi.ErrInvalidState)
 	}
 	select {
 	case k.queue <- event{id: id, input: input}:
@@ -285,6 +288,7 @@ func (k *Kernel) run() {
 }
 
 func (k *Kernel) route(ctx context.Context, admitted event) {
+	acknowledge := true
 	for _, module := range k.modules {
 		interested := false
 		for _, action := range module.Descriptor().Consumes() {
@@ -300,6 +304,9 @@ func (k *Kernel) route(ctx context.Context, admitted event) {
 		invocation := newInvocation(ctx, k.messenger, admitted, moduleID)
 		result, report := invokeModule(ctx, module, admitted, invocation)
 		result = validModuleResult(result)
+		if result.Status() == otogi.ResultCanceled {
+			acknowledge = false
+		}
 		k.mu.Lock()
 		if report != nil {
 			k.panics = appendBounded(k.panics, *report)
@@ -307,7 +314,7 @@ func (k *Kernel) route(ctx context.Context, admitted event) {
 		k.deliveries = appendBounded(k.deliveries, Delivery{eventID: admitted.ID(), moduleID: moduleID, status: result.Status(), err: stableError(result.Err())})
 		k.mu.Unlock()
 	}
-	k.complete(admitted.ID())
+	k.complete(admitted.ID(), acknowledge && ctx.Err() == nil)
 }
 
 func invokeModule(ctx context.Context, module otogi.Module, admitted event, invocation *invocation) (result otogi.Result, report *PanicReport) {

@@ -12,23 +12,17 @@ type TrustedAdmitter interface {
 	// SubmitTrusted admits one event with a trusted deterministic runtime ID.
 	SubmitTrusted(context.Context, otogi.EventID, otogi.EventInput) error
 	// SubscribeCompletion observes volatile completion for one runtime event attempt.
-	SubscribeCompletion(context.Context, otogi.EventID) (<-chan Completion, error)
+	SubscribeCompletion(context.Context, otogi.EventID) (<-chan otogi.EventID, error)
 }
 
-// Completion acknowledges that all interested modules finished one volatile event attempt.
-type Completion struct{ eventID otogi.EventID }
-
-// EventID returns the completed runtime event identifier.
-func (c Completion) EventID() otogi.EventID { return c.eventID }
-
 type completionSubscription struct {
-	channel chan Completion
+	channel chan otogi.EventID
 	stop    func() bool
 }
 
 // SubscribeCompletion registers one bounded, cancelable completion observer for id.
 // The subscription is volatile: callers must subscribe before admission and replay after acknowledgement loss.
-func (k *Kernel) SubscribeCompletion(ctx context.Context, id otogi.EventID) (<-chan Completion, error) {
+func (k *Kernel) SubscribeCompletion(ctx context.Context, id otogi.EventID) (<-chan otogi.EventID, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -44,11 +38,15 @@ func (k *Kernel) SubscribeCompletion(ctx context.Context, id otogi.EventID) (<-c
 		k.mu.Unlock()
 		return nil, fmt.Errorf("subscribe completion: %w", otogi.ErrCapacity)
 	}
+	if _, exists := k.active[id]; exists {
+		k.mu.Unlock()
+		return nil, fmt.Errorf("subscribe completion active: %w", otogi.ErrInvalidState)
+	}
 	if _, exists := k.completions[id]; exists {
 		k.mu.Unlock()
 		return nil, fmt.Errorf("subscribe completion duplicate: %w", otogi.ErrInvalidState)
 	}
-	channel := make(chan Completion, 1)
+	channel := make(chan otogi.EventID, 1)
 	subscription := &completionSubscription{channel: channel}
 	k.completions[id] = subscription
 	subscription.stop = context.AfterFunc(ctx, func() { k.cancelCompletion(id, subscription) })
@@ -65,13 +63,15 @@ func (k *Kernel) cancelCompletion(id otogi.EventID, subscription *completionSubs
 	}
 }
 
-func (k *Kernel) complete(id otogi.EventID) {
+func (k *Kernel) complete(id otogi.EventID, acknowledge bool) {
 	k.mu.Lock()
 	delete(k.active, id)
 	if subscription, exists := k.completions[id]; exists {
 		delete(k.completions, id)
 		subscription.stop()
-		subscription.channel <- Completion{eventID: id}
+		if acknowledge {
+			subscription.channel <- id
+		}
 		close(subscription.channel)
 	}
 	k.mu.Unlock()
