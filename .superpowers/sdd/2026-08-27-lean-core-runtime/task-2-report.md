@@ -19,6 +19,8 @@ Lean public contracts are implemented under `pkg/otogi` with private immutable v
 - Review fix red: adding a temporary exported `EventSink` made `TestPublicAPIHasOnlyLeanContracts` fail with the unexpected export.
 - Review fix red: adding a temporary method to `Event` made `TestPublicInterfacesHaveExactMethodShapes/Event` fail with `has 15 methods, want 14`.
 - Review fix green: focused API allowlist/interface-shape tests, full package unit tests, and uncached race tests passed after removing both mutations.
+- Follow-up red: adding a temporary exported `EventInputParams.Diagnostics` field made `TestPublicAPIHasOnlyLeanContracts` fail with that unexpected qualified field.
+- Follow-up green: the allowlist now includes every intentional exported struct field as `Type.Field`; focused, full unit, and uncached race tests passed after removing the mutation.
 
 ## Module normalization
 

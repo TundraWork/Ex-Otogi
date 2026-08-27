@@ -26,12 +26,20 @@ func TestPublicAPIHasOnlyLeanContracts(t *testing.T) {
 		EventIDGenerator.Next EventInput EventInput.Account EventInput.Actor EventInput.CausalEventID
 		EventInput.Conversation EventInput.IngestedAt EventInput.Kind EventInput.OccurredAt
 		EventInput.Platform EventInput.SchemaVersion EventInput.SourceEventID EventInput.Tenant
-		EventInput.Text EventInput.TraceID EventInputParams EventKind EventKind.String
+		EventInput.Text EventInput.TraceID EventInputParams EventInputParams.Account
+		EventInputParams.Actor EventInputParams.CausalEventID EventInputParams.Conversation
+		EventInputParams.IngestedAt EventInputParams.Kind EventInputParams.OccurredAt
+		EventInputParams.Platform EventInputParams.SchemaVersion EventInputParams.SourceEventID
+		EventInputParams.Tenant EventInputParams.Text EventInputParams.TraceID EventKind EventKind.String
 		IdempotencyKey IdempotencyKey.String Invocation Messenger Module ModuleDescriptor
 		ModuleDescriptor.Consumes ModuleDescriptor.ID ModuleID ModuleID.String OutboundMessage
 		OutboundMessage.Account OutboundMessage.Conversation OutboundMessage.IdempotencyKey
 		OutboundMessage.OriginatingEvent OutboundMessage.OriginatingModule OutboundMessage.Platform
-		OutboundMessage.Tenant OutboundMessage.Text OutboundMessageParams PlatformID PlatformID.String
+		OutboundMessage.Tenant OutboundMessage.Text OutboundMessageParams
+		OutboundMessageParams.Account OutboundMessageParams.Conversation
+		OutboundMessageParams.IdempotencyKey OutboundMessageParams.OriginatingEvent
+		OutboundMessageParams.OriginatingModule OutboundMessageParams.Platform
+		OutboundMessageParams.Tenant OutboundMessageParams.Text PlatformID PlatformID.String
 		Result Result.Err Result.Status ResultStatus SourceEventID SourceEventID.String TenantID
 		TenantID.String Text Text.String TraceID TraceID.String
 		ErrCapacity ErrInvalid ErrInvalidState ErrModulePanic ErrUnavailable
@@ -135,8 +143,18 @@ func exportedPackageNames() ([]string, error) {
 				for _, specification := range declaration.Specs {
 					switch specification := specification.(type) {
 					case *ast.TypeSpec:
-						if ast.IsExported(specification.Name.Name) {
-							names = append(names, specification.Name.Name)
+						if !ast.IsExported(specification.Name.Name) {
+							continue
+						}
+						names = append(names, specification.Name.Name)
+						if structure, ok := specification.Type.(*ast.StructType); ok {
+							for _, field := range structure.Fields.List {
+								for _, fieldName := range field.Names {
+									if ast.IsExported(fieldName.Name) {
+										names = append(names, specification.Name.Name+"."+fieldName.Name)
+									}
+								}
+							}
 						}
 					case *ast.ValueSpec:
 						for _, name := range specification.Names {
