@@ -14,6 +14,8 @@ The current executable work is an **experimental, non-conforming vertical slice*
 
 Commands introduced for this slice are milestone gates only. They MUST NOT be named or documented as satisfying deferred persistence, authenticated management, security scanning, telemetry, backup/restore, SBOM, signature, provenance, or release-verification requirements.
 
+The implemented event bridge and its exact milestone commands are documented in [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md).
+
 ## Scope
 
 This suite specifies the core runtime, its statically linked extensions, platform adapters, operator boundary, engineering system, and single-node operations.

@@ -12,6 +12,8 @@ Generated files record their generator and are reproducible from source. The gat
 
 Until the implementation satisfies the full product boundary, commands introduced for the experimental vertical slice are milestone gates only, not the full release gate. They MUST NOT report deferred functionality as passing or be represented as satisfying the complete `quality` or `release-verify` contracts below. Every requirement in this document remains binding before a production-ready or conforming release claim.
 
+The current milestone implements `make format`, `make fmt-check`, `make lint`, `make arch-check`, `make test`, `make test-race`, `make test-leak`, `make smoke`, and `make quality`. `quality` aggregates all of these except the mutating `format` target. Their operator contract and deferred scope are recorded in [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md); names in the stable-command table below that are absent from this list remain release requirements, not implemented targets.
+
 ## Stable commands
 
 The implementation repository provides discoverable, non-interactive commands with these contracts:
