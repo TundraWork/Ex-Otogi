@@ -1,9 +1,11 @@
 package otogi
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
 )
 
 func readFixture[T any](t *testing.T, name string) T {
@@ -47,6 +49,12 @@ func TestTelegramEntityMediaReplyCorpus(t *testing.T) {
 	if err != nil || len(message.Parts()) != 2 || message.Relations()[0].Kind() != RelationReply {
 		t.Fatalf("telegram corpus: %v", err)
 	}
+	gotMedia, _ := message.Part(mediaID)
+	metadata, _ := gotMedia.Media()
+	gotLocator, ok := metadata.Source().OpaqueLocator()
+	if !ok || !bytes.Equal(gotLocator.Data(), []byte(fixture.MediaLocator)) {
+		t.Fatal("Telegram media locator bytes changed")
+	}
 }
 
 func TestMatrixReplacementCorpus(t *testing.T) {
@@ -67,22 +75,30 @@ func TestMatrixReplacementCorpus(t *testing.T) {
 
 func TestDiscordComponentAndRedactedCorpus(t *testing.T) {
 	fixture := readFixture[struct{ Completeness, Component, Opaque string }](t, "discord")
-	if fixture.Completeness != "redacted" {
-		t.Fatal("fixture lost completeness")
-	}
-	codec := mustRichExtension(t, "https://discord.com/components", fixture.Component, []byte(fixture.Opaque))
-	id := mustRichPartID(t, "component")
-	part, _ := NewTypedPart(id, PartInteractive, codec, nil, nil)
-	message, err := NewMessage([]PartID{id}, []Part{part}, nil, nil)
+	rootID, childID := mustRichPartID(t, "row"), mustRichPartID(t, "button")
+	rowValue, _ := NewInteractive(InteractiveParams{Layout: "row"})
+	buttonValue, _ := NewInteractive(InteractiveParams{Layout: "button", ActionID: "click", Label: fixture.Component})
+	row, _ := NewInteractivePart(rootID, rowValue, []PartID{childID}, nil)
+	buttonExtension := mustRichExtension(t, "https://discord.com/components", fixture.Component, []byte(fixture.Opaque))
+	button, _ := NewInteractivePart(childID, buttonValue, nil, []Extension{buttonExtension})
+	message, err := NewMessage([]PartID{rootID}, []Part{row, button}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, ok := message.Parts()[0].Value()
-	if !ok || value.LocalName() != "button" {
-		t.Fatal("discord component not represented")
+	children := message.Parts()[0].Children()
+	if len(children) != 1 || children[0] != childID || message.Parts()[1].ID() != childID {
+		t.Fatal("Discord component tree/order changed")
 	}
-	if _, err := NewMessage(nil, nil, nil, nil); err != nil {
-		t.Fatalf("redacted empty message: %v", err)
+	empty, _ := NewMessage(nil, nil, nil, nil)
+	platform, _ := NewPlatformID("discord")
+	account, _ := NewAccountID("bot")
+	tenant, _ := NewTenantID("tenant")
+	conversation, _ := NewConversationID("channel")
+	source, _ := NewSourceEventID("redacted")
+	now := time.Date(2026, 8, 28, 0, 0, 0, 0, time.UTC)
+	redacted, err := NewEventInput(EventInputParams{Platform: platform, Account: account, Tenant: tenant, Conversation: conversation, SourceEventID: source, Action: ActionMessageCreated, Direction: DirectionIncoming, OccurredAt: now, IngestedAt: now, Completeness: Completeness(fixture.Completeness), Message: empty})
+	if err != nil || redacted.Completeness() != CompletenessRedacted || len(redacted.Message().Parts()) != 0 {
+		t.Fatalf("Discord redacted event: %v", err)
 	}
 }
 
@@ -105,8 +121,8 @@ func TestMIMEContentIDTreeCorpus(t *testing.T) {
 	fixture := readFixture[struct{ Roots, Children []string }](t, "mime")
 	rootID := mustRichPartID(t, fixture.Roots[0])
 	childIDs := []PartID{mustRichPartID(t, fixture.Children[0]), mustRichPartID(t, fixture.Children[1])}
-	codec := mustRichExtension(t, "https://www.rfc-editor.org/rfc/rfc2046", "multipart", []byte("mixed"))
-	root, _ := NewTypedPart(rootID, PartEmbeddedMessage, codec, childIDs, nil)
+	embedded, _ := NewEmbeddedMessage(EmbeddedMessageParams{Summary: "multipart/mixed", Reference: fixture.Roots[0]})
+	root, _ := NewEmbeddedMessagePart(rootID, embedded, childIDs, nil)
 	left, _ := NewTextPart(childIDs[0], "a", nil, nil, nil)
 	right, _ := NewTextPart(childIDs[1], "b", nil, nil, nil)
 	message, err := NewMessage([]PartID{rootID}, []Part{root, left, right}, nil, nil)
@@ -126,10 +142,10 @@ func TestQQOrderedReplyForwardOpaqueCorpus(t *testing.T) {
 		roots[i] = mustRichPartID(t, name)
 		if name == "text" {
 			parts[i], _ = NewTextPart(roots[i], "hello", nil, nil, nil)
-			continue
+		} else {
+			codec := mustRichExtension(t, "https://im.qq.com/elements", name, []byte(name))
+			parts[i], _ = NewOpaquePart(roots[i], codec, nil, nil)
 		}
-		codec := mustRichExtension(t, "https://im.qq.com/elements", name, []byte(name))
-		parts[i], _ = NewOpaquePart(roots[i], codec, nil, nil)
 	}
 	platform, _ := NewPlatformID("qq")
 	account, _ := NewAccountID("bot")

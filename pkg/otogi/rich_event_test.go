@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const compileTimeCoreAction EventAction = ActionMessageCreated
+
 func TestEventInputOwnsRichEnvelope(t *testing.T) {
 	message := mustTextMessage(t, "body")
 	extension := mustEnvelopeExtension(t, "https://example.test/envelope", []byte{1, 2, 3})
@@ -68,7 +70,7 @@ func TestEventInputCompletenessControlsEmptyMessage(t *testing.T) {
 }
 
 func TestEventActionValidation(t *testing.T) {
-	for _, action := range []EventAction{ActionMessageCreated, ActionMessageEdited, ActionMessageDeleted, ActionMessageService} {
+	for _, action := range []EventAction{compileTimeCoreAction, ActionMessageEdited, ActionMessageDeleted, ActionMessageService} {
 		if _, err := NewEventAction(action.String()); err != nil {
 			t.Fatalf("core action %q: %v", action, err)
 		}
@@ -81,6 +83,18 @@ func TestEventActionValidation(t *testing.T) {
 		if _, err := NewEventAction(value); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("action %q: %v", value, err)
 		}
+	}
+}
+func TestContractsRejectUnvalidatedDirectEventActions(t *testing.T) {
+	invalid := EventAction("message.unknown")
+	p := richEventInputParams(t, mustTextMessage(t, "body"))
+	p.Action = invalid
+	if _, err := NewEventInput(p); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("event input direct action: %v", err)
+	}
+	id := mustValue(t, NewModuleID, "module")
+	if _, err := NewModuleDescriptor(id, []EventAction{invalid}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("module descriptor direct action: %v", err)
 	}
 }
 

@@ -100,7 +100,7 @@ func TestEventInputRejectsInvalidRequiredFields(t *testing.T) {
 	mutations := []func(*EventInputParams){
 		func(p *EventInputParams) { p.Platform = PlatformID{} }, func(p *EventInputParams) { p.Account = AccountID{} },
 		func(p *EventInputParams) { p.Tenant = TenantID{} }, func(p *EventInputParams) { p.Conversation = ConversationID{} },
-		func(p *EventInputParams) { p.Action = EventAction{} }, func(p *EventInputParams) { p.Direction = Direction("") },
+		func(p *EventInputParams) { p.Action = "" }, func(p *EventInputParams) { p.Direction = Direction("") },
 		func(p *EventInputParams) { p.OccurredAt = time.Time{} }, func(p *EventInputParams) { p.IngestedAt = time.Time{} },
 		func(p *EventInputParams) { p.OccurredAt = p.IngestedAt.Add(time.Second) }, func(p *EventInputParams) { p.Message = Message{} },
 	}

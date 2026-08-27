@@ -203,6 +203,66 @@ func TestMessageRejectsMalformedGraphsAndPreservesOrder(t *testing.T) {
 		t.Fatalf("cycle: %v", err)
 	}
 }
+func TestMessageRejectsMalformedOwnedValues(t *testing.T) {
+	id := mustRichPartID(t, "text")
+	part, err := NewTextPart(id, "hello", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewMessage([]PartID{id}, []Part{part}, []Relation{{}}, nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero relation: %v", err)
+	}
+	if _, err := NewMessage([]PartID{id}, []Part{part}, nil, []Extension{{}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero extension: %v", err)
+	}
+}
+
+func TestMessageRequiresRootsAndReachability(t *testing.T) {
+	a := mustRichPartID(t, "a")
+	b := mustRichPartID(t, "b")
+	pa, _ := NewTextPart(a, "a", nil, nil, nil)
+	pb, _ := NewTextPart(b, "b", nil, nil, nil)
+	if _, err := NewMessage(nil, []Part{pa}, nil, nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unrooted graph: %v", err)
+	}
+	if _, err := NewMessage([]PartID{a}, []Part{pa, pb}, nil, nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("disconnected part: %v", err)
+	}
+}
+
+func TestEventInputRejectsMalformedEnvelopeExtension(t *testing.T) {
+	p := richEventInputParams(t, mustTextMessage(t, "body"))
+	p.Extensions = []Extension{{}}
+	if _, err := NewEventInput(p); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("zero envelope extension: %v", err)
+	}
+}
+func TestMessageChargesRootCollectionMetadata(t *testing.T) {
+	const count = 16
+	ids := make([]PartID, count)
+	parts := make([]Part, count)
+	fixedWithoutRoots := count * 16
+	for i := range count {
+		ids[i] = mustRichPartID(t, fmt.Sprintf("root-%02d", i))
+		fixedWithoutRoots += len(ids[i].String()) + len(string(PartText))
+	}
+	remainingText := maxNormalizedMetadata - fixedWithoutRoots - 1
+	for i := range count {
+		length := 64 * 1024
+		if remainingText < length {
+			length = remainingText
+		}
+		remainingText -= length
+		parts[i], _ = NewTextPart(ids[i], strings.Repeat("x", length), nil, nil, nil)
+	}
+	if remainingText != 0 {
+		t.Fatalf("fixture left %d bytes", remainingText)
+	}
+	if _, err := NewMessage(ids, parts, nil, nil); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("root collection overhead omitted: %v", err)
+	}
+}
+
 func TestMessageRejectsLeafFirstDepthOverflow(t *testing.T) {
 	parts := make([]Part, 17)
 	ids := make([]PartID, 17)

@@ -9,38 +9,43 @@ import (
 )
 
 // EventAction identifies an event lifecycle action used for routing.
-type EventAction struct{ value string }
+type EventAction string
 
-var (
+const (
 	// ActionMessageCreated identifies a newly created message.
-	ActionMessageCreated = EventAction{value: "message.created"}
+	ActionMessageCreated EventAction = "message.created"
 	// ActionMessageEdited identifies an edited message.
-	ActionMessageEdited = EventAction{value: "message.edited"}
+	ActionMessageEdited EventAction = "message.edited"
 	// ActionMessageDeleted identifies a deleted message.
-	ActionMessageDeleted = EventAction{value: "message.deleted"}
+	ActionMessageDeleted EventAction = "message.deleted"
 	// ActionMessageService identifies a protocol service message.
-	ActionMessageService = EventAction{value: "message.service"}
+	ActionMessageService EventAction = "message.service"
 )
 
 // NewEventAction validates a core action or an absolute namespaced action.
 func NewEventAction(value string) (EventAction, error) {
-	if value == "" || len(value) > 512 || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
-		return EventAction{}, fmt.Errorf("event action: %w", ErrInvalid)
+	action := EventAction(value)
+	if !validEventAction(action) {
+		return "", fmt.Errorf("event action: %w", ErrInvalid)
 	}
-	for _, core := range []EventAction{ActionMessageCreated, ActionMessageEdited, ActionMessageDeleted, ActionMessageService} {
-		if value == core.value {
-			return core, nil
-		}
+	return action, nil
+}
+
+func validEventAction(action EventAction) bool {
+	value := string(action)
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	switch action {
+	case ActionMessageCreated, ActionMessageEdited, ActionMessageDeleted, ActionMessageService:
+		return true
 	}
 	parsed, err := url.Parse(value)
-	if err != nil || !parsed.IsAbs() {
-		return EventAction{}, fmt.Errorf("event action: %w", ErrInvalid)
-	}
-	return EventAction{value: value}, nil
+	return err == nil && parsed.IsAbs()
 }
 
 // String returns the exact validated action.
-func (a EventAction) String() string { return a.value }
+func (a EventAction) String() string { return string(a) }
 
 // Direction identifies protocol-defined event flow.
 type Direction string
@@ -130,7 +135,7 @@ type EventInput struct {
 // NewEventInput validates context and defensively owns rich envelope data.
 func NewEventInput(p EventInputParams) (EventInput, error) {
 	occurred, ingested, edited := p.OccurredAt.UTC().Round(0), p.IngestedAt.UTC().Round(0), p.EditedAt.UTC().Round(0)
-	if p.Platform.value == "" || p.Account.value == "" || p.Tenant.value == "" || p.Conversation.value == "" || p.Action.value == "" || !validDirection(p.Direction) || !validCompleteness(p.Completeness) || p.OccurredAt.IsZero() || p.IngestedAt.IsZero() || occurred.After(ingested) || (!p.EditedAt.IsZero() && edited.Before(occurred)) || len(p.Extensions) > maxOwnerExtensions {
+	if p.Platform.value == "" || p.Account.value == "" || p.Tenant.value == "" || p.Conversation.value == "" || !validEventAction(p.Action) || !validDirection(p.Direction) || !validCompleteness(p.Completeness) || p.OccurredAt.IsZero() || p.IngestedAt.IsZero() || occurred.After(ingested) || (!p.EditedAt.IsZero() && edited.Before(occurred)) || len(p.Extensions) > maxOwnerExtensions {
 		return EventInput{}, fmt.Errorf("event input: %w", ErrInvalid)
 	}
 	if len(p.Message.parts) == 0 && p.Completeness == CompletenessComplete {
@@ -138,6 +143,11 @@ func NewEventInput(p EventInputParams) (EventInput, error) {
 	}
 	if len(p.Message.parts) == 0 && p.SourceEventID.value == "" && p.ProviderLocator.NamespaceURI() == "" {
 		return EventInput{}, fmt.Errorf("event input source proof: %w", ErrInvalid)
+	}
+	for _, extension := range p.Extensions {
+		if !validExtension(extension) {
+			return EventInput{}, fmt.Errorf("event input extension: %w", ErrInvalid)
+		}
 	}
 	if err := validateEventAggregates(p.Message, p.Extensions, p.ProviderLocator); err != nil {
 		return EventInput{}, fmt.Errorf("event input aggregates: %w", err)

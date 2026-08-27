@@ -19,7 +19,7 @@ func NewModuleDescriptor(id ModuleID, consumes []EventAction) (ModuleDescriptor,
 	owned := make([]EventAction, len(consumes))
 	seen := make(map[EventAction]struct{}, len(consumes))
 	for i, action := range consumes {
-		if action.value == "" {
+		if !validEventAction(action) {
 			return ModuleDescriptor{}, fmt.Errorf("module descriptor: %w", ErrInvalid)
 		}
 		if _, exists := seen[action]; exists {

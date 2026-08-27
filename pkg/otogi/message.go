@@ -1,6 +1,9 @@
 package otogi
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 const (
 	maxMessageParts        = 256
@@ -28,11 +31,17 @@ func NewMessage(roots []PartID, parts []Part, relations []Relation, extensions [
 	if len(parts) > maxMessageParts || len(relations) > maxMessageRelations || len(extensions) > 64 {
 		return Message{}, fmt.Errorf("message owner limits: %w", ErrCapacity)
 	}
-	if err := validateAggregates(parts, relations, extensions); err != nil {
-		return Message{}, err
-	}
 	if len(roots) > maxMessageParts {
 		return Message{}, fmt.Errorf("message roots: %w", ErrCapacity)
+	}
+	if len(parts) != 0 && len(roots) == 0 {
+		return Message{}, fmt.Errorf("message roots: %w", ErrInvalid)
+	}
+	if err := validateOwnedValues(parts, relations, extensions); err != nil {
+		return Message{}, err
+	}
+	if err := validateAggregates(roots, parts, relations, extensions); err != nil {
+		return Message{}, err
 	}
 	index := make(map[PartID]int, len(parts))
 	for i, part := range parts {
@@ -60,6 +69,23 @@ func NewMessage(roots []PartID, parts []Part, relations []Relation, extensions [
 				return Message{}, fmt.Errorf("missing child: %w", ErrInvalid)
 			}
 		}
+	}
+	reachable := make(map[PartID]struct{}, len(parts))
+	var markReachable func(PartID)
+	markReachable = func(id PartID) {
+		if _, seen := reachable[id]; seen {
+			return
+		}
+		reachable[id] = struct{}{}
+		for _, child := range parts[index[id]].children {
+			markReachable(child)
+		}
+	}
+	for _, root := range roots {
+		markReachable(root)
+	}
+	if len(reachable) != len(parts) {
+		return Message{}, fmt.Errorf("message disconnected part: %w", ErrInvalid)
 	}
 	if err := validateDAG(parts, index); err != nil {
 		return Message{}, err
@@ -137,15 +163,15 @@ func validateDAG(parts []Part, index map[PartID]int) error {
 	return nil
 }
 
-func validateAggregates(parts []Part, relations []Relation, messageExtensions []Extension) error {
-	return validateAggregateInputs(parts, relations, messageExtensions, nil, ProviderLocator{})
+func validateAggregates(roots []PartID, parts []Part, relations []Relation, messageExtensions []Extension) error {
+	return validateAggregateInputs(roots, parts, relations, messageExtensions, nil, ProviderLocator{})
 }
 
 func validateEventAggregates(message Message, envelope []Extension, locator ProviderLocator) error {
-	return validateAggregateInputs(message.parts, message.relations, message.extensions, envelope, locator)
+	return validateAggregateInputs(message.roots, message.parts, message.relations, message.extensions, envelope, locator)
 }
 
-func validateAggregateInputs(parts []Part, relations []Relation, messageExtensions, envelope []Extension, locator ProviderLocator) error {
+func validateAggregateInputs(roots []PartID, parts []Part, relations []Relation, messageExtensions, envelope []Extension, locator ProviderLocator) error {
 	annotations, hashes, extensionCount := 0, 0, 0
 	var extensionBytes, metadata, inlineBytes uint64
 	add := func(dst *uint64, n uint64) bool {
@@ -168,7 +194,7 @@ func validateAggregateInputs(parts []Part, relations []Relation, messageExtensio
 		}
 		return add(&metadata, uint64(len(values))*16)
 	}
-	if len(relations) > 256 || !chargeExtensions(messageExtensions) || !chargeExtensions(envelope) || !add(&metadata, uint64(len(parts)+len(relations)+len(envelope))*16) || !add(&metadata, uint64(len(locator.data))) || !chargeString(locator.namespaceURI) {
+	if len(relations) > 256 || !chargeExtensions(messageExtensions) || !chargeExtensions(envelope) || !add(&metadata, uint64(len(roots)+len(parts)+len(relations)+len(envelope))*16) || !add(&metadata, uint64(len(locator.data))) || !chargeString(locator.namespaceURI) {
 		return fmt.Errorf("message aggregate: %w", ErrCapacity)
 	}
 	for _, part := range parts {
@@ -207,7 +233,33 @@ func validateAggregateInputs(parts []Part, relations []Relation, messageExtensio
 				return fmt.Errorf("message metadata: %w", ErrCapacity)
 			}
 		}
-		if typedPartKind(part.kind) || part.kind == PartOpaque {
+		switch part.kind {
+		case PartLocation:
+			if !chargeString(part.location.label) {
+				return fmt.Errorf("location metadata: %w", ErrCapacity)
+			}
+		case PartContact:
+			if !chargeString(part.contact.displayName) || !chargeString(part.contact.address) {
+				return fmt.Errorf("contact metadata: %w", ErrCapacity)
+			}
+		case PartPoll:
+			if !chargeString(part.poll.question) || !add(&metadata, uint64(len(part.poll.options))*16) {
+				return fmt.Errorf("poll metadata: %w", ErrCapacity)
+			}
+			for _, option := range part.poll.options {
+				if !chargeString(option) {
+					return fmt.Errorf("poll metadata: %w", ErrCapacity)
+				}
+			}
+		case PartInteractive:
+			if !chargeString(part.interactive.layout) || !chargeString(part.interactive.actionID) || !chargeString(part.interactive.label) {
+				return fmt.Errorf("interactive metadata: %w", ErrCapacity)
+			}
+		case PartEmbeddedMessage:
+			if !chargeString(part.embeddedMessage.summary) || !chargeString(part.embeddedMessage.reference) {
+				return fmt.Errorf("embedded message metadata: %w", ErrCapacity)
+			}
+		case PartOpaque:
 			if !chargeExtensions([]Extension{part.value}) {
 				return fmt.Errorf("message value: %w", ErrCapacity)
 			}
@@ -220,6 +272,53 @@ func validateAggregateInputs(parts []Part, relations []Relation, messageExtensio
 	}
 	if extensionBytes > maxTotalExtensionBytes || metadata > maxNormalizedMetadata || inlineBytes > maxInlineMediaBytes {
 		return fmt.Errorf("message aggregate: %w", ErrCapacity)
+	}
+	return nil
+}
+func validateOwnedValues(parts []Part, relations []Relation, messageExtensions []Extension) error {
+	for _, extension := range messageExtensions {
+		if !validExtension(extension) {
+			return fmt.Errorf("message extension: %w", ErrInvalid)
+		}
+	}
+	for _, relation := range relations {
+		if !validRelationKind(relation.kind) || relation.target.platform.value == "" || relation.target.account.value == "" || relation.target.conversation.value == "" || relation.target.sourceEvent.value == "" || !utf8.ValidString(relation.key) {
+			return fmt.Errorf("message relation: %w", ErrInvalid)
+		}
+		for _, extension := range relation.extensions {
+			if !validExtension(extension) {
+				return fmt.Errorf("relation extension: %w", ErrInvalid)
+			}
+		}
+	}
+	for _, part := range parts {
+		for _, extension := range part.extensions {
+			if !validExtension(extension) {
+				return fmt.Errorf("part extension: %w", ErrInvalid)
+			}
+		}
+		for _, annotation := range part.annotations {
+			for _, extension := range annotation.extensions {
+				if !validExtension(extension) {
+					return fmt.Errorf("annotation extension: %w", ErrInvalid)
+				}
+			}
+		}
+		if part.kind == PartMedia || part.kind == PartFile {
+			for _, extension := range part.media.extensions {
+				if !validExtension(extension) {
+					return fmt.Errorf("media extension: %w", ErrInvalid)
+				}
+			}
+			for _, extension := range part.media.source.extensions {
+				if !validExtension(extension) {
+					return fmt.Errorf("media source extension: %w", ErrInvalid)
+				}
+			}
+		}
+		if part.kind == PartOpaque && !validExtension(part.value) {
+			return fmt.Errorf("opaque value: %w", ErrInvalid)
+		}
 	}
 	return nil
 }

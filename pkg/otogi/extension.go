@@ -74,6 +74,10 @@ func (v ProviderLocator) SchemaVersion() uint32 { return v.schemaVersion }
 // Data returns a defensive copy of the opaque locator bytes.
 func (v ProviderLocator) Data() []byte { return cloneBytes(v.data) }
 
+func validExtension(v Extension) bool {
+	return len(v.data) <= maxExtensionBytes && validAbsoluteURI(v.namespaceURI) && validRichString(v.localName) && v.schemaVersion != 0 && validRichString(v.mediaType)
+}
+
 func validAbsoluteURI(value string) bool {
 	if value == "" || !utf8.ValidString(value) {
 		return false
