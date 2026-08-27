@@ -103,7 +103,14 @@ func adapterForbidden(source, target string) bool {
 	if !strings.HasPrefix(target, "internal/adapter/") {
 		return false
 	}
-	parts := strings.Split(source, "/internal/adapter/")
-	adapter := strings.Split(parts[len(parts)-1], "/")[0]
-	return !strings.HasPrefix(target, "internal/adapter/"+adapter)
+	sourceAdapter := firstPathComponent(strings.SplitAfter(source, "/internal/adapter/")[1])
+	targetAdapter := firstPathComponent(strings.TrimPrefix(target, "internal/adapter/"))
+	return sourceAdapter != targetAdapter
+}
+
+func firstPathComponent(path string) string {
+	if slash := strings.IndexByte(path, '/'); slash >= 0 {
+		return path[:slash]
+	}
+	return path
 }

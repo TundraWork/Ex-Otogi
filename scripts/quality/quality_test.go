@@ -82,7 +82,7 @@ func TestSmokePreservesCommandFailure(t *testing.T) {
 }
 
 func TestArchitectureFixturesFail(t *testing.T) {
-	for _, fixture := range []string{"arch_adapter_kernel", "arch_adapter_module", "arch_adapter_sibling", "arch_contract_external"} {
+	for _, fixture := range []string{"arch_adapter_kernel", "arch_adapter_module", "arch_adapter_sibling", "arch_adapter_prefix_sibling", "arch_contract_external"} {
 		t.Run(fixture, func(t *testing.T) {
 			command := exec.Command("go", "run", "./scripts/quality/cmd/archcheck", "./scripts/quality/testdata/"+fixture)
 			command.Dir = "../.."

@@ -34,6 +34,12 @@ Implemented the experimental structural Go quality baseline.
 - `make fmt-check && make smoke && make arch-check && make lint` — passed; lint reported zero issues.
 - `GOROOT=/stale make quality` — passed, including unit, race, leak, architecture, lint, documentation, formatting, and smoke gates.
 
+### Review fix round 2
+
+- Added a red-green fixture proving an adapter such as `capture` cannot import a similarly prefixed sibling such as `capturex`.
+- Adapter boundary enforcement now compares the exact first path component following `internal/adapter/` for source and target.
+- `go test ./scripts/quality -run TestArchitectureFixturesFail`, `make arch-check`, and `GOROOT=/stale make quality` — passed.
+
 ## Concerns
 
 The lint installer downloads the pinned tool on first use and caches it under ignored `.cache/`. Existing test-only lint debt is isolated by exact path, linter, and diagnostic text so unrelated or new findings remain fatal.
