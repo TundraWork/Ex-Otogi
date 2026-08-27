@@ -12,8 +12,8 @@ import (
 
 // Invocation exposes effects scoped to one module delivery.
 type Invocation interface {
-	// SendText sends text once for a nonempty stable effect slot within the delivery.
-	SendText(context.Context, string, Text) error
+	// Send sends a rich message once for a stable effect slot within the delivery.
+	Send(context.Context, string, Message) error
 }
 
 // Messenger delivers fully scoped immutable outbound messages.
@@ -22,23 +22,23 @@ type Messenger interface {
 	Send(context.Context, OutboundMessage) error
 }
 
-// OutboundMessageParams supplies the validated values used to construct an OutboundMessage.
+// OutboundMessageParams supplies values used to construct an OutboundMessage.
 type OutboundMessageParams struct {
 	// Tenant identifies the destination tenant.
 	Tenant TenantID
 	// Platform identifies the destination platform.
 	Platform PlatformID
-	// Account identifies the destination platform account.
+	// Account identifies the destination account.
 	Account AccountID
 	// Conversation identifies the destination conversation.
 	Conversation ConversationID
-	// OriginatingEvent identifies the event that caused this message.
+	// OriginatingEvent identifies the event that caused the message.
 	OriginatingEvent EventID
-	// OriginatingModule identifies the module that produced this message.
+	// OriginatingModule identifies the producing module.
 	OriginatingModule ModuleID
-	// Text is the exact outbound message content.
-	Text Text
-	// IdempotencyKey identifies this logical effect across retries.
+	// Message contains the rich outbound content, relations, and extensions.
+	Message Message
+	// IdempotencyKey identifies the logical effect across retries.
 	IdempotencyKey IdempotencyKey
 }
 
@@ -50,16 +50,16 @@ type OutboundMessage struct {
 	conversation      ConversationID
 	originatingEvent  EventID
 	originatingModule ModuleID
-	text              Text
+	message           Message
 	idempotencyKey    IdempotencyKey
 }
 
 // NewOutboundMessage validates every required scope, origin, content, and idempotency value.
 func NewOutboundMessage(p OutboundMessageParams) (OutboundMessage, error) {
-	if p.Tenant.value == "" || p.Platform.value == "" || p.Account.value == "" || p.Conversation.value == "" || p.OriginatingEvent.value == "" || p.OriginatingModule.value == "" || p.Text.value == "" || p.IdempotencyKey.value == "" {
+	if p.Tenant.value == "" || p.Platform.value == "" || p.Account.value == "" || p.Conversation.value == "" || p.OriginatingEvent.value == "" || p.OriginatingModule.value == "" || len(p.Message.parts) == 0 || p.IdempotencyKey.value == "" {
 		return OutboundMessage{}, fmt.Errorf("outbound message: %w", ErrInvalid)
 	}
-	return OutboundMessage{p.Tenant, p.Platform, p.Account, p.Conversation, p.OriginatingEvent, p.OriginatingModule, p.Text, p.IdempotencyKey}, nil
+	return OutboundMessage{tenant: p.Tenant, platform: p.Platform, account: p.Account, conversation: p.Conversation, originatingEvent: p.OriginatingEvent, originatingModule: p.OriginatingModule, message: p.Message, idempotencyKey: p.IdempotencyKey}, nil
 }
 
 // Tenant returns the destination tenant.
@@ -80,8 +80,8 @@ func (m OutboundMessage) OriginatingEvent() EventID { return m.originatingEvent 
 // OriginatingModule returns the module that produced the message.
 func (m OutboundMessage) OriginatingModule() ModuleID { return m.originatingModule }
 
-// Text returns the exact outbound text.
-func (m OutboundMessage) Text() Text { return m.text }
+// Message returns the immutable rich content.
+func (m OutboundMessage) Message() Message { return m.message }
 
 // IdempotencyKey returns the key for the logical outbound effect.
 func (m OutboundMessage) IdempotencyKey() IdempotencyKey { return m.idempotencyKey }

@@ -165,20 +165,47 @@ func newTestGenerator(t *testing.T) *otogi.EventIDGenerator {
 	return generator
 }
 
-func newTestInput(t *testing.T, kindValue, textValue string) otogi.EventInput {
+func newTestInput(t *testing.T, actionValue, textValue string) otogi.EventInput {
 	t.Helper()
 	platform, _ := otogi.NewPlatformID("platform")
 	account, _ := otogi.NewAccountID("account")
 	tenant, _ := otogi.NewTenantID("tenant")
 	conversation, _ := otogi.NewConversationID("conversation")
-	kind, _ := otogi.NewEventKind(kindValue)
-	text, _ := otogi.NewText(textValue)
+	var action otogi.EventAction
+	if actionValue == "message" {
+		action = otogi.ActionMessageCreated
+	} else {
+		action, _ = otogi.NewEventAction("https://example.test/" + actionValue)
+	}
+	partID, _ := otogi.NewPartID("text")
+	part, _ := otogi.NewTextPart(partID, textValue, nil, nil, nil)
+	message, err := otogi.NewMessage([]otogi.PartID{partID}, []otogi.Part{part}, nil, nil)
+	if err != nil {
+		t.Fatalf("NewMessage(): %v", err)
+	}
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
-	input, err := otogi.NewEventInput(otogi.EventInputParams{Platform: platform, Account: account, Tenant: tenant, Conversation: conversation, Kind: kind, SchemaVersion: 1, OccurredAt: now, IngestedAt: now, Text: text})
+	input, err := otogi.NewEventInput(otogi.EventInputParams{Platform: platform, Account: account, Tenant: tenant, Conversation: conversation, Action: action, Direction: otogi.DirectionIncoming, Completeness: otogi.CompletenessComplete, OccurredAt: now, IngestedAt: now, Message: message})
 	if err != nil {
 		t.Fatalf("NewEventInput(): %v", err)
 	}
 	return input
+}
+
+func testRichMessage(t *testing.T, text string) otogi.Message {
+	t.Helper()
+	id, err := otogi.NewPartID("text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, err := otogi.NewTextPart(id, text, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := otogi.NewMessage([]otogi.PartID{id}, []otogi.Part{part}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message
 }
 
 type testModule struct {
@@ -188,11 +215,16 @@ type testModule struct {
 	calls      int
 }
 
-func newTestModule(t *testing.T, idValue, kindValue string, handle func(context.Context, otogi.Event, otogi.Invocation) otogi.Result) *testModule {
+func newTestModule(t *testing.T, idValue, actionValue string, handle func(context.Context, otogi.Event, otogi.Invocation) otogi.Result) *testModule {
 	t.Helper()
 	id, _ := otogi.NewModuleID(idValue)
-	kind, _ := otogi.NewEventKind(kindValue)
-	descriptor, err := otogi.NewModuleDescriptor(id, []otogi.EventKind{kind})
+	var action otogi.EventAction
+	if actionValue == "message" {
+		action = otogi.ActionMessageCreated
+	} else {
+		action, _ = otogi.NewEventAction("https://example.test/" + actionValue)
+	}
+	descriptor, err := otogi.NewModuleDescriptor(id, []otogi.EventAction{action})
 	if err != nil {
 		t.Fatalf("NewModuleDescriptor(): %v", err)
 	}

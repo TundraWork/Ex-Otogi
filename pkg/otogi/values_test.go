@@ -22,7 +22,6 @@ func TestIdentifierContracts(t *testing.T) {
 		{"actor", func(s string) (string, error) { v, e := NewActorID(s); return v.String(), e }},
 		{"module", func(s string) (string, error) { v, e := NewModuleID(s); return v.String(), e }},
 		{"idempotency", func(s string) (string, error) { v, e := NewIdempotencyKey(s); return v.String(), e }},
-		{"event kind", func(s string) (string, error) { v, e := NewEventKind(s); return v.String(), e }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -35,21 +34,5 @@ func TestIdentifierContracts(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestTextPreservesContentAndEnforcesBoundaries(t *testing.T) {
-	const exact = "  hello\n"
-	v, err := NewText(exact)
-	if err != nil || v.String() != exact {
-		t.Fatalf("got %q, %v", v.String(), err)
-	}
-	if _, err := NewText(strings.Repeat("a", 4096)); err != nil {
-		t.Fatalf("4096 bytes: %v", err)
-	}
-	for _, invalid := range []string{"", strings.Repeat("a", 4097), string([]byte{0xff})} {
-		if _, err := NewText(invalid); !errors.Is(err, ErrInvalid) {
-			t.Fatalf("got %v, want ErrInvalid", err)
-		}
 	}
 }

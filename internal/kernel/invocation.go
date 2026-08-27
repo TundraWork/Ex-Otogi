@@ -27,38 +27,38 @@ func newInvocation(ctx context.Context, messenger otogi.Messenger, admitted even
 	return &invocation{messenger: messenger, event: admitted, moduleID: moduleID, ctx: invocationCtx, cancel: cancel, slots: make(map[string]struct{})}
 }
 
-func (i *invocation) SendText(ctx context.Context, slot string, text otogi.Text) error {
+func (i *invocation) Send(ctx context.Context, slot string, content otogi.Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if slot == "" || len(slot) > 64 || !utf8.ValidString(slot) || strings.TrimSpace(slot) != slot || text.String() == "" {
-		return fmt.Errorf("send text: %w", otogi.ErrInvalid)
+	if slot == "" || len(slot) > 64 || !utf8.ValidString(slot) || strings.TrimSpace(slot) != slot {
+		return fmt.Errorf("send message: %w", otogi.ErrInvalid)
 	}
-	i.mu.Lock()
-	if i.closed {
-		i.mu.Unlock()
-		return fmt.Errorf("send text after invocation close: %w", otogi.ErrInvalidState)
-	}
-	if _, exists := i.slots[slot]; exists {
-		i.mu.Unlock()
-		return fmt.Errorf("send text duplicate slot: %w", otogi.ErrInvalidState)
-	}
-	i.slots[slot] = struct{}{}
-	i.inflight.Add(1)
-	i.mu.Unlock()
-	defer i.inflight.Done()
-
 	key, err := messagingKey(i.event.ID(), i.moduleID, slot)
 	if err != nil {
 		return err
 	}
 	message, err := otogi.NewOutboundMessage(otogi.OutboundMessageParams{
 		Tenant: i.event.Tenant(), Platform: i.event.Platform(), Account: i.event.Account(), Conversation: i.event.Conversation(),
-		OriginatingEvent: i.event.ID(), OriginatingModule: i.moduleID, Text: text, IdempotencyKey: key,
+		OriginatingEvent: i.event.ID(), OriginatingModule: i.moduleID, Message: content, IdempotencyKey: key,
 	})
 	if err != nil {
-		return fmt.Errorf("send text message: %w", err)
+		return fmt.Errorf("send rich message: %w", err)
 	}
+	i.mu.Lock()
+	if i.closed {
+		i.mu.Unlock()
+		return fmt.Errorf("send message after invocation close: %w", otogi.ErrInvalidState)
+	}
+	if _, exists := i.slots[slot]; exists {
+		i.mu.Unlock()
+		return fmt.Errorf("send message duplicate slot: %w", otogi.ErrInvalidState)
+	}
+	i.slots[slot] = struct{}{}
+	i.inflight.Add(1)
+	i.mu.Unlock()
+	defer i.inflight.Done()
+
 	sendCtx, cancelSend := context.WithCancel(ctx)
 	stopInvocationCancel := context.AfterFunc(i.ctx, cancelSend)
 	defer func() {
@@ -66,7 +66,7 @@ func (i *invocation) SendText(ctx context.Context, slot string, text otogi.Text)
 		cancelSend()
 	}()
 	if err := i.messenger.Send(sendCtx, message); err != nil {
-		return fmt.Errorf("send text: %w", err)
+		return fmt.Errorf("send message: %w", err)
 	}
 	return nil
 }

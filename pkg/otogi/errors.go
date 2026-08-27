@@ -13,4 +13,6 @@ var (
 	ErrInvalidState = errors.New("invalid state")
 	// ErrModulePanic identifies a module invocation that panicked.
 	ErrModulePanic = errors.New("module panic")
+	// ErrUnsupported identifies valid content that an adapter cannot represent.
+	ErrUnsupported = errors.New("unsupported")
 )

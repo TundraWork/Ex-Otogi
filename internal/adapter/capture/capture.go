@@ -34,7 +34,7 @@ func (m *Messenger) Send(ctx context.Context, message otogi.OutboundMessage) err
 		Conversation:      message.Conversation(),
 		OriginatingEvent:  message.OriginatingEvent(),
 		OriginatingModule: message.OriginatingModule(),
-		Text:              message.Text(),
+		Message:           message.Message(),
 		IdempotencyKey:    message.IdempotencyKey(),
 	}); err != nil {
 		return fmt.Errorf("capture send: %w", err)

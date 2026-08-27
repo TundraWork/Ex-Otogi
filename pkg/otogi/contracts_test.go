@@ -27,11 +27,25 @@ func validEventInputParams(t *testing.T) EventInputParams {
 	return EventInputParams{
 		Platform: mustValue(t, NewPlatformID, "platform"), Account: mustValue(t, NewAccountID, "account"),
 		Tenant: mustValue(t, NewTenantID, "tenant"), Conversation: mustValue(t, NewConversationID, "conversation"),
-		Kind: mustValue(t, NewEventKind, "message"), SchemaVersion: 1,
+		Action: ActionMessageCreated, Direction: DirectionIncoming, Completeness: CompletenessComplete,
 		OccurredAt: time.Date(2026, 8, 27, 12, 0, 0, 0, time.FixedZone("local", 3600)),
 		IngestedAt: time.Date(2026, 8, 27, 12, 0, 1, 0, time.FixedZone("local", 3600)),
-		Text:       mustValue(t, NewText, "hello"),
+		Message:    testRichMessage(t, "hello"),
 	}
+}
+
+func testRichMessage(t *testing.T, text string) Message {
+	t.Helper()
+	id := mustValue(t, NewPartID, "part")
+	part, err := NewTextPart(id, text, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := NewMessage([]PartID{id}, []Part{part}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return msg
 }
 
 func TestEventInputValidatesAndCanonicalizes(t *testing.T) {
@@ -44,7 +58,7 @@ func TestEventInputValidatesAndCanonicalizes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.Platform() != p.Platform || v.Account() != p.Account || v.Tenant() != p.Tenant || v.Conversation() != p.Conversation || v.Kind() != p.Kind || v.SchemaVersion() != 1 || v.Text() != p.Text {
+	if v.Platform() != p.Platform || v.Account() != p.Account || v.Tenant() != p.Tenant || v.Conversation() != p.Conversation || v.Action() != p.Action || v.Direction() != p.Direction || v.Completeness() != p.Completeness {
 		t.Fatal("required accessors differ")
 	}
 	if got, ok := v.SourceEventID(); !ok || got != p.SourceEventID {
@@ -86,9 +100,9 @@ func TestEventInputRejectsInvalidRequiredFields(t *testing.T) {
 	mutations := []func(*EventInputParams){
 		func(p *EventInputParams) { p.Platform = PlatformID{} }, func(p *EventInputParams) { p.Account = AccountID{} },
 		func(p *EventInputParams) { p.Tenant = TenantID{} }, func(p *EventInputParams) { p.Conversation = ConversationID{} },
-		func(p *EventInputParams) { p.Kind = EventKind{} }, func(p *EventInputParams) { p.SchemaVersion = 0 },
+		func(p *EventInputParams) { p.Action = EventAction{} }, func(p *EventInputParams) { p.Direction = Direction("") },
 		func(p *EventInputParams) { p.OccurredAt = time.Time{} }, func(p *EventInputParams) { p.IngestedAt = time.Time{} },
-		func(p *EventInputParams) { p.OccurredAt = p.IngestedAt.Add(time.Second) }, func(p *EventInputParams) { p.Text = Text{} },
+		func(p *EventInputParams) { p.OccurredAt = p.IngestedAt.Add(time.Second) }, func(p *EventInputParams) { p.Message = Message{} },
 	}
 	for i, mutate := range mutations {
 		p := validEventInputParams(t)
@@ -101,9 +115,9 @@ func TestEventInputRejectsInvalidRequiredFields(t *testing.T) {
 
 func TestModuleDescriptorOwnsConsumedKinds(t *testing.T) {
 	id := mustValue(t, NewModuleID, "echo")
-	first := mustValue(t, NewEventKind, "first")
-	second := mustValue(t, NewEventKind, "second")
-	input := []EventKind{first}
+	first := ActionMessageCreated
+	second := ActionMessageEdited
+	input := []EventAction{first}
 	d, err := NewModuleDescriptor(id, input)
 	if err != nil {
 		t.Fatal(err)
@@ -117,10 +131,10 @@ func TestModuleDescriptorOwnsConsumedKinds(t *testing.T) {
 	if d.Consumes()[0] != first {
 		t.Fatal("Consumes exposed internal storage")
 	}
-	if _, err := NewModuleDescriptor(id, []EventKind{first, first}); !errors.Is(err, ErrInvalid) {
+	if _, err := NewModuleDescriptor(id, []EventAction{first, first}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("duplicate: %v", err)
 	}
-	if _, err := NewModuleDescriptor(ModuleID{}, []EventKind{first}); !errors.Is(err, ErrInvalid) {
+	if _, err := NewModuleDescriptor(ModuleID{}, []EventAction{first}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("zero ID: %v", err)
 	}
 	if _, err := NewModuleDescriptor(id, nil); !errors.Is(err, ErrInvalid) {
@@ -158,13 +172,14 @@ func TestResultInvariants(t *testing.T) {
 }
 
 func TestOutboundMessageIsImmutable(t *testing.T) {
-	p := OutboundMessageParams{Tenant: mustValue(t, NewTenantID, "tenant"), Platform: mustValue(t, NewPlatformID, "platform"), Account: mustValue(t, NewAccountID, "account"), Conversation: mustValue(t, NewConversationID, "conversation"), OriginatingEvent: mustValue(t, NewEventID, "event"), OriginatingModule: mustValue(t, NewModuleID, "module"), Text: mustValue(t, NewText, "hello"), IdempotencyKey: mustValue(t, NewIdempotencyKey, "key")}
+	p := OutboundMessageParams{Tenant: mustValue(t, NewTenantID, "tenant"), Platform: mustValue(t, NewPlatformID, "platform"), Account: mustValue(t, NewAccountID, "account"), Conversation: mustValue(t, NewConversationID, "conversation"), OriginatingEvent: mustValue(t, NewEventID, "event"), OriginatingModule: mustValue(t, NewModuleID, "module"), Message: testRichMessage(t, "hello"), IdempotencyKey: mustValue(t, NewIdempotencyKey, "key")}
 	m, err := NewOutboundMessage(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Text = mustValue(t, NewText, "changed")
-	if m.Tenant().String() != "tenant" || m.Platform().String() != "platform" || m.Account().String() != "account" || m.Conversation().String() != "conversation" || m.OriginatingEvent().String() != "event" || m.OriginatingModule().String() != "module" || m.Text().String() != "hello" || m.IdempotencyKey().String() != "key" {
+	p.Message = testRichMessage(t, "changed")
+	text, _, _ := m.Message().Parts()[0].Text()
+	if m.Tenant().String() != "tenant" || m.Platform().String() != "platform" || m.Account().String() != "account" || m.Conversation().String() != "conversation" || m.OriginatingEvent().String() != "event" || m.OriginatingModule().String() != "module" || text != "hello" || m.IdempotencyKey().String() != "key" {
 		t.Fatal("message accessors differ")
 	}
 	bad := OutboundMessageParams{}
@@ -267,7 +282,7 @@ type moduleContract interface {
 	Handle(context.Context, Event, Invocation) Result
 }
 type invocationContract interface {
-	SendText(context.Context, string, Text) error
+	Send(context.Context, string, Message) error
 }
 type messengerContract interface {
 	Send(context.Context, OutboundMessage) error

@@ -21,33 +21,21 @@ func TestPublicAPIHasOnlyLeanContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := strings.Fields(`
-		AccountID AccountID.String ActorID ActorID.String CausalEventID CausalEventID.String
-		ConversationID ConversationID.String Event EventID EventID.String EventIDGenerator
-		EventIDGenerator.Next EventInput EventInput.Account EventInput.Actor EventInput.CausalEventID
-		EventInput.Conversation EventInput.IngestedAt EventInput.Kind EventInput.OccurredAt
-		EventInput.Platform EventInput.SchemaVersion EventInput.SourceEventID EventInput.Tenant
-		EventInput.Text EventInput.TraceID EventInputParams EventInputParams.Account
-		EventInputParams.Actor EventInputParams.CausalEventID EventInputParams.Conversation
-		EventInputParams.IngestedAt EventInputParams.Kind EventInputParams.OccurredAt
-		EventInputParams.Platform EventInputParams.SchemaVersion EventInputParams.SourceEventID
-		EventInputParams.Tenant EventInputParams.Text EventInputParams.TraceID EventKind EventKind.String
-		IdempotencyKey IdempotencyKey.String Invocation Messenger Module ModuleDescriptor
-		ModuleDescriptor.Consumes ModuleDescriptor.ID ModuleID ModuleID.String OutboundMessage
-		OutboundMessage.Account OutboundMessage.Conversation OutboundMessage.IdempotencyKey
-		OutboundMessage.OriginatingEvent OutboundMessage.OriginatingModule OutboundMessage.Platform
-		OutboundMessage.Tenant OutboundMessage.Text OutboundMessageParams
-		OutboundMessageParams.Account OutboundMessageParams.Conversation
-		OutboundMessageParams.IdempotencyKey OutboundMessageParams.OriginatingEvent
-		OutboundMessageParams.OriginatingModule OutboundMessageParams.Platform
-		OutboundMessageParams.Tenant OutboundMessageParams.Text PlatformID PlatformID.String
-		Result Result.Err Result.Status ResultStatus SourceEventID SourceEventID.String TenantID
-		TenantID.String Text Text.String TraceID TraceID.String
-		ErrCapacity ErrInvalid ErrInvalidState ErrModulePanic ErrUnavailable
-		NewAccountID NewActorID NewCanceledResult NewCausalEventID NewConversationID
-		NewEventID NewEventIDGenerator NewEventInput NewEventKind NewFailedResult
-		NewIdempotencyKey NewModuleDescriptor NewModuleID NewOutboundMessage NewPlatformID
-		NewRejectedResult NewResult NewSourceEventID NewSucceededResult NewTenantID NewText
-		NewTraceID ResultCanceled ResultFailed ResultRejected ResultSucceeded
+		AccountID AccountID.String ActionMessageCreated ActionMessageDeleted ActionMessageEdited ActionMessageService ActorID ActorID.String
+		Annotation Annotation.Extensions Annotation.ID Annotation.Kind Annotation.Length Annotation.Offset Annotation.Target AnnotationBlockQuote AnnotationBold AnnotationCode AnnotationCommand AnnotationEmail AnnotationEmoji AnnotationHashtag AnnotationItalic AnnotationKind AnnotationLink AnnotationMention AnnotationPreformatted AnnotationSpoiler AnnotationStrike AnnotationTimestamp AnnotationUnderline
+		CausalEventID CausalEventID.String Completeness CompletenessComplete CompletenessPartial CompletenessRedacted CompletenessUnavailable ConversationID ConversationID.String Direction DirectionIncoming DirectionOutgoing DirectionSystem
+		ErrCapacity ErrInvalid ErrInvalidState ErrModulePanic ErrUnavailable ErrUnsupported Event EventAction EventAction.String EventID EventID.String EventIDGenerator EventIDGenerator.Next
+		EventInput EventInput.Account EventInput.Action EventInput.Actor EventInput.CausalEventID EventInput.Completeness EventInput.Conversation EventInput.Direction EventInput.EditedAt EventInput.Extensions EventInput.IngestedAt EventInput.Message EventInput.OccurredAt EventInput.Platform EventInput.ProviderLocator EventInput.SourceEventID EventInput.Tenant EventInput.TraceID
+		EventInputParams EventInputParams.Account EventInputParams.Action EventInputParams.Actor EventInputParams.CausalEventID EventInputParams.Completeness EventInputParams.Conversation EventInputParams.Direction EventInputParams.EditedAt EventInputParams.Extensions EventInputParams.IngestedAt EventInputParams.Message EventInputParams.OccurredAt EventInputParams.Platform EventInputParams.ProviderLocator EventInputParams.SourceEventID EventInputParams.Tenant EventInputParams.TraceID
+		EventRef EventRef.Account EventRef.Conversation EventRef.HasLocator EventRef.Locator EventRef.Platform EventRef.SourceEvent EventRefParams EventRefParams.Account EventRefParams.Conversation EventRefParams.Locator EventRefParams.Platform EventRefParams.SourceEvent
+		Extension Extension.Data Extension.LocalName Extension.MediaType Extension.NamespaceURI Extension.SchemaVersion IdempotencyKey IdempotencyKey.String Invocation
+		Media Media.ByteSize Media.Duration Media.Extensions Media.Filename Media.Hashes Media.Height Media.MediaType Media.Role Media.Source Media.Width MediaAnimation MediaAudio MediaDocument MediaHash MediaHash.Algorithm MediaHash.Value MediaImage MediaOther MediaParams MediaParams.ByteSize MediaParams.Duration MediaParams.Extensions MediaParams.Filename MediaParams.Hashes MediaParams.Height MediaParams.MediaType MediaParams.Role MediaParams.Source MediaParams.Width MediaRole
+		MediaSource MediaSource.Extensions MediaSource.ExternalURI MediaSource.Inline MediaSource.Kind MediaSource.OpaqueLocator MediaSourceExternal MediaSourceInline MediaSourceKind MediaSourceOpaque MediaSticker MediaThumbnail MediaVideo MediaVoice
+		Message Message.Extensions Message.Part Message.Parts Message.Relations Message.Roots Messenger Module ModuleDescriptor ModuleDescriptor.Consumes ModuleDescriptor.ID ModuleID ModuleID.String
+		NewAccountID NewActorID NewAnnotation NewCanceledResult NewCausalEventID NewConversationID NewEventAction NewEventID NewEventIDGenerator NewEventInput NewEventRef NewExtension NewExternalMediaSource NewFailedResult NewIdempotencyKey NewInlineMediaSource NewMedia NewMediaHash NewMediaPart NewMessage NewModuleDescriptor NewModuleID NewOpaqueMediaSource NewOpaquePart NewOutboundMessage NewPartID NewPlatformID NewProviderLocator NewRejectedResult NewRelation NewResult NewSourceEventID NewSucceededResult NewTenantID NewTextPart NewTraceID NewTypedPart
+		OutboundMessage OutboundMessage.Account OutboundMessage.Conversation OutboundMessage.IdempotencyKey OutboundMessage.Message OutboundMessage.OriginatingEvent OutboundMessage.OriginatingModule OutboundMessage.Platform OutboundMessage.Tenant OutboundMessageParams OutboundMessageParams.Account OutboundMessageParams.Conversation OutboundMessageParams.IdempotencyKey OutboundMessageParams.Message OutboundMessageParams.OriginatingEvent OutboundMessageParams.OriginatingModule OutboundMessageParams.Platform OutboundMessageParams.Tenant
+		Part Part.Children Part.Extensions Part.ID Part.Kind Part.Media Part.Text Part.Value PartContact PartEmbeddedMessage PartFile PartID PartID.String PartInteractive PartKind PartLocation PartMedia PartOpaque PartPoll PartText PlatformID PlatformID.String ProviderLocator ProviderLocator.Data ProviderLocator.NamespaceURI ProviderLocator.SchemaVersion
+		Relation Relation.Extensions Relation.Key Relation.Kind Relation.Target RelationAnnotation RelationForward RelationKind RelationReference RelationReplacement RelationReply RelationThread Result Result.Err Result.Status ResultCanceled ResultFailed ResultRejected ResultStatus ResultSucceeded SourceEventID SourceEventID.String TenantID TenantID.String TraceID TraceID.String
 	`)
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
@@ -64,20 +52,24 @@ func TestPublicInterfacesHaveExactMethodShapes(t *testing.T) {
 		Conversation() ConversationID
 		SourceEventID() (SourceEventID, bool)
 		Actor() (ActorID, bool)
-		Kind() EventKind
-		SchemaVersion() uint64
+		Action() EventAction
+		Direction() Direction
 		OccurredAt() time.Time
 		IngestedAt() time.Time
+		EditedAt() (time.Time, bool)
 		TraceID() (TraceID, bool)
 		CausalEventID() (CausalEventID, bool)
-		Text() Text
+		Completeness() Completeness
+		ProviderLocator() (ProviderLocator, bool)
+		Message() Message
+		Extensions() []Extension
 	}
 	type wantedModule interface {
 		Descriptor() ModuleDescriptor
 		Handle(context.Context, Event, Invocation) Result
 	}
 	type wantedInvocation interface {
-		SendText(context.Context, string, Text) error
+		Send(context.Context, string, Message) error
 	}
 	type wantedMessenger interface {
 		Send(context.Context, OutboundMessage) error

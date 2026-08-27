@@ -66,10 +66,14 @@ func run(ctx context.Context, output io.Writer) (runErr error) {
 	if len(deliveries) != 1 || deliveries[0].Status() != otogi.ResultSucceeded || deliveries[0].Err() != nil {
 		return fmt.Errorf("verify delivery: %w", otogi.ErrInvalidState)
 	}
-	if len(messages) != 1 || messages[0].Text().String() != "echo: hello" {
+	var outputText string
+	if len(messages) == 1 && len(messages[0].Message().Parts()) == 1 {
+		outputText, _, _ = messages[0].Message().Parts()[0].Text()
+	}
+	if outputText != "echo: hello" {
 		return fmt.Errorf("verify capture: %w", otogi.ErrInvalidState)
 	}
-	if _, err := fmt.Fprintln(output, messages[0].Text().String()); err != nil {
+	if _, err := fmt.Fprintln(output, outputText); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil
@@ -101,17 +105,22 @@ func helloInput(now time.Time) (otogi.EventInput, error) {
 	if err != nil {
 		return otogi.EventInput{}, err
 	}
-	kind, err := otogi.NewEventKind("text.message")
+	action := otogi.ActionMessageCreated
+	partID, err := otogi.NewPartID("part")
 	if err != nil {
 		return otogi.EventInput{}, err
 	}
-	text, err := otogi.NewText("hello")
+	part, err := otogi.NewTextPart(partID, "hello", nil, nil, nil)
+	if err != nil {
+		return otogi.EventInput{}, err
+	}
+	message, err := otogi.NewMessage([]otogi.PartID{partID}, []otogi.Part{part}, nil, nil)
 	if err != nil {
 		return otogi.EventInput{}, err
 	}
 	input, err := otogi.NewEventInput(otogi.EventInputParams{
 		Platform: platform, Account: account, Tenant: tenant, Conversation: conversation,
-		Kind: kind, SchemaVersion: 1, OccurredAt: now, IngestedAt: now, Text: text,
+		Action: action, Direction: otogi.DirectionIncoming, Completeness: otogi.CompletenessComplete, OccurredAt: now, IngestedAt: now, Message: message,
 	})
 	if err != nil {
 		return otogi.EventInput{}, fmt.Errorf("construct hello event: %w", err)

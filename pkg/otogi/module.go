@@ -5,28 +5,28 @@ import (
 	"fmt"
 )
 
-// ModuleDescriptor is an immutable declaration of module identity and consumed event kinds.
+// ModuleDescriptor is an immutable declaration of module identity and consumed event actions.
 type ModuleDescriptor struct {
 	id       ModuleID
-	consumes []EventKind
+	consumes []EventAction
 }
 
-// NewModuleDescriptor validates identity and a nonempty unique set of consumed kinds and copies the slice.
-func NewModuleDescriptor(id ModuleID, consumes []EventKind) (ModuleDescriptor, error) {
+// NewModuleDescriptor validates identity and a nonempty unique set of consumed actions and copies the slice.
+func NewModuleDescriptor(id ModuleID, consumes []EventAction) (ModuleDescriptor, error) {
 	if id.value == "" || len(consumes) == 0 {
 		return ModuleDescriptor{}, fmt.Errorf("module descriptor: %w", ErrInvalid)
 	}
-	owned := make([]EventKind, len(consumes))
-	seen := make(map[EventKind]struct{}, len(consumes))
-	for i, kind := range consumes {
-		if kind.value == "" {
+	owned := make([]EventAction, len(consumes))
+	seen := make(map[EventAction]struct{}, len(consumes))
+	for i, action := range consumes {
+		if action.value == "" {
 			return ModuleDescriptor{}, fmt.Errorf("module descriptor: %w", ErrInvalid)
 		}
-		if _, exists := seen[kind]; exists {
+		if _, exists := seen[action]; exists {
 			return ModuleDescriptor{}, fmt.Errorf("module descriptor: %w", ErrInvalid)
 		}
-		seen[kind] = struct{}{}
-		owned[i] = kind
+		seen[action] = struct{}{}
+		owned[i] = action
 	}
 	return ModuleDescriptor{id: id, consumes: owned}, nil
 }
@@ -34,8 +34,8 @@ func NewModuleDescriptor(id ModuleID, consumes []EventKind) (ModuleDescriptor, e
 // ID returns the module identity.
 func (d ModuleDescriptor) ID() ModuleID { return d.id }
 
-// Consumes returns an independent copy of the consumed event kinds.
-func (d ModuleDescriptor) Consumes() []EventKind { return append([]EventKind(nil), d.consumes...) }
+// Consumes returns an independent copy of the consumed event actions.
+func (d ModuleDescriptor) Consumes() []EventAction { return append([]EventAction(nil), d.consumes...) }
 
 // Module handles events according to its immutable descriptor.
 type Module interface {

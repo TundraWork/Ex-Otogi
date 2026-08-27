@@ -13,10 +13,10 @@ import (
 func TestSendCancellationIsIsolatedWithinInvocation(t *testing.T) {
 	messenger := &isolatingMessenger{entered: make(chan string, 2), releaseB: make(chan struct{})}
 	module := newTestModule(t, "sender", "message", func(ctx context.Context, _ otogi.Event, invocation otogi.Invocation) otogi.Result {
-		text, _ := otogi.NewText("reply")
+		message := testRichMessage(t, "reply")
 		aCtx, cancelA := context.WithCancel(ctx)
 		aDone := make(chan error, 1)
-		go func() { aDone <- invocation.SendText(aCtx, "a", text) }()
+		go func() { aDone <- invocation.Send(aCtx, "a", message) }()
 		if slot := <-messenger.entered; slot != "a" {
 			return otogi.NewFailedResult(errors.New("unexpected first slot"))
 		}
@@ -26,7 +26,7 @@ func TestSendCancellationIsIsolatedWithinInvocation(t *testing.T) {
 		}
 
 		bDone := make(chan error, 1)
-		go func() { bDone <- invocation.SendText(ctx, "b", text) }()
+		go func() { bDone <- invocation.Send(ctx, "b", message) }()
 		if slot := <-messenger.entered; slot != "b" {
 			return otogi.NewFailedResult(errors.New("unexpected second slot"))
 		}

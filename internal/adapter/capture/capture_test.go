@@ -55,7 +55,9 @@ func TestMessagesReturnsDefensiveSnapshot(t *testing.T) {
 	first = append(first, testMessage(t, 2))
 
 	got := messenger.Messages()
-	if len(got) != 1 || got[0].Text().String() != want.Text().String() {
+	gotText, _, _ := got[0].Message().Parts()[0].Text()
+	wantText, _, _ := want.Message().Parts()[0].Text()
+	if len(got) != 1 || gotText != wantText {
 		t.Fatalf("Messages = %#v, want independent one-message snapshot", got)
 	}
 }
@@ -68,11 +70,13 @@ func testMessage(t *testing.T, n int) otogi.OutboundMessage {
 	conversation, _ := otogi.NewConversationID("conversation")
 	event, _ := otogi.NewEventID(fmt.Sprintf("event-%d", n))
 	module, _ := otogi.NewModuleID("module")
-	text, _ := otogi.NewText(fmt.Sprintf("message-%d", n))
+	pid, _ := otogi.NewPartID("part")
+	part, _ := otogi.NewTextPart(pid, fmt.Sprintf("message-%d", n), nil, nil, nil)
+	content, _ := otogi.NewMessage([]otogi.PartID{pid}, []otogi.Part{part}, nil, nil)
 	key, _ := otogi.NewIdempotencyKey(fmt.Sprintf("key-%d", n))
 	message, err := otogi.NewOutboundMessage(otogi.OutboundMessageParams{
 		Tenant: tenant, Platform: platform, Account: account, Conversation: conversation,
-		OriginatingEvent: event, OriginatingModule: module, Text: text, IdempotencyKey: key,
+		OriginatingEvent: event, OriginatingModule: module, Message: content, IdempotencyKey: key,
 	})
 	if err != nil {
 		t.Fatalf("NewOutboundMessage: %v", err)

@@ -30,7 +30,7 @@ type Kernel struct {
 	terminalErr      error
 	config           Config
 	modules          []otogi.Module
-	kinds            map[otogi.EventKind]struct{}
+	actions          map[otogi.EventAction]struct{}
 	messenger        otogi.Messenger
 	generator        *otogi.EventIDGenerator
 	queue            chan event
@@ -51,7 +51,7 @@ func New(config Config, modules []otogi.Module, messenger otogi.Messenger, gener
 	}
 	owned := append([]otogi.Module(nil), modules...)
 	seen := make(map[otogi.ModuleID]struct{}, len(owned))
-	kinds := make(map[otogi.EventKind]struct{})
+	actions := make(map[otogi.EventAction]struct{})
 	for _, module := range owned {
 		if module == nil {
 			return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
@@ -64,15 +64,15 @@ func New(config Config, modules []otogi.Module, messenger otogi.Messenger, gener
 			return nil, fmt.Errorf("new kernel duplicate module: %w", otogi.ErrInvalid)
 		}
 		seen[descriptor.ID()] = struct{}{}
-		for _, kind := range descriptor.Consumes() {
-			if kind.String() == "" {
+		for _, action := range descriptor.Consumes() {
+			if action.String() == "" {
 				return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
 			}
-			kinds[kind] = struct{}{}
+			actions[action] = struct{}{}
 		}
 	}
 	sort.Slice(owned, func(i, j int) bool { return owned[i].Descriptor().ID().String() < owned[j].Descriptor().ID().String() })
-	return &Kernel{state: stateNew, config: config, modules: owned, kinds: kinds, messenger: messenger, generator: generator, queue: make(chan event, config.queueCapacity), wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
+	return &Kernel{state: stateNew, config: config, modules: owned, actions: actions, messenger: messenger, generator: generator, queue: make(chan event, config.queueCapacity), wake: make(chan struct{}, 1), done: make(chan struct{})}, nil
 }
 
 // Start transitions a new kernel to ready and starts its sole worker.
@@ -107,8 +107,8 @@ func (k *Kernel) Submit(ctx context.Context, input otogi.EventInput) (otogi.Even
 	if k.state != stateReady {
 		return otogi.EventID{}, fmt.Errorf("submit event: %w", otogi.ErrInvalidState)
 	}
-	if _, supported := k.kinds[input.Kind()]; !supported {
-		return otogi.EventID{}, fmt.Errorf("submit event kind: %w", otogi.ErrInvalid)
+	if _, supported := k.actions[input.Action()]; !supported {
+		return otogi.EventID{}, fmt.Errorf("submit event action: %w", otogi.ErrInvalid)
 	}
 	id, err := k.generator.Next()
 	if err != nil {
@@ -258,8 +258,8 @@ func (k *Kernel) run() {
 func (k *Kernel) route(ctx context.Context, admitted event) {
 	for _, module := range k.modules {
 		interested := false
-		for _, kind := range module.Descriptor().Consumes() {
-			if kind == admitted.Kind() {
+		for _, action := range module.Descriptor().Consumes() {
+			if action == admitted.Action() {
 				interested = true
 				break
 			}

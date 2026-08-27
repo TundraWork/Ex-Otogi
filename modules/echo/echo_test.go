@@ -10,33 +10,31 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-func TestHandleEchoesInputThrough4090Bytes(t *testing.T) {
+func TestHandleEchoesInputAtMaximumOutputSize(t *testing.T) {
 	t.Parallel()
 	module := New()
 	invocation := &recordingInvocation{}
-
-	result := module.Handle(context.Background(), fakeEvent{text: mustText(t, strings.Repeat("a", 4090))}, invocation)
-
+	input := strings.Repeat("a", 64*1024-len(prefix))
+	result := module.Handle(context.Background(), fakeEvent{message: mustMessage(t, input)}, invocation)
 	if result.Status() != otogi.ResultSucceeded || result.Err() != nil {
 		t.Fatalf("result = (%s, %v), want succeeded", result.Status(), result.Err())
 	}
-	if invocation.slot != "echo" || invocation.text.String() != "echo: "+strings.Repeat("a", 4090) {
-		t.Fatalf("SendText = (%q, %d bytes), want echo slot and 4096-byte echo", invocation.slot, len(invocation.text.String()))
+	text, _, _ := invocation.message.Parts()[0].Text()
+	if invocation.slot != "echo" || text != prefix+input {
+		t.Fatalf("Send = (%q, %d bytes), want echo slot and maximum text", invocation.slot, len(text))
 	}
 }
 
-func TestHandleFailsWithoutSendingFor4091Bytes(t *testing.T) {
+func TestHandleRejectsOversizedEchoWithoutSending(t *testing.T) {
 	t.Parallel()
 	module := New()
 	invocation := &recordingInvocation{}
-
-	result := module.Handle(context.Background(), fakeEvent{text: mustText(t, strings.Repeat("a", 4091))}, invocation)
-
-	if result.Status() != otogi.ResultFailed || !errors.Is(result.Err(), otogi.ErrInvalid) {
-		t.Fatalf("result = (%s, %v), want failed ErrInvalid", result.Status(), result.Err())
+	result := module.Handle(context.Background(), fakeEvent{message: mustMessage(t, strings.Repeat("a", 64*1024-len(prefix)+1))}, invocation)
+	if result.Status() != otogi.ResultRejected || result.Err() != nil {
+		t.Fatalf("result = (%s, %v), want rejected", result.Status(), result.Err())
 	}
 	if invocation.calls != 0 {
-		t.Fatalf("SendText calls = %d, want 0", invocation.calls)
+		t.Fatalf("Send calls = %d, want 0", invocation.calls)
 	}
 }
 
@@ -57,7 +55,7 @@ func TestHandleMapsCancellationAndSendFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			invocation := &recordingInvocation{err: tt.sendError}
-			result := module.Handle(tt.ctx, fakeEvent{text: mustText(t, "hello")}, invocation)
+			result := module.Handle(tt.ctx, fakeEvent{message: mustMessage(t, "hello")}, invocation)
 			if result.Status() != tt.wantStatus || !errors.Is(result.Err(), tt.wantError) {
 				t.Fatalf("result = (%s, %v), want (%s, %v)", result.Status(), result.Err(), tt.wantStatus, tt.wantError)
 			}
@@ -65,33 +63,33 @@ func TestHandleMapsCancellationAndSendFailure(t *testing.T) {
 	}
 }
 
-func TestDescriptorConsumesTextMessage(t *testing.T) {
+func TestDescriptorConsumesMessageCreated(t *testing.T) {
 	t.Parallel()
 	descriptor := New().Descriptor()
 	if descriptor.ID().String() != "echo" {
 		t.Fatalf("ID = %q, want echo", descriptor.ID())
 	}
 	consumes := descriptor.Consumes()
-	if len(consumes) != 1 || consumes[0].String() != "text.message" {
-		t.Fatalf("Consumes = %v, want text.message", consumes)
+	if len(consumes) != 1 || consumes[0] != otogi.ActionMessageCreated {
+		t.Fatalf("Consumes = %v, want message.created", consumes)
 	}
 }
 
 type recordingInvocation struct {
-	calls int
-	slot  string
-	text  otogi.Text
-	err   error
+	calls   int
+	slot    string
+	message otogi.Message
+	err     error
 }
 
-func (i *recordingInvocation) SendText(_ context.Context, slot string, text otogi.Text) error {
+func (i *recordingInvocation) Send(_ context.Context, slot string, message otogi.Message) error {
 	i.calls++
 	i.slot = slot
-	i.text = text
+	i.message = message
 	return i.err
 }
 
-type fakeEvent struct{ text otogi.Text }
+type fakeEvent struct{ message otogi.Message }
 
 func (e fakeEvent) ID() otogi.EventID                          { return otogi.EventID{} }
 func (e fakeEvent) Platform() otogi.PlatformID                 { return otogi.PlatformID{} }
@@ -100,21 +98,32 @@ func (e fakeEvent) Tenant() otogi.TenantID                     { return otogi.Te
 func (e fakeEvent) Conversation() otogi.ConversationID         { return otogi.ConversationID{} }
 func (e fakeEvent) SourceEventID() (otogi.SourceEventID, bool) { return otogi.SourceEventID{}, false }
 func (e fakeEvent) Actor() (otogi.ActorID, bool)               { return otogi.ActorID{}, false }
-func (e fakeEvent) Kind() otogi.EventKind                      { return otogi.EventKind{} }
-func (e fakeEvent) SchemaVersion() uint64                      { return 1 }
+func (e fakeEvent) Action() otogi.EventAction                  { return otogi.ActionMessageCreated }
+func (e fakeEvent) Direction() otogi.Direction                 { return otogi.DirectionIncoming }
 func (e fakeEvent) OccurredAt() time.Time                      { return time.Time{} }
 func (e fakeEvent) IngestedAt() time.Time                      { return time.Time{} }
+func (e fakeEvent) EditedAt() (time.Time, bool)                { return time.Time{}, false }
 func (e fakeEvent) TraceID() (otogi.TraceID, bool)             { return otogi.TraceID{}, false }
 func (e fakeEvent) CausalEventID() (otogi.CausalEventID, bool) { return otogi.CausalEventID{}, false }
-func (e fakeEvent) Text() otogi.Text                           { return e.text }
+func (e fakeEvent) Completeness() otogi.Completeness           { return otogi.CompletenessComplete }
+func (e fakeEvent) ProviderLocator() (otogi.ProviderLocator, bool) {
+	return otogi.ProviderLocator{}, false
+}
+func (e fakeEvent) Message() otogi.Message        { return e.message }
+func (e fakeEvent) Extensions() []otogi.Extension { return nil }
 
-func mustText(t *testing.T, value string) otogi.Text {
+func mustMessage(t *testing.T, value string) otogi.Message {
 	t.Helper()
-	text, err := otogi.NewText(value)
+	id, _ := otogi.NewPartID("text")
+	part, err := otogi.NewTextPart(id, value, nil, nil, nil)
 	if err != nil {
-		t.Fatalf("NewText: %v", err)
+		t.Fatal(err)
 	}
-	return text
+	message, err := otogi.NewMessage([]otogi.PartID{id}, []otogi.Part{part}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message
 }
 
 func canceledContext() context.Context {

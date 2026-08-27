@@ -39,9 +39,6 @@ type ModuleID struct{ value string }
 // IdempotencyKey identifies one logical outbound effect across retries.
 type IdempotencyKey struct{ value string }
 
-// EventKind identifies an event schema and routing kind.
-type EventKind struct{ value string }
-
 func validateIdentifier(value string) error {
 	if value == "" || len(value) > 128 || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
 		return fmt.Errorf("identifier: %w", ErrInvalid)
@@ -137,14 +134,6 @@ func NewIdempotencyKey(value string) (IdempotencyKey, error) {
 	return IdempotencyKey{value}, nil
 }
 
-// NewEventKind validates value and returns a comparable event kind.
-func NewEventKind(value string) (EventKind, error) {
-	if err := validateIdentifier(value); err != nil {
-		return EventKind{}, err
-	}
-	return EventKind{value}, nil
-}
-
 // String returns the exact validated identifier.
 func (v EventID) String() string { return v.value }
 
@@ -177,6 +166,3 @@ func (v ModuleID) String() string { return v.value }
 
 // String returns the exact validated key.
 func (v IdempotencyKey) String() string { return v.value }
-
-// String returns the exact validated event kind.
-func (v EventKind) String() string { return v.value }

@@ -23,8 +23,9 @@ func TestSourceCopiesInputsAndSubmitsSerially(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if len(sink.inputs) != 2 || sink.inputs[0].Text().String() != "first" || sink.inputs[1].Text().String() != "second" {
-		t.Fatalf("submitted texts = %v, want [first second]", inputTexts(sink.inputs))
+	texts := inputTexts(sink.inputs)
+	if len(texts) != 2 || texts[0] != "first" || texts[1] != "second" {
+		t.Fatalf("submitted texts = %v, want [first second]", texts)
 	}
 }
 
@@ -78,12 +79,14 @@ func testInput(t *testing.T, value string) otogi.EventInput {
 	account, _ := otogi.NewAccountID("account")
 	tenant, _ := otogi.NewTenantID("tenant")
 	conversation, _ := otogi.NewConversationID("conversation")
-	kind, _ := otogi.NewEventKind("text.message")
-	text, _ := otogi.NewText(value)
+	action := otogi.ActionMessageCreated
+	id, _ := otogi.NewPartID("part")
+	part, _ := otogi.NewTextPart(id, value, nil, nil, nil)
+	message, _ := otogi.NewMessage([]otogi.PartID{id}, []otogi.Part{part}, nil, nil)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	input, err := otogi.NewEventInput(otogi.EventInputParams{
 		Platform: platform, Account: account, Tenant: tenant, Conversation: conversation,
-		Kind: kind, SchemaVersion: 1, OccurredAt: now, IngestedAt: now, Text: text,
+		Action: action, Direction: otogi.DirectionIncoming, Completeness: otogi.CompletenessComplete, OccurredAt: now, IngestedAt: now, Message: message,
 	})
 	if err != nil {
 		t.Fatalf("NewEventInput: %v", err)
@@ -94,7 +97,7 @@ func testInput(t *testing.T, value string) otogi.EventInput {
 func inputTexts(inputs []otogi.EventInput) []string {
 	texts := make([]string, len(inputs))
 	for i := range inputs {
-		texts[i] = inputs[i].Text().String()
+		texts[i], _, _ = inputs[i].Message().Parts()[0].Text()
 	}
 	return texts
 }

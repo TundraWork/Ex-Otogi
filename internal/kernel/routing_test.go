@@ -95,11 +95,11 @@ func TestRoutingInvokesInterestedModulesInIDOrderAndIsolatesFailures(t *testing.
 func TestInvocationScopesMessageAndRejectsDuplicateSlots(t *testing.T) {
 	messenger := &recordingMessenger{}
 	module := newTestModule(t, "sender", "message", func(ctx context.Context, event otogi.Event, invocation otogi.Invocation) otogi.Result {
-		text, _ := otogi.NewText("reply")
-		if err := invocation.SendText(ctx, "reply-slot", text); err != nil {
+		content := testRichMessage(t, "reply")
+		if err := invocation.Send(ctx, "reply-slot", content); err != nil {
 			return otogi.NewFailedResult(err)
 		}
-		if err := invocation.SendText(ctx, "reply-slot", text); !errors.Is(err, otogi.ErrInvalidState) {
+		if err := invocation.Send(ctx, "reply-slot", content); !errors.Is(err, otogi.ErrInvalidState) {
 			return otogi.NewFailedResult(fmt.Errorf("duplicate slot error: %v", err))
 		}
 		return otogi.NewSucceededResult()
@@ -120,7 +120,8 @@ func TestInvocationScopesMessageAndRejectsDuplicateSlots(t *testing.T) {
 		t.Fatalf("messages = %d, want 1", len(messages))
 	}
 	message := messages[0]
-	if message.Tenant().String() != "tenant" || message.Platform().String() != "platform" || message.Account().String() != "account" || message.Conversation().String() != "conversation" || message.OriginatingEvent() != id || message.OriginatingModule().String() != "sender" || message.Text().String() != "reply" {
+	text, _, _ := message.Message().Parts()[0].Text()
+	if message.Tenant().String() != "tenant" || message.Platform().String() != "platform" || message.Account().String() != "account" || message.Conversation().String() != "conversation" || message.OriginatingEvent() != id || message.OriginatingModule().String() != "sender" || text != "reply" {
 		t.Fatalf("message scope incorrect")
 	}
 	if got, want := message.IdempotencyKey().String(), expectedMessagingKey(id.String(), "sender", "reply-slot"); got != want {
