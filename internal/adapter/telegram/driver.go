@@ -337,7 +337,8 @@ func (d *Driver) Drain(ctx context.Context) (err error) {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(context.Cause(drainCtx), errStopDrain) && errors.Is(err, context.Canceled) {
+	drainCause := context.Cause(drainCtx)
+	if errors.Is(drainCause, errStopDrain) && (errors.Is(err, context.Canceled) || errors.Is(err, drainCause)) {
 		return nil
 	}
 	d.fail(err)

@@ -70,3 +70,13 @@ Focused green evidence:
 - `go test ./internal/adapter/telegram -timeout 30s` — PASS.
 - `go test -race ./internal/adapter/telegram -timeout 45s` — PASS.
 - `go test ./internal/adapter/telegram -count=10 -timeout 60s` — PASS with goleak coverage.
+
+## Fix round 4
+
+Added a cause-aware drain regression whose callback wraps `context.Cause(ctx)` after Stop cancellation. The red test showed `Stop error=drain canceled: telegram: stop drain`: the driver recorded the private Stop cause correctly but accepted only errors matching `context.Canceled`. Drain now accepts a callback error only when the recorded cause is Stop-owned and the error matches either `context.Canceled` or that exact recorded cause. Caller cancellation/deadline identity and arbitrary drain errors remain lifecycle failures; caller-first ordering and drain-before-store-close ordering are unchanged.
+
+Focused green evidence (using the explicit Go 1.27 GOROOT noted above):
+
+- `go test ./internal/adapter/telegram -timeout 30s` — PASS (`ok`, 0.070s).
+- `go test -race ./internal/adapter/telegram -timeout 45s` — PASS (`ok`, 0.679s).
+- `go test ./internal/adapter/telegram -count=10 -timeout 60s` — PASS (`ok`, 1.084s) with goleak coverage.

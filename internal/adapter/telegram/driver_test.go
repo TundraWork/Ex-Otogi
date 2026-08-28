@@ -229,6 +229,32 @@ func TestDriverStopCancellationFinishesDrainBeforeCloseWithoutFailure(t *testing
 	}
 }
 
+func TestDriverStopAcceptsCauseAwareDrainError(t *testing.T) {
+	cfg := validDriverConfig(t)
+	started := make(chan struct{})
+	cfg.DrainDispatcher = func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		return fmt.Errorf("drain canceled: %w", context.Cause(ctx))
+	}
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	drained := make(chan error, 1)
+	go func() { drained <- d.Drain(context.Background()) }()
+	<-started
+	if err := d.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error=%v", err)
+	}
+	if err := <-drained; err != nil {
+		t.Fatalf("shutdown Drain error=%v", err)
+	}
+	if d.Err() != nil {
+		t.Fatalf("lifecycle error=%v", d.Err())
+	}
+}
+
 func TestDriverCallerCanceledDrainFailsLifecycle(t *testing.T) {
 	cfg := validDriverConfig(t)
 	cfg.DrainDispatcher = func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
@@ -243,6 +269,48 @@ func TestDriverCallerCanceledDrainFailsLifecycle(t *testing.T) {
 		t.Fatalf("err=%v state=%s cause=%v", err, d.State(), d.Err())
 	}
 	_ = d.Stop(context.Background())
+}
+
+func TestDriverDrainRejectsNonStopErrors(t *testing.T) {
+	drainFailed := errors.New("drain failed")
+	tests := []struct {
+		name string
+		ctx  func() context.Context
+		drain func(context.Context) error
+		want error
+	}{
+		{
+			name: "caller deadline",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				t.Cleanup(cancel)
+				return ctx
+			},
+			drain: func(ctx context.Context) error { <-ctx.Done(); return context.Cause(ctx) },
+			want:  context.DeadlineExceeded,
+		},
+		{
+			name:  "arbitrary error",
+			ctx:   context.Background,
+			drain: func(context.Context) error { return drainFailed },
+			want:  drainFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validDriverConfig(t)
+			cfg.DrainDispatcher = tt.drain
+			d := NewDriver(cfg)
+			if err := d.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			err := d.Drain(tt.ctx())
+			if !errors.Is(err, tt.want) || d.State() != StateFailed || !errors.Is(d.Err(), tt.want) {
+				t.Fatalf("err=%v state=%s cause=%v", err, d.State(), d.Err())
+			}
+			_ = d.Stop(context.Background())
+		})
+	}
 }
 
 func TestDriverCallerCancellationWinsStopRace(t *testing.T) {
