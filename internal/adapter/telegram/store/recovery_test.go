@@ -106,29 +106,53 @@ func testTime() time.Time { return time.Unix(123, 0).UTC() }
 func TestRecordGapPreservesAcknowledgedPermanentForSameCause(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
-	if err := s.RecordGap(ctx, "channel:9", 12, "channel inaccessible"); err != nil { t.Fatal(err) }
-	if err := s.MarkRecoveryPermanent(ctx, "channel:9", "channel inaccessible"); err != nil { t.Fatal(err) }
-	if err := s.AcknowledgeRecovery(ctx, "channel:9"); err != nil { t.Fatal(err) }
-	if err := s.RecordGap(ctx, "channel:9", 12, "channel inaccessible"); err != nil { t.Fatal(err) }
+	if err := s.RecordGap(ctx, "channel:9", 12, "channel inaccessible"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkRecoveryPermanent(ctx, "channel:9", "channel inaccessible"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AcknowledgeRecovery(ctx, "channel:9"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordGap(ctx, "channel:9", 12, "channel inaccessible"); err != nil {
+		t.Fatal(err)
+	}
 	record, _, err := s.Recovery(ctx, "channel:9")
-	if err != nil || record.State != RecoveryPermanentDegraded || !record.Acknowledged { t.Fatalf("record=%+v err=%v", record, err) }
-	if err := s.RecordGap(ctx, "channel:9", 13, "new recoverable evidence"); err != nil { t.Fatal(err) }
+	if err != nil || record.State != RecoveryPermanentDegraded || !record.Acknowledged {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
+	if err := s.RecordGap(ctx, "channel:9", 13, "new recoverable evidence"); err != nil {
+		t.Fatal(err)
+	}
 	record, _, err = s.Recovery(ctx, "channel:9")
-	if err != nil || record.State != RecoveryDegraded || record.Acknowledged { t.Fatalf("record=%+v err=%v", record, err) }
+	if err != nil || record.State != RecoveryDegraded || record.Acknowledged {
+		t.Fatalf("record=%+v err=%v", record, err)
+	}
 }
 
 func TestPreviousSchemaMigrationCopiesDegradedConsistency(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "telegram.db")
-	s, err := Open(ctx, Config{Path:path,AccountKey:"deployment",AuthorizedUserID:42,GotdVersion:"v0.161.0",TGLayer:228})
-	if err != nil { t.Fatal(err) }
-	if _, err := s.db.ExecContext(ctx, "INSERT INTO consistency(account_key,box,position,degraded,reason) VALUES(?,?,?,?,?)", s.accountKey, "common", 41, 1, "old gap"); err != nil { t.Fatal(err) }
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM recovery; UPDATE schema_meta SET version=3"); err != nil { t.Fatal(err) }
+	s, err := Open(ctx, Config{Path: path, AccountKey: "deployment", AuthorizedUserID: 42, GotdVersion: "v0.161.0", TGLayer: 228})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "INSERT INTO consistency(account_key,box,position,degraded,reason) VALUES(?,?,?,?,?)", s.accountKey, "common", 41, 1, "old gap"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM recovery; UPDATE schema_meta SET version=3"); err != nil {
+		t.Fatal(err)
+	}
 	_ = s.Close()
-	reopened, err := Open(ctx, Config{Path:path,AccountKey:"deployment",AuthorizedUserID:42,GotdVersion:"v0.161.0",TGLayer:228})
-	if err != nil { t.Fatal(err) }
-	t.Cleanup(func(){_ = reopened.Close()})
-	record, found, err := reopened.Recovery(ctx,"common")
-	if err != nil || !found || record.Position != 41 || record.Cause != "old gap" || record.State != RecoveryDegraded { t.Fatalf("record=%+v found=%v err=%v",record,found,err) }
+	reopened, err := Open(ctx, Config{Path: path, AccountKey: "deployment", AuthorizedUserID: 42, GotdVersion: "v0.161.0", TGLayer: 228})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	record, found, err := reopened.Recovery(ctx, "common")
+	if err != nil || !found || record.Position != 41 || record.Cause != "old gap" || record.State != RecoveryDegraded {
+		t.Fatalf("record=%+v found=%v err=%v", record, found, err)
+	}
 }

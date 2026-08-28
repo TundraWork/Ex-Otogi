@@ -176,18 +176,24 @@ func (s *Store) migrate(ctx context.Context, cfg Config) error {
 		if _, e = tx.ExecContext(ctx, "ALTER TABLE quarantine ADD COLUMN reprocessed_at INTEGER"); e != nil && !strings.Contains(e.Error(), "duplicate column name") {
 			return e
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE schema_meta SET version=4 WHERE singleton=1"); e != nil { return e }
+		if _, e = tx.ExecContext(ctx, "UPDATE schema_meta SET version=4 WHERE singleton=1"); e != nil {
+			return e
+		}
 		version = 4
 	}
 	if version == 3 {
 		if _, e = tx.ExecContext(ctx, "ALTER TABLE quarantine ADD COLUMN reprocessed_at INTEGER"); e != nil && !strings.Contains(e.Error(), "duplicate column name") {
 			return e
 		}
-		if _, e = tx.ExecContext(ctx, "UPDATE schema_meta SET version=4 WHERE singleton=1"); e != nil { return e }
+		if _, e = tx.ExecContext(ctx, "UPDATE schema_meta SET version=4 WHERE singleton=1"); e != nil {
+			return e
+		}
 		version = 4
 	}
 	if version == 4 {
-		if _, e = tx.ExecContext(ctx, "INSERT INTO recovery(account_key,box,position,state,cause,acknowledged) SELECT account_key,box,position,'degraded',reason,0 FROM consistency WHERE degraded=1 ON CONFLICT(account_key,box) DO NOTHING"); e != nil { return e }
+		if _, e = tx.ExecContext(ctx, "INSERT INTO recovery(account_key,box,position,state,cause,acknowledged) SELECT account_key,box,position,'degraded',reason,0 FROM consistency WHERE degraded=1 ON CONFLICT(account_key,box) DO NOTHING"); e != nil {
+			return e
+		}
 	}
 	if version != CurrentSchemaVersion {
 		return fmt.Errorf("unsupported schema version %d", version)

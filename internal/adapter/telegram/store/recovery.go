@@ -11,26 +11,37 @@ import (
 // RecoveryState is the persisted state of one required consistency box.
 type RecoveryState string
 
+// Persisted recovery states.
 const (
 	RecoveryDegraded          RecoveryState = "degraded"
 	RecoveryResynchronizing   RecoveryState = "resynchronizing"
 	RecoveryReady             RecoveryState = "ready"
 	RecoveryPermanentDegraded RecoveryState = "permanent_degraded"
 )
+
 // QuarantineRow is one mapper-upgrade reprocessing source.
 type QuarantineRow struct {
-	ID        int64
+	// ID is the durable quarantine row identifier.
+	ID int64
+	// SourceKey is the stable source deduplication key.
 	SourceKey string
-	Kind      string
-	Payload   []byte
+	// Kind identifies the quarantined Telegram constructor family.
+	Kind string
+	// Payload contains bounded deterministic preserved bytes.
+	Payload []byte
 }
 
 // RecoveryRecord is the operator-visible recovery status of one consistency box.
 type RecoveryRecord struct {
-	Box          string
-	Position     int64
-	State        RecoveryState
-	Cause        string
+	// Box identifies the common or channel consistency stream.
+	Box string
+	// Position is the last durable source position.
+	Position int64
+	// State is the persisted recovery lifecycle state.
+	State RecoveryState
+	// Cause describes why recovery is required or permanent.
+	Cause string
+	// Acknowledged records explicit operator acceptance of permanent degradation.
 	Acknowledged bool
 }
 
@@ -129,7 +140,7 @@ func (s *Store) RecoveryReady(ctx context.Context) (bool, []RecoveryRecord, erro
 	if err != nil {
 		return false, nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ready := true
 	var records []RecoveryRecord
 	for rows.Next() {
@@ -139,7 +150,7 @@ func (s *Store) RecoveryReady(ctx context.Context) (bool, []RecoveryRecord, erro
 			return false, nil, err
 		}
 		record.Acknowledged = acknowledged != 0
-		if record.State != RecoveryReady && !(record.State == RecoveryPermanentDegraded && record.Acknowledged) {
+		if record.State != RecoveryReady && (record.State != RecoveryPermanentDegraded || !record.Acknowledged) {
 			ready = false
 		}
 		records = append(records, record)
@@ -150,35 +161,82 @@ func (s *Store) RecoveryReady(ctx context.Context) (bool, []RecoveryRecord, erro
 // RequiredRecoveries returns every non-ready recovery record in stable box order.
 func (s *Store) RequiredRecoveries(ctx context.Context) ([]RecoveryRecord, error) {
 	rows, err := s.db.QueryContext(ctx, "SELECT box,position,state,cause,acknowledged FROM recovery WHERE account_key=? AND state<>? ORDER BY box", s.accountKey, RecoveryReady)
-	if err != nil { return nil, err }
-	defer rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
 	var records []RecoveryRecord
 	for rows.Next() {
 		var record RecoveryRecord
 		var acknowledged int
-		if err := rows.Scan(&record.Box,&record.Position,&record.State,&record.Cause,&acknowledged); err != nil { return nil, err }
-		record.Acknowledged=acknowledged!=0
-		if record.State != RecoveryPermanentDegraded || !record.Acknowledged { records=append(records,record) }
+		if err := rows.Scan(&record.Box, &record.Position, &record.State, &record.Cause, &acknowledged); err != nil {
+			return nil, err
+		}
+		record.Acknowledged = acknowledged != 0
+		if record.State != RecoveryPermanentDegraded || !record.Acknowledged {
+			records = append(records, record)
+		}
 	}
-	return records,rows.Err()
+	return records, rows.Err()
 }
 
 // PendingJournal returns at most limit unnormalized packets in receipt order.
 func (s *Store) PendingJournal(ctx context.Context, limit int) ([]JournalRow, error) {
-	if limit <= 0 || limit > MaxCaptureRows { return nil, ErrInputTooLarge }
-	rows,err:=s.db.QueryContext(ctx,"SELECT id,payload,received_at,normalized_at FROM journal WHERE account_key=? AND normalized_at IS NULL ORDER BY id LIMIT ?",s.accountKey,limit)
-	if err!=nil{return nil,err};defer rows.Close()
+	if limit <= 0 || limit > MaxCaptureRows {
+		return nil, ErrInputTooLarge
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT id,payload,received_at,normalized_at FROM journal WHERE account_key=? AND normalized_at IS NULL ORDER BY id LIMIT ?", s.accountKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
 	var result []JournalRow
-	for rows.Next(){var row JournalRow;var received int64;var normalized sql.NullInt64;if err:=rows.Scan(&row.ID,&row.Payload,&received,&normalized);err!=nil{return nil,err};row.ReceivedAt=time.Unix(0,received).UTC();result=append(result,row)}
-	return result,rows.Err()
+	for rows.Next() {
+		var row JournalRow
+		var received int64
+		var normalized sql.NullInt64
+		if err := rows.Scan(&row.ID, &row.Payload, &received, &normalized); err != nil {
+			return nil, err
+		}
+		row.ReceivedAt = time.Unix(0, received).UTC()
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }
 
 // PendingQuarantine returns at most limit unreprocessed rows in stable order.
-func (s *Store) PendingQuarantine(ctx context.Context, limit int) ([]QuarantineRow,error){
-	if limit<=0||limit>MaxCaptureRows{return nil,ErrInputTooLarge}
-	rows,err:=s.db.QueryContext(ctx,"SELECT id,source_key,kind,payload FROM quarantine WHERE account_key=? AND reprocessed_at IS NULL ORDER BY id LIMIT ?",s.accountKey,limit);if err!=nil{return nil,err};defer rows.Close()
-	var result []QuarantineRow;for rows.Next(){var row QuarantineRow;if err:=rows.Scan(&row.ID,&row.SourceKey,&row.Kind,&row.Payload);err!=nil{return nil,err};result=append(result,row)};return result,rows.Err()
+func (s *Store) PendingQuarantine(ctx context.Context, limit int) ([]QuarantineRow, error) {
+	if limit <= 0 || limit > MaxCaptureRows {
+		return nil, ErrInputTooLarge
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT id,source_key,kind,payload FROM quarantine WHERE account_key=? AND reprocessed_at IS NULL ORDER BY id LIMIT ?", s.accountKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var result []QuarantineRow
+	for rows.Next() {
+		var row QuarantineRow
+		if err := rows.Scan(&row.ID, &row.SourceKey, &row.Kind, &row.Payload); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }
 
 // CompleteQuarantine records successful mapper-upgrade reprocessing while retaining the source-key tombstone.
-func (s *Store) CompleteQuarantine(ctx context.Context,id int64)error{result,err:=s.db.ExecContext(ctx,"UPDATE quarantine SET reprocessed_at=? WHERE account_key=? AND id=? AND reprocessed_at IS NULL",time.Now().UTC().UnixNano(),s.accountKey,id);if err!=nil{return err};n,err:=result.RowsAffected();if err!=nil{return err};if n!=1{return ErrStateNotFound};return nil}
+func (s *Store) CompleteQuarantine(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, "UPDATE quarantine SET reprocessed_at=? WHERE account_key=? AND id=? AND reprocessed_at IS NULL", time.Now().UTC().UnixNano(), s.accountKey, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrStateNotFound
+	}
+	return nil
+}

@@ -128,7 +128,7 @@ func forbidden(source, target string) string {
 }
 
 func sameTelegramAdapter(source, target string) bool {
-	return strings.HasPrefix(source, "/internal/adapter/telegram/") && strings.HasPrefix(target, "internal/adapter/telegram/")
+	return (source == "/internal/adapter/telegram" || strings.HasPrefix(source, "/internal/adapter/telegram/")) && strings.HasPrefix(target, "internal/adapter/telegram/")
 }
 
 func isStandardLibrary(importPath string) bool {

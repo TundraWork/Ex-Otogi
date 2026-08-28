@@ -46,6 +46,9 @@ func TestClassificationRootPreservesSyntheticFixtureRoot(t *testing.T) {
 }
 
 func TestSameTelegramAdapterAllowanceIsNarrow(t *testing.T) {
+	if reason := forbidden("/internal/adapter/telegram", module+"internal/adapter/telegram/store"); reason != "" {
+		t.Fatalf("adapter root rejected: %s", reason)
+	}
 	if reason := forbidden("/internal/adapter/telegram/updates", module+"internal/adapter/telegram/store"); reason != "" {
 		t.Fatalf("same adapter rejected: %s", reason)
 	}
