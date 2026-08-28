@@ -32,9 +32,13 @@ func main() {
 }
 
 func inspect(root string) ([]string, error) {
-	classificationRoot := repositoryRoot(root)
+	walkRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	classificationRoot := classificationRoot(walkRoot)
 	var violations []string
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(walkRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -88,6 +92,24 @@ func repositoryRoot(path string) string {
 			return path
 		}
 		current = parent
+	}
+}
+
+func classificationRoot(walkRoot string) string {
+	repository := repositoryRoot(walkRoot)
+	relative, err := filepath.Rel(repository, walkRoot)
+	if err != nil || relative == "." {
+		return repository
+	}
+	first := relative
+	if separator := strings.IndexRune(first, filepath.Separator); separator >= 0 {
+		first = first[:separator]
+	}
+	switch first {
+	case "cmd", "internal", "modules", "pkg":
+		return repository
+	default:
+		return walkRoot
 	}
 }
 

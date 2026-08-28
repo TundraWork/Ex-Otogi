@@ -118,8 +118,7 @@ func packetUpdates(packet tg.UpdatesClass) []tg.UpdateClass {
 func correlationKey(update tg.UpdateClass) ([32]byte, error) {
 	var kind byte
 	var messageID, pts int
-	switch value := update.(type) {
-	case *tg.UpdateNewMessage:
+	if value, ok := update.(*tg.UpdateNewMessage); ok {
 		kind, pts = 1, value.Pts
 		if message, ok := value.Message.(interface{ GetID() int }); ok {
 			messageID = message.GetID()

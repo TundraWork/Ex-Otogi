@@ -79,10 +79,9 @@ func TestStateStorageRestoresPersistedDegradedReadiness(t *testing.T) {
 
 type channelState struct {
 	memState
-	position  int64
-	degraded  bool
-	reason    string
-	forwarded bool
+	position int64
+	degraded bool
+	reason   string
 }
 
 func (s *channelState) ForEachChannels(ctx context.Context, _ int64, f func(context.Context, int64, int) error) error {
