@@ -111,7 +111,7 @@ func (s *Store) EraseAccount(ctx context.Context) error {
 		return e
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, table := range []string{"update_state", "channel_state", "channel_access_hash", "user_hash", "peers", "journal", "inbox", "quarantine", "locators", "consistency", "sends"} {
+	for _, table := range []string{"update_state", "channel_state", "channel_access_hash", "user_hash", "peers", "journal", "inbox", "quarantine", "locators", "consistency", "recovery", "sends"} {
 		if _, e = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_key=?", s.accountKey); e != nil {
 			return e
 		}

@@ -431,10 +431,31 @@ func (s *Store) FindLocators(ctx context.Context, namespace string, id int64) ([
 	return locators, rows.Err()
 }
 
+// KnownPeers returns bounded durable peers in stable kind/ID order for history recovery.
+func (s *Store) KnownPeers(ctx context.Context, limit int) ([]Peer, error) {
+	if limit <= 0 || limit > MaxCaptureRows { return nil, ErrInputTooLarge }
+	rows, err := s.db.QueryContext(ctx, "SELECT kind,peer_id,access_hash,payload FROM peers WHERE account_key=? ORDER BY kind,peer_id LIMIT ?", s.accountKey, limit)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	var peers []Peer
+	for rows.Next() { var peer Peer; if err:=rows.Scan(&peer.Kind,&peer.ID,&peer.AccessHash,&peer.Payload);err!=nil{return nil,err};peers=append(peers,peer) }
+	return peers,rows.Err()
+}
+
 // RecordGap marks a consistency box degraded at a durable boundary.
 func (s *Store) RecordGap(ctx context.Context, b string, p int64, r string) error {
-	_, e := s.db.ExecContext(ctx, "INSERT INTO consistency(account_key,box,position,degraded,reason) VALUES(?,?,?,1,?) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position),degraded=1,reason=excluded.reason", s.accountKey, b, p, r)
-	return e
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, "INSERT INTO consistency(account_key,box,position,degraded,reason) VALUES(?,?,?,1,?) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position),degraded=1,reason=excluded.reason", s.accountKey, b, p, r); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO recovery(account_key,box,position,state,cause,acknowledged) VALUES(?,?,?,?,?,0) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position),state=excluded.state,cause=excluded.cause,acknowledged=0", s.accountKey, b, p, RecoveryDegraded, r); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Consistency returns normalized position and degradation status.

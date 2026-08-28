@@ -214,7 +214,7 @@ func TestOversizedInputsAreRejectedWithoutInsertion(t *testing.T) {
 	}
 }
 
-func TestCurrentSchemaHasSeparatedHashAndLocatorIdentityAndRejectsOldLayout(t *testing.T) {
+func TestCurrentSchemaHasSeparatedHashAndLocatorIdentityAndMigratesPreviousLayout(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	for _, table := range []string{"channel_access_hash", "locators"} {
@@ -236,9 +236,11 @@ func TestCurrentSchemaHasSeparatedHashAndLocatorIdentityAndRejectsOldLayout(t *t
 		t.Fatal(err)
 	}
 	_ = old.Close()
-	if _, err = Open(ctx, testConfig(path)); err == nil || !strings.Contains(err.Error(), "unsupported schema") {
-		t.Fatalf("old schema: %v", err)
+	upgraded, err := Open(ctx, testConfig(path))
+	if err != nil {
+		t.Fatalf("upgrade previous schema: %v", err)
 	}
+	_ = upgraded.Close()
 	path = filepath.Join(t.TempDir(), "bad-layout.db")
 	bad, err := Open(ctx, testConfig(path))
 	if err != nil {

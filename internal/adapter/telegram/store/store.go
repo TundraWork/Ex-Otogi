@@ -15,7 +15,7 @@ import (
 )
 
 // CurrentSchemaVersion is the only schema version supported by this experimental store.
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 4
 
 var (
 	// ErrInvalidPath reports a non-local, non-regular, or URI-like database path.
@@ -164,11 +164,29 @@ func (s *Store) migrate(ctx context.Context, cfg Config) error {
 	e = tx.QueryRowContext(ctx, "SELECT version FROM schema_meta WHERE singleton=1").Scan(&version)
 	if errors.Is(e, sql.ErrNoRows) {
 		_, e = tx.ExecContext(ctx, "INSERT INTO schema_meta(singleton,version) VALUES(1,?)", CurrentSchemaVersion)
+		version = CurrentSchemaVersion
 	}
 	if e != nil {
 		return e
 	}
-	if version != 0 && version != CurrentSchemaVersion {
+	if version == 2 {
+		if _, e = tx.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS recovery(account_key TEXT NOT NULL,box TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,cause TEXT NOT NULL DEFAULT '',acknowledged INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_key,box))"); e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "ALTER TABLE quarantine ADD COLUMN reprocessed_at INTEGER"); e != nil && !strings.Contains(e.Error(), "duplicate column name") {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "UPDATE schema_meta SET version=4 WHERE singleton=1"); e != nil { return e }
+		version = 4
+	}
+	if version == 3 {
+		if _, e = tx.ExecContext(ctx, "ALTER TABLE quarantine ADD COLUMN reprocessed_at INTEGER"); e != nil && !strings.Contains(e.Error(), "duplicate column name") {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "UPDATE schema_meta SET version=4 WHERE singleton=1"); e != nil { return e }
+		version = 4
+	}
+	if version != CurrentSchemaVersion {
 		return fmt.Errorf("unsupported schema version %d", version)
 	}
 	var key, gotdVersion string
@@ -205,9 +223,10 @@ func validateCurrentSchema(ctx context.Context, tx *sql.Tx) error {
 		"peers":               {[]string{"account_key", "kind", "peer_id", "access_hash", "payload"}, []string{"account_key", "kind", "peer_id"}},
 		"journal":             {[]string{"id", "account_key", "payload", "received_at", "normalized_at"}, []string{"id"}},
 		"inbox":               {[]string{"id", "account_key", "source_key", "conversation", "sequence", "payload", "available_at", "status", "owner", "lease_until", "attempts", "completed_at", "error"}, []string{"id"}},
-		"quarantine":          {[]string{"id", "account_key", "source_key", "kind", "payload", "created_at"}, []string{"id"}},
+		"quarantine":          {[]string{"id", "account_key", "source_key", "kind", "payload", "created_at", "reprocessed_at"}, []string{"id"}},
 		"locators":            {[]string{"account_key", "namespace", "message_id", "conversation", "payload", "payload_hash", "created_at", "updated_at"}, []string{"account_key", "namespace", "message_id", "conversation"}},
 		"consistency":         {[]string{"account_key", "box", "position", "degraded", "reason"}, []string{"account_key", "box"}},
+		"recovery":            {[]string{"account_key", "box", "position", "state", "cause", "acknowledged"}, []string{"account_key", "box"}},
 		"sends":               {[]string{"account_key", "key", "digest", "random_id", "peer_locator", "status", "retry_at", "error", "provider_message_id", "created_at", "updated_at", "terminal_at"}, []string{"account_key", "key"}},
 	}
 	for table, layout := range expected {
@@ -280,9 +299,9 @@ CREATE TABLE IF NOT EXISTS user_hash(account_key TEXT NOT NULL,user_id INTEGER N
 CREATE TABLE IF NOT EXISTS peers(account_key TEXT NOT NULL,kind TEXT NOT NULL,peer_id INTEGER NOT NULL,access_hash INTEGER NOT NULL,payload BLOB,PRIMARY KEY(account_key,kind,peer_id));
 CREATE TABLE IF NOT EXISTS journal(id INTEGER PRIMARY KEY AUTOINCREMENT,account_key TEXT NOT NULL,payload BLOB NOT NULL,received_at INTEGER NOT NULL,normalized_at INTEGER);
 CREATE TABLE IF NOT EXISTS inbox(id TEXT PRIMARY KEY,account_key TEXT NOT NULL,source_key TEXT NOT NULL,conversation TEXT NOT NULL,sequence INTEGER NOT NULL,payload BLOB,available_at INTEGER NOT NULL,status TEXT NOT NULL,owner TEXT,lease_until INTEGER,attempts INTEGER NOT NULL DEFAULT 0,completed_at INTEGER,error TEXT,UNIQUE(account_key,source_key));
-CREATE INDEX IF NOT EXISTS inbox_order ON inbox(account_key,available_at,conversation,sequence);
-CREATE TABLE IF NOT EXISTS quarantine(id INTEGER PRIMARY KEY AUTOINCREMENT,account_key TEXT NOT NULL,source_key TEXT NOT NULL,kind TEXT NOT NULL,payload BLOB,created_at INTEGER NOT NULL,UNIQUE(account_key,source_key));
+CREATE TABLE IF NOT EXISTS quarantine(id INTEGER PRIMARY KEY AUTOINCREMENT,account_key TEXT NOT NULL,source_key TEXT NOT NULL,kind TEXT NOT NULL,payload BLOB,created_at INTEGER NOT NULL,reprocessed_at INTEGER,UNIQUE(account_key,source_key));
 CREATE TABLE IF NOT EXISTS locators(account_key TEXT NOT NULL,namespace TEXT NOT NULL,message_id INTEGER NOT NULL,conversation TEXT NOT NULL,payload BLOB,payload_hash BLOB NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_key,namespace,message_id,conversation));
 CREATE TABLE IF NOT EXISTS consistency(account_key TEXT NOT NULL,box TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,degraded INTEGER NOT NULL DEFAULT 0,reason TEXT NOT NULL DEFAULT '',PRIMARY KEY(account_key,box));
+CREATE TABLE IF NOT EXISTS recovery(account_key TEXT NOT NULL,box TEXT NOT NULL,position INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,cause TEXT NOT NULL DEFAULT '',acknowledged INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_key,box));
 CREATE TABLE IF NOT EXISTS sends(account_key TEXT NOT NULL,key TEXT NOT NULL,digest BLOB NOT NULL,random_id INTEGER NOT NULL,peer_locator BLOB,status TEXT NOT NULL,retry_at INTEGER,error TEXT,provider_message_id INTEGER,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,terminal_at INTEGER,PRIMARY KEY(account_key,key));
 `
