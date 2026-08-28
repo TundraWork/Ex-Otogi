@@ -26,3 +26,18 @@ The command tests first failed to compile because `run` and `liveConfig` did not
 ## Live-test status
 
 No real Telegram credentials or session were available, so the opt-in network smoke was not run. Its pre-network refusal and secret-safety paths were exercised locally. A passing live smoke is intentionally not claimed as production readiness.
+
+## Fix round 1
+
+Runtime, quality, and security review findings were corrected with focused regressions:
+
+- pre-bind gotd middleware proxies now pass startup RPCs through and forward after graph binding;
+- the authorized user ID flows from `Driver.runConnected` into manager composition without an uncancelable duplicate `Self` RPC;
+- dispatcher readiness begins only after Run owns admission, while drain closes new claims and waits for active delivery and durable cleanup without canceling it;
+- every non-context durable event-codec rejection wraps `otogi.ErrInvalid`, so poison inbox rows fail permanently and later rows progress; cancellation identity remains transient;
+- default fuzz smoke runs both entity conversion and durable EventInput decoding;
+- live smoke now verifies only preauthorized session connectivity and no longer claims SQLite, account-binding, recovery, or driver readiness coverage;
+- Linux session/SQLite paths require real current-user-owned `0700` parents, single-link `0600` files and safe sidecars; unsupported platforms fail closed;
+- restore instructions require a vetted no-follow restore tool, externally authenticated encrypted artifacts, strict flat-member allowlisting, integrity/binding verification, and atomic publication.
+
+Focused verification passed with the repository wrapper: Telegram/store unit tests, selected runtime race tests, both bounded fuzz targets, command/quality contract tests, doccheck, and archcheck. No full `make quality` was run in this review round, per controller instruction.

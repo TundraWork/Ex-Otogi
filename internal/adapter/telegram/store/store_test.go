@@ -11,9 +11,18 @@ import (
 	"github.com/gotd/td/telegram/updates"
 )
 
+func privateStoreDirectory(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(context.Background(), Config{Path: filepath.Join(t.TempDir(), "telegram.db"), AccountKey: "deployment", AuthorizedUserID: 42, GotdVersion: "v0.161.0", TGLayer: 228, MaxReaders: 2, BusyTimeout: time.Second})
+	s, err := Open(context.Background(), Config{Path: filepath.Join(privateStoreDirectory(t), "telegram.db"), AccountKey: "deployment", AuthorizedUserID: 42, GotdVersion: "v0.161.0", TGLayer: 228, MaxReaders: 2, BusyTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +32,7 @@ func openTestStore(t *testing.T) *Store {
 
 func TestOpenBindingPragmasAndPathValidation(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := privateStoreDirectory(t)
 	path := filepath.Join(dir, "db.sqlite")
 	s, err := Open(ctx, Config{Path: path, AccountKey: "a", AuthorizedUserID: 7, GotdVersion: "v", TGLayer: 228})
 	if err != nil {

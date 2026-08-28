@@ -45,6 +45,8 @@ Telegram authorization first reuses the opaque gotd session when it is valid. If
 
 The application hash, phone number, login code, 2FA password, and session bytes are secrets. They MUST NOT be supplied in command-line arguments or written to logs, traces, metrics, errors, diagnostic exports, or audit records. Callback results are consumed only by the authorization attempt and MUST NOT be persisted by Ex-Otogi. Session bytes remain opaque and MUST NOT be copied except by the encrypted paired backup procedure in [`operations.md`](operations.md#telegram-state-backup-and-restore).
 
+Backup ciphertext and archive structure are untrusted input. Restore MUST authenticate the artifact using an external checksum or signature before decryption; an archive-internal manifest does not establish provenance. A vetted restore tool or procedure MUST reject non-allowlisted members, links, devices, duplicates, and traversal, extract with no-follow exclusive creation into a new private temporary directory, validate integrity and binding, and atomically publish only the accepted result.
+
 ## Data minimization and privacy
 
 The runtime collects and retains only data required by an approved capability. Raw message content is excluded from routine telemetry and audit evidence. Persisted sensitive fields have an owner, purpose, retention rule, deletion behavior, and backup treatment.

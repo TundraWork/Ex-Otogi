@@ -32,6 +32,11 @@ func ownedByCurrentUser(info os.FileInfo) bool {
 	return ok && stat.Uid == uint32(os.Geteuid())
 }
 
+func hasSingleLink(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Nlink == 1
+}
+
 func validateFilesystemType(fsType int64) error {
 	switch uint64(fsType) {
 	case extSuperMagic, xfsSuperMagic, btrfsSuperMagic, tmpfsSuperMagic, zfsSuperMagic, f2fsSuperMagic, ubifsSuperMagic, overlaySuperMagic:

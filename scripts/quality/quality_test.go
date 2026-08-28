@@ -36,12 +36,38 @@ func TestExperimentalMilestoneTargetsArePresent(t *testing.T) {
 	if strings.Contains(" "+quality[1]+" ", " telegram-smoke ") {
 		t.Error("quality must not contact Telegram")
 	}
-	fuzzGate := regexp.MustCompile(`(?m)^\t\$\(GO\) test -run '\^\$\$' -fuzz '\^FuzzConvertEntitiesUTF16\$\$' -fuzztime=\$\(TELEGRAM_FUZZTIME\) \./internal/adapter/telegram/mapper$`)
-	if !fuzzGate.MatchString(makefile) || !strings.Contains(makefile, "TELEGRAM_FUZZTIME ?= 1x") {
-		t.Error("Telegram fuzz gate must be deterministic, bounded, and use the repository Go wrapper")
+	fuzzGates := []*regexp.Regexp{
+		regexp.MustCompile(`(?m)^\t\$\(GO\) test -run '\^\$\$' -fuzz '\^FuzzConvertEntitiesUTF16\$\$' -fuzztime=\$\(TELEGRAM_FUZZTIME\) \./internal/adapter/telegram/mapper$`),
+		regexp.MustCompile(`(?m)^\t\$\(GO\) test -run '\^\$\$' -fuzz '\^FuzzDecodeEventInput\$\$' -fuzztime=\$\(TELEGRAM_FUZZTIME\) \./internal/adapter/telegram$`),
+	}
+	for _, fuzzGate := range fuzzGates {
+		if !fuzzGate.MatchString(makefile) {
+			t.Error("Telegram fuzz gate must run both bounded adapter fuzz targets with the repository Go wrapper")
+		}
+	}
+	if !strings.Contains(makefile, "TELEGRAM_FUZZTIME ?= 1x") {
+		t.Error("Telegram fuzz gate must have a deterministic default bound")
 	}
 	if !strings.Contains(makefile, "$(GO) test ./pkg/otogi -run 'Corpus'") {
 		t.Error("corpus gate must run deterministic cross-protocol corpus tests")
+	}
+}
+
+func TestTelegramRunbookRequiresVettedRestoreProcedure(t *testing.T) {
+	data, err := os.ReadFile("../../docs/runbooks/telegram-mtproto.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runbook := string(data)
+	for _, unsafe := range []string{"age -d /secure/backups/telegram-account.tar.age | tar", "tar -C \"$RESTORE_DIR\" -xf -"} {
+		if strings.Contains(runbook, unsafe) {
+			t.Errorf("runbook contains unsafe restore instruction %q", unsafe)
+		}
+	}
+	for _, requirement := range []string{"authenticated external checksum or signature", "new `0700` temporary directory", "unique flat regular-file allowlist", "symbolic links, hard links, devices, duplicate names, and path traversal", "no-follow", "atomic publish", "does not validate SQLite, account binding, or recovery readiness"} {
+		if !strings.Contains(runbook, requirement) {
+			t.Errorf("runbook is missing restore/smoke requirement %q", requirement)
+		}
 	}
 }
 

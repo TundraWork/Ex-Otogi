@@ -49,21 +49,27 @@ tar -C "$BACKUP_STAGE" -cf - session.json state.sqlite METADATA SHA256SUMS | age
 sha256sum "$BACKUP_STAGE.tar.age"
 ```
 
-The integrity result must be `ok`; record the displayed account binding, schema version, UTC creation time, and encrypted artifact checksum in the protected backup inventory. Store only `$BACKUP_STAGE.tar.age` outside the host's protected boundary. Apply the approved encrypted-backup retention and access policy, then securely remove plaintext staging according to that policy.
+The integrity result must be `ok`; record the displayed account binding, schema version, UTC creation time, and encrypted artifact checksum in the protected backup inventory. Store only `$BACKUP_STAGE.tar.age` outside the host's protected boundary. Publish an authenticated external checksum or signature for the encrypted artifact in the protected inventory; `SHA256SUMS` inside the archive is an integrity manifest, not provenance or authentication. Apply the approved encrypted-backup retention and access policy, then securely remove plaintext staging according to that policy.
 
-Restore offline into a new private directory; never overlay active state:
+Restore is offline into a new location and MUST use the deployment's vetted restore tool or procedure; do not pipe decrypted bytes to a general-purpose archive extractor and never overlay active state. The vetted implementation is required to:
+
+- authenticate the encrypted artifact against its external checksum or signature before decryption;
+- decrypt only into a new `0700` temporary directory on the destination local filesystem;
+- parse the archive before extraction and enforce the exact unique flat regular-file allowlist `session.json`, `state.sqlite`, `METADATA`, and `SHA256SUMS`;
+- reject symbolic links, hard links, devices, duplicate names, and path traversal, including absolute paths and any path component other than the allowlisted flat names;
+- extract with no-follow filesystem operations, exclusive file creation, and `0600` modes, without invoking `tar -x` on untrusted input;
+- verify `SHA256SUMS`, SQLite `PRAGMA integrity_check`, schema compatibility, and the account/user/gotd/layer binding against independently supplied expected values; and
+- perform atomic publish only after every check succeeds, renaming the complete new directory into an absent final path on the same filesystem.
+
+Invoke only the reviewed deployment tool according to its own documented interface, for example:
 
 ```sh
-export RESTORE_DIR=/srv/ex-otogi/telegram-account-restored
-install -d -m 0700 "$RESTORE_DIR"
-age -d /secure/backups/telegram-account.tar.age | tar -C "$RESTORE_DIR" -xf -
-cd "$RESTORE_DIR" && sha256sum -c SHA256SUMS
-chmod 0600 "$RESTORE_DIR/session.json" "$RESTORE_DIR/state.sqlite"
-sqlite3 "$RESTORE_DIR/state.sqlite" 'PRAGMA integrity_check; SELECT account_key,authorized_user_id,gotd_version,tg_layer FROM binding WHERE singleton=1; SELECT version FROM schema_meta WHERE singleton=1;'
-stat -c '%F %a %U %n' "$RESTORE_DIR" "$RESTORE_DIR/session.json" "$RESTORE_DIR/state.sqlite"
+approved-telegram-restore --artifact /secure/backups/telegram-account.tar.age \
+  --authenticated-digest-file /secure/inventory/telegram-account.tar.age.sha256 \
+  --expected-account telegram-account --destination /srv/ex-otogi/telegram-account-restored
 ```
 
-Checksums and SQLite integrity must pass. Confirm binding and versions match the intended account and binary before changing the two path environment values together. Start only after archiving the old pair. A restore drill is successful only when the expected account authorizes and update state becomes reconciled; a degraded result requires the process below.
+`approved-telegram-restore` is a required vetted deployment prerequisite, not a command supplied by this repository. If no tool or procedure implementing every requirement above is available, restoration is prohibited. After publication, independently inspect the final directory and regular files as `0700`/`0600`, then start only with both restored paths selected together. A restore drill succeeds only when the expected account authorizes and the full driver reconciles update state; a degraded result requires the process below.
 
 ## Degraded update gaps
 
@@ -79,23 +85,21 @@ The milestone has no operator erasure command. Do not issue ad hoc SQL: adapter-
 
 ## Opt-in live smoke
 
-Use a disposable Telegram test account with an already-authorized session and dedicated SQLite state. Set secrets through the environment or a protected secret-injection mechanism, never arguments:
+Use a disposable Telegram test account with an already-authorized session. Set secrets through the environment or a protected secret-injection mechanism, never arguments:
 ```sh
 export OTOGI_TELEGRAM_APP_ID='<telegram-app-id>'
 export OTOGI_TELEGRAM_APP_HASH='<telegram-app-hash>'
-export OTOGI_TELEGRAM_ACCOUNT_KEY='telegram-smoke-account'
 export OTOGI_TELEGRAM_SESSION_PATH='/srv/ex-otogi/telegram-smoke/session.json'
-export OTOGI_TELEGRAM_DATABASE_PATH='/srv/ex-otogi/telegram-smoke/state.sqlite'
 make telegram-smoke
 ```
 
-The target rejects missing configuration before network access. It is deliberately excluded from `make quality`; default quality is offline and must never consume these values or contact Telegram. Unset the environment after the run:
+The target rejects missing configuration before network access. It requires only the application ID, application hash, and existing session path. On success it prints `telegram smoke: session connectivity verified`. This means only that the session connected, was authorized, and loaded its Telegram account; it does not validate SQLite, account binding, or recovery readiness, and it never claims that the full driver is ready. It is deliberately excluded from `make quality`; default quality is offline and must never consume these values or contact Telegram. Unset the environment after the run:
 
 ```sh
-unset OTOGI_TELEGRAM_APP_ID OTOGI_TELEGRAM_APP_HASH OTOGI_TELEGRAM_ACCOUNT_KEY OTOGI_TELEGRAM_SESSION_PATH OTOGI_TELEGRAM_DATABASE_PATH
+unset OTOGI_TELEGRAM_APP_ID OTOGI_TELEGRAM_APP_HASH OTOGI_TELEGRAM_SESSION_PATH
 ```
 
-A passing live smoke proves only the experimental path against that test account. It is not production-readiness or release-verification evidence.
+A passing live smoke proves only session connectivity for that disposable account. It is not production-readiness or release-verification evidence.
 
 ## Gotd upgrade
 

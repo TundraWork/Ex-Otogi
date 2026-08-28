@@ -107,6 +107,7 @@ type Driver struct {
 	state          State
 	cause          error
 	client         ClientSession
+	authorizedID   int64
 	store          DriverStore
 	stopping       bool
 	lifeCancel     context.CancelFunc
@@ -142,6 +143,12 @@ func (d *Driver) Ready() bool {
 
 // Err reports the most recent lifecycle failure.
 func (d *Driver) Err() error { d.mu.Lock(); defer d.mu.Unlock(); return d.cause }
+
+func (d *Driver) authorizedUserID() int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.authorizedID
+}
 
 // Done closes after the client and all owned children exit.
 func (d *Driver) Done() <-chan struct{} { return d.done }
@@ -238,11 +245,12 @@ func (d *Driver) runConnected(ctx context.Context) error {
 	}
 	d.mu.Lock()
 	d.store = store
+	d.authorizedID = self.ID
 	d.mu.Unlock()
 	managerReady := make(chan struct{})
 	var readyOnce sync.Once
 	managerResult := d.runChild(ctx, "manager", func(child context.Context) error {
-		return d.cfg.RunManager(child, d.client, store, func() { readyOnce.Do(func() { close(managerReady) }) })
+		return d.cfg.RunManager(child, d.client, store, self.ID, func() { readyOnce.Do(func() { close(managerReady) }) })
 	})
 	select {
 	case <-managerReady:
@@ -275,6 +283,13 @@ func (d *Driver) runConnected(ctx context.Context) error {
 	})
 	select {
 	case <-dispatchReady:
+		select {
+		case err = <-d.dispatchDone:
+			return d.startFailed(err)
+		case <-ctx.Done():
+			return d.startFailed(ctx.Err())
+		default:
+		}
 		d.mu.Lock()
 		if d.state != StateStarting {
 			err = d.cause

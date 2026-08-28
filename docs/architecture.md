@@ -84,6 +84,8 @@ Constructors MUST NOT start goroutines or perform hidden network I/O. Constructi
 
 For the Telegram composition, the root constructs a single-use gotd client and its adapter-owned session storage, SQLite store, update manager, resynchronizer, and inbox dispatcher. Startup first validates and opens the separate storage resources, restores authorization, binds the authorized account, starts update capture and the manager, reconciles durable gaps, then starts dispatch. It publishes ready only after the startup criteria defined in [`runtime.md`](runtime.md#telegram-lifecycle-specialization) are met. Child failure, drain, stop ordering, and the no-restart rule are governed there; operator procedures are in the [Telegram MTProto runbook](runbooks/telegram-mtproto.md).
 
+The opt-in Telegram smoke is intentionally not that composition root: it constructs only gotd session storage and a client to verify existing-session connectivity. It does not open the adapter SQLite store or claim account-binding, recovery, dispatcher, or driver readiness.
+
 ## Data flow
 
 1. A driver authenticates and validates an external payload within declared size limits.

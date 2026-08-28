@@ -367,7 +367,7 @@ func TestDriverWaitsForManagerGateAndPropagatesGateFailure(t *testing.T) {
 	t.Run("blocks until gate open", func(t *testing.T) {
 		cfg := validDriverConfig(t)
 		release := make(chan struct{})
-		cfg.RunManager = func(ctx context.Context, _ ClientSession, _ DriverStore, ready func()) error {
+		cfg.RunManager = func(ctx context.Context, _ ClientSession, _ DriverStore, _ int64, ready func()) error {
 			<-release
 			ready()
 			<-ctx.Done()
@@ -390,13 +390,34 @@ func TestDriverWaitsForManagerGateAndPropagatesGateFailure(t *testing.T) {
 	t.Run("gate failure", func(t *testing.T) {
 		want := errors.New("gate replay failed")
 		cfg := validDriverConfig(t)
-		cfg.RunManager = func(context.Context, ClientSession, DriverStore, func()) error { return want }
+		cfg.RunManager = func(context.Context, ClientSession, DriverStore, int64, func()) error { return want }
 		d := NewDriver(cfg)
 		if err := d.Start(context.Background()); !errors.Is(err, want) {
 			t.Fatalf("error=%v", err)
 		}
 		_ = d.Stop(context.Background())
 	})
+}
+
+func TestDriverPassesLifecycleAuthorizedUserToManager(t *testing.T) {
+	cfg := validDriverConfig(t)
+	client := &fakeClientSession{selfID: 73}
+	cfg.ClientFactory = fakeClientFactory{client: client}
+	var got int64
+	cfg.RunManager = func(ctx context.Context, _ ClientSession, _ DriverStore, authorizedUserID int64, ready func()) error {
+		got = authorizedUserID
+		ready()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got != 73 {
+		t.Fatalf("manager authorized user ID=%d, want 73", got)
+	}
+	_ = d.Stop(context.Background())
 }
 
 func TestDriverStopAggregatesCleanupErrorAndClosesAfterChildren(t *testing.T) {
@@ -522,6 +543,7 @@ type fakeClientSession struct {
 	runErr      error
 	panicValue  any
 	nilOnCancel bool
+	selfID      int64
 }
 
 func (f *fakeClientSession) Run(ctx context.Context, fn func(context.Context) error) error {
@@ -539,8 +561,13 @@ func (f *fakeClientSession) Run(ctx context.Context, fn func(context.Context) er
 }
 func (*fakeClientSession) Authorized(context.Context) (bool, error)  { return true, nil }
 func (*fakeClientSession) Authorize(context.Context, AuthFlow) error { return nil }
-func (*fakeClientSession) Self(context.Context) (*tg.User, error)    { return &tg.User{ID: 42}, nil }
-func (*fakeClientSession) API() API                                  { return nil }
+func (f *fakeClientSession) Self(context.Context) (*tg.User, error) {
+	if f.selfID == 0 {
+		return &tg.User{ID: 42}, nil
+	}
+	return &tg.User{ID: f.selfID}, nil
+}
+func (*fakeClientSession) API() API { return nil }
 
 type fakeDriverStore struct {
 	ready      bool

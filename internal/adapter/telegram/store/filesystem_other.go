@@ -12,3 +12,5 @@ func validateLocalFilesystem(string) error {
 }
 
 func ownedByCurrentUser(os.FileInfo) bool { return false }
+
+func hasSingleLink(os.FileInfo) bool { return false }

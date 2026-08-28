@@ -87,7 +87,7 @@ func (p *middlewareProxy) Handle(invoker tg.Invoker) gotdtelegram.InvokeFunc {
 		next := p.next
 		p.mu.RUnlock()
 		if next == nil {
-			return errors.New("telegram: update middleware graph is not bound")
+			return invoker.Invoke(ctx, input, output)
 		}
 		return next.Handle(invoker)(ctx, input, output)
 	}
@@ -136,7 +136,7 @@ func NewComposition(config ProductionCompositionConfig) (*Composition, error) {
 	return c, nil
 }
 
-func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore) (CompositionRuntime, error) {
+func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore, authorizedUserID int64) (CompositionRuntime, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.bound {
@@ -150,9 +150,8 @@ func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore)
 	if api == nil {
 		return CompositionRuntime{}, fmt.Errorf("%w: Telegram client API", ErrInvalidConfig)
 	}
-	self, err := client.Self(context.Background())
-	if err != nil {
-		return CompositionRuntime{}, fmt.Errorf("load bound account: %w", err)
+	if authorizedUserID <= 0 {
+		return CompositionRuntime{}, fmt.Errorf("%w: authorized Telegram user", ErrInvalidConfig)
 	}
 	platform, err := otogi.NewPlatformID("telegram")
 	if err != nil {
@@ -162,7 +161,7 @@ func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore)
 	if err != nil {
 		return CompositionRuntime{}, err
 	}
-	valueMapper := mapper.New(mapper.Config{Platform: platform, Account: account, Tenant: c.config.Tenant, AuthorizedUserID: self.ID, IngestedAt: c.config.Now})
+	valueMapper := mapper.New(mapper.Config{Platform: platform, Account: account, Tenant: c.config.Tenant, AuthorizedUserID: authorizedUserID, IngestedAt: c.config.Now})
 	health := telegramupdates.NewHealth()
 	downstream := telegramupdates.NewDownstream(store, valueMapper, EncodeEventInput, health)
 	manager, gate, _, _ := telegramupdates.NewManager(telegramupdates.ManagerConfig{APIStorage: store, AccessHasher: store, UserAccessHasher: store, Journal: store, Downstream: downstream, GapStore: store, Health: health})
@@ -206,16 +205,15 @@ func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore)
 		},
 		Raw: raw,
 	}
-	resynchronizer := NewResynchronizer(api, StoreRecovery{Store: store, UserID: self.ID}, replay, c.config.Recovery)
+	resynchronizer := NewResynchronizer(api, StoreRecovery{Store: store, UserID: authorizedUserID}, replay, c.config.Recovery)
 	dispatcher := NewInboxDispatcher(store, c.config.Admitter, DecodeEventInput, c.config.Dispatcher)
 	sender := NewSender(api, store, gate, c.config.Now)
 	refetcher := NewRefetcher(api, store)
 	var dispatchMu sync.Mutex
-	var dispatchCancel context.CancelFunc
 	var dispatchDone chan struct{}
 	runtime := CompositionRuntime{
 		RunManager: func(ctx context.Context, ready func()) error {
-			return telegramupdates.RunManager(ctx, manager, gate, api, self.ID, gotdupdates.AuthOptions{}, ready)
+			return telegramupdates.RunManager(ctx, manager, gate, api, authorizedUserID, gotdupdates.AuthOptions{}, ready)
 		},
 		RunResynchronizer: func(ctx context.Context) error {
 			if err := sender.Reconcile(ctx); err != nil {
@@ -224,29 +222,21 @@ func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore)
 			return resynchronizer.Run(ctx)
 		},
 		RunDispatcher: func(ctx context.Context, ready func()) error {
-			runCtx, cancel := context.WithCancel(ctx)
-			done := make(chan struct{})
 			dispatchMu.Lock()
-			dispatchCancel, dispatchDone = cancel, done
+			dispatchDone = make(chan struct{})
+			done := dispatchDone
 			dispatchMu.Unlock()
 			defer close(done)
-			ready()
-			return dispatcher.Run(runCtx)
+			return dispatcher.Run(ctx, ready)
 		},
 		DrainDispatcher: func(ctx context.Context) error {
 			dispatchMu.Lock()
-			cancel, done := dispatchCancel, dispatchDone
+			done := dispatchDone
 			dispatchMu.Unlock()
-			if cancel == nil || done == nil {
+			if done == nil {
 				return ErrInvalidLifecycle
 			}
-			cancel()
-			select {
-			case <-done:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			return dispatcher.Drain(ctx)
 		},
 		Sender:    sender,
 		Refetcher: refetcher,
@@ -291,15 +281,15 @@ func updatesFromHistory(value tg.MessagesMessagesClass) tg.UpdatesClass {
 	return &tg.Updates{Updates: result, Users: modified.GetUsers(), Chats: modified.GetChats()}
 }
 
-func (c *Composition) runManager(ctx context.Context, client ClientSession, store DriverStore, ready func()) error {
-	runtime, err := c.bindRuntime(client, store)
+func (c *Composition) runManager(ctx context.Context, client ClientSession, store DriverStore, authorizedUserID int64, ready func()) error {
+	runtime, err := c.bindRuntime(client, store, authorizedUserID)
 	if err != nil {
 		return err
 	}
 	return runtime.RunManager(ctx, ready)
 }
 func (c *Composition) runResynchronizer(ctx context.Context, client ClientSession, store DriverStore) error {
-	runtime, err := c.bindRuntime(client, store)
+	runtime, err := c.bindRuntime(client, store, c.driver.authorizedUserID())
 	if err != nil {
 		return err
 	}

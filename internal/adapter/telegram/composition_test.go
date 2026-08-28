@@ -7,8 +7,46 @@ import (
 	"time"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
+	"github.com/gotd/td/bin"
+	gotdtelegram "github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 )
+
+type recordingInvoker struct{ calls int }
+
+func (i *recordingInvoker) Invoke(context.Context, bin.Encoder, bin.Decoder) error {
+	i.calls++
+	return nil
+}
+
+type forwardingMiddleware struct{ supplied, downstream tg.Invoker }
+
+func (m *forwardingMiddleware) Handle(invoker tg.Invoker) gotdtelegram.InvokeFunc {
+	m.supplied = invoker
+	return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+		return m.downstream.Invoke(ctx, input, output)
+	}
+}
+
+func TestMiddlewareProxyPassesThroughUntilBoundAndThenForwards(t *testing.T) {
+	supplied := &recordingInvoker{}
+	proxy := &middlewareProxy{}
+	if err := proxy.Handle(supplied)(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if supplied.calls != 1 {
+		t.Fatalf("unbound supplied invoker calls=%d", supplied.calls)
+	}
+	downstream := &recordingInvoker{}
+	middleware := &forwardingMiddleware{downstream: downstream}
+	proxy.bind(middleware)
+	if err := proxy.Handle(supplied)(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if middleware.supplied != supplied || downstream.calls != 1 {
+		t.Fatalf("supplied=%T downstream calls=%d", middleware.supplied, downstream.calls)
+	}
+}
 
 func TestCompositionLifecycleSmoke(t *testing.T) {
 	cfg := validDriverConfig(t)

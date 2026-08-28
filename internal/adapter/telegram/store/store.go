@@ -114,6 +114,11 @@ func prepareDatabaseFile(path string) (bool, error) {
 	if err := validatePath(path); err != nil {
 		return false, err
 	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := validateExistingPrivateFile(path+suffix, "SQLite sidecar"); err != nil {
+			return false, err
+		}
+	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 	if err == nil {
 		return true, f.Close()
@@ -121,17 +126,31 @@ func prepareDatabaseFile(path string) (bool, error) {
 	if !os.IsExist(err) {
 		return false, fmt.Errorf("%w: create database: %w", ErrInvalidPath, err)
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-		return false, fmt.Errorf("%w: existing database must be regular mode 0600", ErrInvalidPath)
-	}
-	if !ownedByCurrentUser(info) {
-		return false, fmt.Errorf("%w: existing database must be owned by current user", ErrInvalidPath)
+	if err := validateExistingPrivateFile(path, "existing database"); err != nil {
+		return false, err
 	}
 	return false, nil
 }
+
+func validateExistingPrivateFile(path, description string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return fmt.Errorf("%w: %s must be regular mode 0600", ErrInvalidPath, description)
+	}
+	if !ownedByCurrentUser(info) {
+		return fmt.Errorf("%w: %s must be owned by current user", ErrInvalidPath, description)
+	}
+	if !hasSingleLink(info) {
+		return fmt.Errorf("%w: %s must have exactly one link", ErrInvalidPath, description)
+	}
+	return nil
+}
+
 func validatePath(path string) error {
-	if path == "" || path == ":memory:" || strings.ContainsAny(path, "?#") || strings.HasPrefix(path, "file:") || !filepath.IsAbs(path) {
+	if path == "" || path == ":memory:" || strings.ContainsAny(path, "?#") || strings.HasPrefix(path, "file:") || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return ErrInvalidPath
 	}
 	if i, e := os.Lstat(path); e == nil {
@@ -142,9 +161,12 @@ func validatePath(path string) error {
 		return fmt.Errorf("%w: %w", ErrInvalidPath, e)
 	}
 	p := filepath.Dir(path)
-	i, e := os.Stat(p)
-	if e != nil || !i.IsDir() {
+	i, e := os.Lstat(p)
+	if e != nil || !i.IsDir() || i.Mode()&os.ModeSymlink != 0 {
 		return ErrInvalidPath
+	}
+	if i.Mode().Perm() != 0o700 || !ownedByCurrentUser(i) {
+		return fmt.Errorf("%w: parent must be owned by current user and mode 0700", ErrInvalidPath)
 	}
 	if e = validateLocalFilesystem(p); e != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidPath, e)

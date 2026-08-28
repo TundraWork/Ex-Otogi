@@ -30,6 +30,7 @@ test-race:
 
 test-fuzz-smoke:
 	$(GO) test -run '^$$' -fuzz '^FuzzConvertEntitiesUTF16$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram/mapper
+	$(GO) test -run '^$$' -fuzz '^FuzzDecodeEventInput$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram
 
 test-corpus:
 	$(GO) test ./pkg/otogi -run 'Corpus'

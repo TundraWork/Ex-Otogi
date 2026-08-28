@@ -32,7 +32,7 @@ type OpenStoreFunc func(context.Context, StoreConfig) (DriverStore, error)
 type ConfigureClientOptionsFunc func(*ClientOptions) error
 
 // ManagerRunner owns the gotd update manager until cancellation.
-type ManagerRunner func(context.Context, ClientSession, DriverStore, func()) error
+type ManagerRunner func(context.Context, ClientSession, DriverStore, int64, func()) error
 
 // ResynchronizerRunner performs durable startup reconciliation.
 type ResynchronizerRunner func(context.Context, ClientSession, DriverStore) error

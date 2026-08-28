@@ -81,6 +81,24 @@ func TestValidateSessionPathRejectsSymlinks(t *testing.T) {
 	}
 }
 
+func TestValidateSessionPathRejectsSymlinkParent(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux ownership and link contract")
+	}
+	root := privateDirectory(t)
+	realParent := filepath.Join(root, "real")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkParent := filepath.Join(root, "link")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSessionPath(filepath.Join(linkParent, "telegram.session")); err == nil {
+		t.Fatal("ValidateSessionPath() accepted symlink parent")
+	}
+}
+
 func privateDirectory(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

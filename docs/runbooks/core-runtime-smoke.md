@@ -41,7 +41,7 @@ make smoke
 make quality
 ```
 
-`make smoke` captures standard output with POSIX command substitution, which removes all trailing newline characters, then requires the remaining text to equal `echo: hello`; a nonzero executable exit also fails the target. `make quality` runs `fmt-check`, `lint`, `arch-check`, `test`, `test-race`, `test-fuzz-smoke`, `test-corpus`, `test-leak`, and `smoke`; it runs neither mutating `make format` nor opt-in `make telegram-smoke`.
+`make smoke` captures standard output with POSIX command substitution, which removes all trailing newline characters, then requires the remaining text to equal `echo: hello`; a nonzero executable exit also fails the target. `make test-fuzz-smoke` runs bounded smoke executions of both Telegram fuzz targets, `FuzzConvertEntitiesUTF16` and `FuzzDecodeEventInput`. `make quality` runs `fmt-check`, `lint`, `arch-check`, `test`, `test-race`, `test-fuzz-smoke`, `test-corpus`, `test-leak`, and `smoke`; it runs neither mutating `make format` nor opt-in `make telegram-smoke`.
 
 To verify that repository launchers reject a stale external toolchain root:
 

@@ -17,7 +17,7 @@ func testConfig(path string) Config {
 
 func TestOpenCreatesPrivateFileAndRequiresPrivateOwnedRegularExistingFile(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "telegram.db")
+	path := filepath.Join(privateStoreDirectory(t), "telegram.db")
 	s, err := Open(ctx, testConfig(path))
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +42,7 @@ func TestOpenCreatesPrivateFileAndRequiresPrivateOwnedRegularExistingFile(t *tes
 
 func TestOpenBindingChecksEveryIdentityField(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "telegram.db")
+	path := filepath.Join(privateStoreDirectory(t), "telegram.db")
 	cfg := testConfig(path)
 	s, err := Open(ctx, cfg)
 	if err != nil {
@@ -224,7 +224,7 @@ func TestCurrentSchemaHasSeparatedHashAndLocatorIdentityAndMigratesPreviousLayou
 		}
 	}
 	_ = s.Close()
-	path := filepath.Join(t.TempDir(), "old.db")
+	path := filepath.Join(privateStoreDirectory(t), "old.db")
 	if err := os.WriteFile(path, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestCurrentSchemaHasSeparatedHashAndLocatorIdentityAndMigratesPreviousLayou
 		t.Fatalf("upgrade previous schema: %v", err)
 	}
 	_ = upgraded.Close()
-	path = filepath.Join(t.TempDir(), "bad-layout.db")
+	path = filepath.Join(privateStoreDirectory(t), "bad-layout.db")
 	bad, err := Open(ctx, testConfig(path))
 	if err != nil {
 		t.Fatal(err)
@@ -257,7 +257,7 @@ func TestCurrentSchemaHasSeparatedHashAndLocatorIdentityAndMigratesPreviousLayou
 
 func TestOpenRejectsCurrentSchemaWithWrongLocatorPrimaryKey(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "wrong-locator-key.db")
+	path := filepath.Join(privateStoreDirectory(t), "wrong-locator-key.db")
 	s, err := Open(ctx, testConfig(path))
 	if err != nil {
 		t.Fatal(err)

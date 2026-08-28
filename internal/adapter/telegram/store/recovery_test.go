@@ -133,7 +133,7 @@ func TestRecordGapPreservesAcknowledgedPermanentForSameCause(t *testing.T) {
 
 func TestPreviousSchemaMigrationCopiesDegradedConsistency(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := privateStoreDirectory(t)
 	path := filepath.Join(dir, "telegram.db")
 	s, err := Open(ctx, Config{Path: path, AccountKey: "deployment", AuthorizedUserID: 42, GotdVersion: "v0.161.0", TGLayer: 228})
 	if err != nil {

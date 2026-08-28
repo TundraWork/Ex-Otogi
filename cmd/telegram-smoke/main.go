@@ -16,15 +16,13 @@ import (
 )
 
 type liveConfig struct {
-	AppID        int
-	AppHash      string
-	AccountKey   string
-	SessionPath  string
-	DatabasePath string
+	AppID       int
+	AppHash     string
+	SessionPath string
 }
 
 func loadConfig(getenv func(string) string) (liveConfig, error) {
-	required := []string{"OTOGI_TELEGRAM_APP_ID", "OTOGI_TELEGRAM_APP_HASH", "OTOGI_TELEGRAM_ACCOUNT_KEY", "OTOGI_TELEGRAM_SESSION_PATH", "OTOGI_TELEGRAM_DATABASE_PATH"}
+	required := []string{"OTOGI_TELEGRAM_APP_ID", "OTOGI_TELEGRAM_APP_HASH", "OTOGI_TELEGRAM_SESSION_PATH"}
 	values := make(map[string]string, len(required))
 	for _, key := range required {
 		value := strings.TrimSpace(getenv(key))
@@ -37,7 +35,7 @@ func loadConfig(getenv func(string) string) (liveConfig, error) {
 	if err != nil || appID <= 0 {
 		return liveConfig{}, errors.New("telegram smoke: OTOGI_TELEGRAM_APP_ID must be a positive integer")
 	}
-	return liveConfig{AppID: appID, AppHash: values[required[1]], AccountKey: values[required[2]], SessionPath: values[required[3]], DatabasePath: values[required[4]]}, nil
+	return liveConfig{AppID: appID, AppHash: values[required[1]], SessionPath: values[required[2]]}, nil
 }
 
 func run(ctx context.Context, getenv func(string) string, output io.Writer, live func(context.Context, liveConfig) error) error {
@@ -48,7 +46,7 @@ func run(ctx context.Context, getenv func(string) string, output io.Writer, live
 	if err = live(ctx, cfg); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(output, "telegram smoke: ready")
+	_, err = fmt.Fprintln(output, "telegram smoke: session connectivity verified")
 	return err
 }
 
@@ -66,7 +64,6 @@ func mainExit() int {
 
 func liveSmoke(ctx context.Context, cfg liveConfig) error {
 	return telegram.RunLiveSmoke(ctx, telegram.LiveSmokeConfig{
-		AppID: cfg.AppID, AppHash: cfg.AppHash, AccountKey: cfg.AccountKey,
-		SessionPath: cfg.SessionPath, DatabasePath: cfg.DatabasePath,
+		AppID: cfg.AppID, AppHash: cfg.AppHash, SessionPath: cfg.SessionPath,
 	})
 }

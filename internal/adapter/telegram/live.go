@@ -15,20 +15,13 @@ type LiveSmokeConfig struct {
 	AppID int
 	// AppHash is the Telegram application secret.
 	AppHash string
-	// AccountKey is the expected deployment account identity.
-	AccountKey string
 	// SessionPath is an already-authorized private gotd session file.
 	SessionPath string
-	// DatabasePath is the distinct private SQLite path reserved for the full driver.
-	DatabasePath string
 }
 
 // RunLiveSmoke verifies an existing session against Telegram without prompting for credentials.
 func RunLiveSmoke(ctx context.Context, cfg LiveSmokeConfig) error {
-	if cfg.AppID <= 0 || strings.TrimSpace(cfg.AppHash) == "" || strings.TrimSpace(cfg.AccountKey) == "" {
-		return ErrInvalidConfig
-	}
-	if cfg.SessionPath == cfg.DatabasePath || strings.TrimSpace(cfg.DatabasePath) == "" {
+	if cfg.AppID <= 0 || strings.TrimSpace(cfg.AppHash) == "" || strings.TrimSpace(cfg.SessionPath) == "" {
 		return ErrInvalidConfig
 	}
 	storage, err := NewSessionStorage(cfg.SessionPath)

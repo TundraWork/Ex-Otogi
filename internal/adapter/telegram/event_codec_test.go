@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,8 +41,8 @@ func TestEventCodecRoundTripsRichGraphDeterministically(t *testing.T) {
 }
 
 func TestEventCodecRejectsInvalidInput(t *testing.T) {
-	if _, err := EncodeEventInput(otogi.EventInput{}); err == nil {
-		t.Fatal("encoded zero event")
+	if _, err := EncodeEventInput(otogi.EventInput{}); !errors.Is(err, otogi.ErrInvalid) {
+		t.Fatalf("EncodeEventInput error=%v, want ErrInvalid", err)
 	}
 }
 
@@ -61,8 +62,8 @@ func TestEventCodecRejectsInvalidEnvelope(t *testing.T) {
 	tests["corrupt"][0] ^= 0xff
 	for name, data := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, err := DecodeEventInput(context.Background(), data); err == nil {
-				t.Fatal("accepted invalid envelope")
+			if _, err := DecodeEventInput(context.Background(), data); !errors.Is(err, otogi.ErrInvalid) {
+				t.Fatalf("DecodeEventInput error=%v, want ErrInvalid", err)
 			}
 		})
 	}
@@ -71,14 +72,14 @@ func TestEventCodecRejectsInvalidEnvelope(t *testing.T) {
 func TestEventCodecHonorsCancellationAndCountBounds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := DecodeEventInput(ctx, []byte("anything")); err == nil {
-		t.Fatal("ignored cancellation")
+	if _, err := DecodeEventInput(ctx, []byte("anything")); !errors.Is(err, context.Canceled) || errors.Is(err, otogi.ErrInvalid) {
+		t.Fatalf("cancellation error=%v", err)
 	}
 	// A syntactically framed payload declaring too many roots must fail before allocating them.
 	w := codecTestPreamble()
 	w.u32(maxCodecCollectionCount + 1)
-	if _, err := DecodeEventInput(context.Background(), w.Bytes()); err == nil {
-		t.Fatal("accepted excessive count")
+	if _, err := DecodeEventInput(context.Background(), w.Bytes()); !errors.Is(err, otogi.ErrInvalid) {
+		t.Fatalf("excessive count error=%v, want ErrInvalid", err)
 	}
 
 	// Seventeen linked parts exceed the public graph's maximum depth of sixteen.
@@ -102,8 +103,8 @@ func TestEventCodecHonorsCancellationAndCountBounds(t *testing.T) {
 	w.u32(0)
 	w.u32(0)
 	w.u32(0)
-	if _, err := DecodeEventInput(context.Background(), w.Bytes()); err == nil {
-		t.Fatal("accepted excessive graph depth")
+	if _, err := DecodeEventInput(context.Background(), w.Bytes()); !errors.Is(err, otogi.ErrInvalid) {
+		t.Fatalf("excessive depth error=%v, want ErrInvalid", err)
 	}
 }
 

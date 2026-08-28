@@ -67,7 +67,7 @@ func validDriverConfig(t *testing.T) Config {
 		Device:        gotdtelegram.DeviceConfig{DeviceModel: "model", SystemVersion: "system", AppVersion: "app", LangCode: "en", SystemLangCode: "en"},
 		Authenticator: auth, ClientFactory: fakeClientFactory{}, ConfigureClientOptions: func(*ClientOptions) error { return nil },
 		OpenStore: func(context.Context, StoreConfig) (DriverStore, error) { return &fakeDriverStore{ready: true}, nil },
-		RunManager: func(ctx context.Context, _ ClientSession, _ DriverStore, ready func()) error {
+		RunManager: func(ctx context.Context, _ ClientSession, _ DriverStore, _ int64, ready func()) error {
 			ready()
 			<-ctx.Done()
 			return ctx.Err()

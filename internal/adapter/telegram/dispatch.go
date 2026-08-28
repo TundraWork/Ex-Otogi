@@ -67,6 +67,9 @@ type InboxDispatcher struct {
 	config      InboxDispatcherConfig
 	mu          sync.Mutex
 	active      bool
+	draining    bool
+	attempting  bool
+	stateChange chan struct{}
 	claimPrefix string
 	claimCount  uint64
 	after       string
@@ -81,7 +84,7 @@ func NewInboxDispatcher(store InboxStore, admitter TrustedAdmitter, decode Event
 	if _, err := rand.Read(nonce[:]); err != nil {
 		panic("telegram: generate inbox claim owner: " + err.Error())
 	}
-	return &InboxDispatcher{store: store, admitter: admitter, decode: decode, config: config, claimPrefix: config.Owner + ":" + hex.EncodeToString(nonce[:])}
+	return &InboxDispatcher{store: store, admitter: admitter, decode: decode, config: config, claimPrefix: config.Owner + ":" + hex.EncodeToString(nonce[:]), stateChange: make(chan struct{})}
 }
 
 func validDispatchDurations(config InboxDispatcherConfig) bool {
@@ -96,7 +99,7 @@ func validDispatchDurations(config InboxDispatcherConfig) bool {
 }
 
 // Run claims and dispatches eligible rows until ctx is canceled. Only one Run may own the dispatcher.
-func (d *InboxDispatcher) Run(ctx context.Context) error {
+func (d *InboxDispatcher) Run(ctx context.Context, ready func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -106,12 +109,22 @@ func (d *InboxDispatcher) Run(ctx context.Context) error {
 		return fmt.Errorf("run inbox dispatcher: %w", otogi.ErrInvalidState)
 	}
 	d.active = true
+	d.draining = false
+	d.notifyLocked()
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
 		d.active = false
+		d.attempting = false
+		d.notifyLocked()
 		d.mu.Unlock()
 	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ready != nil {
+		ready()
+	}
 
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -120,6 +133,13 @@ func (d *InboxDispatcher) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timer.C:
+		}
+		d.mu.Lock()
+		draining := d.draining
+		d.mu.Unlock()
+		if draining {
+			timer.Reset(d.config.PollInterval)
+			continue
 		}
 		worked, err := d.dispatchOne(ctx)
 		if err != nil {
@@ -139,7 +159,49 @@ func (d *InboxDispatcher) running() bool {
 	return d.active
 }
 
-func (d *InboxDispatcher) dispatchOne(ctx context.Context) (bool, error) {
+// Drain prevents new claims and waits for the current claimed attempt and its durable cleanup.
+func (d *InboxDispatcher) Drain(ctx context.Context) error {
+	d.mu.Lock()
+	if !d.active {
+		d.mu.Unlock()
+		return fmt.Errorf("drain inbox dispatcher: %w", otogi.ErrInvalidState)
+	}
+	d.draining = true
+	d.notifyLocked()
+	for d.attempting {
+		changed := d.stateChange
+		d.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		d.mu.Lock()
+	}
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *InboxDispatcher) notifyLocked() {
+	close(d.stateChange)
+	d.stateChange = make(chan struct{})
+}
+
+func (d *InboxDispatcher) dispatchOne(ctx context.Context) (worked bool, result error) {
+	d.mu.Lock()
+	if d.draining {
+		d.mu.Unlock()
+		return false, nil
+	}
+	d.attempting = true
+	d.notifyLocked()
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		d.attempting = false
+		d.notifyLocked()
+		d.mu.Unlock()
+	}()
 	now := d.config.Now().UTC()
 	d.mu.Lock()
 	d.claimCount++

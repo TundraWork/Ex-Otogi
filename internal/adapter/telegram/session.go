@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	gotdsession "github.com/gotd/td/session"
 )
@@ -31,8 +30,11 @@ func ValidateSessionPath(path string) error {
 	if !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
 		return errors.New("validate Telegram session path: parent must be a real directory")
 	}
-	if runtime.GOOS != "windows" && parentInfo.Mode().Perm() != 0o700 {
+	if parentInfo.Mode().Perm() != 0o700 {
 		return fmt.Errorf("validate Telegram session path: parent mode is %04o, want 0700", parentInfo.Mode().Perm())
+	}
+	if err := validatePathOwnerAndLinks(parentInfo, true); err != nil {
+		return fmt.Errorf("validate Telegram session path: parent: %w", err)
 	}
 	if err := validateLocalFilesystem(parent); err != nil {
 		return fmt.Errorf("validate Telegram session path: %w", err)
@@ -48,8 +50,11 @@ func ValidateSessionPath(path string) error {
 	if !fileInfo.Mode().IsRegular() {
 		return errors.New("validate Telegram session path: file must be regular")
 	}
-	if runtime.GOOS != "windows" && fileInfo.Mode().Perm() != 0o600 {
+	if fileInfo.Mode().Perm() != 0o600 {
 		return fmt.Errorf("validate Telegram session path: file mode is %04o, want 0600", fileInfo.Mode().Perm())
+	}
+	if err := validatePathOwnerAndLinks(fileInfo, false); err != nil {
+		return fmt.Errorf("validate Telegram session path: file: %w", err)
 	}
 	return nil
 }

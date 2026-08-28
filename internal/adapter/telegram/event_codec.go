@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -124,7 +125,8 @@ func (r *eventReader) count(max int) (int, error) {
 }
 
 // EncodeEventInput serializes an immutable event into the Telegram durable-inbox wire format.
-func EncodeEventInput(v otogi.EventInput) ([]byte, error) {
+func EncodeEventInput(v otogi.EventInput) (encoded []byte, err error) {
+	defer func() { err = classifyCodecError(err) }()
 	if v.Platform().String() == "" || v.Account().String() == "" || v.Tenant().String() == "" || v.Conversation().String() == "" || v.OccurredAt().IsZero() || v.IngestedAt().IsZero() {
 		return nil, fmt.Errorf("telegram event codec: invalid event input")
 	}
@@ -155,6 +157,13 @@ func EncodeEventInput(v otogi.EventInput) ([]byte, error) {
 		return nil, fmt.Errorf("telegram event codec: payload exceeds bound")
 	}
 	return w.Bytes(), nil
+}
+
+func classifyCodecError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, otogi.ErrInvalid) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", otogi.ErrInvalid, err)
 }
 
 func optionalSource(v otogi.EventInput) string {
@@ -334,7 +343,8 @@ func writeRelation(w *eventWriter, x otogi.Relation) {
 }
 
 // DecodeEventInput reconstructs one strictly framed, bounded Telegram durable-inbox event.
-func DecodeEventInput(ctx context.Context, data []byte) (otogi.EventInput, error) {
+func DecodeEventInput(ctx context.Context, data []byte) (decoded otogi.EventInput, err error) {
+	defer func() { err = classifyCodecError(err) }()
 	if ctx == nil {
 		ctx = context.Background()
 	}

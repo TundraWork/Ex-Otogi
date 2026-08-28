@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ type dispatchStore struct {
 	failed          []string
 	claimHook       func(context.Context)
 	claimContextErr bool
+	completeHook    func(context.Context)
 }
 
 type releaseRecord struct {
@@ -56,7 +58,10 @@ func (s *dispatchStore) ReleaseClaim(_ context.Context, id, _ string, next time.
 	s.released = append(s.released, releaseRecord{id: id, next: next, reason: reason})
 	return nil
 }
-func (s *dispatchStore) CompleteClaim(_ context.Context, id, _ string, _ time.Time) error {
+func (s *dispatchStore) CompleteClaim(ctx context.Context, id, _ string, _ time.Time) error {
+	if s.completeHook != nil {
+		s.completeHook(ctx)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.complete = append(s.complete, id)
@@ -205,6 +210,68 @@ func TestDispatcherPermanentlyFailsInvalidPayloadWithoutAdmission(t *testing.T) 
 	}
 }
 
+func TestDispatcherPoisonRowFailsAndSuccessorProceeds(t *testing.T) {
+	now := time.Unix(450, 0).UTC()
+	store := &dispatchStore{rows: []telegramstore.InboxRow{
+		dispatchRow(t, "poison", "a", []byte("bad")),
+		dispatchRow(t, "successor", "a", []byte("good")),
+	}}
+	admitter := &dispatchAdmitter{autoComplete: true}
+	d := NewInboxDispatcher(store, admitter, func(_ context.Context, payload []byte) (otogi.EventInput, error) {
+		if string(payload) == "bad" {
+			return otogi.EventInput{}, fmt.Errorf("decode poison: %w", otogi.ErrInvalid)
+		}
+		return dispatchInput(t, "a"), nil
+	}, dispatchConfig(now))
+	if worked, err := d.dispatchOne(context.Background()); !worked || err != nil {
+		t.Fatalf("poison dispatch=%v, %v", worked, err)
+	}
+	if worked, err := d.dispatchOne(context.Background()); !worked || err != nil {
+		t.Fatalf("successor dispatch=%v, %v", worked, err)
+	}
+	if fmt.Sprint(store.failed) != "[poison]" || fmt.Sprint(store.complete) != "[successor]" {
+		t.Fatalf("failed=%v complete=%v", store.failed, store.complete)
+	}
+}
+
+func TestDispatcherDrainClosesClaimsAndWaitsForActiveCleanup(t *testing.T) {
+	now := time.Unix(475, 0).UTC()
+	cleanupStarted := make(chan struct{})
+	cleanupRelease := make(chan struct{})
+	store := &dispatchStore{rows: []telegramstore.InboxRow{
+		dispatchRow(t, "active", "a", []byte("good")),
+		dispatchRow(t, "unclaimed", "b", []byte("good")),
+	}, completeHook: func(context.Context) { close(cleanupStarted); <-cleanupRelease }}
+	d := NewInboxDispatcher(store, &dispatchAdmitter{autoComplete: true}, func(context.Context, []byte) (otogi.EventInput, error) {
+		return dispatchInput(t, "a"), nil
+	}, dispatchConfig(now))
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan error, 1)
+	go func() { runDone <- d.Run(ctx, nil) }()
+	<-cleanupStarted
+	drainDone := make(chan error, 1)
+	go func() { drainDone <- d.Drain(context.Background()) }()
+	select {
+	case err := <-drainDone:
+		t.Fatalf("Drain returned before cleanup: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(cleanupRelease)
+	if err := <-drainDone; err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	claimed := append([]string(nil), store.claimed...)
+	store.mu.Unlock()
+	if fmt.Sprint(claimed) != "[active]" {
+		t.Fatalf("claims after drain=%v", claimed)
+	}
+	cancel()
+	if err := <-runDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error=%v", err)
+	}
+}
+
 func TestDispatcherRunIsSingleOwnerAndStopsOnCancellation(t *testing.T) {
 	now := time.Unix(500, 0).UTC()
 	cfg := dispatchConfig(now)
@@ -212,11 +279,11 @@ func TestDispatcherRunIsSingleOwnerAndStopsOnCancellation(t *testing.T) {
 	d := NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func(_ context.Context, _ []byte) (otogi.EventInput, error) { return dispatchInput(t, "a"), nil }, cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- d.Run(ctx) }()
+	go func() { done <- d.Run(ctx, nil) }()
 	for i := 0; i < 100 && !d.running(); i++ {
 		time.Sleep(time.Millisecond)
 	}
-	if err := d.Run(context.Background()); !errors.Is(err, otogi.ErrInvalidState) {
+	if err := d.Run(context.Background(), nil); !errors.Is(err, otogi.ErrInvalidState) {
 		t.Fatalf("concurrent Run error=%v", err)
 	}
 	cancel()

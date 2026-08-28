@@ -16,7 +16,7 @@ The current milestone implements `make format`, `make fmt-check`, `make lint`, `
 
 ### Telegram quality gates
 
-The Telegram milestone extends the default offline `make quality` gate with its mapper corpus, store and driver tests, race/leak coverage, generated-type import guard, and the pinned gotd/module-layer assertion. Default quality MUST NOT read Telegram credentials, use a real session, resolve Telegram endpoints, or otherwise contact Telegram. `make telegram-smoke` is a separate, explicitly opted-in live check; it is excluded from `make quality` and is governed by the [Telegram MTProto runbook](runbooks/telegram-mtproto.md#opt-in-live-smoke).
+The Telegram milestone extends the default offline `make quality` gate with its mapper corpus, store and driver tests, race/leak coverage, generated-type import guard, pinned gotd/module-layer assertion, and bounded smoke runs of both `FuzzConvertEntitiesUTF16` and `FuzzDecodeEventInput`. Default quality MUST NOT read Telegram credentials, use a real session, resolve Telegram endpoints, or otherwise contact Telegram. `make telegram-smoke` is a separate, explicitly opted-in check of session connectivity only; it requires AppID, AppHash, and SessionPath and does not validate SQLite, account binding, recovery readiness, or full-driver readiness. It is excluded from `make quality` and is governed by the [Telegram MTProto runbook](runbooks/telegram-mtproto.md#opt-in-live-smoke).
 
 Passing these gates proves only the named experimental milestone. It does not satisfy deferred security scanning, artifact verification, operational readiness, or the production release contract.
 
