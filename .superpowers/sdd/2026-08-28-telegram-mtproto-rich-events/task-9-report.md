@@ -23,6 +23,8 @@ All listed focused checks passed after implementation. Package TestMain runs gol
 
 The pre-commit review identified and the implementation corrected: cancelled caller contexts during mandatory post-RPC persistence, false zero-random-ID correlation, ignored ambiguity transition failures, silent annotation-target loss, unbounded refreshed file references, and missing durable `updateMessageID` capture.
 
+A follow-up review corrected rate-limit timing to use the RPC error receipt time and moved relation validation ahead of peer lookup, preserving `ErrUnsupported` identity before external dependency access.
+
 ## Residual concerns
 
 - The full Telegram package race invocation exposed the pre-existing lifecycle test failure `TestDriverCallerCancellationWinsStopRace` (`state=stopped cause=context canceled`); the Task 9-only race set passes. This Task does not modify that lifecycle path.

@@ -151,26 +151,27 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 		return err
 	}
 	updates, rpcErr := s.api.MessagesSendMessage(ctx, req)
+	completedAt := s.now().UTC()
 	persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if rpcErr != nil {
-		return s.recordSendError(persist, key, rpcErr, now)
+		return s.recordSendError(persist, key, rpcErr, completedAt)
 	}
 	if updates == nil {
 		e := errors.New("telegram: nil send updates")
-		if transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: now, Error: "nil updates"}); transitionErr != nil {
+		if transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: completedAt, Error: "nil updates"}); transitionErr != nil {
 			return errors.Join(e, transitionErr)
 		}
 		return e
 	}
 	if err = s.journal.Handle(persist, updates); err != nil {
-		transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: now, Error: "journal returned updates"})
+		transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: completedAt, Error: "journal returned updates"})
 		return errors.Join(fmt.Errorf("telegram: journal returned updates: %w", err), transitionErr)
 	}
 	id := correlatedMessageID(updates, req.RandomID)
 	if id <= 0 {
 		e := errors.New("telegram: missing message correlation")
-		if transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: now, Error: "missing message correlation"}); transitionErr != nil {
+		if transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: completedAt, Error: "missing message correlation"}); transitionErr != nil {
 			return errors.Join(e, transitionErr)
 		}
 		return e
@@ -182,7 +183,7 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 	if found && current.Status == telegramstore.SendSucceeded {
 		return nil
 	}
-	if err = s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendSucceeded, telegramstore.SendTransition{At: now, ProviderMessageID: int64(id)}); err != nil {
+	if err = s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendSucceeded, telegramstore.SendTransition{At: completedAt, ProviderMessageID: int64(id)}); err != nil {
 		return err
 	}
 	return nil
@@ -226,18 +227,6 @@ func (s *Sender) encode(ctx context.Context, m otogi.OutboundMessage) (*tg.Messa
 		}
 		entities = append(entities, e)
 	}
-	peer, record, err := s.inputPeer(ctx, m.Conversation().String())
-	if err != nil {
-		return nil, nil, err
-	}
-	locator, err := encodePeerRecord(record)
-	if err != nil {
-		return nil, nil, err
-	}
-	req := &tg.MessagesSendMessageRequest{Peer: peer, Message: text, RandomID: RandomID(m.IdempotencyKey().String())}
-	if len(entities) > 0 {
-		req.SetEntities(entities)
-	}
 	var reply, thread int
 	for _, r := range m.Message().Relations() {
 		if len(r.Extensions()) != 0 || r.Key() != "" || (r.Kind() != otogi.RelationReply && r.Kind() != otogi.RelationThread) || !r.Target().HasLocator() {
@@ -266,15 +255,30 @@ func (s *Sender) encode(ctx context.Context, m otogi.OutboundMessage) (*tg.Messa
 			thread = ml.MessageID
 		}
 	}
+	var replyTo *tg.InputReplyToMessage
 	if reply != 0 || thread != 0 {
 		if reply == 0 {
 			reply = thread
 		}
-		r := &tg.InputReplyToMessage{ReplyToMsgID: reply}
+		replyTo = &tg.InputReplyToMessage{ReplyToMsgID: reply}
 		if thread != 0 && thread != reply {
-			r.SetTopMsgID(thread)
+			replyTo.SetTopMsgID(thread)
 		}
-		req.SetReplyTo(r)
+	}
+	peer, record, err := s.inputPeer(ctx, m.Conversation().String())
+	if err != nil {
+		return nil, nil, err
+	}
+	locator, err := encodePeerRecord(record)
+	if err != nil {
+		return nil, nil, err
+	}
+	req := &tg.MessagesSendMessageRequest{Peer: peer, Message: text, RandomID: RandomID(m.IdempotencyKey().String())}
+	if len(entities) > 0 {
+		req.SetEntities(entities)
+	}
+	if replyTo != nil {
+		req.SetReplyTo(replyTo)
 	}
 	return req, locator, nil
 }

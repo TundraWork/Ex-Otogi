@@ -166,14 +166,22 @@ func TestUnsupportedGraphIsRejectedBeforeStoreOrRPC(t *testing.T) {
 }
 
 func TestRateLimitRecordsExactRetryWithoutRetry(t *testing.T) {
-	now := time.Unix(1000, 0).UTC()
+	start := time.Unix(1000, 0).UTC()
+	received := start.Add(3 * time.Second)
 	for _, typ := range []string{"FLOOD_WAIT_17", "SLOWMODE_WAIT_17"} {
 		t.Run(typ, func(t *testing.T) {
 			s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}, peer: telegramstore.Peer{Kind: "user", ID: 7, AccessHash: 8}}
 			api := &sendAPIFake{err: tgerr.New(420, typ)}
-			err := NewSender(api, s, &gateFake{}, func() time.Time { return now }).Send(context.Background(), outboundText(t, typ, "user:7", "x", nil, nil))
+			calls := 0
+			err := NewSender(api, s, &gateFake{}, func() time.Time {
+				calls++
+				if calls == 1 {
+					return start
+				}
+				return received
+			}).Send(context.Background(), outboundText(t, typ, "user:7", "x", nil, nil))
 			var rate *RateLimitError
-			if !errors.As(err, &rate) || !rate.RetryAt.Equal(now.Add(17*time.Second)) || api.calls != 1 {
+			if !errors.As(err, &rate) || !rate.RetryAt.Equal(received.Add(17*time.Second)) || api.calls != 1 {
 				t.Fatalf("err=%v calls=%d", err, api.calls)
 			}
 			if got := s.intents[typ]; got.Status != telegramstore.SendRetryable || got.RetryAt == nil || !got.RetryAt.Equal(rate.RetryAt) {
@@ -252,6 +260,20 @@ func TestUnsupportedAnnotationAndRelationAreRejectedBeforeMutation(t *testing.T)
 		if !errors.Is(err, otogi.ErrUnsupported) || s.creates != 0 || api.calls != 0 {
 			t.Fatalf("err=%v creates=%d calls=%d", err, s.creates, api.calls)
 		}
+	}
+}
+
+func TestUnsupportedRelationWinsBeforeMissingPeerLookup(t *testing.T) {
+	platform, _ := otogi.NewPlatformID("telegram")
+	account, _ := otogi.NewAccountID("account")
+	conversation, _ := otogi.NewConversationID("user:7")
+	source, _ := otogi.NewSourceEventID("1")
+	ref, _ := otogi.NewEventRef(otogi.EventRefParams{Platform: platform, Account: account, Conversation: conversation, SourceEvent: source})
+	relation, _ := otogi.NewRelation(otogi.RelationForward, ref, "", nil)
+	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}}
+	err := NewSender(&sendAPIFake{}, s, &gateFake{}, time.Now).Send(context.Background(), outboundText(t, "relation-first", "user:7", "x", nil, []otogi.Relation{relation}))
+	if !errors.Is(err, otogi.ErrUnsupported) || s.creates != 0 {
+		t.Fatalf("err=%v creates=%d", err, s.creates)
 	}
 }
 
