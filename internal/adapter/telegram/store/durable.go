@@ -120,6 +120,12 @@ type Locator struct {
 	UpdatedAt time.Time
 }
 
+// SendCorrelation binds Telegram's random_id acknowledgement to a provider message ID.
+type SendCorrelation struct {
+	RandomID  int64
+	MessageID int64
+}
+
 // Capture is one atomic normalized-capture transaction.
 type Capture struct {
 	// JournalID is the source transport journal row.
@@ -134,6 +140,8 @@ type Capture struct {
 	Quarantine *QuarantineInput
 	// Locators are provider identities learned during mapping.
 	Locators []Locator
+	// SendCorrelations durably complete outbound intents acknowledged by this update.
+	SendCorrelations []SendCorrelation
 	// Box identifies the common or channel consistency stream.
 	Box string
 	// Position is the last normalized source position.
@@ -327,6 +335,14 @@ func (s *Store) CaptureBatch(ctx context.Context, captures []Capture) (bool, err
 				return false, err
 			}
 		}
+		for _, correlation := range c.SendCorrelations {
+			if correlation.RandomID <= 0 || correlation.MessageID <= 0 {
+				return false, fmt.Errorf("invalid send correlation")
+			}
+			if _, err = tx.ExecContext(ctx, "UPDATE sends SET status='succeeded',provider_message_id=?,updated_at=?,terminal_at=? WHERE account_key=? AND random_id=? AND status IN ('in_flight','ambiguous')", correlation.MessageID, now.UnixNano(), now.UnixNano(), s.accountKey, correlation.RandomID); err != nil {
+				return false, err
+			}
+		}
 		if c.Box != "" {
 			if _, err = tx.ExecContext(ctx, "INSERT INTO consistency(account_key,box,position) VALUES(?,?,?) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position)", s.accountKey, c.Box, c.Position); err != nil {
 				return false, err
@@ -342,6 +358,9 @@ func validateCapture(c Capture) error {
 	}
 	if len(c.Locators) > maxCaptureLocators {
 		return fmt.Errorf("%w: locator count %d", ErrInputTooLarge, len(c.Locators))
+	}
+	if len(c.SendCorrelations) > MaxCaptureRows {
+		return fmt.Errorf("%w: send correlation count %d", ErrInputTooLarge, len(c.SendCorrelations))
 	}
 	if len(c.Peers) > maxCaptureLocators {
 		return fmt.Errorf("%w: peer count %d", ErrInputTooLarge, len(c.Peers))

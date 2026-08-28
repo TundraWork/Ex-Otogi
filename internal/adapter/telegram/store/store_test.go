@@ -407,4 +407,28 @@ func TestSendIntentTransitionsConflictRestartAndRetention(t *testing.T) {
 	}
 }
 
+func TestCaptureBatchCompletesCorrelatedSendAtomically(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	now := time.Unix(4000, 0).UTC()
+	_, _, err := s.CreateSendIntent(ctx, SendIntent{Key: "correlated", RequestDigest: []byte("digest"), RandomID: 77}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TransitionSend(ctx, "correlated", SendCreated, SendInFlight, SendTransition{At: now}); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := s.AppendJournal(ctx, []byte("packet"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CaptureBatch(ctx, []Capture{{JournalID: journal, CapturedAt: now, SendCorrelations: []SendCorrelation{{RandomID: 77, MessageID: 88}}}}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetSendIntent(ctx, "correlated")
+	if err != nil || !ok || got.Status != SendSucceeded || got.ProviderMessageID != 88 {
+		t.Fatalf("got=%+v ok=%v err=%v", got, ok, err)
+	}
+}
+
 func oldTime() time.Time { return time.Unix(1, 0).UTC() }

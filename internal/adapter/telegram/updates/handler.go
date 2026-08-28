@@ -77,7 +77,14 @@ func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
 	complete := journalComplete(ctx)
 	captures := make([]telegramstore.Capture, 0, max(1, len(batch.Updates)))
 	peersAttached := false
+	var sendCorrelations []telegramstore.SendCorrelation
 	for _, value := range batch.Updates {
+		if correlation, ok := value.(*tg.UpdateMessageID); ok {
+			if correlation.RandomID > 0 && correlation.ID > 0 {
+				sendCorrelations = append(sendCorrelations, telegramstore.SendCorrelation{RandomID: correlation.RandomID, MessageID: int64(correlation.ID)})
+			}
+			continue
+		}
 		if placeholder, ok := shortSentPlaceholder(value); ok {
 			payload, err := encodeTL(value)
 			if err != nil {
@@ -135,7 +142,9 @@ func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
 		captures = append(captures, capture)
 	}
 	if len(captures) == 0 {
-		captures = append(captures, telegramstore.Capture{JournalID: journalID, KeepJournalPending: !complete, Peers: peers})
+		captures = append(captures, telegramstore.Capture{JournalID: journalID, KeepJournalPending: !complete, Peers: peers, SendCorrelations: sendCorrelations})
+	} else if len(sendCorrelations) > 0 {
+		captures[0].SendCorrelations = sendCorrelations
 	}
 	if _, err := h.store.CaptureBatch(ctx, captures); err != nil {
 		box, position := captures[0].Box, captures[0].Position

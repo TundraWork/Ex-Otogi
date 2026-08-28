@@ -180,3 +180,15 @@ func TestDownstreamQuarantineAdvancesCommonAndChannelConsistency(t *testing.T) {
 		})
 	}
 }
+
+func TestDownstreamCapturesUpdateMessageIDCorrelation(t *testing.T) {
+	store := &captureStore{}
+	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("event"), nil }, NewHealth())
+	packet := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateMessageID{RandomID: 77, ID: 88}}}
+	if err := handler.Handle(context.Background(), packet); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.captures) != 1 || len(store.captures[0].SendCorrelations) != 1 || store.captures[0].SendCorrelations[0].RandomID != 77 || store.captures[0].SendCorrelations[0].MessageID != 88 {
+		t.Fatalf("captures=%+v", store.captures)
+	}
+}
