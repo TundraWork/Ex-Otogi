@@ -41,6 +41,10 @@ A capability interface SHOULD be declared by its consumer and contain only opera
 
 Domain identifiers are opaque typed values. IDs from separate domains MUST NOT share an interchangeable string alias. Time values identify their clock and precision; durations use `time.Duration`. Byte sequences and collections document whether ownership transfers or a copy is required.
 
+### Telegram adapter confinement
+
+The Telegram adapter owns every gotd value and generated `github.com/gotd/td/tg` type. Those types MUST remain below `internal/adapter/telegram`; the adapter translates them to protocol-neutral contracts before calling the kernel, modules, or any other adapter. Session sequence state, access hashes, transport journals, raw update quarantine, and Telegram account binding are likewise adapter-owned. The import guard and generated-version checks are defined in [`quality.md`](quality.md#telegram-quality-gates).
+
 ## Kernel ownership
 
 The kernel owns:
@@ -77,6 +81,8 @@ The composition root MUST:
 6. stop components in reverse dependency order within the shutdown budget.
 
 Constructors MUST NOT start goroutines or perform hidden network I/O. Construction creates a valid inert value; lifecycle methods perform bounded work under context.
+
+For the Telegram composition, the root constructs a single-use gotd client and its adapter-owned session storage, SQLite store, update manager, resynchronizer, and inbox dispatcher. Startup first validates and opens the separate storage resources, restores authorization, binds the authorized account, starts update capture and the manager, reconciles durable gaps, then starts dispatch. It publishes ready only after the startup criteria defined in [`runtime.md`](runtime.md#telegram-lifecycle-specialization) are met. Child failure, drain, stop ordering, and the no-restart rule are governed there; operator procedures are in the [Telegram MTProto runbook](runbooks/telegram-mtproto.md).
 
 ## Data flow
 

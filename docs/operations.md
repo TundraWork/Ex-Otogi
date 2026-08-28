@@ -21,6 +21,12 @@ Environment variables are reserved for simple deploy-specific overrides and secr
 
 The process provides a validation-only command that performs schema and dependency checks without binding public listeners or mutating durable state.
 
+### Telegram storage configuration
+
+Each Telegram account has two absolute, clean, distinct paths: a gotd session file and an adapter SQLite database. Both MUST be on a local filesystem; network, FUSE, URI-style, in-memory, symlink, and shared paths are rejected. On Unix-like systems the session parent directory MUST be mode `0700`; existing or newly created session and database files MUST be regular mode `0600`, and an existing database MUST be owned by the current service user. SQLite WAL and shared-memory sidecars inherit the same protected directory boundary. One account MUST NOT reuse another account's session or database.
+
+The SQLite binding records the immutable deployment account key, authorized Telegram user ID, gotd module version, and generated Telegram layer. Startup fails on any mismatch rather than rebinding or creating apparently fresh state. The exact setup and inspection commands are in the [Telegram MTProto runbook](runbooks/telegram-mtproto.md#prepare-private-storage).
+
 ## Reload
 
 Reload is opt-in. Logging level, telemetry sampling within bounded limits, and selected admission limits MAY be reloadable. The runtime validates a full candidate, computes supported changes, applies them atomically, and retains the previous configuration on failure.
@@ -75,6 +81,12 @@ Retention, encryption, off-host transfer, and access control are deployment poli
 
 Auditable state is included in every full backup. Audit backup metadata records the covered stream IDs and first/last record IDs and digests. The default audit RPO is 24 hours; a deployment MAY choose a shorter interval but MUST NOT weaken it without an approved security-risk decision. Before retention expiry, the operator verifies that a completed, readable backup covers the records to be removed.
 
+### Telegram state backup and restore
+
+A Telegram recovery point is one inseparable pair: the opaque gotd session file plus a database-aware snapshot of the matching SQLite state. The pair MUST be captured while the adapter is offline, or under a coordinated procedure that prevents the two resources from representing different account moments. Copying the live SQLite main file or backing up only one member is prohibited. Backup metadata records account key, authorized user ID, gotd version, Telegram layer, schema version, creation time, and both checksums without recording credentials or session bytes.
+
+Before leaving the protected host boundary, the pair and metadata MUST be encrypted together for an approved recovery identity, stored under least-privilege access control, and governed by the account retention policy. Restore is offline into empty private paths. It verifies encryption, checksums, metadata agreement, SQLite integrity, account binding, versions/layer, and `0700`/`0600` protections before startup. A restore drill MUST prove that the paired artifacts authorize the expected account and reach reconciled or explicitly acknowledged degraded readiness. Exact backup and restore commands are in the [runbook](runbooks/telegram-mtproto.md#paired-backup-and-restore).
+
 ## Restore
 
 Restore is a deliberate offline operation into an empty or archived data location. It verifies checksum, SQLite integrity, application invariants, schema compatibility, ownership/permissions, required secret references, and every restored audit digest chain before replacing active state.
@@ -87,11 +99,15 @@ Startup order follows `architecture.md`: validate configuration, resolve secrets
 
 Liveness starts only after process initialization. Readiness remains false until recovery completes and becomes false before drain.
 
+For Telegram, readiness additionally requires successful session/account binding, the update-manager startup gate, and reconciled update state. An unrecoverable difference or persisted gap keeps readiness false and records the affected account/box, position, and bounded cause. An operator MAY acknowledge that durable marker after assessing the missing-history impact; acknowledgement permits readiness but does not repair or erase the gap. The [runbook](runbooks/telegram-mtproto.md#degraded-update-gaps) defines the decision record and recovery procedure.
+
 ## Rollout and rollback
 
 An upgrade procedure states supported source versions, schema effects, expected downtime, backup prerequisite, smoke check, and rollback boundary. Binary rollback is allowed only while the persisted schema remains readable by the prior release. Otherwise rollback means restore the pre-upgrade backup.
 
 Operators never discover rollback incompatibility during an incident; CI tests every declared upgrade and rollback path with representative data.
+
+Telegram upgrades pin both `github.com/gotd/td` and its generated `tg.Layer`. A change to either requires review of generated type confinement, account-binding compatibility, schema/migrations, mapper fixtures (including unknown constructors and entities), authorization variants, update-difference handling, send/refetch RPCs, and paired restore compatibility. Regenerate or update fixtures from the newly pinned public generated types, never by editing generated gotd sources. Run the exact upgrade gates in [`quality.md`](quality.md#gotd-upgrades) and the [runbook](runbooks/telegram-mtproto.md#gotd-upgrade); rollback requires the pre-upgrade paired backup when the prior binary cannot read the new binding or schema.
 
 ## Shutdown and signals
 
@@ -102,3 +118,5 @@ Exit codes distinguish clean stop, configuration/startup failure, invariant fail
 ## Runbooks
 
 A production-ready release includes concise runbooks for install, validation, start, readiness failure, capacity saturation, dependency outage, disk pressure, backup, restore, migration failure, credential rotation, upgrade, rollback, and incident evidence collection. Each runbook uses stable commands and identifies destructive steps before execution.
+
+The Telegram-specific runbook is [`runbooks/telegram-mtproto.md`](runbooks/telegram-mtproto.md). It covers private storage, authentication, paired backup/restore, degraded gaps, retention/erasure, opt-in live smoke, and gotd upgrades. These procedures support an experimental milestone and MUST NOT be described as production release procedures.

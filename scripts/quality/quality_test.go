@@ -15,7 +15,7 @@ func TestExperimentalMilestoneTargetsArePresent(t *testing.T) {
 		t.Fatal(err)
 	}
 	makefile := string(data)
-	for _, target := range []string{"format", "fmt-check", "lint", "arch-check", "test", "test-race", "test-leak", "smoke", "quality"} {
+	for _, target := range []string{"format", "fmt-check", "lint", "arch-check", "test", "test-race", "test-fuzz-smoke", "test-corpus", "test-leak", "telegram-smoke", "smoke", "quality"} {
 		pattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(target) + `:`)
 		if !pattern.MatchString(makefile) {
 			t.Errorf("Makefile is missing %q target", target)
@@ -24,8 +24,24 @@ func TestExperimentalMilestoneTargetsArePresent(t *testing.T) {
 	if !regexp.MustCompile(`(?m)^# Experimental milestone gates`).MatchString(makefile) {
 		t.Error("Makefile must label targets as experimental milestone gates")
 	}
-	if !regexp.MustCompile(`(?m)^quality: fmt-check lint arch-check test test-race test-leak smoke$`).MatchString(makefile) {
-		t.Error("quality must run every nonmutating milestone gate")
+	quality := regexp.MustCompile(`(?m)^quality: ([^\n]+)$`).FindStringSubmatch(makefile)
+	if len(quality) != 2 {
+		t.Fatal("quality target is missing")
+	}
+	for _, target := range []string{"fmt-check", "lint", "arch-check", "test", "test-race", "test-fuzz-smoke", "test-corpus", "test-leak", "smoke"} {
+		if !strings.Contains(" "+quality[1]+" ", " "+target+" ") {
+			t.Errorf("quality does not include %q", target)
+		}
+	}
+	if strings.Contains(" "+quality[1]+" ", " telegram-smoke ") {
+		t.Error("quality must not contact Telegram")
+	}
+	fuzzGate := regexp.MustCompile(`(?m)^\t\$\(GO\) test -run '\^\$\$' -fuzz '\^FuzzConvertEntitiesUTF16\$\$' -fuzztime=\$\(TELEGRAM_FUZZTIME\) \./internal/adapter/telegram/mapper$`)
+	if !fuzzGate.MatchString(makefile) || !strings.Contains(makefile, "TELEGRAM_FUZZTIME ?= 1x") {
+		t.Error("Telegram fuzz gate must be deterministic, bounded, and use the repository Go wrapper")
+	}
+	if !strings.Contains(makefile, "$(GO) test ./pkg/otogi -run 'Corpus'") {
+		t.Error("corpus gate must run deterministic cross-protocol corpus tests")
 	}
 }
 

@@ -48,7 +48,7 @@ func inspect(root string) ([]string, error) {
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
@@ -60,10 +60,14 @@ func inspect(root string) ([]string, error) {
 			return err
 		}
 		source := filepath.ToSlash(relative)
+		testFile := strings.HasSuffix(path, "_test.go")
 		for _, imported := range file.Imports {
 			target, err := strconv.Unquote(imported.Path.Value)
 			if err != nil {
 				return err
+			}
+			if testFile && target != "github.com/gotd/td" && !strings.HasPrefix(target, "github.com/gotd/td/") {
+				continue
 			}
 			reason := forbidden(source, target)
 			if reason != "" {
@@ -117,7 +121,10 @@ func forbidden(source, target string) string {
 	source = "/" + strings.Trim(source, "/")
 	internal := strings.HasPrefix(target, module)
 	repositoryTarget := strings.TrimPrefix(target, module)
+	gotd := target == "github.com/gotd/td" || strings.HasPrefix(target, "github.com/gotd/td/")
 	switch {
+	case gotd && !telegramAdapterSource(source):
+		return "gotd imports are confined to the Telegram adapter"
 	case strings.HasPrefix(source, "/pkg/otogi") && !isStandardLibrary(target):
 		return "contracts must import only the standard library"
 	case contractOnlySource(source) && internal && repositoryTarget != "pkg/otogi" && !sameTelegramAdapter(source, repositoryTarget):
@@ -127,8 +134,12 @@ func forbidden(source, target string) string {
 	}
 }
 
+func telegramAdapterSource(source string) bool {
+	return source == "/internal/adapter/telegram" || strings.HasPrefix(source, "/internal/adapter/telegram/")
+}
+
 func sameTelegramAdapter(source, target string) bool {
-	return (source == "/internal/adapter/telegram" || strings.HasPrefix(source, "/internal/adapter/telegram/")) && strings.HasPrefix(target, "internal/adapter/telegram/")
+	return telegramAdapterSource(source) && strings.HasPrefix(target, "internal/adapter/telegram/")
 }
 
 func isStandardLibrary(importPath string) bool {

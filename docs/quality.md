@@ -12,7 +12,13 @@ Generated files record their generator and are reproducible from source. The gat
 
 Until the implementation satisfies the full product boundary, commands introduced for the experimental vertical slice are milestone gates only, not the full release gate. They MUST NOT report deferred functionality as passing or be represented as satisfying the complete `quality` or `release-verify` contracts below. Every requirement in this document remains binding before a production-ready or conforming release claim.
 
-The current milestone implements `make format`, `make fmt-check`, `make lint`, `make arch-check`, `make test`, `make test-race`, `make test-leak`, `make smoke`, and `make quality`. The experimental `arch-check` target implements the milestone architecture contract corresponding to the full-release `architecture` gate. The milestone `quality` target aggregates `fmt-check`, `lint`, `arch-check`, `test`, `test-race`, `test-leak`, and `smoke`; it does not invoke mutating `format`. The full-release `verify-generated`, `test-fuzz-smoke`, `security`, and `release-verify` commands remain deferred. Their operator contract and deferred scope are recorded in [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md).
+The current milestone implements `make format`, `make fmt-check`, `make lint`, `make arch-check`, `make test`, `make test-race`, `make test-fuzz-smoke`, `make test-corpus`, `make test-leak`, `make telegram-smoke`, `make smoke`, and `make quality`. The experimental `arch-check` target implements the milestone architecture contract corresponding to the full-release `architecture` gate. The offline milestone `quality` target aggregates `fmt-check`, `lint`, `arch-check`, `test`, `test-race`, `test-fuzz-smoke`, `test-corpus`, `test-leak`, and `smoke`; it invokes neither mutating `format` nor live `telegram-smoke`. The full-release `verify-generated`, `security`, and `release-verify` commands remain deferred. Their operator contract and deferred scope are recorded in [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md).
+
+### Telegram quality gates
+
+The Telegram milestone extends the default offline `make quality` gate with its mapper corpus, store and driver tests, race/leak coverage, generated-type import guard, and the pinned gotd/module-layer assertion. Default quality MUST NOT read Telegram credentials, use a real session, resolve Telegram endpoints, or otherwise contact Telegram. `make telegram-smoke` is a separate, explicitly opted-in live check; it is excluded from `make quality` and is governed by the [Telegram MTProto runbook](runbooks/telegram-mtproto.md#opt-in-live-smoke).
+
+Passing these gates proves only the named experimental milestone. It does not satisfy deferred security scanning, artifact verification, operational readiness, or the production release contract.
 
 ## Stable commands
 
@@ -77,6 +83,12 @@ During implementation, run the smallest gate that can falsify the current change
 Required CI checks cannot be bypassed by changing only workflow files. Changes to gates or tool versions receive the same review as production code and demonstrate the intended failure mode.
 
 Flaky tests are defects. A failing test may be quarantined only with an owner, issue, expiry date, preserved signal, and explicit release-risk decision; repeated retries that hide the first failure are prohibited.
+
+### Gotd upgrades
+
+The repository currently pins `github.com/gotd/td v0.161.0` and asserts generated `tg.Layer == 228` in `internal/adapter/telegram/store/version_test.go`. An upgrade changes both expectations deliberately and MUST include reviewed mapper/codec fixture updates and compatibility evidence for authorization, update recovery, account-bound SQLite state, send/refetch operations, and paired backup restore. Generated gotd sources remain dependency-owned under `internal/adapter/telegram` use and MUST NOT be copied into public contracts or edited by hand.
+
+The exact dependency-update, scoped test, default-quality, and live-smoke commands are maintained in the [gotd upgrade runbook](runbooks/telegram-mtproto.md#gotd-upgrade). The dependency diff, old/new layer, fixture provenance, migration/restore result, and live-smoke result are review evidence; none of them is a production release claim.
 
 ## Release artifacts
 

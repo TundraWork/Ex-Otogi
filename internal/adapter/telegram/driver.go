@@ -38,6 +38,25 @@ const (
 // ClientOptions are the gotd options assembled by the driver.
 type ClientOptions = gotdtelegram.Options
 
+// API is the complete generated RPC surface used by the composed manager,
+// recovery, sender, and refetcher graph.
+type API interface {
+	// UpdatesGetState loads the current common update cursor.
+	UpdatesGetState(context.Context) (*tg.UpdatesState, error)
+	// UpdatesGetDifference loads common updates after a cursor.
+	UpdatesGetDifference(context.Context, *tg.UpdatesGetDifferenceRequest) (tg.UpdatesDifferenceClass, error)
+	// UpdatesGetChannelDifference loads channel updates after a cursor.
+	UpdatesGetChannelDifference(context.Context, *tg.UpdatesGetChannelDifferenceRequest) (tg.UpdatesChannelDifferenceClass, error)
+	// MessagesGetHistory loads bounded peer history during recovery.
+	MessagesGetHistory(context.Context, *tg.MessagesGetHistoryRequest) (tg.MessagesMessagesClass, error)
+	// MessagesSendMessage sends one raw idempotent text message.
+	MessagesSendMessage(context.Context, *tg.MessagesSendMessageRequest) (tg.UpdatesClass, error)
+	// MessagesGetMessages refetches common message metadata.
+	MessagesGetMessages(context.Context, []tg.InputMessageClass) (tg.MessagesMessagesClass, error)
+	// ChannelsGetMessages refetches channel message metadata.
+	ChannelsGetMessages(context.Context, *tg.ChannelsGetMessagesRequest) (tg.MessagesMessagesClass, error)
+}
+
 // ClientSession is the narrow, mockable lifetime of one gotd client.
 type ClientSession interface {
 	// Run owns one client transport lifetime.
@@ -48,6 +67,8 @@ type ClientSession interface {
 	Authorize(context.Context, AuthFlow) error
 	// Self returns the authorized Telegram user.
 	Self(context.Context) (*tg.User, error)
+	// API exposes only the Telegram RPC methods owned by this adapter graph.
+	API() API
 }
 
 // ClientFactory constructs exactly one inert client per Driver.
@@ -77,6 +98,7 @@ func (c gotdClientSession) Authorize(ctx context.Context, flow AuthFlow) error {
 	return flow.Run(ctx, c.client.Auth())
 }
 func (c gotdClientSession) Self(ctx context.Context) (*tg.User, error) { return c.client.Self(ctx) }
+func (c gotdClientSession) API() API                                   { return c.client.API() }
 
 // Driver owns one non-restartable gotd client and all adapter children.
 type Driver struct {
@@ -217,9 +239,6 @@ func (d *Driver) runConnected(ctx context.Context) error {
 	d.mu.Lock()
 	d.store = store
 	d.mu.Unlock()
-	if err = panicError("resynchronizer", func() error { return d.cfg.RunResynchronizer(ctx, d.client, store) }); err != nil {
-		return d.startFailed(err)
-	}
 	managerReady := make(chan struct{})
 	var readyOnce sync.Once
 	managerResult := d.runChild(ctx, "manager", func(child context.Context) error {
@@ -234,6 +253,9 @@ func (d *Driver) runConnected(ctx context.Context) error {
 		return d.startFailed(err)
 	case <-ctx.Done():
 		return d.startFailed(ctx.Err())
+	}
+	if err = panicError("resynchronizer", func() error { return d.cfg.RunResynchronizer(ctx, d.client, store) }); err != nil {
+		return d.startFailed(err)
 	}
 	ready, _, err := store.RecoveryReady(ctx)
 	if err != nil {
@@ -370,15 +392,18 @@ func (d *Driver) Stop(ctx context.Context) error {
 		if d.state == StateStarting || d.state == StateReady || d.state == StateDraining {
 			d.state = StateDraining
 		}
-		cancel, started, drainCancel := d.lifeCancel, d.client != nil, d.drainCancel
+		cancel, started, drainCancel, dispatchCancel := d.lifeCancel, d.client != nil, d.drainCancel, d.dispatchCancel
 		d.mu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
 		if drainCancel != nil {
 			drainCancel(errStopDrain)
 		}
 		go func() {
+			if dispatchCancel != nil {
+				dispatchCancel()
+			}
+			if cancel != nil {
+				cancel()
+			}
 			var errs []error
 			if started {
 				<-d.done

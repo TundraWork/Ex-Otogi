@@ -540,6 +540,7 @@ func (f *fakeClientSession) Run(ctx context.Context, fn func(context.Context) er
 func (*fakeClientSession) Authorized(context.Context) (bool, error)  { return true, nil }
 func (*fakeClientSession) Authorize(context.Context, AuthFlow) error { return nil }
 func (*fakeClientSession) Self(context.Context) (*tg.User, error)    { return &tg.User{ID: 42}, nil }
+func (*fakeClientSession) API() API                                  { return nil }
 
 type fakeDriverStore struct {
 	ready      bool

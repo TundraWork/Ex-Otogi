@@ -71,6 +71,12 @@ new -> starting -> ready -> draining -> stopped
 
 Lifecycle transitions are serialized and observable. Calls in an invalid state return stable errors rather than panic.
 
+### Telegram lifecycle specialization
+
+The Telegram driver is a governed one-shot component. Its gotd client owns MTProto transport cleanup; the update manager, durable resynchronizer, and inbox dispatcher are child lifecycles under the driver context. Readiness requires completed authorization, an open update-manager startup gate, and update state that is either reconciled or durably marked degraded and explicitly acknowledged by an operator. A gap, unrecoverable difference, storage failure, or fatal child error clears readiness and preserves a bounded cause. Acknowledgement permits operation with known missing history; it MUST NOT erase the gap marker, claim recovery, or fabricate events.
+
+During drain, the dispatcher stops taking new durable inbox claims and waits for claimed work, while MTProto update capture continues until stop. Stop cancels transport and children, observes their completion within the caller deadline, and closes SQLite after them. Once the gotd client's run method returns, the same client instance MUST NOT be run again.
+
 ## Goroutine and resource ownership
 
 A goroutine may start only when its owner can name:

@@ -150,6 +150,47 @@ func Quarantine(update tg.UpdateClass, account string, position int) (Quarantine
 	return QuarantineRecord{SourceKey: fmt.Sprintf("telegram:layer228:%x", digest[:]), Kind: "telegram.layer228." + update.TypeName(), Payload: payload}, nil
 }
 
+// DecodeQuarantinedUpdate decodes the versioned preservation envelope into its original TL update.
+func DecodeQuarantinedUpdate(payload []byte) (tg.UpdateClass, error) {
+	fields, err := decodeBinaryFields(payload, 3)
+	if err != nil {
+		return nil, err
+	}
+	raw := bin.Buffer{Buf: fields[2]}
+	update, err := tg.DecodeUpdate(&raw)
+	if err != nil {
+		return nil, err
+	}
+	if raw.Len() != 0 {
+		return nil, fmt.Errorf("trailing quarantined update bytes: %d", raw.Len())
+	}
+	return update, nil
+}
+
+func decodeBinaryFields(data []byte, count int) ([][]byte, error) {
+	if len(data) < 2 || len(data) > MaxPreservationBytes || binary.LittleEndian.Uint16(data[:2]) != 1 {
+		return nil, fmt.Errorf("invalid preservation envelope")
+	}
+	fields := make([][]byte, 0, count)
+	data = data[2:]
+	for len(fields) < count {
+		if len(data) < 4 {
+			return nil, fmt.Errorf("truncated preservation envelope")
+		}
+		n := int(binary.LittleEndian.Uint32(data[:4]))
+		data = data[4:]
+		if n > len(data) {
+			return nil, fmt.Errorf("truncated preservation field")
+		}
+		fields = append(fields, data[:n])
+		data = data[n:]
+	}
+	if len(data) != 0 {
+		return nil, fmt.Errorf("trailing preservation fields")
+	}
+	return fields, nil
+}
+
 func validateMessageLocator(locator MessageLocator) error {
 	if locator.MessageID <= 0 || locator.Peer == "" || locator.Namespace != NamespaceCommon && locator.Namespace != NamespaceChannel {
 		return fmt.Errorf("message locator: invalid")

@@ -56,3 +56,36 @@ func TestSameTelegramAdapterAllowanceIsNarrow(t *testing.T) {
 		t.Fatal("telegram adapter imported kernel")
 	}
 }
+
+func TestGotdImportsAreConfinedToTelegramAdapter(t *testing.T) {
+	for _, source := range []string{"/cmd/telegram-smoke", "/internal/kernel", "/modules/example", "/pkg/otogi", "/scripts/quality/cmd/archcheck"} {
+		if reason := forbidden(source, "github.com/gotd/td/tg"); !strings.Contains(reason, "gotd imports are confined") {
+			t.Errorf("source %q reason = %q", source, reason)
+		}
+	}
+	for _, source := range []string{"/internal/adapter/telegram", "/internal/adapter/telegram/mapper"} {
+		if reason := forbidden(source, "github.com/gotd/td/tg"); reason != "" {
+			t.Errorf("source %q rejected: %s", source, reason)
+		}
+	}
+}
+
+func TestGotdConfinementDoesNotMatchLookalikeModules(t *testing.T) {
+	if reason := forbidden("/pkg/otogi", "github.com/gotd/tdx/tg"); reason != "contracts must import only the standard library" {
+		t.Fatalf("reason = %q", reason)
+	}
+}
+
+func TestInspectChecksGotdImportsInTestFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "leak_test.go"), []byte("package leak_test\nimport _ \"github.com/gotd/td/tg\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	violations, err := inspect(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || !strings.Contains(violations[0], "gotd imports are confined") {
+		t.Fatalf("violations = %v", violations)
+	}
+}

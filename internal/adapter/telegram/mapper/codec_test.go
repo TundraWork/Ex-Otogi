@@ -67,3 +67,18 @@ func TestQuarantineUpdateIsBoundedDeterministic(t *testing.T) {
 		t.Fatalf("quarantine=%+v", first)
 	}
 }
+
+func TestDecodeQuarantinedUpdateRestoresTLValue(t *testing.T) {
+	record, err := Quarantine(&tg.UpdateUserTyping{UserID: 7, Action: &tg.SendMessageTypingAction{}}, "account:1", 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	update, err := DecodeQuarantinedUpdate(record.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := update.(*tg.UpdateUserTyping)
+	if !ok || got.UserID != 7 {
+		t.Fatalf("update=%#v", update)
+	}
+}

@@ -12,9 +12,9 @@ An implementation conforms only when it satisfies every applicable MUST and MUST
 
 The current executable work is an **experimental, non-conforming vertical slice**, not an Ex-Otogi release. It intentionally implements only the approved milestone scope. The full product requirements in `product.md` and full release gates in `quality.md` remain binding before any production-ready or conforming release claim.
 
-Commands introduced for this slice are milestone gates only. They MUST NOT be named or documented as satisfying deferred persistence, authenticated management, security scanning, telemetry, backup/restore, SBOM, signature, provenance, or release-verification requirements.
+Commands introduced for this slice are milestone gates only. They MUST NOT be named or documented as satisfying deferred authenticated management, security scanning, telemetry, SBOM, signature, provenance, artifact, or release-verification requirements.
 
-The implemented event bridge and its exact milestone commands are documented in [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md).
+The implemented core event bridge and its exact offline milestone commands are documented in [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md). The opt-in Telegram MTProto driver, including its separate live smoke and operator constraints, is documented in [`runbooks/telegram-mtproto.md`](runbooks/telegram-mtproto.md). Neither runbook is a production release procedure.
 
 ## Scope
 
@@ -44,6 +44,8 @@ A future specification may add a deferred capability only through the contracts 
 | [`operations.md`](operations.md) | Configuration, SQLite, migrations, backup, rollout, rollback |
 | [`management-plane.md`](management-plane.md) | Technology-neutral operator capabilities and protocol rules |
 | [`standards.md`](standards.md) | External standards and adoption decisions |
+| [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md) | Experimental offline core smoke and milestone gate commands |
+| [`runbooks/telegram-mtproto.md`](runbooks/telegram-mtproto.md) | Experimental Telegram storage, auth, recovery, live smoke, and upgrade operations |
 
 `AGENTS.md` is the executable workflow index. It does not override domain requirements in this suite.
 

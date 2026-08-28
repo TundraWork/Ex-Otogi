@@ -39,11 +39,19 @@ Configuration stores secret references. Resolution occurs through an explicit pr
 
 Rotation behavior is declared per credential. If safe reload is unsupported, rotation uses a bounded restart. Missing or unreadable required secrets fail startup without echoing the value.
 
+### Telegram authorization and session secrets
+
+Telegram authorization first reuses the opaque gotd session when it is valid. If the account is unauthorized, an injected authenticator supplies the phone number, delivered login code, and, when Telegram requires it, the 2FA password through cancellable callbacks. Supported code delivery metadata is limited to app, SMS, call, flash-call, and missed-call challenges. Signup, QR, passkey, payment-required/Fragment, email verification, OAuth, and unknown authorization paths fail explicitly as unsupported; the runtime MUST NOT silently switch flows.
+
+The application hash, phone number, login code, 2FA password, and session bytes are secrets. They MUST NOT be supplied in command-line arguments or written to logs, traces, metrics, errors, diagnostic exports, or audit records. Callback results are consumed only by the authorization attempt and MUST NOT be persisted by Ex-Otogi. Session bytes remain opaque and MUST NOT be copied except by the encrypted paired backup procedure in [`operations.md`](operations.md#telegram-state-backup-and-restore).
+
 ## Data minimization and privacy
 
 The runtime collects and retains only data required by an approved capability. Raw message content is excluded from routine telemetry and audit evidence. Persisted sensitive fields have an owner, purpose, retention rule, deletion behavior, and backup treatment.
 
 Diagnostic exports require an explicit operator action, enumerate included categories before creation, and apply redaction. Access to participant content is recorded through the audit capability described above.
+
+Telegram durable payloads, raw quarantine records, locators, send intents, and session data require deployment-defined retention and erasure schedules. Erasure MUST cover the account's SQLite rows, SQLite sidecars, session file, paired backups after their retention expires, and temporary restore material. Deleting only the SQLite database or only the session is incomplete account erasure. Operators preserve legally or operationally required audit evidence under its independent retention rule and record the erasure outcome without participant content or credentials.
 
 ## Resource and parser safety
 
