@@ -264,7 +264,6 @@ func TestClaimsPreserveConversationOrderAndRecoverLeases(t *testing.T) {
 	}
 }
 
-
 func TestClaimsProgressDistinctConversationBeforeLaterSameConversationRow(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

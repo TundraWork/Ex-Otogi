@@ -11,38 +11,58 @@ import (
 	"time"
 
 	telegramstore "github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/store"
-	"github.com/TundraWork/Ex-Otogi/internal/kernel"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
 // InboxStore is the durable claim boundary required by InboxDispatcher.
 type InboxStore interface {
+	// ClaimNextAfter atomically leases the next eligible conversation head.
 	ClaimNextAfter(context.Context, string, time.Time, time.Duration, string) (telegramstore.InboxRow, bool, error)
+	// ReleaseClaim returns an owned row to pending with its next eligibility time.
 	ReleaseClaim(context.Context, string, string, time.Time, string) error
+	// CompleteClaim marks an owned row terminal after exact kernel acknowledgement.
 	CompleteClaim(context.Context, string, string, time.Time) error
+	// FailClaim marks an owned row permanently failed with a bounded reason.
 	FailClaim(context.Context, string, string, string, time.Time) error
 }
 
 // EventDecoder decodes one bounded normalized inbox payload and observes attempt cancellation.
 type EventDecoder func(context.Context, []byte) (otogi.EventInput, error)
 
+// TrustedAdmitter is the driver-facing boundary for deterministic event admission and volatile completion observation.
+type TrustedAdmitter interface {
+	// SubmitTrusted admits one event with a trusted deterministic runtime ID.
+	SubmitTrusted(context.Context, otogi.EventID, otogi.EventInput) error
+	// SubscribeCompletion observes volatile completion for one runtime event attempt.
+	SubscribeCompletion(context.Context, otogi.EventID) (<-chan otogi.EventID, error)
+}
+
 // InboxDispatcherConfig bounds claim ownership, retries, polling, and shutdown cleanup.
 type InboxDispatcherConfig struct {
-	Owner          string
-	Lease          time.Duration
-	ClaimTimeout   time.Duration
+	// Owner identifies this dispatcher instance in durable claims.
+	Owner string
+	// Lease bounds exclusive ownership across claim, attempt, and cleanup.
+	Lease time.Duration
+	// ClaimTimeout bounds acquisition latency deducted from the lease.
+	ClaimTimeout time.Duration
+	// AttemptTimeout bounds decode, admission, and acknowledgement together.
 	AttemptTimeout time.Duration
+	// CleanupTimeout bounds durable release, completion, or failure updates.
 	CleanupTimeout time.Duration
-	PollInterval   time.Duration
-	RetryBase      time.Duration
-	RetryMax       time.Duration
-	Now            func() time.Time
+	// PollInterval bounds idle waiting before another claim attempt.
+	PollInterval time.Duration
+	// RetryBase is the initial retry delay.
+	RetryBase time.Duration
+	// RetryMax caps exponential retry delay.
+	RetryMax time.Duration
+	// Now supplies UTC-compatible wall time for durable schedules.
+	Now func() time.Time
 }
 
 // InboxDispatcher is the single owner of durable Telegram inbox delivery.
 type InboxDispatcher struct {
 	store       InboxStore
-	admitter    kernel.TrustedAdmitter
+	admitter    TrustedAdmitter
 	decode      EventDecoder
 	config      InboxDispatcherConfig
 	mu          sync.Mutex
@@ -53,7 +73,7 @@ type InboxDispatcher struct {
 }
 
 // NewInboxDispatcher constructs a bounded durable inbox dispatcher.
-func NewInboxDispatcher(store InboxStore, admitter kernel.TrustedAdmitter, decode EventDecoder, config InboxDispatcherConfig) *InboxDispatcher {
+func NewInboxDispatcher(store InboxStore, admitter TrustedAdmitter, decode EventDecoder, config InboxDispatcherConfig) *InboxDispatcher {
 	if store == nil || admitter == nil || decode == nil || config.Owner == "" || len(config.Owner) > 128 || !validDispatchDurations(config) || config.PollInterval <= 0 || config.RetryBase <= 0 || config.RetryMax < config.RetryBase || config.Now == nil {
 		panic("telegram: invalid inbox dispatcher dependency or bound")
 	}

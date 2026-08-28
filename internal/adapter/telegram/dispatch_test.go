@@ -70,14 +70,14 @@ func (s *dispatchStore) FailClaim(_ context.Context, id, _, _ string, _ time.Tim
 }
 
 type dispatchAdmitter struct {
-	mu             sync.Mutex
-	subscribeErr   error
-	submitErr      error
-	submitted      []otogi.EventID
-	subscribed     []otogi.EventID
-	completion     chan otogi.EventID
-	autoComplete   bool
-	onSubmit       func(otogi.EventID, otogi.EventInput)
+	mu           sync.Mutex
+	subscribeErr error
+	submitErr    error
+	submitted    []otogi.EventID
+	subscribed   []otogi.EventID
+	completion   chan otogi.EventID
+	autoComplete bool
+	onSubmit     func(otogi.EventID, otogi.EventInput)
 }
 
 func (a *dispatchAdmitter) SubscribeCompletion(_ context.Context, id otogi.EventID) (<-chan otogi.EventID, error) {

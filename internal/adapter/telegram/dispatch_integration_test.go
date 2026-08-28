@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TundraWork/Ex-Otogi/internal/kernel"
 	telegramstore "github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/store"
+	"github.com/TundraWork/Ex-Otogi/internal/kernel"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -41,6 +41,7 @@ type effectMessenger struct {
 	effects []otogi.OutboundMessage
 	notify  chan struct{}
 }
+
 func (m *effectMessenger) Send(_ context.Context, message otogi.OutboundMessage) error {
 	m.mu.Lock()
 	m.effects = append(m.effects, message)
@@ -57,6 +58,7 @@ type cancelAfterSubmit struct {
 	cancel context.CancelFunc
 	once   sync.Once
 }
+
 func (a *cancelAfterSubmit) SubscribeCompletion(ctx context.Context, id otogi.EventID) (<-chan otogi.EventID, error) {
 	return a.kernel.SubscribeCompletion(ctx, id)
 }

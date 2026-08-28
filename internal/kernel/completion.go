@@ -7,14 +7,6 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// TrustedAdmitter is the internal driver-facing boundary for deterministic event admission and volatile completion observation.
-type TrustedAdmitter interface {
-	// SubmitTrusted admits one event with a trusted deterministic runtime ID.
-	SubmitTrusted(context.Context, otogi.EventID, otogi.EventInput) error
-	// SubscribeCompletion observes volatile completion for one runtime event attempt.
-	SubscribeCompletion(context.Context, otogi.EventID) (<-chan otogi.EventID, error)
-}
-
 type completionSubscription struct {
 	channel chan otogi.EventID
 	stop    func() bool
