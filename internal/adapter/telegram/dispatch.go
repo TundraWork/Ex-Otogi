@@ -23,13 +23,14 @@ type InboxStore interface {
 	FailClaim(context.Context, string, string, string, time.Time) error
 }
 
-// EventDecoder decodes one bounded normalized inbox payload.
-type EventDecoder func([]byte) (otogi.EventInput, error)
+// EventDecoder decodes one bounded normalized inbox payload and observes attempt cancellation.
+type EventDecoder func(context.Context, []byte) (otogi.EventInput, error)
 
 // InboxDispatcherConfig bounds claim ownership, retries, polling, and shutdown cleanup.
 type InboxDispatcherConfig struct {
 	Owner          string
 	Lease          time.Duration
+	ClaimTimeout   time.Duration
 	AttemptTimeout time.Duration
 	CleanupTimeout time.Duration
 	PollInterval   time.Duration
@@ -53,7 +54,7 @@ type InboxDispatcher struct {
 
 // NewInboxDispatcher constructs a bounded durable inbox dispatcher.
 func NewInboxDispatcher(store InboxStore, admitter kernel.TrustedAdmitter, decode EventDecoder, config InboxDispatcherConfig) *InboxDispatcher {
-	if store == nil || admitter == nil || decode == nil || config.Owner == "" || len(config.Owner) > 128 || config.Lease <= config.AttemptTimeout+config.CleanupTimeout || config.AttemptTimeout <= 0 || config.CleanupTimeout <= 0 || config.PollInterval <= 0 || config.RetryBase <= 0 || config.RetryMax < config.RetryBase || config.Now == nil {
+	if store == nil || admitter == nil || decode == nil || config.Owner == "" || len(config.Owner) > 128 || !validDispatchDurations(config) || config.PollInterval <= 0 || config.RetryBase <= 0 || config.RetryMax < config.RetryBase || config.Now == nil {
 		panic("telegram: invalid inbox dispatcher dependency or bound")
 	}
 	var nonce [16]byte
@@ -61,6 +62,17 @@ func NewInboxDispatcher(store InboxStore, admitter kernel.TrustedAdmitter, decod
 		panic("telegram: generate inbox claim owner: " + err.Error())
 	}
 	return &InboxDispatcher{store: store, admitter: admitter, decode: decode, config: config, claimPrefix: config.Owner + ":" + hex.EncodeToString(nonce[:])}
+}
+
+func validDispatchDurations(config InboxDispatcherConfig) bool {
+	if config.Lease <= 0 || config.ClaimTimeout <= 0 || config.AttemptTimeout <= 0 || config.CleanupTimeout <= 0 || config.ClaimTimeout >= config.Lease {
+		return false
+	}
+	remaining := config.Lease - config.ClaimTimeout
+	if config.AttemptTimeout >= remaining {
+		return false
+	}
+	return config.CleanupTimeout < remaining-config.AttemptTimeout
 }
 
 // Run claims and dispatches eligible rows until ctx is canceled. Only one Run may own the dispatcher.
@@ -114,7 +126,9 @@ func (d *InboxDispatcher) dispatchOne(ctx context.Context) (bool, error) {
 	owner := fmt.Sprintf("%s:%x", d.claimPrefix, d.claimCount)
 	after := d.after
 	d.mu.Unlock()
-	row, ok, err := d.store.ClaimNextAfter(ctx, owner, now, d.config.Lease, after)
+	claimCtx, cancelClaim := context.WithTimeout(ctx, d.config.ClaimTimeout)
+	row, ok, err := d.store.ClaimNextAfter(claimCtx, owner, now, d.config.Lease, after)
+	cancelClaim()
 	if err != nil || !ok {
 		return false, err
 	}
@@ -122,7 +136,9 @@ func (d *InboxDispatcher) dispatchOne(ctx context.Context) (bool, error) {
 	d.after = row.Conversation
 	d.mu.Unlock()
 
-	input, err := d.decode(row.Payload)
+	attempt, cancel := context.WithTimeout(ctx, d.config.AttemptTimeout)
+	defer cancel()
+	input, err := d.decode(attempt, row.Payload)
 	if err != nil {
 		if permanentDispatchError(err) {
 			return true, d.fail(row, owner, err)
@@ -130,8 +146,6 @@ func (d *InboxDispatcher) dispatchOne(ctx context.Context) (bool, error) {
 		return true, d.release(row, owner, err)
 	}
 	id := deterministicInboxEventID(row.ID)
-	attempt, cancel := context.WithTimeout(ctx, d.config.AttemptTimeout)
-	defer cancel()
 	completion, err := d.admitter.SubscribeCompletion(attempt, id)
 	if err != nil {
 		if permanentDispatchError(err) {

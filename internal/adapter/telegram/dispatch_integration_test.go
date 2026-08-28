@@ -87,7 +87,7 @@ func TestDispatcherKernelReplayKeepsEventAndEffectIDsStable(t *testing.T) {
 	store := &dispatchStore{rows: []telegramstore.InboxRow{row}}
 	firstCtx, cancel := context.WithCancel(context.Background())
 	bridge := &cancelAfterSubmit{kernel: k, cancel: cancel}
-	d := NewInboxDispatcher(store, bridge, func([]byte) (otogi.EventInput, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(time.Unix(600, 0).UTC()))
+	d := NewInboxDispatcher(store, bridge, func(context.Context, []byte) (otogi.EventInput, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(time.Unix(600, 0).UTC()))
 	if worked, err := d.dispatchOne(firstCtx); !worked || err != nil {
 		t.Fatalf("first dispatch=%v,%v", worked, err)
 	}
@@ -101,7 +101,7 @@ func TestDispatcherKernelReplayKeepsEventAndEffectIDsStable(t *testing.T) {
 	}
 
 	store.rows = []telegramstore.InboxRow{row}
-	d = NewInboxDispatcher(store, k, func([]byte) (otogi.EventInput, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(time.Unix(700, 0).UTC()))
+	d = NewInboxDispatcher(store, k, func(context.Context, []byte) (otogi.EventInput, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(time.Unix(700, 0).UTC()))
 	if worked, err := d.dispatchOne(context.Background()); !worked || err != nil {
 		t.Fatalf("replay=%v,%v", worked, err)
 	}

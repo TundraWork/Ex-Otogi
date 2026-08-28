@@ -12,12 +12,14 @@ import (
 )
 
 type dispatchStore struct {
-	mu       sync.Mutex
-	rows     []telegramstore.InboxRow
-	claimed  []string
-	released []releaseRecord
-	complete []string
-	failed   []string
+	mu              sync.Mutex
+	rows            []telegramstore.InboxRow
+	claimed         []string
+	released        []releaseRecord
+	complete        []string
+	failed          []string
+	claimHook       func(context.Context)
+	claimContextErr bool
 }
 
 type releaseRecord struct {
@@ -26,7 +28,13 @@ type releaseRecord struct {
 	reason string
 }
 
-func (s *dispatchStore) ClaimNextAfter(_ context.Context, owner string, now time.Time, lease time.Duration, _ string) (telegramstore.InboxRow, bool, error) {
+func (s *dispatchStore) ClaimNextAfter(ctx context.Context, owner string, now time.Time, lease time.Duration, _ string) (telegramstore.InboxRow, bool, error) {
+	if s.claimHook != nil {
+		s.claimHook(ctx)
+	}
+	if s.claimContextErr && ctx.Err() != nil {
+		return telegramstore.InboxRow{}, false, ctx.Err()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.rows) == 0 {
@@ -107,7 +115,7 @@ func TestDispatcherSubscribesBeforeAdmissionAndCompletesAcknowledgedRichEvent(t 
 	store := &dispatchStore{rows: []telegramstore.InboxRow{row}}
 	admitter := &dispatchAdmitter{autoComplete: true}
 	var decoded bool
-	decoder := func(payload []byte) (otogi.EventInput, error) {
+	decoder := func(_ context.Context, payload []byte) (otogi.EventInput, error) {
 		if string(payload) != "rich" {
 			t.Fatalf("payload=%q", payload)
 		}
@@ -143,7 +151,7 @@ func TestDispatcherDerivesStableEventIDAndReplaysAfterLostAcknowledgement(t *tes
 	now := time.Unix(200, 0).UTC()
 	store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, inboxID, "chat:1", []byte("event"))}}
 	admitter := &dispatchAdmitter{completion: make(chan otogi.EventID)}
-	d := NewInboxDispatcher(store, admitter, func([]byte) (otogi.EventInput, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(now))
+	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(now))
 	ctx, cancel := context.WithCancel(context.Background())
 	admitter.onSubmit = func(otogi.EventID, otogi.EventInput) { cancel() }
 	if worked, err := d.dispatchOne(ctx); !worked || err != nil {
@@ -173,7 +181,7 @@ func TestDispatcherRetriesCapacityWithBoundedExponentialSchedule(t *testing.T) {
 		store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, "row", "a", []byte("event"))}}
 		store.rows[0].Attempts = attempts - 1
 		admitter := &dispatchAdmitter{subscribeErr: otogi.ErrCapacity}
-		d := NewInboxDispatcher(store, admitter, func([]byte) (otogi.EventInput, error) { return dispatchInput(t, "a"), nil }, cfg)
+		d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) { return dispatchInput(t, "a"), nil }, cfg)
 		if worked, err := d.dispatchOne(context.Background()); err != nil || !worked {
 			t.Fatalf("attempt %d = %v, %v", attempts, worked, err)
 		}
@@ -188,7 +196,7 @@ func TestDispatcherPermanentlyFailsInvalidPayloadWithoutAdmission(t *testing.T) 
 	now := time.Unix(400, 0).UTC()
 	store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, "bad", "a", []byte("invalid"))}}
 	admitter := &dispatchAdmitter{}
-	d := NewInboxDispatcher(store, admitter, func([]byte) (otogi.EventInput, error) { return otogi.EventInput{}, otogi.ErrInvalid }, dispatchConfig(now))
+	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) { return otogi.EventInput{}, otogi.ErrInvalid }, dispatchConfig(now))
 	if worked, err := d.dispatchOne(context.Background()); err != nil || !worked {
 		t.Fatalf("dispatch = %v, %v", worked, err)
 	}
@@ -201,7 +209,7 @@ func TestDispatcherRunIsSingleOwnerAndStopsOnCancellation(t *testing.T) {
 	now := time.Unix(500, 0).UTC()
 	cfg := dispatchConfig(now)
 	cfg.PollInterval = time.Hour
-	d := NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func([]byte) (otogi.EventInput, error) { return dispatchInput(t, "a"), nil }, cfg)
+	d := NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func(_ context.Context, _ []byte) (otogi.EventInput, error) { return dispatchInput(t, "a"), nil }, cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- d.Run(ctx) }()
@@ -222,8 +230,104 @@ func TestDispatcherRunIsSingleOwnerAndStopsOnCancellation(t *testing.T) {
 	}
 }
 
+func TestDispatcherClaimTimeoutCancelsStoreWithoutDispatch(t *testing.T) {
+	now := time.Unix(550, 0).UTC()
+	store := &dispatchStore{claimHook: func(ctx context.Context) { <-ctx.Done() }, claimContextErr: true}
+	admitter := &dispatchAdmitter{}
+	decoded := false
+	cfg := dispatchConfig(now)
+	cfg.ClaimTimeout = time.Millisecond
+	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) {
+		decoded = true
+		return dispatchInput(t, "a"), nil
+	}, cfg)
+	worked, err := d.dispatchOne(context.Background())
+	if worked || !errors.Is(err, context.DeadlineExceeded) || decoded || len(admitter.submitted) != 0 {
+		t.Fatalf("worked=%v err=%v decoded=%v submitted=%v", worked, err, decoded, admitter.submitted)
+	}
+}
+
+func TestDispatcherAttemptDeadlineStartsAfterClaimReturns(t *testing.T) {
+	now := time.Unix(560, 0).UTC()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, "delayed", "a", []byte("event"))}, claimHook: func(ctx context.Context) {
+		close(entered)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}}
+	cfg := dispatchConfig(now)
+	cfg.ClaimTimeout = time.Second
+	cfg.AttemptTimeout = 100 * time.Millisecond
+	remaining := time.Duration(0)
+	d := NewInboxDispatcher(store, &dispatchAdmitter{autoComplete: true}, func(ctx context.Context, _ []byte) (otogi.EventInput, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("decoder context has no deadline")
+		}
+		remaining = time.Until(deadline)
+		return dispatchInput(t, "a"), nil
+	}, cfg)
+	done := make(chan error, 1)
+	go func() { _, err := d.dispatchOne(context.Background()); done <- err }()
+	<-entered
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if remaining < cfg.AttemptTimeout/2 {
+		t.Fatalf("attempt deadline was consumed by claim: remaining=%s", remaining)
+	}
+}
+
+func TestDispatcherCanceledDecoderReleasesWithoutSubmission(t *testing.T) {
+	now := time.Unix(570, 0).UTC()
+	store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, "decode", "a", []byte("event"))}}
+	admitter := &dispatchAdmitter{}
+	entered := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	d := NewInboxDispatcher(store, admitter, func(ctx context.Context, _ []byte) (otogi.EventInput, error) {
+		close(entered)
+		<-ctx.Done()
+		return otogi.EventInput{}, ctx.Err()
+	}, dispatchConfig(now))
+	done := make(chan error, 1)
+	go func() { _, err := d.dispatchOne(ctx); done <- err }()
+	<-entered
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(store.released) != 1 || len(admitter.submitted) != 0 {
+		t.Fatalf("released=%v submitted=%v", store.released, admitter.submitted)
+	}
+}
+
+func TestDispatcherRejectsLeaseWithoutClaimAttemptCleanupBudget(t *testing.T) {
+	base := dispatchConfig(time.Unix(580, 0).UTC())
+	for _, lease := range []time.Duration{0, base.ClaimTimeout + base.AttemptTimeout + base.CleanupTimeout, time.Duration(1<<63 - 1)} {
+		cfg := base
+		cfg.Lease = lease
+		if lease == time.Duration(1<<63-1) {
+			cfg.ClaimTimeout = lease
+		}
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("lease=%s accepted invalid budget", lease)
+				}
+			}()
+			NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func(context.Context, []byte) (otogi.EventInput, error) {
+				return dispatchInput(t, "a"), nil
+			}, cfg)
+		}()
+	}
+}
+
 func dispatchConfig(now time.Time) InboxDispatcherConfig {
-	return InboxDispatcherConfig{Owner: "dispatcher", Lease: 12 * time.Second, AttemptTimeout: 10 * time.Second, CleanupTimeout: time.Second, PollInterval: time.Millisecond, RetryBase: time.Second, RetryMax: time.Minute, Now: func() time.Time { return now }}
+	return InboxDispatcherConfig{Owner: "dispatcher", Lease: 13 * time.Second, ClaimTimeout: time.Second, AttemptTimeout: 10 * time.Second, CleanupTimeout: time.Second, PollInterval: time.Millisecond, RetryBase: time.Second, RetryMax: time.Minute, Now: func() time.Time { return now }}
 }
 func dispatchRow(t *testing.T, id, conversation string, payload []byte) telegramstore.InboxRow {
 	t.Helper()
