@@ -19,14 +19,16 @@ type StoreConfig = telegramstore.Config
 
 // DriverStore is the narrow lifecycle and readiness view consumed by Driver.
 type DriverStore interface {
+	// RecoveryReady reports durable recovery readiness.
 	RecoveryReady(context.Context) (bool, []telegramstore.RecoveryRecord, error)
+	// Close releases the durable store.
 	Close() error
 }
 
 // OpenStoreFunc validates, opens, and account-binds the driver store.
 type OpenStoreFunc func(context.Context, StoreConfig) (DriverStore, error)
 
-// ConfigureClientOptions installs update capture before constructing the one-shot client.
+// ConfigureClientOptionsFunc installs update capture before constructing the one-shot client.
 type ConfigureClientOptionsFunc func(*ClientOptions) error
 
 // ManagerRunner owns the gotd update manager until cancellation.
@@ -43,20 +45,34 @@ type DispatcherDrainer func(context.Context) error
 
 // Config contains immutable Telegram client settings and consumer-owned lifecycle seams.
 type Config struct {
-	AppID                  int
-	AppHash                string
-	AccountKey             string
-	SessionPath            string
-	DatabasePath           string
-	Device                 gotdtelegram.DeviceConfig
-	Authenticator          Authenticator
-	ClientFactory          ClientFactory
+	// AppID is the Telegram application identifier.
+	AppID int
+	// AppHash is the Telegram application secret.
+	AppHash string
+	// AccountKey is the immutable deployment account identity.
+	AccountKey string
+	// SessionPath is the private local gotd session file.
+	SessionPath string
+	// DatabasePath is the private local SQLite state file.
+	DatabasePath string
+	// Device describes the Telegram client device identity.
+	Device gotdtelegram.DeviceConfig
+	// Authenticator supplies interactive authorization credentials.
+	Authenticator Authenticator
+	// ClientFactory constructs the one-shot Telegram client.
+	ClientFactory ClientFactory
+	// ConfigureClientOptions installs update capture.
 	ConfigureClientOptions ConfigureClientOptionsFunc
-	OpenStore              OpenStoreFunc
-	RunManager             ManagerRunner
-	RunResynchronizer      ResynchronizerRunner
-	RunDispatcher          DispatcherRunner
-	DrainDispatcher        DispatcherDrainer
+	// OpenStore opens and account-binds durable state.
+	OpenStore OpenStoreFunc
+	// RunManager owns update manager execution.
+	RunManager ManagerRunner
+	// RunResynchronizer performs durable startup recovery.
+	RunResynchronizer ResynchronizerRunner
+	// RunDispatcher owns inbox dispatch.
+	RunDispatcher DispatcherRunner
+	// DrainDispatcher gracefully stops new claims.
+	DrainDispatcher DispatcherDrainer
 }
 
 // Validate rejects incomplete settings without exposing secret values.

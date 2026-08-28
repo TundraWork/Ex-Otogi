@@ -80,3 +80,9 @@ Focused green evidence (using the explicit Go 1.27 GOROOT noted above):
 - `go test ./internal/adapter/telegram -timeout 30s` — PASS (`ok`, 0.070s).
 - `go test -race ./internal/adapter/telegram -timeout 45s` — PASS (`ok`, 0.679s).
 - `go test ./internal/adapter/telegram -count=10 -timeout 60s` — PASS (`ok`, 1.084s) with goleak coverage.
+
+## Authoritative quality gate
+
+The first `make quality` attempt stopped at `fmt-check` for `internal/adapter/telegram/driver_test.go`. After formatting that exact file, the next run exposed only missing Task 8 exported API documentation in lint/doccheck; comments were added without behavioral changes. Final command:
+
+- `GOROOT=/home/tundra/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.linux-amd64 make quality` — PASS: formatting, golangci-lint (0 issues), doccheck, archcheck, all tests, full race tests, and focused leak suites.

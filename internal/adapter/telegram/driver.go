@@ -14,6 +14,7 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+// Lifecycle errors reported by the Telegram driver.
 var (
 	ErrInvalidLifecycle = errors.New("telegram: invalid lifecycle transition")
 	ErrDegraded         = errors.New("telegram: durable recovery is degraded")
@@ -24,6 +25,7 @@ var errStopDrain = errors.New("telegram: stop drain")
 // State is the serialized driver lifecycle state.
 type State string
 
+// Driver lifecycle states.
 const (
 	StateNew      State = "new"
 	StateStarting State = "starting"
@@ -38,20 +40,26 @@ type ClientOptions = gotdtelegram.Options
 
 // ClientSession is the narrow, mockable lifetime of one gotd client.
 type ClientSession interface {
+	// Run owns one client transport lifetime.
 	Run(context.Context, func(context.Context) error) error
+	// Authorized reports current session authorization.
 	Authorized(context.Context) (bool, error)
+	// Authorize runs the injected authorization flow.
 	Authorize(context.Context, AuthFlow) error
+	// Self returns the authorized Telegram user.
 	Self(context.Context) (*tg.User, error)
 }
 
 // ClientFactory constructs exactly one inert client per Driver.
 type ClientFactory interface {
+	// New constructs exactly one inert client session.
 	New(int, string, ClientOptions) ClientSession
 }
 
 // GotdClientFactory constructs the production gotd client.
 type GotdClientFactory struct{}
 
+// New constructs one inert gotd client session.
 func (GotdClientFactory) New(appID int, appHash string, options ClientOptions) ClientSession {
 	return gotdClientSession{client: gotdtelegram.NewClient(appID, appHash, options)}
 }
@@ -93,18 +101,27 @@ type Driver struct {
 	stopErr        error
 }
 
+// NewDriver constructs an inert, one-shot Telegram driver.
 func NewDriver(cfg Config) *Driver {
 	drainDone := make(chan struct{})
 	close(drainDone)
 	return &Driver{cfg: cfg, state: StateNew, done: make(chan struct{}), startResult: make(chan error, 1), stopDone: make(chan struct{}), drainDone: drainDone}
 }
+
+// State reports the current serialized lifecycle state.
 func (d *Driver) State() State { d.mu.Lock(); defer d.mu.Unlock(); return d.state }
+
+// Ready reports whether the driver can currently serve its contract.
 func (d *Driver) Ready() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return !d.stopping && d.state == StateReady
 }
-func (d *Driver) Err() error            { d.mu.Lock(); defer d.mu.Unlock(); return d.cause }
+
+// Err reports the most recent lifecycle failure.
+func (d *Driver) Err() error { d.mu.Lock(); defer d.mu.Unlock(); return d.cause }
+
+// Done closes after the client and all owned children exit.
 func (d *Driver) Done() <-chan struct{} { return d.done }
 
 // Start performs bounded initialization once and waits until readiness or failure.

@@ -15,6 +15,7 @@ var ErrUnsupportedAuth = errors.New("telegram: unsupported authorization flow")
 // AuthFlowKind identifies a refused interactive authorization path.
 type AuthFlowKind string
 
+// Supported and explicitly unsupported authorization flow kinds.
 const (
 	AuthFlowSignup  AuthFlowKind = "signup"
 	AuthFlowQR      AuthFlowKind = "QR"
@@ -32,6 +33,7 @@ func UnsupportedAuthorization(flow AuthFlowKind) error {
 // CodeDelivery describes a supported login-code channel without exposing gotd types.
 type CodeDelivery string
 
+// Supported login code delivery channels.
 const (
 	CodeDeliveryApp        CodeDelivery = "app"
 	CodeDeliverySMS        CodeDelivery = "sms"
@@ -42,36 +44,49 @@ const (
 
 // CodeChallenge contains the non-secret prompt metadata needed by an authenticator.
 type CodeChallenge struct {
+	// Delivery identifies the supported code channel.
 	Delivery CodeDelivery
-	Length   int
+	// Length is the expected code length when available.
+	Length int
 }
 
 // Authenticator supplies credentials transiently for phone/code/2FA authorization.
 type Authenticator interface {
+	// Phone returns the account phone number.
 	Phone(context.Context) (string, error)
+	// Code returns the login code for a challenge.
 	Code(context.Context, CodeChallenge) (string, error)
+	// Password returns the account 2FA password.
 	Password(context.Context) (string, error)
 }
 
 // AuthenticatorFuncs adapts three callbacks to Authenticator.
 type AuthenticatorFuncs struct {
-	PhoneFunc    func(context.Context) (string, error)
-	CodeFunc     func(context.Context, CodeChallenge) (string, error)
+	// PhoneFunc supplies the account phone number.
+	PhoneFunc func(context.Context) (string, error)
+	// CodeFunc supplies a login code for a challenge.
+	CodeFunc func(context.Context, CodeChallenge) (string, error)
+	// PasswordFunc supplies the account 2FA password.
 	PasswordFunc func(context.Context) (string, error)
 }
 
+// Phone invokes the configured phone-number callback.
 func (a AuthenticatorFuncs) Phone(ctx context.Context) (string, error) {
 	if a.PhoneFunc == nil {
 		return "", fmt.Errorf("auth phone: %w", ErrInvalidConfig)
 	}
 	return a.PhoneFunc(ctx)
 }
+
+// Code invokes the configured login-code callback.
 func (a AuthenticatorFuncs) Code(ctx context.Context, c CodeChallenge) (string, error) {
 	if a.CodeFunc == nil {
 		return "", fmt.Errorf("auth code: %w", ErrInvalidConfig)
 	}
 	return a.CodeFunc(ctx, c)
 }
+
+// Password invokes the configured 2FA password callback.
 func (a AuthenticatorFuncs) Password(ctx context.Context) (string, error) {
 	if a.PasswordFunc == nil {
 		return "", fmt.Errorf("auth password: %w", ErrInvalidConfig)
@@ -81,6 +96,7 @@ func (a AuthenticatorFuncs) Password(ctx context.Context) (string, error) {
 
 // AuthFlow is the narrow authorization operation consumed by a client session.
 type AuthFlow interface {
+	// Run performs authorization against a gotd flow client.
 	Run(context.Context, gotdauth.FlowClient) error
 }
 

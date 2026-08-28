@@ -274,10 +274,10 @@ func TestDriverCallerCanceledDrainFailsLifecycle(t *testing.T) {
 func TestDriverDrainRejectsNonStopErrors(t *testing.T) {
 	drainFailed := errors.New("drain failed")
 	tests := []struct {
-		name string
-		ctx  func() context.Context
+		name  string
+		ctx   func() context.Context
 		drain func(context.Context) error
-		want error
+		want  error
 	}{
 		{
 			name: "caller deadline",
