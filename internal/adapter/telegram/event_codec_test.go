@@ -46,6 +46,17 @@ func TestEventCodecRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestClassifyCodecErrorPreservesInvalidAndCause(t *testing.T) {
+	cause := errors.New("codec cause")
+	err := classifyCodecError(cause)
+	if !errors.Is(err, otogi.ErrInvalid) {
+		t.Fatalf("classifyCodecError error=%v, want ErrInvalid", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("classifyCodecError error=%v, want underlying cause", err)
+	}
+}
+
 func TestEventCodecRejectsInvalidEnvelope(t *testing.T) {
 	valid, err := EncodeEventInput(richCodecEvent(t))
 	if err != nil {

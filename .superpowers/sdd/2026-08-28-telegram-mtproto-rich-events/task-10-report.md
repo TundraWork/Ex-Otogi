@@ -45,3 +45,7 @@ Focused verification passed with the repository wrapper: Telegram/store unit tes
 ## Fix round 2
 
 Corrected the degraded-gap runbook: full `Driver`/`NewComposition` startup checks SQLite `RecoveryReady` and refuses readiness for unacknowledged degraded records, while `telegram-smoke` verifies preauthorized session connectivity only and cannot assess SQLite, account binding, recovery state, or full-driver readiness.
+
+## Authoritative quality correction
+
+The controller's authoritative gate exposed one `errorlint` finding in codec classification. A red regression proved the classified error preserved `otogi.ErrInvalid` but not its concrete cause. `classifyCodecError` now uses dual `%w` wrapping, preserving both identities while context cancellation/deadline errors remain unchanged. The focused codec/dispatcher tests and full `make quality` then passed, including lint, documentation and architecture checks, all unit and race tests, both bounded fuzz targets, corpus, leak suites, and the unchanged offline smoke.

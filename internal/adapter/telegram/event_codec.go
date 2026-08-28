@@ -163,7 +163,7 @@ func classifyCodecError(err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, otogi.ErrInvalid) {
 		return err
 	}
-	return fmt.Errorf("%w: %v", otogi.ErrInvalid, err)
+	return fmt.Errorf("%w: %w", otogi.ErrInvalid, err)
 }
 
 func optionalSource(v otogi.EventInput) string {
