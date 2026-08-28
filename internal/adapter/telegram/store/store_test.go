@@ -264,6 +264,58 @@ func TestClaimsPreserveConversationOrderAndRecoverLeases(t *testing.T) {
 	}
 }
 
+
+func TestClaimsProgressDistinctConversationBeforeLaterSameConversationRow(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	now := time.Unix(2500, 0).UTC()
+	for _, in := range []InboxInput{
+		{ID: "a1", SourceKey: "fair-a1", Conversation: "a", Sequence: 1, Payload: []byte("1"), AvailableAt: now},
+		{ID: "a2", SourceKey: "fair-a2", Conversation: "a", Sequence: 2, Payload: []byte("2"), AvailableAt: now},
+		{ID: "b1", SourceKey: "fair-b1", Conversation: "b", Sequence: 1, Payload: []byte("3"), AvailableAt: now},
+	} {
+		if ok, err := s.EnqueueInbox(ctx, in); err != nil || !ok {
+			t.Fatalf("enqueue %v %v", ok, err)
+		}
+	}
+	first, ok, err := s.ClaimNext(ctx, "worker", now, time.Minute)
+	if err != nil || !ok || first.ID != "a1" {
+		t.Fatalf("first claim=%+v ok=%v err=%v", first, ok, err)
+	}
+	if err := s.CompleteClaim(ctx, first.ID, "worker", now); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := s.ClaimNextAfter(ctx, "worker", now, time.Minute, first.Conversation)
+	if err != nil || !ok || second.ID != "b1" {
+		t.Fatalf("distinct conversation did not progress: claim=%+v ok=%v err=%v", second, ok, err)
+	}
+}
+
+func TestClaimsPreserveInsertionOrderForEqualConversationSequence(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	now := time.Unix(2600, 0).UTC()
+	for _, in := range []InboxInput{
+		{ID: "first", SourceKey: "equal-first", Conversation: "a", Sequence: 7, Payload: []byte("1"), AvailableAt: now},
+		{ID: "second", SourceKey: "equal-second", Conversation: "a", Sequence: 7, Payload: []byte("2"), AvailableAt: now},
+	} {
+		if ok, err := s.EnqueueInbox(ctx, in); err != nil || !ok {
+			t.Fatalf("enqueue %v %v", ok, err)
+		}
+	}
+	first, ok, err := s.ClaimNext(ctx, "worker", now, time.Minute)
+	if err != nil || !ok || first.ID != "first" {
+		t.Fatalf("first claim=%+v ok=%v err=%v", first, ok, err)
+	}
+	if err := s.CompleteClaim(ctx, first.ID, "worker", now); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := s.ClaimNext(ctx, "worker", now, time.Minute)
+	if err != nil || !ok || second.ID != "second" {
+		t.Fatalf("second claim=%+v ok=%v err=%v", second, ok, err)
+	}
+}
+
 func TestRetentionCompactionAndAccountErasure(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

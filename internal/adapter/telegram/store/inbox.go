@@ -36,11 +36,20 @@ func (s *Store) GetInbox(ctx context.Context, id string) (InboxRow, bool, error)
 
 // ClaimNext atomically claims the oldest eligible conversation head.
 func (s *Store) ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (InboxRow, bool, error) {
+	return s.ClaimNextAfter(ctx, owner, now, lease, "")
+}
+
+// ClaimNextAfter atomically claims the next eligible conversation head after
+// the supplied conversation, wrapping lexically for fair single-worker service.
+func (s *Store) ClaimNextAfter(ctx context.Context, owner string, now time.Time, lease time.Duration, afterConversation string) (InboxRow, bool, error) {
 	if err := validateText("claim owner", owner); err != nil {
 		return InboxRow{}, false, err
 	}
+	if err := validateText("claim cursor", afterConversation); err != nil {
+		return InboxRow{}, false, err
+	}
 	until := now.Add(lease)
-	return scanInbox(s.db.QueryRowContext(ctx, `UPDATE inbox SET status='claimed',owner=?,lease_until=?,attempts=attempts+1 WHERE account_key=? AND id=(SELECT i.id FROM inbox i WHERE i.account_key=? AND i.status IN ('pending','claimed') AND i.available_at<=? AND (i.status='pending' OR i.lease_until<=?) AND NOT EXISTS (SELECT 1 FROM inbox h WHERE h.account_key=i.account_key AND h.conversation=i.conversation AND h.sequence<i.sequence AND h.status NOT IN ('terminal','failed')) ORDER BY i.available_at,i.conversation,i.sequence LIMIT 1) AND (status='pending' OR lease_until<=?) RETURNING id,source_key,conversation,sequence,payload,available_at,status,coalesce(owner,''),lease_until,attempts,completed_at,coalesce(error,'')`, owner, until.UnixNano(), s.accountKey, s.accountKey, now.UnixNano(), now.UnixNano(), now.UnixNano()))
+	return scanInbox(s.db.QueryRowContext(ctx, `UPDATE inbox SET status='claimed',owner=?,lease_until=?,attempts=attempts+1 WHERE account_key=? AND rowid=(SELECT i.rowid FROM inbox i WHERE i.account_key=? AND i.status IN ('pending','claimed') AND i.available_at<=? AND (i.status='pending' OR i.lease_until<=?) AND NOT EXISTS (SELECT 1 FROM inbox h WHERE h.account_key=i.account_key AND h.conversation=i.conversation AND (h.sequence<i.sequence OR (h.sequence=i.sequence AND h.rowid<i.rowid)) AND h.status NOT IN ('terminal','failed')) ORDER BY i.conversation<=?,i.conversation,i.sequence,i.rowid LIMIT 1) AND (status='pending' OR lease_until<=?) RETURNING id,source_key,conversation,sequence,payload,available_at,status,coalesce(owner,''),lease_until,attempts,completed_at,coalesce(error,'')`, owner, until.UnixNano(), s.accountKey, s.accountKey, now.UnixNano(), now.UnixNano(), afterConversation, now.UnixNano()))
 }
 
 // ReleaseClaim returns a claimed row with a retry schedule.
