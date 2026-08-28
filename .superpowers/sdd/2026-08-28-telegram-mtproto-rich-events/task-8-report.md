@@ -86,3 +86,12 @@ Focused green evidence (using the explicit Go 1.27 GOROOT noted above):
 The first `make quality` attempt stopped at `fmt-check` for `internal/adapter/telegram/driver_test.go`. After formatting that exact file, the next run exposed only missing Task 8 exported API documentation in lint/doccheck; comments were added without behavioral changes. Final command:
 
 - `GOROOT=/home/tundra/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.linux-amd64 make quality` — PASS: formatting, golangci-lint (0 issues), doccheck, archcheck, all tests, full race tests, and focused leak suites.
+
+## Post-Task 8 verification correction
+
+The caller-first drain cancellation test raced its `StateFailed` assertion with legitimate Stop cleanup publishing `StateStopped`; production retained `context.Canceled` correctly. The regression now blocks store close, asserts failed state and preserved cause after Drain returns, then releases cleanup and asserts stopped state plus the same preserved cause and Stop error semantics.
+
+- `go test -race ./internal/adapter/telegram -run '^TestDriverCallerCancellationWinsStopRace$' -count=50 -timeout 60s` — PASS.
+- `go test ./internal/adapter/telegram -timeout 30s` — PASS.
+- `go test -race ./internal/adapter/telegram -timeout 45s` — PASS.
+- `go test ./internal/adapter/telegram -count=10 -timeout 60s` — PASS with goleak coverage.

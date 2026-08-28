@@ -317,6 +317,9 @@ func TestDriverCallerCancellationWinsStopRace(t *testing.T) {
 	cfg := validDriverConfig(t)
 	callbackCanceled := make(chan struct{})
 	release := make(chan struct{})
+	allowClose := make(chan struct{})
+	store := &fakeDriverStore{ready: true, onClose: func() { <-allowClose }}
+	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { return store, nil }
 	cfg.DrainDispatcher = func(ctx context.Context) error { <-ctx.Done(); close(callbackCanceled); <-release; return ctx.Err() }
 	d := NewDriver(cfg)
 	if err := d.Start(context.Background()); err != nil {
@@ -351,7 +354,13 @@ func TestDriverCallerCancellationWinsStopRace(t *testing.T) {
 	if !errors.Is(d.Err(), context.Canceled) || d.State() != StateFailed {
 		t.Fatalf("state=%s cause=%v", d.State(), d.Err())
 	}
-	<-stopped
+	close(allowClose)
+	if err := <-stopped; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop error=%v", err)
+	}
+	if d.State() != StateStopped || !errors.Is(d.Err(), context.Canceled) {
+		t.Fatalf("final state=%s cause=%v", d.State(), d.Err())
+	}
 }
 
 func TestDriverWaitsForManagerGateAndPropagatesGateFailure(t *testing.T) {
