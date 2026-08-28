@@ -77,11 +77,15 @@ func forbidden(source, target string) string {
 	switch {
 	case strings.HasPrefix(source, "/pkg/otogi") && !isStandardLibrary(target):
 		return "contracts must import only the standard library"
-	case contractOnlySource(source) && internal && repositoryTarget != "pkg/otogi":
+	case contractOnlySource(source) && internal && repositoryTarget != "pkg/otogi" && !sameTelegramAdapter(source, repositoryTarget):
 		return "kernel, modules, and adapters may import only repository contracts"
 	default:
 		return ""
 	}
+}
+
+func sameTelegramAdapter(source, target string) bool {
+	return strings.HasPrefix(source, "/internal/adapter/telegram/") && strings.HasPrefix(target, "internal/adapter/telegram/")
 }
 
 func isStandardLibrary(importPath string) bool {

@@ -81,6 +81,38 @@ type Result struct {
 // New creates a mapper with immutable scope configuration.
 func New(config Config) *Mapper { return &Mapper{config: config} }
 
+// MapDeletion constructs an unavailable lifecycle event after durable locator resolution.
+func (m *Mapper) MapDeletion(deletion DeleteRecord, conversation string) (otogi.EventInput, error) {
+	if deletion.MessageID <= 0 || conversation == "" || deletion.Namespace != NamespaceCommon && deletion.Namespace != NamespaceChannel {
+		return otogi.EventInput{}, fmt.Errorf("invalid Telegram deletion: %w", otogi.ErrInvalid)
+	}
+	conversationID, err := otogi.NewConversationID(conversation)
+	if err != nil {
+		return otogi.EventInput{}, err
+	}
+	sourceID, err := otogi.NewSourceEventID(fmt.Sprintf("telegram:%s:%s:%d", deletion.Namespace, conversation, deletion.MessageID))
+	if err != nil {
+		return otogi.EventInput{}, err
+	}
+	locatorData, err := EncodeMessageLocator(MessageLocator{Namespace: deletion.Namespace, Peer: conversation, MessageID: deletion.MessageID})
+	if err != nil {
+		return otogi.EventInput{}, err
+	}
+	providerLocator, err := otogi.NewProviderLocator(extensionNamespace+"/message", 1, locatorData)
+	if err != nil {
+		return otogi.EventInput{}, err
+	}
+	accountID, err := otogi.NewAccountID(m.accountScope())
+	if err != nil {
+		return otogi.EventInput{}, err
+	}
+	ingested := time.Now().UTC()
+	if m.config.IngestedAt != nil {
+		ingested = m.config.IngestedAt().UTC()
+	}
+	return otogi.NewEventInput(otogi.EventInputParams{Platform: m.config.Platform, Account: accountID, Tenant: m.config.Tenant, Conversation: conversationID, SourceEventID: sourceID, Action: otogi.ActionMessageDeleted, Direction: otogi.DirectionSystem, OccurredAt: ingested, IngestedAt: ingested, Completeness: otogi.CompletenessUnavailable, ProviderLocator: providerLocator})
+}
+
 // Map maps a supported update or returns a raw quarantine record for a non-routed update.
 func (m *Mapper) Map(update tg.UpdateClass) (Result, error) {
 	if m.config.AuthorizedUserID <= 0 {

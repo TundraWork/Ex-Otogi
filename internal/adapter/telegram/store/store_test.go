@@ -173,6 +173,52 @@ func TestPeerJournalCaptureDedupeAndStartup(t *testing.T) {
 	}
 }
 
+func TestCaptureBatchLeavesJournalPendingUntilCompleteDelivery(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	now := time.Unix(1500, 0).UTC()
+	journalID, err := s.AppendJournal(ctx, []byte("raw"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := InboxInput{ID: "first", SourceKey: "first", Conversation: "chat:1", Sequence: 1, Payload: []byte("first"), AvailableAt: now}
+	if _, err := s.Capture(ctx, Capture{JournalID: journalID, KeepJournalPending: true, Inbox: &first}); err != nil {
+		t.Fatal(err)
+	}
+	row, _, err := s.Journal(ctx, journalID)
+	if err != nil || row.NormalizedAt != nil {
+		t.Fatalf("journal normalized before completion: %+v err=%v", row, err)
+	}
+	second := InboxInput{ID: "second", SourceKey: "second", Conversation: "chat:1", Sequence: 2, Payload: []byte("second"), AvailableAt: now}
+	if _, err := s.Capture(ctx, Capture{JournalID: journalID, Inbox: &second}); err != nil {
+		t.Fatal(err)
+	}
+	row, _, err = s.Journal(ctx, journalID)
+	if err != nil || row.NormalizedAt == nil {
+		t.Fatalf("completed journal remained pending: %+v err=%v", row, err)
+	}
+}
+
+func TestCaptureBatchRejectsUnboundedRowsBeforeTransaction(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	journalID, err := s.AppendJournal(ctx, []byte("raw"), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	captures := make([]Capture, MaxCaptureRows+1)
+	for i := range captures {
+		captures[i].JournalID = journalID
+	}
+	if _, err := s.CaptureBatch(ctx, captures); !errors.Is(err, ErrInputTooLarge) {
+		t.Fatalf("oversized capture error = %v", err)
+	}
+	row, _, err := s.Journal(ctx, journalID)
+	if err != nil || row.NormalizedAt != nil {
+		t.Fatalf("oversized capture mutated journal: %+v err=%v", row, err)
+	}
+}
+
 func TestClaimsPreserveConversationOrderAndRecoverLeases(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
