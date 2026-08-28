@@ -50,3 +50,13 @@ Red evidence included focused failures for prompt cancellation, nil-on-cancel sh
 - `go test ./internal/adapter/telegram ./internal/adapter/telegram/updates -count=10 -timeout 60s` — PASS with both packages' goleak TestMain coverage.
 
 Residual concern: Task 10 composition must adapt its concrete manager runner to the new `updates.RunManager(..., ready)` callback and dispatcher runner readiness callback. No Task 10 composition exists yet, so no current caller remains unmigrated.
+
+## Fix round 2
+
+Added concurrent Drain/Stop regressions proving shutdown cancellation is classified before the drain completion signal permits SQLite close, Stop-induced `context.Canceled` is a normal lifecycle outcome, caller-originated drain cancellation still fails the lifecycle, and a direct timed-out Stop from ready publishes draining/not-ready until cleanup alone publishes stopped. The red regressions observed `Stop error=context canceled` because `drainDone` closed before cancellation classification and observed `state=ready ready=false` because Stop did not serialize the active state transition. `Drain` now defers cancellation and completion signaling until after all result classification/state mutation, checks `stopping` under the lifecycle lock before treating cancellation as normal, and Stop transitions active non-failed states to draining under that same lock while preserving failed.
+
+Focused green evidence:
+
+- `go test ./internal/adapter/telegram -timeout 30s` — PASS.
+- `go test -race ./internal/adapter/telegram -timeout 45s` — PASS.
+- `go test ./internal/adapter/telegram -count=10 -timeout 60s` — PASS with goleak coverage.

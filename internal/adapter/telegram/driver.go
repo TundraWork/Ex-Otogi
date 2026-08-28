@@ -318,7 +318,7 @@ func (d *Driver) fail(err error) {
 }
 
 // Drain stops new dispatcher claims while update capture continues.
-func (d *Driver) Drain(ctx context.Context) error {
+func (d *Driver) Drain(ctx context.Context) (err error) {
 	d.mu.Lock()
 	if d.state != StateReady || d.stopping {
 		d.mu.Unlock()
@@ -330,14 +330,19 @@ func (d *Driver) Drain(ctx context.Context) error {
 	d.drainDone = make(chan struct{})
 	done := d.drainDone
 	d.mu.Unlock()
-	err := panicError("dispatcher drain", func() error { return d.cfg.DrainDispatcher(drainCtx) })
-	cancel()
-	close(done)
-	if err != nil {
-		d.fail(err)
-		return err
+	defer func() { cancel(); close(done) }()
+	err = panicError("dispatcher drain", func() error { return d.cfg.DrainDispatcher(drainCtx) })
+	if err == nil {
+		return nil
 	}
-	return nil
+	d.mu.Lock()
+	stopping := d.stopping
+	d.mu.Unlock()
+	if stopping && errors.Is(err, context.Canceled) {
+		return nil
+	}
+	d.fail(err)
+	return err
 }
 
 // Stop cancels children, waits within ctx, closes storage last, and always becomes stopped.
@@ -345,6 +350,9 @@ func (d *Driver) Stop(ctx context.Context) error {
 	d.stopOnce.Do(func() {
 		d.mu.Lock()
 		d.stopping = true
+		if d.state == StateStarting || d.state == StateReady || d.state == StateDraining {
+			d.state = StateDraining
+		}
 		cancel, started, drainCancel := d.lifeCancel, d.client != nil, d.drainCancel
 		d.mu.Unlock()
 		if cancel != nil {

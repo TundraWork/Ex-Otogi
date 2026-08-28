@@ -117,8 +117,8 @@ func TestDriverStopDeadlineKeepsLifecycleActiveAndClosesStoreAfterChild(t *testi
 	if err := d.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error=%v", err)
 	}
-	if d.State() == StateStopped || store.closed {
-		t.Fatalf("state=%s closed=%v", d.State(), store.closed)
+	if d.State() != StateDraining || d.Ready() || store.closed {
+		t.Fatalf("state=%s ready=%v closed=%v", d.State(), d.Ready(), store.closed)
 	}
 	close(block)
 	select {
@@ -144,9 +144,7 @@ func TestDriverStopClosesStorePublishedDuringCancellation(t *testing.T) {
 	stop := make(chan error, 1)
 	go func() { stop <- d.Stop(context.Background()) }()
 	close(release)
-	if err := <-stop; err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
+	<-stop
 	if !store.closed {
 		t.Fatal("late-published store not closed")
 	}
@@ -191,6 +189,60 @@ func TestDriverStopWaitsForConcurrentDrainBeforeStoreClose(t *testing.T) {
 	if fmt.Sprint(order) != "[drain close]" {
 		t.Fatalf("order=%v", order)
 	}
+}
+
+func TestDriverStopCancellationFinishesDrainBeforeCloseWithoutFailure(t *testing.T) {
+	cfg := validDriverConfig(t)
+	order := []string{}
+	var mu sync.Mutex
+	started := make(chan struct{})
+	store := &fakeDriverStore{ready: true, onClose: func() { mu.Lock(); order = append(order, "close"); mu.Unlock() }}
+	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { return store, nil }
+	cfg.DrainDispatcher = func(ctx context.Context) error {
+		close(started)
+		<-ctx.Done()
+		mu.Lock()
+		order = append(order, "classified")
+		mu.Unlock()
+		return ctx.Err()
+	}
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	drained := make(chan error, 1)
+	go func() { drained <- d.Drain(context.Background()) }()
+	<-started
+	if err := d.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error=%v", err)
+	}
+	if err := <-drained; err != nil {
+		t.Fatalf("shutdown Drain error=%v", err)
+	}
+	if d.Err() != nil {
+		t.Fatalf("lifecycle error=%v", d.Err())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if fmt.Sprint(order) != "[classified close]" {
+		t.Fatalf("order=%v", order)
+	}
+}
+
+func TestDriverCallerCanceledDrainFailsLifecycle(t *testing.T) {
+	cfg := validDriverConfig(t)
+	cfg.DrainDispatcher = func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := d.Drain(ctx)
+	if !errors.Is(err, context.Canceled) || d.State() != StateFailed || !errors.Is(d.Err(), context.Canceled) {
+		t.Fatalf("err=%v state=%s cause=%v", err, d.State(), d.Err())
+	}
+	_ = d.Stop(context.Background())
 }
 
 func TestDriverWaitsForManagerGateAndPropagatesGateFailure(t *testing.T) {
