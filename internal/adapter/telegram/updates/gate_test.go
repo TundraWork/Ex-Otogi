@@ -15,12 +15,15 @@ import (
 )
 
 type memoryJournal struct {
-	mu        sync.Mutex
-	next      int64
-	rows      map[int64][]byte
-	pending   []int64
-	calls     []string
-	appendErr error
+	mu         sync.Mutex
+	next       int64
+	rows       map[int64][]byte
+	pending    []int64
+	calls      []string
+	appendErr  error
+	gapErr     error
+	gaps       []string
+	normalized int
 }
 
 func (m *memoryJournal) AppendJournal(_ context.Context, payload []byte, _ time.Time) (int64, error) {
@@ -51,6 +54,27 @@ func (m *memoryJournal) Journal(_ context.Context, id int64) (telegramstore.Jour
 	defer m.mu.Unlock()
 	p, ok := m.rows[id]
 	return telegramstore.JournalRow{ID: id, Payload: append([]byte(nil), p...)}, ok, nil
+}
+func (m *memoryJournal) RecordGap(_ context.Context, box string, position int64, reason string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.gapErr != nil {
+		return m.gapErr
+	}
+	m.gaps = append(m.gaps, fmt.Sprintf("%s:%d:%s", box, position, reason))
+	return nil
+}
+func (m *memoryJournal) MarkJournalNormalized(_ context.Context, id int64, _ time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, candidate := range m.pending {
+		if candidate == id {
+			m.pending = append(m.pending[:i], m.pending[i+1:]...)
+			m.normalized++
+			return nil
+		}
+	}
+	return fmt.Errorf("journal %d not pending", id)
 }
 
 type recordingUpdates struct {
@@ -276,28 +300,5 @@ func TestCorrelationCompletesSupersededSourcesWithDifferenceOutput(t *testing.T)
 	}
 	if got := fmt.Sprint(ids); got != "[11 12]" {
 		t.Fatalf("superseded journal ids = %s", got)
-	}
-}
-
-func TestCorrelationCompletesSourceWithNoDownstreamUpdates(t *testing.T) {
-	for _, source := range []tg.UpdatesClass{&tg.Updates{}, &tg.UpdatesTooLong{}} {
-		correlation := newJournalCorrelation()
-		if err := correlation.register(11, source); err != nil {
-			t.Fatal(err)
-		}
-		var calls int
-		handler := correlatingHandler{correlation: correlation, next: telegram.UpdateHandlerFunc(func(ctx context.Context, packet tg.UpdatesClass) error {
-			calls++
-			if JournalID(ctx) != 11 || !journalComplete(ctx) || len(packetUpdates(packet)) != 0 {
-				t.Fatalf("completion id=%d complete=%v packet=%T", JournalID(ctx), journalComplete(ctx), packet)
-			}
-			return nil
-		})}
-		if err := handler.Handle(context.Background(), source); err != nil {
-			t.Fatal(err)
-		}
-		if calls != 1 {
-			t.Fatalf("completion calls = %d", calls)
-		}
 	}
 }

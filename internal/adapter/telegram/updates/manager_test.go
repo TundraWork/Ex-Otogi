@@ -200,3 +200,65 @@ func TestNewManagerUsesCallerSharedHealth(t *testing.T) {
 		t.Fatalf("shared health ready=%v reasons=%+v", ready, reasons)
 	}
 }
+
+type emptyDifferenceAPI struct {
+	processed chan struct{}
+	calls     int
+}
+
+func (*emptyDifferenceAPI) UpdatesGetState(context.Context) (*tg.UpdatesState, error) {
+	return &tg.UpdatesState{}, nil
+}
+func (a *emptyDifferenceAPI) UpdatesGetDifference(context.Context, *tg.UpdatesGetDifferenceRequest) (tg.UpdatesDifferenceClass, error) {
+	a.calls++
+	if a.calls == 2 {
+		close(a.processed)
+	}
+	return &tg.UpdatesDifferenceEmpty{}, nil
+}
+func (*emptyDifferenceAPI) UpdatesGetChannelDifference(context.Context, *tg.UpdatesGetChannelDifferenceRequest) (tg.UpdatesChannelDifferenceClass, error) {
+	return &tg.UpdatesChannelDifferenceEmpty{}, nil
+}
+
+func TestManagerRunCompletesTooLongJournalOnlyAfterDurableResyncMarker(t *testing.T) {
+	journal := &memoryJournal{}
+	health := NewHealth()
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{found: true}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: journal, Health: health})
+	if err := gate.Handle(context.Background(), &tg.UpdatesTooLong{}); err != nil {
+		t.Fatal(err)
+	}
+	api := &emptyDifferenceAPI{processed: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunManager(ctx, manager, gate, api, 42, gotdupdates.AuthOptions{}) }()
+	select {
+	case <-api.processed:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	ids, err := journal.StartupJournalIDs(context.Background(), StartupJournalLimit)
+	if err != nil || len(ids) != 0 || journal.normalized != 1 || len(journal.gaps) != 1 {
+		t.Fatalf("pending=%v normalized=%d gaps=%v err=%v", ids, journal.normalized, journal.gaps, err)
+	}
+	restart := NewJournalGate(journal, telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { t.Fatal("normalized journal replayed"); return nil }))
+	if err := restart.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+}
+
+func TestNoOutputGapPersistenceFailureLeavesJournalPending(t *testing.T) {
+	journal := &memoryJournal{gapErr: errors.New("disk full")}
+	gate := newJournalGate(journal, telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), newJournalCorrelation())
+	gate.open = true
+	if err := gate.Handle(context.Background(), &tg.UpdatesTooLong{}); !errors.Is(err, journal.gapErr) {
+		t.Fatalf("error=%v", err)
+	}
+	ids, err := journal.StartupJournalIDs(context.Background(), StartupJournalLimit)
+	if err != nil || len(ids) != 1 || journal.normalized != 0 {
+		t.Fatalf("pending=%v normalized=%d err=%v", ids, journal.normalized, err)
+	}
+}

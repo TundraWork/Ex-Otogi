@@ -41,3 +41,7 @@ The implementation does not claim atomicity between gotd cursor writes and inbox
 - Returned errors for common/channel cursors ahead of normalized markers instead of handing gotd unsafe state.
 - Preserved channel-specific consistency boxes for channel deletion capture.
 - Made archcheck source classification repository-root-relative even when invoked on a nested subtree, while retaining the narrow same-Telegram-adapter allowance.
+
+## Review Fix Round 2
+
+Gotd v0.161.0 exposes no downstream acknowledgement when `UpdatesTooLong` resolves to `UpdatesDifferenceEmpty` (or for semantically empty `Updates`/`UpdatesCombined` packets): `Manager.Handle` returns after queue admission and the manager emits no handler call. The gate therefore uses a conservative public-API seam while retaining its serialization lock: after `Manager.Handle` accepts such a source, it must first durably record a readiness-blocking full-resync requirement and only then mark that journal normalized. If the degraded marker or normalization write fails, the gate returns the error and the journal remains pending. A crash before the marker retains replay; a crash after the marker but before normalization retains both replay and resync requirement; a normalized no-output source always has the durable resync requirement. Task 6 performs reconciliation.

@@ -29,6 +29,8 @@ type journalStore interface {
 	AppendJournal(context.Context, []byte, time.Time) (int64, error)
 	StartupJournalIDs(context.Context, int) ([]int64, error)
 	Journal(context.Context, int64) (telegramstore.JournalRow, bool, error)
+	RecordGap(context.Context, string, int64, string) error
+	MarkJournalNormalized(context.Context, int64, time.Time) error
 }
 
 type journalContextKey struct{}
@@ -146,13 +148,38 @@ func (g *JournalGate) Open(ctx context.Context) error {
 }
 
 func (g *JournalGate) deliver(ctx context.Context, id int64, update tg.UpdatesClass) error {
-	if err := g.correlation.register(id, update); err != nil {
-		return fmt.Errorf("correlate update journal %d: %w", id, err)
+	conservative := noDownstreamAck(update)
+	if !conservative {
+		if err := g.correlation.register(id, update); err != nil {
+			return fmt.Errorf("correlate update journal %d: %w", id, err)
+		}
 	}
 	if err := g.next.Handle(context.WithValue(ctx, journalContextKey{}, id), update); err != nil {
 		return fmt.Errorf("handle journal %d: %w", id, err)
 	}
+	if conservative {
+		const reason = "manager accepted source without public completion acknowledgement; full resync required"
+		if err := g.store.RecordGap(ctx, "common", 0, reason); err != nil {
+			return fmt.Errorf("record journal %d resync requirement: %w", id, err)
+		}
+		if err := g.store.MarkJournalNormalized(ctx, id, time.Now().UTC()); err != nil {
+			return fmt.Errorf("complete journal %d after resync requirement: %w", id, err)
+		}
+	}
 	return nil
+}
+
+func noDownstreamAck(update tg.UpdatesClass) bool {
+	switch value := update.(type) {
+	case *tg.Updates:
+		return len(value.Updates) == 0
+	case *tg.UpdatesCombined:
+		return len(value.Updates) == 0
+	case *tg.UpdatesTooLong:
+		return true
+	default:
+		return false
+	}
 }
 
 func encodeUpdates(update tg.UpdatesClass) ([]byte, error) {
