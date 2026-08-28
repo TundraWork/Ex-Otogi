@@ -24,6 +24,7 @@ type Refetcher struct {
 	peers peerStore
 }
 
+// NewRefetcher constructs a locator refetcher that resolves durable peers through peers and performs only metadata RPCs through api.
 func NewRefetcher(api refetchAPI, peers peerStore) *Refetcher {
 	if api == nil || peers == nil {
 		panic("telegram: nil refetch dependency")

@@ -24,6 +24,7 @@ import (
 
 const sendCodecVersion uint16 = 1
 
+// ErrAmbiguousSend reports that Telegram may have accepted the durable intent and normal Send must not retry it.
 var ErrAmbiguousSend = errors.New("telegram: ambiguous send outcome")
 
 type sendAPI interface {
@@ -42,13 +43,18 @@ type sendStore interface {
 
 // RateLimitError reports exact Telegram send eligibility without sleeping or retrying.
 type RateLimitError struct {
+	// RetryAt is the exact UTC instant when the same logical send becomes eligible again.
 	RetryAt time.Time
-	Cause   error
+	// Cause retains the Telegram RPC error for errors.Is and errors.As classification.
+	Cause error
 }
 
+// Error describes the exact retry instant without exposing any implicit retry behavior.
 func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("telegram: rate limited until %s: %v", e.RetryAt.Format(time.RFC3339), e.Cause)
 }
+
+// Unwrap returns the underlying Telegram RPC error for identity-preserving classification.
 func (e *RateLimitError) Unwrap() error { return e.Cause }
 
 // Sender performs validated, durable, idempotent raw Telegram sends.
@@ -59,6 +65,7 @@ type Sender struct {
 	now     func() time.Time
 }
 
+// NewSender constructs a sender that validates content before durable mutation and journals every successful RPC result before reporting success.
 func NewSender(api sendAPI, store sendStore, journal sendJournal, now func() time.Time) *Sender {
 	if api == nil || store == nil || journal == nil || now == nil {
 		panic("telegram: nil sender dependency")
@@ -135,6 +142,7 @@ func requestDigest(req *tg.MessagesSendMessageRequest) ([]byte, error) {
 	return digest, nil
 }
 
+// Send durably executes one idempotent rich-text intent; ambiguous or in-flight redelivery returns ErrAmbiguousSend without another RPC.
 func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error {
 	template, err := encodeMessage(message)
 	if err != nil {

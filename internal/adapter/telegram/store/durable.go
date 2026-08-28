@@ -122,7 +122,9 @@ type Locator struct {
 
 // SendCorrelation binds Telegram's random_id acknowledgement to a provider message ID.
 type SendCorrelation struct {
-	RandomID  int64
+	// RandomID identifies the durable outbound intent acknowledged by Telegram.
+	RandomID int64
+	// MessageID is Telegram's provider message ID assigned to that intent.
 	MessageID int64
 }
 

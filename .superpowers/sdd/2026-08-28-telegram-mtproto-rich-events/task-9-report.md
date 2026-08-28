@@ -19,6 +19,8 @@ Focused sender tests initially failed to compile because `NewSender`, `RandomID`
 
 All listed focused checks passed after implementation. Package TestMain runs goleak for the Telegram adapter and updates package.
 
+After reverting the unapproved v1 digest compatibility change in commit `0ce58af6`, the authoritative `make quality` gate passed in full: golangci-lint reported 0 issues; doccheck and archcheck passed; all `go test ./...`, `go test -race ./...`, and focused kernel/scripted tests passed.
+
 ## Review fixes
 
 The pre-commit review identified and the implementation corrected: cancelled caller contexts during mandatory post-RPC persistence, false zero-random-ID correlation, ignored ambiguity transition failures, silent annotation-target loss, unbounded refreshed file references, and missing durable `updateMessageID` capture.
