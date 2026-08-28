@@ -219,11 +219,11 @@ func (a *emptyDifferenceAPI) UpdatesGetDifference(context.Context, *tg.UpdatesGe
 func (*emptyDifferenceAPI) UpdatesGetChannelDifference(context.Context, *tg.UpdatesGetChannelDifferenceRequest) (tg.UpdatesChannelDifferenceClass, error) {
 	return &tg.UpdatesChannelDifferenceEmpty{}, nil
 }
-
 func TestManagerRunCompletesTooLongJournalOnlyAfterDurableResyncMarker(t *testing.T) {
 	journal := &memoryJournal{}
+	gaps := &gapStore{}
 	health := NewHealth()
-	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{found: true}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: journal, Health: health})
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{found: true}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: gaps, Health: health})
 	if err := gate.Handle(context.Background(), &tg.UpdatesTooLong{}); err != nil {
 		t.Fatal(err)
 	}
@@ -237,10 +237,11 @@ func TestManagerRunCompletesTooLongJournalOnlyAfterDurableResyncMarker(t *testin
 		t.Fatal(ctx.Err())
 	}
 	ids, err := journal.StartupJournalIDs(context.Background(), StartupJournalLimit)
-	if err != nil || len(ids) != 0 || journal.normalized != 1 || len(journal.gaps) != 1 {
-		t.Fatalf("pending=%v normalized=%d gaps=%v err=%v", ids, journal.normalized, journal.gaps, err)
+	ready, reasons := health.Ready()
+	if err != nil || len(ids) != 0 || journal.normalized != 1 || len(gaps.records) != 1 || ready || len(reasons) != 1 {
+		t.Fatalf("pending=%v normalized=%d gaps=%v ready=%v reasons=%v err=%v", ids, journal.normalized, gaps.records, ready, reasons, err)
 	}
-	restart := NewJournalGate(journal, telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { t.Fatal("normalized journal replayed"); return nil }))
+	restart := NewJournalGate(journal, gaps, NewHealth(), telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { t.Fatal("normalized journal replayed"); return nil }))
 	if err := restart.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -250,15 +251,18 @@ func TestManagerRunCompletesTooLongJournalOnlyAfterDurableResyncMarker(t *testin
 	}
 }
 
-func TestNoOutputGapPersistenceFailureLeavesJournalPending(t *testing.T) {
-	journal := &memoryJournal{gapErr: errors.New("disk full")}
-	gate := newJournalGate(journal, telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), newJournalCorrelation())
+func TestNoOutputGapPersistenceFailureDegradesHealthAndLeavesJournalPending(t *testing.T) {
+	journal := &memoryJournal{}
+	gaps := &gapStore{err: errors.New("disk full")}
+	health := NewHealth()
+	gate := newJournalGate(journal, gaps, health, telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), newJournalCorrelation())
 	gate.open = true
-	if err := gate.Handle(context.Background(), &tg.UpdatesTooLong{}); !errors.Is(err, journal.gapErr) {
+	if err := gate.Handle(context.Background(), &tg.UpdatesTooLong{}); !errors.Is(err, gaps.err) {
 		t.Fatalf("error=%v", err)
 	}
 	ids, err := journal.StartupJournalIDs(context.Background(), StartupJournalLimit)
-	if err != nil || len(ids) != 1 || journal.normalized != 0 {
-		t.Fatalf("pending=%v normalized=%d err=%v", ids, journal.normalized, err)
+	ready, reasons := health.Ready()
+	if err != nil || len(ids) != 1 || journal.normalized != 0 || ready || len(reasons) != 1 || !errors.Is(reasons[0].Err, gaps.err) {
+		t.Fatalf("pending=%v normalized=%d ready=%v reasons=%+v err=%v", ids, journal.normalized, ready, reasons, err)
 	}
 }

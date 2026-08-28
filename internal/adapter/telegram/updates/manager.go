@@ -51,6 +51,17 @@ func (h *Health) Ready() (bool, []DegradedReason) {
 	return len(h.reasons) == 0, append([]DegradedReason(nil), h.reasons...)
 }
 
+func recordGap(ctx context.Context, store GapStore, health *Health, reason DegradedReason) error {
+	durableReason := reason.Reason
+	if reason.Err != nil {
+		durableReason += ": " + reason.Err.Error()
+	}
+	err := store.RecordGap(ctx, reason.Box, reason.Position, durableReason)
+	reason.Err = err
+	health.degrade(reason)
+	return err
+}
+
 // Callbacks contains all gotd manager gap callbacks. None are left to gotd's
 // log-only defaults.
 type Callbacks struct {
@@ -72,8 +83,7 @@ func GapCallbacks(store GapStore, health *Health) Callbacks {
 		panic("updates: nil gap dependency")
 	}
 	record := func(box string, position int64, reason string) {
-		err := store.RecordGap(context.Background(), box, position, reason)
-		health.degrade(DegradedReason{Box: box, Position: position, Reason: reason, Err: err})
+		_ = recordGap(context.Background(), store, health, DegradedReason{Box: box, Position: position, Reason: reason})
 	}
 	return Callbacks{
 		OnLoadUserStateFailed:    func() { record("common", 0, "load user state failed") },
@@ -122,7 +132,7 @@ func NewManager(config ManagerConfig) (*gotdupdates.Manager, *JournalGate, Callb
 		OnLoadUserStateFailed:    callbacks.OnLoadUserStateFailed,
 		OnLoadChannelStateFailed: callbacks.OnLoadChannelStateFailed,
 	})
-	return manager, newJournalGate(config.Journal, manager, correlation), callbacks, health
+	return manager, newJournalGate(config.Journal, config.GapStore, health, manager, correlation), callbacks, health
 }
 
 // Middlewares returns the required raw-invoker middleware order: journaled

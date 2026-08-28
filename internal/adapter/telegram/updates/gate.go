@@ -29,7 +29,6 @@ type journalStore interface {
 	AppendJournal(context.Context, []byte, time.Time) (int64, error)
 	StartupJournalIDs(context.Context, int) ([]int64, error)
 	Journal(context.Context, int64) (telegramstore.JournalRow, bool, error)
-	RecordGap(context.Context, string, int64, string) error
 	MarkJournalNormalized(context.Context, int64, time.Time) error
 }
 
@@ -54,6 +53,8 @@ func JournalID(ctx context.Context) int64 {
 // UpdateHandler and RPC UpdateHook paths.
 type JournalGate struct {
 	store       journalStore
+	gaps        GapStore
+	health      *Health
 	next        telegram.UpdateHandler
 	correlation *journalCorrelation
 
@@ -64,15 +65,15 @@ type JournalGate struct {
 }
 
 // NewJournalGate constructs a closed startup gate.
-func NewJournalGate(store journalStore, next telegram.UpdateHandler) *JournalGate {
-	return newJournalGate(store, next, newJournalCorrelation())
+func NewJournalGate(store journalStore, gaps GapStore, health *Health, next telegram.UpdateHandler) *JournalGate {
+	return newJournalGate(store, gaps, health, next, newJournalCorrelation())
 }
 
-func newJournalGate(store journalStore, next telegram.UpdateHandler, correlation *journalCorrelation) *JournalGate {
-	if store == nil || next == nil || correlation == nil {
+func newJournalGate(store journalStore, gaps GapStore, health *Health, next telegram.UpdateHandler, correlation *journalCorrelation) *JournalGate {
+	if store == nil || gaps == nil || health == nil || next == nil || correlation == nil {
 		panic("updates: nil journal gate dependency")
 	}
-	return &JournalGate{store: store, next: next, correlation: correlation}
+	return &JournalGate{store: store, gaps: gaps, health: health, next: next, correlation: correlation}
 }
 
 // Handle implements telegram.UpdateHandler. Receipt serialization preserves
@@ -159,7 +160,7 @@ func (g *JournalGate) deliver(ctx context.Context, id int64, update tg.UpdatesCl
 	}
 	if conservative {
 		const reason = "manager accepted source without public completion acknowledgement; full resync required"
-		if err := g.store.RecordGap(ctx, "common", 0, reason); err != nil {
+		if err := recordGap(ctx, g.gaps, g.health, DegradedReason{Box: "common", Reason: reason}); err != nil {
 			return fmt.Errorf("record journal %d resync requirement: %w", id, err)
 		}
 		if err := g.store.MarkJournalNormalized(ctx, id, time.Now().UTC()); err != nil {

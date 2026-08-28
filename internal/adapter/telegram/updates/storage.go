@@ -29,8 +29,7 @@ func (s monitoredStateStorage) fail(ctx context.Context, box, operation string, 
 	if err == nil {
 		return nil
 	}
-	recordErr := s.gaps.RecordGap(ctx, box, position, operation+": "+err.Error())
-	s.health.degrade(DegradedReason{Box: box, Position: position, Reason: operation, Err: recordErr})
+	_ = recordGap(ctx, s.gaps, s.health, DegradedReason{Box: box, Position: position, Reason: operation, Err: err})
 	return err
 }
 func (s monitoredStateStorage) GetState(ctx context.Context, userID int64) (gotdupdates.State, bool, error) {

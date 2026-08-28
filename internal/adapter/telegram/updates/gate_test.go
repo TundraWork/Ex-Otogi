@@ -132,7 +132,7 @@ func encodePacket(t *testing.T, u tg.UpdatesClass) []byte {
 func TestJournalGateBuffersUntilOpenAndReplaysInReceiptOrder(t *testing.T) {
 	journal := &memoryJournal{}
 	manager := &recordingUpdates{calls: &journal.calls}
-	gate := NewJournalGate(journal, manager)
+	gate := NewJournalGate(journal, &gapStore{}, NewHealth(), manager)
 	for i := 1; i <= 3; i++ {
 		if err := gate.Handle(context.Background(), packet(i)); err != nil {
 			t.Fatal(err)
@@ -162,7 +162,7 @@ func TestJournalGateBuffersUntilOpenAndReplaysInReceiptOrder(t *testing.T) {
 func TestJournalGateRejectsSixtyFifthBufferedPacketWithoutBypass(t *testing.T) {
 	journal := &memoryJournal{}
 	manager := &recordingUpdates{}
-	gate := NewJournalGate(journal, manager)
+	gate := NewJournalGate(journal, &gapStore{}, NewHealth(), manager)
 	for i := 1; i <= StartupJournalLimit; i++ {
 		if err := gate.Handle(context.Background(), packet(i)); err != nil {
 			t.Fatalf("packet %d: %v", i, err)
@@ -182,7 +182,7 @@ func TestJournalGateRejectsSixtyFifthBufferedPacketWithoutBypass(t *testing.T) {
 func TestJournalGateDoesNotCallManagerWhenAppendFails(t *testing.T) {
 	journal := &memoryJournal{appendErr: errors.New("disk full")}
 	manager := &recordingUpdates{}
-	gate := NewJournalGate(journal, manager)
+	gate := NewJournalGate(journal, &gapStore{}, NewHealth(), manager)
 	if err := gate.Handle(context.Background(), packet(1)); err == nil {
 		t.Fatal("expected append failure")
 	}
@@ -194,7 +194,7 @@ func TestJournalGateDoesNotCallManagerWhenAppendFails(t *testing.T) {
 func TestJournalGateRecoversPendingRowsOnOpen(t *testing.T) {
 	journal := &memoryJournal{next: 2, rows: map[int64][]byte{1: encodePacket(t, packet(1)), 2: encodePacket(t, packet(2))}, pending: []int64{1, 2}}
 	manager := &recordingUpdates{}
-	gate := NewJournalGate(journal, manager)
+	gate := NewJournalGate(journal, &gapStore{}, NewHealth(), manager)
 	if err := gate.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
