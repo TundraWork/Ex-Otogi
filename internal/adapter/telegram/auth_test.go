@@ -73,6 +73,25 @@ func TestUserAuthenticatorRejectsPaymentRequiredResponse(t *testing.T) {
 	}
 }
 
+func TestAuthFlowPreservesPromptCancellation(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		auth   AuthenticatorFuncs
+		client *fakeAuthClient
+	}{
+		{"phone", AuthenticatorFuncs{PhoneFunc: func(context.Context) (string, error) { return "", context.Canceled }}, &fakeAuthClient{}},
+		{"code", AuthenticatorFuncs{PhoneFunc: func(context.Context) (string, error) { return "+1", nil }, CodeFunc: func(context.Context, CodeChallenge) (string, error) { return "", context.DeadlineExceeded }}, &fakeAuthClient{sent: &tg.AuthSentCode{Type: &tg.AuthSentCodeTypeApp{Length: 5}}}},
+		{"password", AuthenticatorFuncs{PhoneFunc: func(context.Context) (string, error) { return "+1", nil }, CodeFunc: func(context.Context, CodeChallenge) (string, error) { return "1", nil }, PasswordFunc: func(context.Context) (string, error) { return "", context.Canceled }}, &fakeAuthClient{sent: &tg.AuthSentCode{Type: &tg.AuthSentCodeTypeApp{Length: 5}}, signInErr: gotdauth.ErrPasswordAuthNeeded}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewAuthFlow(tt.auth).Run(context.Background(), tt.client)
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestNamedUnsupportedAuthorizationFlows(t *testing.T) {
 	for _, flow := range []AuthFlowKind{AuthFlowSignup, AuthFlowQR, AuthFlowPasskey, AuthFlowPayment, AuthFlowEmail, AuthFlowOAuth} {
 		err := UnsupportedAuthorization(flow)

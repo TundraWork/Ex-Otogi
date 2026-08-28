@@ -108,7 +108,7 @@ func TestManagerRunOpensGateOnlyAfterStartupStateLoad(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunManager(ctx, manager, gate, api, 42, gotdupdates.AuthOptions{}) }()
+	go func() { done <- RunManager(ctx, manager, gate, api, 42, gotdupdates.AuthOptions{}, nil) }()
 	deadline := time.After(time.Second)
 	for len(recorder.snapshot()) == 0 {
 		select {
@@ -139,7 +139,7 @@ func TestManagerRunReplaysSixtyFourRowsWithoutDeadlock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- RunManager(ctx, manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{})
+		done <- RunManager(ctx, manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{}, nil)
 	}()
 	deadline := time.After(2 * time.Second)
 	for len(recorder.snapshot()) < StartupJournalLimit {
@@ -170,9 +170,53 @@ func TestManagerRunPropagatesAsynchronousGateReplayFailure(t *testing.T) {
 		journal.rows[journal.next] = encodePacket(t, packet(i))
 		journal.pending = append(journal.pending, journal.next)
 	}
-	err := RunManager(context.Background(), manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{})
+	err := RunManager(context.Background(), manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{}, nil)
 	if !errors.Is(err, ErrStartupOverflow) {
 		t.Fatalf("RunManager error = %v", err)
+	}
+}
+
+func TestManagerReadySignalsOnlyAfterGateReplay(t *testing.T) {
+	release := make(chan struct{})
+	journal := &memoryJournal{startupWait: release}
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}, Health: NewHealth()})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- RunManager(ctx, manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{}, func() { close(ready) })
+	}()
+	select {
+	case <-ready:
+		t.Fatal("ready before gate replay completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("ready not signaled")
+	}
+	cancel()
+	<-done
+}
+
+func TestManagerGateFailureDoesNotSignalReady(t *testing.T) {
+	journal := &memoryJournal{}
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}, Health: NewHealth()})
+	for i := 0; i <= StartupJournalLimit; i++ {
+		journal.next++
+		if journal.rows == nil {
+			journal.rows = map[int64][]byte{}
+		}
+		journal.rows[journal.next] = encodePacket(t, packet(i))
+		journal.pending = append(journal.pending, journal.next)
+	}
+	ready := false
+	err := RunManager(context.Background(), manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{}, func() { ready = true })
+	if !errors.Is(err, ErrStartupOverflow) || ready {
+		t.Fatalf("error=%v ready=%v", err, ready)
 	}
 }
 
@@ -230,7 +274,7 @@ func TestManagerRunCompletesTooLongJournalOnlyAfterDurableResyncMarker(t *testin
 	api := &emptyDifferenceAPI{processed: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunManager(ctx, manager, gate, api, 42, gotdupdates.AuthOptions{}) }()
+	go func() { done <- RunManager(ctx, manager, gate, api, 42, gotdupdates.AuthOptions{}, nil) }()
 	select {
 	case <-api.processed:
 	case <-ctx.Done():

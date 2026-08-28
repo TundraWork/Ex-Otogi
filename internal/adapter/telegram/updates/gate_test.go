@@ -15,15 +15,16 @@ import (
 )
 
 type memoryJournal struct {
-	mu         sync.Mutex
-	next       int64
-	rows       map[int64][]byte
-	pending    []int64
-	calls      []string
-	appendErr  error
-	gapErr     error
-	gaps       []string
-	normalized int
+	mu          sync.Mutex
+	next        int64
+	rows        map[int64][]byte
+	pending     []int64
+	calls       []string
+	appendErr   error
+	gapErr      error
+	gaps        []string
+	normalized  int
+	startupWait <-chan struct{}
 }
 
 func (m *memoryJournal) AppendJournal(_ context.Context, payload []byte, _ time.Time) (int64, error) {
@@ -42,6 +43,9 @@ func (m *memoryJournal) AppendJournal(_ context.Context, payload []byte, _ time.
 	return m.next, nil
 }
 func (m *memoryJournal) StartupJournalIDs(_ context.Context, limit int) ([]int64, error) {
+	if m.startupWait != nil {
+		<-m.startupWait
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.pending) > limit {

@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -21,7 +22,12 @@ func TestDriverStartReadyDrainStopAndOneShot(t *testing.T) {
 	store := &fakeDriverStore{ready: true}
 	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { return store, nil }
 	claims := make(chan struct{}, 1)
-	cfg.RunDispatcher = func(ctx context.Context, _ DriverStore) error { claims <- struct{}{}; <-ctx.Done(); return ctx.Err() }
+	cfg.RunDispatcher = func(ctx context.Context, _ DriverStore, ready func()) error {
+		claims <- struct{}{}
+		ready()
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	drained := false
 	cfg.DrainDispatcher = func(context.Context) error { drained = true; return nil }
 	d := NewDriver(cfg)
@@ -73,42 +79,35 @@ func TestDriverDegradedRecoveryNeverBecomesReady(t *testing.T) {
 	_ = d.Stop(context.Background())
 }
 
-func TestDriverChildFailureAndPanicFailLifecycle(t *testing.T) {
+func TestDriverImmediateDispatcherFailureFailsStart(t *testing.T) {
 	for _, tt := range []struct {
 		name string
-		run  func(context.Context, DriverStore) error
+		run  func(context.Context, DriverStore, func()) error
 	}{
-		{"error", func(context.Context, DriverStore) error { return errors.New("dispatch failed") }},
-		{"panic", func(context.Context, DriverStore) error { panic("dispatch panic") }},
+		{"error", func(context.Context, DriverStore, func()) error { return errors.New("dispatch failed") }},
+		{"panic", func(context.Context, DriverStore, func()) error { panic("dispatch panic") }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validDriverConfig(t)
 			cfg.RunDispatcher = tt.run
 			d := NewDriver(cfg)
-			if err := d.Start(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-d.Done():
-			case <-time.After(time.Second):
-				t.Fatal("failure not propagated")
+			if err := d.Start(context.Background()); err == nil {
+				t.Fatal("Start returned nil")
 			}
 			if d.State() != StateFailed || d.Err() == nil || d.Ready() {
 				t.Fatalf("state=%s err=%v", d.State(), d.Err())
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			_ = d.Stop(ctx)
+			_ = d.Stop(context.Background())
 		})
 	}
 }
 
-func TestDriverStopDeadlineStillClosesStoreLastAndStops(t *testing.T) {
+func TestDriverStopDeadlineKeepsLifecycleActiveAndClosesStoreAfterChild(t *testing.T) {
 	cfg := validDriverConfig(t)
 	store := &fakeDriverStore{ready: true}
 	block := make(chan struct{})
 	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { return store, nil }
-	cfg.RunDispatcher = func(context.Context, DriverStore) error { <-block; return nil }
+	cfg.RunDispatcher = func(_ context.Context, _ DriverStore, ready func()) error { ready(); <-block; return nil }
 	d := NewDriver(cfg)
 	if err := d.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -116,20 +115,118 @@ func TestDriverStopDeadlineStillClosesStoreLastAndStops(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := d.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Stop error=%v", err)
+		t.Fatalf("error=%v", err)
 	}
-	if d.State() != StateStopped || store.closed {
-		t.Fatalf("state=%s closed-before-child=%v", d.State(), store.closed)
+	if d.State() == StateStopped || store.closed {
+		t.Fatalf("state=%s closed=%v", d.State(), store.closed)
 	}
 	close(block)
 	select {
 	case <-d.stopDone:
 	case <-time.After(time.Second):
-		t.Fatal("background cleanup did not finish")
+		t.Fatal("cleanup blocked")
+	}
+	if d.State() != StateStopped || !store.closed {
+		t.Fatalf("state=%s closed=%v", d.State(), store.closed)
+	}
+}
+
+func TestDriverStopClosesStorePublishedDuringCancellation(t *testing.T) {
+	cfg := validDriverConfig(t)
+	store := &fakeDriverStore{ready: true}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { close(entered); <-release; return store, nil }
+	d := NewDriver(cfg)
+	start := make(chan error, 1)
+	go func() { start <- d.Start(context.Background()) }()
+	<-entered
+	stop := make(chan error, 1)
+	go func() { stop <- d.Stop(context.Background()) }()
+	close(release)
+	if err := <-stop; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 	if !store.closed {
-		t.Fatal("store not closed after child exited")
+		t.Fatal("late-published store not closed")
 	}
+	<-start
+}
+
+func TestDriverStopWaitsForConcurrentDrainBeforeStoreClose(t *testing.T) {
+	cfg := validDriverConfig(t)
+	order := []string{}
+	var mu sync.Mutex
+	drainStarted := make(chan struct{})
+	drainRelease := make(chan struct{})
+	store := &fakeDriverStore{ready: true, onClose: func() { mu.Lock(); order = append(order, "close"); mu.Unlock() }}
+	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { return store, nil }
+	cfg.DrainDispatcher = func(ctx context.Context) error {
+		close(drainStarted)
+		<-drainRelease
+		mu.Lock()
+		order = append(order, "drain")
+		mu.Unlock()
+		return ctx.Err()
+	}
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	drained := make(chan error, 1)
+	go func() { drained <- d.Drain(context.Background()) }()
+	<-drainStarted
+	stopped := make(chan error, 1)
+	go func() { stopped <- d.Stop(context.Background()) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop passed active drain")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(drainRelease)
+	<-drained
+	<-stopped
+	mu.Lock()
+	defer mu.Unlock()
+	if fmt.Sprint(order) != "[drain close]" {
+		t.Fatalf("order=%v", order)
+	}
+}
+
+func TestDriverWaitsForManagerGateAndPropagatesGateFailure(t *testing.T) {
+	t.Run("blocks until gate open", func(t *testing.T) {
+		cfg := validDriverConfig(t)
+		release := make(chan struct{})
+		cfg.RunManager = func(ctx context.Context, _ ClientSession, _ DriverStore, ready func()) error {
+			<-release
+			ready()
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		d := NewDriver(cfg)
+		started := make(chan error, 1)
+		go func() { started <- d.Start(context.Background()) }()
+		select {
+		case err := <-started:
+			t.Fatalf("Start returned before gate: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		close(release)
+		if err := <-started; err != nil {
+			t.Fatal(err)
+		}
+		_ = d.Stop(context.Background())
+	})
+	t.Run("gate failure", func(t *testing.T) {
+		want := errors.New("gate replay failed")
+		cfg := validDriverConfig(t)
+		cfg.RunManager = func(context.Context, ClientSession, DriverStore, func()) error { return want }
+		d := NewDriver(cfg)
+		if err := d.Start(context.Background()); !errors.Is(err, want) {
+			t.Fatalf("error=%v", err)
+		}
+		_ = d.Stop(context.Background())
+	})
 }
 
 func TestDriverStopAggregatesCleanupErrorAndClosesAfterChildren(t *testing.T) {
@@ -138,7 +235,8 @@ func TestDriverStopAggregatesCleanupErrorAndClosesAfterChildren(t *testing.T) {
 	mu := sync.Mutex{}
 	store := &fakeDriverStore{ready: true, closeErr: errors.New("close failed"), onClose: func() { mu.Lock(); order = append(order, "close"); mu.Unlock() }}
 	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { return store, nil }
-	cfg.RunDispatcher = func(ctx context.Context, _ DriverStore) error {
+	cfg.RunDispatcher = func(ctx context.Context, _ DriverStore, ready func()) error {
+		ready()
 		<-ctx.Done()
 		mu.Lock()
 		order = append(order, "child")
@@ -157,6 +255,32 @@ func TestDriverStopAggregatesCleanupErrorAndClosesAfterChildren(t *testing.T) {
 	defer mu.Unlock()
 	if len(order) != 2 || order[0] != "child" || order[1] != "close" {
 		t.Fatalf("order=%v", order)
+	}
+}
+
+func TestDriverNormalStopAcceptsNilClientRunResult(t *testing.T) {
+	cfg := validDriverConfig(t)
+	cfg.ClientFactory = fakeClientFactory{client: &fakeClientSession{nilOnCancel: true}}
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDriverStopContainsStoreClosePanic(t *testing.T) {
+	cfg := validDriverConfig(t)
+	store := &fakeDriverStore{ready: true, panicClose: "session-secret"}
+	cfg.OpenStore = func(context.Context, StoreConfig) (DriverStore, error) { return store, nil }
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	err := d.Stop(context.Background())
+	if err == nil || strings.Contains(err.Error(), "session-secret") {
+		t.Fatalf("error=%v", err)
 	}
 }
 
@@ -225,8 +349,9 @@ func (f fakeClientFactory) New(int, string, ClientOptions) ClientSession {
 }
 
 type fakeClientSession struct {
-	runErr     error
-	panicValue any
+	runErr      error
+	panicValue  any
+	nilOnCancel bool
 }
 
 func (f *fakeClientSession) Run(ctx context.Context, fn func(context.Context) error) error {
@@ -236,7 +361,11 @@ func (f *fakeClientSession) Run(ctx context.Context, fn func(context.Context) er
 	if f.runErr != nil {
 		return f.runErr
 	}
-	return fn(ctx)
+	err := fn(ctx)
+	if f.nilOnCancel && errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 func (*fakeClientSession) Authorized(context.Context) (bool, error)  { return true, nil }
 func (*fakeClientSession) Authorize(context.Context, AuthFlow) error { return nil }
@@ -248,12 +377,16 @@ type fakeDriverStore struct {
 	closeCount int
 	closeErr   error
 	onClose    func()
+	panicClose any
 }
 
 func (s *fakeDriverStore) RecoveryReady(context.Context) (bool, []telegramstore.RecoveryRecord, error) {
 	return s.ready, nil, nil
 }
 func (s *fakeDriverStore) Close() error {
+	if s.panicClose != nil {
+		panic(s.panicClose)
+	}
 	s.closeCount++
 	s.closed = true
 	if s.onClose != nil {

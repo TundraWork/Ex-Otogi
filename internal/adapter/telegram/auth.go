@@ -92,6 +92,9 @@ type userAuthFlow struct{ auth userAuthenticator }
 func (f userAuthFlow) Run(ctx context.Context, client gotdauth.FlowClient) error {
 	phone, err := f.auth.Phone(ctx)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		return errors.New("telegram: obtain phone credential")
 	}
 	sent, err := client.SendCode(ctx, phone, gotdauth.SendCodeOptions{})
@@ -115,7 +118,7 @@ func (f userAuthFlow) Run(ctx context.Context, client gotdauth.FlowClient) error
 	}
 	code, err := f.auth.Code(ctx, codeSent)
 	if err != nil {
-		if errors.Is(err, ErrUnsupportedAuth) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrUnsupportedAuth) {
 			return err
 		}
 		return errors.New("telegram: obtain authorization code")
@@ -124,6 +127,9 @@ func (f userAuthFlow) Run(ctx context.Context, client gotdauth.FlowClient) error
 	if errors.Is(err, gotdauth.ErrPasswordAuthNeeded) {
 		password, passwordErr := f.auth.Password(ctx)
 		if passwordErr != nil {
+			if errors.Is(passwordErr, context.Canceled) || errors.Is(passwordErr, context.DeadlineExceeded) {
+				return passwordErr
+			}
 			return errors.New("telegram: obtain 2FA credential")
 		}
 		if _, passwordErr = client.Password(ctx, password); passwordErr != nil {

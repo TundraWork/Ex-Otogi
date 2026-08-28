@@ -85,13 +85,16 @@ type Driver struct {
 	childErrs      []error
 	stopOnce       sync.Once
 	children       sync.WaitGroup
+	drainDone      chan struct{}
+	drainCancel    context.CancelFunc
 	stopDone       chan struct{}
 	stopErr        error
 }
 
-// NewDriver constructs an inert driver. Validation occurs in Start.
 func NewDriver(cfg Config) *Driver {
-	return &Driver{cfg: cfg, state: StateNew, done: make(chan struct{}), startResult: make(chan error, 1), stopDone: make(chan struct{})}
+	drainDone := make(chan struct{})
+	close(drainDone)
+	return &Driver{cfg: cfg, state: StateNew, done: make(chan struct{}), startResult: make(chan error, 1), stopDone: make(chan struct{}), drainDone: drainDone}
 }
 func (d *Driver) State() State { d.mu.Lock(); defer d.mu.Unlock(); return d.state }
 func (d *Driver) Ready() bool {
@@ -153,22 +156,23 @@ func (d *Driver) Start(ctx context.Context) error {
 func (d *Driver) supervise(ctx context.Context) {
 	err := panicError("client", func() error { return d.client.Run(ctx, d.runConnected) })
 	d.children.Wait()
-	if err == nil {
+	d.mu.Lock()
+	stopping := d.stopping || errors.Is(ctx.Err(), context.Canceled)
+	starting := d.state == StateStarting
+	if err == nil && !stopping {
 		err = errors.New("telegram: client stopped unexpectedly")
 	}
-	d.mu.Lock()
-	starting := d.state == StateStarting
-	if d.state == StateStarting || d.state == StateReady || d.state == StateDraining {
+	if !stopping && (d.state == StateStarting || d.state == StateReady || d.state == StateDraining) {
 		d.state = StateFailed
 		if d.cause == nil {
 			d.cause = err
 		}
-		if !errors.Is(err, context.Canceled) {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			d.childErrs = append(d.childErrs, err)
 		}
 	}
 	d.mu.Unlock()
-	if starting {
+	if starting && err != nil {
 		d.signalStart(err)
 	}
 	close(d.done)
@@ -220,16 +224,33 @@ func (d *Driver) runConnected(ctx context.Context) error {
 		return d.startFailed(ErrDegraded)
 	}
 	dispatchCtx, dispatchCancel := context.WithCancel(ctx)
+	dispatchReady := make(chan struct{})
+	var dispatchReadyOnce sync.Once
 	d.mu.Lock()
 	d.dispatchCancel = dispatchCancel
 	d.mu.Unlock()
-	d.dispatchDone = d.runChild(dispatchCtx, "dispatcher", func(child context.Context) error { return d.cfg.RunDispatcher(child, store) })
-	d.mu.Lock()
-	if d.state == StateStarting {
+	d.dispatchDone = d.runChild(dispatchCtx, "dispatcher", func(child context.Context) error {
+		return d.cfg.RunDispatcher(child, store, func() { dispatchReadyOnce.Do(func() { close(dispatchReady) }) })
+	})
+	select {
+	case <-dispatchReady:
+		d.mu.Lock()
+		if d.state != StateStarting {
+			err = d.cause
+			d.mu.Unlock()
+			if err == nil {
+				err = errors.New("telegram: dispatcher failed before ready")
+			}
+			return d.startFailed(err)
+		}
 		d.state = StateReady
+		d.mu.Unlock()
+		d.signalStart(nil)
+	case err = <-d.dispatchDone:
+		return d.startFailed(err)
+	case <-ctx.Done():
+		return d.startFailed(ctx.Err())
 	}
-	d.mu.Unlock()
-	d.signalStart(nil)
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -299,13 +320,20 @@ func (d *Driver) fail(err error) {
 // Drain stops new dispatcher claims while update capture continues.
 func (d *Driver) Drain(ctx context.Context) error {
 	d.mu.Lock()
-	if d.state != StateReady {
+	if d.state != StateReady || d.stopping {
 		d.mu.Unlock()
 		return ErrInvalidLifecycle
 	}
 	d.state = StateDraining
+	drainCtx, cancel := context.WithCancel(ctx)
+	d.drainCancel = cancel
+	d.drainDone = make(chan struct{})
+	done := d.drainDone
 	d.mu.Unlock()
-	if err := panicError("dispatcher drain", func() error { return d.cfg.DrainDispatcher(ctx) }); err != nil {
+	err := panicError("dispatcher drain", func() error { return d.cfg.DrainDispatcher(drainCtx) })
+	cancel()
+	close(done)
+	if err != nil {
 		d.fail(err)
 		return err
 	}
@@ -317,18 +345,28 @@ func (d *Driver) Stop(ctx context.Context) error {
 	d.stopOnce.Do(func() {
 		d.mu.Lock()
 		d.stopping = true
-		cancel, started, store := d.lifeCancel, d.client != nil, d.store
+		cancel, started, drainCancel := d.lifeCancel, d.client != nil, d.drainCancel
 		d.mu.Unlock()
 		if cancel != nil {
 			cancel()
+		}
+		if drainCancel != nil {
+			drainCancel()
 		}
 		go func() {
 			var errs []error
 			if started {
 				<-d.done
 			}
+			d.mu.Lock()
+			drainDone := d.drainDone
+			d.mu.Unlock()
+			<-drainDone
+			d.mu.Lock()
+			store := d.store
+			d.mu.Unlock()
 			if store != nil {
-				if err := store.Close(); err != nil {
+				if err := panicError("store close", store.Close); err != nil {
 					errs = append(errs, err)
 				}
 			}
@@ -346,9 +384,6 @@ func (d *Driver) Stop(ctx context.Context) error {
 		defer d.mu.Unlock()
 		return d.stopErr
 	case <-ctx.Done():
-		d.mu.Lock()
-		d.state = StateStopped
-		d.mu.Unlock()
 		return ctx.Err()
 	}
 }

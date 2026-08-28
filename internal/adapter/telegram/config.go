@@ -36,7 +36,7 @@ type ManagerRunner func(context.Context, ClientSession, DriverStore, func()) err
 type ResynchronizerRunner func(context.Context, ClientSession, DriverStore) error
 
 // DispatcherRunner claims durable inbox work until cancellation.
-type DispatcherRunner func(context.Context, DriverStore) error
+type DispatcherRunner func(context.Context, DriverStore, func()) error
 
 // DispatcherDrainer stops new claims and waits for accepted work under ctx.
 type DispatcherDrainer func(context.Context) error

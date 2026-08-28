@@ -154,7 +154,7 @@ func ConfigureOptions(options *telegram.Options, gate *JournalGate, manager *got
 // RunManager starts gotd state recovery and opens the journal gate asynchronously
 // after state initialization. Replay retains the gate lock until complete, while
 // the manager worker can consume its bounded internal queue.
-func RunManager(ctx context.Context, manager *gotdupdates.Manager, gate *JournalGate, api gotdupdates.API, userID int64, options gotdupdates.AuthOptions) error {
+func RunManager(ctx context.Context, manager *gotdupdates.Manager, gate *JournalGate, api gotdupdates.API, userID int64, options gotdupdates.AuthOptions, ready func()) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	callerStart := options.OnStart
@@ -164,6 +164,9 @@ func RunManager(ctx context.Context, manager *gotdupdates.Manager, gate *Journal
 		close(started)
 		go func() {
 			err := gate.Open(ctx)
+			if err == nil && ready != nil {
+				ready()
+			}
 			gateResult <- err
 			if err != nil {
 				cancel()

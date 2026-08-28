@@ -73,7 +73,7 @@ func validDriverConfig(t *testing.T) Config {
 			return ctx.Err()
 		},
 		RunResynchronizer: func(context.Context, ClientSession, DriverStore) error { return nil },
-		RunDispatcher:     func(ctx context.Context, _ DriverStore) error { <-ctx.Done(); return ctx.Err() },
+		RunDispatcher:     func(ctx context.Context, _ DriverStore, ready func()) error { ready(); <-ctx.Done(); return ctx.Err() },
 		DrainDispatcher:   func(context.Context) error { return nil },
 	}
 }

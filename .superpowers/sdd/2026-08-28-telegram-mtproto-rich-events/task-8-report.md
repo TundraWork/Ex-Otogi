@@ -28,4 +28,25 @@ A focused reviewer identified update option ordering, close-before-child-exit, S
 
 - Task 10 composition must supply `ConfigureClientOptions`, `RunManager`, `RunResynchronizer`, `RunDispatcher`, and `DrainDispatcher` using the existing Task 5/6/7 concrete components. This task intentionally does not add the composition root.
 - `InboxDispatcher` itself currently exposes cancellation-based `Run` but no graceful claim-stop method. The Task 8 driver therefore requires an injected `DrainDispatcher` policy so composition can coordinate admission shutdown without conflating it with final cancellation.
-- On a Stop deadline, visible state becomes stopped while owned cleanup continues in the background until children exit; SQLite remains open until that completion, preserving close-last and avoiding use-after-close.
+- On a Stop deadline, the caller receives its context error while lifecycle remains draining/failed; the cleanup owner transitions to stopped only after children and any active drain exit and SQLite closes last.
+
+## Fix round 1
+
+Added red regressions and corrected all eight lifecycle review findings:
+
+- normal gotd nil-on-cancel `Run` is no longer classified as failure;
+- cleanup reads the published store only after client/children exit and closes it last;
+- timed-out `Stop` leaves lifecycle non-stopped until owned cleanup completes;
+- `updates.RunManager` signals readiness only after successful journal gate open/replay, and never on gate failure;
+- dispatcher has an explicit startup-ready callback, so immediate error/panic fails `Start`;
+- phone/code/password callback cancellation identity is preserved while arbitrary errors remain redacted;
+- store close panic is contained as a bounded stack-digest error and aggregated;
+- active drain is registered under the lifecycle lock, canceled by shutdown, and joined before store close.
+
+Red evidence included focused failures for prompt cancellation, nil-on-cancel shutdown, manager readiness ordering, immediate dispatcher exit, Stop timeout state, late store publication, close panic, and Drain/Stop ordering. Green commands:
+
+- `go test ./internal/adapter/telegram ./internal/adapter/telegram/updates -timeout 30s` — PASS.
+- `go test -race ./internal/adapter/telegram ./internal/adapter/telegram/updates -timeout 45s` — PASS.
+- `go test ./internal/adapter/telegram ./internal/adapter/telegram/updates -count=10 -timeout 60s` — PASS with both packages' goleak TestMain coverage.
+
+Residual concern: Task 10 composition must adapt its concrete manager runner to the new `updates.RunManager(..., ready)` callback and dispatcher runner readiness callback. No Task 10 composition exists yet, so no current caller remains unmigrated.
