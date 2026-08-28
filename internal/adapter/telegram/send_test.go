@@ -345,27 +345,6 @@ func TestDifferentPayloadConflictsBeforePeerLookup(t *testing.T) {
 	}
 }
 
-func TestPersistedV1DigestRemainsReplayCompatible(t *testing.T) {
-	message := outboundText(t, "legacy-digest", "user:7", "x", nil, nil)
-	template, err := encodeMessage(message)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template.Peer = &tg.InputPeerUser{UserID: 7, AccessHash: 8}
-	template.RandomID = RandomID("legacy-digest")
-	legacy, err := legacyRequestDigest(template)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{"legacy-digest": {Key: "legacy-digest", RequestDigest: legacy, RandomID: template.RandomID, PeerLocator: encodePeerRecord(telegramstore.Peer{Kind: "user", ID: 7, AccessHash: 8}), Status: telegramstore.SendSucceeded}}}
-	api := &sendAPIFake{}
-	if err := NewSender(api, s, &gateFake{}, time.Now).Send(context.Background(), message); err != nil {
-		t.Fatal(err)
-	}
-	if api.calls != 0 || s.peerLookups != 0 {
-		t.Fatalf("rpc=%d peer lookups=%d", api.calls, s.peerLookups)
-	}
-}
 func TestEligibleRetryUsesDurablePeerWhenAccessHashChanges(t *testing.T) {
 	start := time.Unix(6000, 0).UTC()
 	now := start

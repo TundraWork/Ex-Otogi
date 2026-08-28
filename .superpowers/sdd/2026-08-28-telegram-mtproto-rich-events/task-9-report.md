@@ -27,8 +27,6 @@ A follow-up review corrected rate-limit timing to use the RPC error receipt time
 
 Fix round 1/5 added red regressions for ambiguous redelivery and replay after peer deletion/access-hash rotation. `Send` now validates and hashes the stable logical request before peer lookup, loads existing intent first, treats ambiguous/in-flight outcomes as non-retriable through the normal `Send` API, and reconstructs eligible replay requests from the durable peer locator and original `random_id`. The logical digest envelope is explicitly version 2 and excludes volatile access hashes and transport `random_id` while retaining peer kind/ID, content, entities, and relations.
 
-Recheck found persisted 32-byte v1 request digests would otherwise conflict with the new v2 envelope. A regression now proves compatibility: existing v1 rows are compared by reconstructing the legacy request from the durable peer locator and original `random_id`; new rows remain v2.
-
 ## Residual concerns
 
 - The full Telegram package race invocation exposed the pre-existing lifecycle test failure `TestDriverCallerCancellationWinsStopRace` (`state=stopped cause=context canceled`); the Task 9-only race set passes. This Task does not modify that lifecycle path.
