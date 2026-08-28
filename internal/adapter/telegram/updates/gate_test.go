@@ -278,3 +278,26 @@ func TestCorrelationCompletesSupersededSourcesWithDifferenceOutput(t *testing.T)
 		t.Fatalf("superseded journal ids = %s", got)
 	}
 }
+
+func TestCorrelationCompletesSourceWithNoDownstreamUpdates(t *testing.T) {
+	for _, source := range []tg.UpdatesClass{&tg.Updates{}, &tg.UpdatesTooLong{}} {
+		correlation := newJournalCorrelation()
+		if err := correlation.register(11, source); err != nil {
+			t.Fatal(err)
+		}
+		var calls int
+		handler := correlatingHandler{correlation: correlation, next: telegram.UpdateHandlerFunc(func(ctx context.Context, packet tg.UpdatesClass) error {
+			calls++
+			if JournalID(ctx) != 11 || !journalComplete(ctx) || len(packetUpdates(packet)) != 0 {
+				t.Fatalf("completion id=%d complete=%v packet=%T", JournalID(ctx), journalComplete(ctx), packet)
+			}
+			return nil
+		})}
+		if err := handler.Handle(context.Background(), source); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 {
+			t.Fatalf("completion calls = %d", calls)
+		}
+	}
+}

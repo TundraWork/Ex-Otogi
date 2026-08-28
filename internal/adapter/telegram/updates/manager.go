@@ -98,12 +98,17 @@ type ManagerConfig struct {
 	Downstream telegram.UpdateHandler
 	// GapStore persists degraded consistency state.
 	GapStore GapStore
+	// Health is shared by manager storage/callbacks and downstream capture.
+	Health *Health
 }
 
 // NewManager creates a gotd manager, its shared closed journal gate, complete
 // callbacks, and readiness state.
 func NewManager(config ManagerConfig) (*gotdupdates.Manager, *JournalGate, Callbacks, *Health) {
-	health := NewHealth()
+	if config.Health == nil {
+		panic("updates: nil shared health")
+	}
+	health := config.Health
 	callbacks := GapCallbacks(config.GapStore, health)
 	correlation := newJournalCorrelation()
 	manager := gotdupdates.New(gotdupdates.Config{

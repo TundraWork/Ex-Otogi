@@ -47,7 +47,7 @@ func (s monitoredStateStorage) GetState(ctx context.Context, userID int64) (gotd
 			s.health.degrade(DegradedReason{Box: "common", Position: marker, Reason: reason})
 		} else if int64(state.Pts) > marker {
 			mismatch := fmt.Errorf("cursor pts %d exceeds normalized position %d", state.Pts, marker)
-			_ = s.fail(ctx, "common", "cursor ahead of consistency marker", int64(state.Pts), mismatch)
+			return state, false, s.fail(ctx, "common", "cursor ahead of consistency marker", int64(state.Pts), mismatch)
 		}
 	}
 	return state, found, nil
@@ -85,7 +85,7 @@ func (s monitoredStateStorage) GetChannelPts(ctx context.Context, userID, channe
 			s.health.degrade(DegradedReason{Box: box, Position: marker, Reason: reason})
 		} else if int64(pts) > marker {
 			mismatch := fmt.Errorf("cursor pts %d exceeds normalized position %d", pts, marker)
-			_ = s.fail(ctx, box, "cursor ahead of consistency marker", int64(pts), mismatch)
+			return 0, false, s.fail(ctx, box, "cursor ahead of consistency marker", int64(pts), mismatch)
 		}
 	}
 	return pts, found, nil
@@ -94,5 +94,21 @@ func (s monitoredStateStorage) SetChannelPts(ctx context.Context, userID, channe
 	return s.fail(ctx, fmt.Sprintf("channel:%d", channelID), "set channel pts", int64(value), s.next.SetChannelPts(ctx, userID, channelID, value))
 }
 func (s monitoredStateStorage) ForEachChannels(ctx context.Context, userID int64, f func(context.Context, int64, int) error) error {
-	return s.next.ForEachChannels(ctx, userID, f)
+	return s.next.ForEachChannels(ctx, userID, func(ctx context.Context, channelID int64, pts int) error {
+		box := fmt.Sprintf("channel:%d", channelID)
+		if reader, ok := s.consistency(); ok {
+			marker, degraded, reason, err := reader.Consistency(ctx, box)
+			if err != nil {
+				return s.fail(ctx, box, "load consistency marker", int64(pts), err)
+			}
+			if degraded {
+				s.health.degrade(DegradedReason{Box: box, Position: marker, Reason: reason})
+			}
+			if int64(pts) > marker {
+				mismatch := fmt.Errorf("cursor pts %d exceeds normalized position %d", pts, marker)
+				return s.fail(ctx, box, "cursor ahead of consistency marker", int64(pts), mismatch)
+			}
+		}
+		return f(ctx, channelID, pts)
+	})
 }

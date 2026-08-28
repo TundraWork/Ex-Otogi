@@ -123,3 +123,60 @@ func TestDownstreamCompletesShortSentPlaceholderWithoutRouting(t *testing.T) {
 		t.Fatalf("captures=%+v", store.captures)
 	}
 }
+
+func TestDownstreamAttachesPeersToFirstEmittedCaptureAfterPlaceholder(t *testing.T) {
+	store := &captureStore{}
+	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("event"), nil }, NewHealth())
+	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
+	placeholder := &tg.UpdateNewMessage{Message: &tg.MessageEmpty{ID: 4}, Pts: 4, PtsCount: 1}
+	message := mappedBatch().Updates[0]
+	batch := &tg.Updates{Updates: []tg.UpdateClass{placeholder, message}, Users: []tg.UserClass{&tg.User{ID: 7, AccessHash: 8, FirstName: "A"}}}
+	if err := handler.Handle(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.captures) != 2 || len(store.captures[0].Peers) != 1 || len(store.captures[1].Peers) != 0 {
+		t.Fatalf("captures=%+v", store.captures)
+	}
+}
+
+func TestDownstreamBoundsCombinedPeerCountBeforeEncoding(t *testing.T) {
+	store := &captureStore{}
+	health := NewHealth()
+	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return nil, nil }, health)
+	users := make([]tg.UserClass, telegramstore.MaxCaptureRows)
+	for i := range users {
+		users[i] = &tg.UserEmpty{ID: int64(i + 1)}
+	}
+	batch := &tg.Updates{Users: users, Chats: []tg.ChatClass{&tg.ChatEmpty{ID: 1}}}
+	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
+	if err := handler.Handle(ctx, batch); err == nil {
+		t.Fatal("oversized peers accepted")
+	}
+	if len(store.captures) != 0 {
+		t.Fatal("oversized peers reached capture")
+	}
+}
+
+func TestDownstreamQuarantineAdvancesCommonAndChannelConsistency(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		update tg.UpdateClass
+		box    string
+		pos    int64
+	}{
+		{name: "common", update: &tg.UpdateReadHistoryInbox{Peer: &tg.PeerUser{UserID: 7}, MaxID: 5, Pts: 11, PtsCount: 1}, box: "common", pos: 11},
+		{name: "channel", update: &tg.UpdateReadChannelInbox{ChannelID: 77, MaxID: 5, Pts: 12}, box: "channel:77", pos: 12},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &captureStore{}
+			handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return nil, nil }, NewHealth())
+			ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
+			if err := handler.Handle(ctx, &tg.Updates{Updates: []tg.UpdateClass{tc.update}}); err != nil {
+				t.Fatal(err)
+			}
+			if len(store.captures) != 1 || store.captures[0].Quarantine == nil || store.captures[0].Box != tc.box || store.captures[0].Position != tc.pos {
+				t.Fatalf("capture=%+v", store.captures)
+			}
+		})
+	}
+}

@@ -32,6 +32,7 @@ func main() {
 }
 
 func inspect(root string) ([]string, error) {
+	classificationRoot := repositoryRoot(root)
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -50,7 +51,7 @@ func inspect(root string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		relative, err := filepath.Rel(root, filepath.Dir(path))
+		relative, err := filepath.Rel(classificationRoot, filepath.Dir(path))
 		if err != nil {
 			return err
 		}
@@ -68,6 +69,26 @@ func inspect(root string) ([]string, error) {
 		return nil
 	})
 	return violations, err
+}
+
+func repositoryRoot(path string) string {
+	current, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	if info, statErr := os.Stat(current); statErr == nil && !info.IsDir() {
+		current = filepath.Dir(current)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(current, "go.mod")); err == nil {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path
+		}
+		current = parent
+	}
 }
 
 func forbidden(source, target string) string {

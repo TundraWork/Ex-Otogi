@@ -102,7 +102,7 @@ func TestManagerRunOpensGateOnlyAfterStartupStateLoad(t *testing.T) {
 	recorder := &recordingUpdates{}
 	storage := &memState{}
 	api := &fakeAPI{state: &tg.UpdatesState{Pts: 1, Qts: 2, Date: 3, Seq: 4}}
-	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: storage, Journal: journal, Downstream: telegram.UpdateHandlerFunc(recorder.Handle), GapStore: &gapStore{}})
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: storage, Journal: journal, Downstream: telegram.UpdateHandlerFunc(recorder.Handle), GapStore: &gapStore{}, Health: NewHealth()})
 	if err := gate.Handle(context.Background(), packet(7)); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestManagerRunOpensGateOnlyAfterStartupStateLoad(t *testing.T) {
 func TestManagerRunReplaysSixtyFourRowsWithoutDeadlock(t *testing.T) {
 	journal := &memoryJournal{}
 	recorder := &recordingUpdates{}
-	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(recorder.Handle), GapStore: &gapStore{}})
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(recorder.Handle), GapStore: &gapStore{}, Health: NewHealth()})
 	for i := 1; i <= StartupJournalLimit; i++ {
 		if err := gate.Handle(context.Background(), packet(i)); err != nil {
 			t.Fatal(err)
@@ -158,7 +158,7 @@ func TestManagerRunReplaysSixtyFourRowsWithoutDeadlock(t *testing.T) {
 
 func TestManagerRunPropagatesAsynchronousGateReplayFailure(t *testing.T) {
 	journal := &memoryJournal{}
-	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}})
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}, Health: NewHealth()})
 	for i := 1; i <= StartupJournalLimit+1; i++ {
 		journal.next++
 		journal.rows = func() map[int64][]byte {
@@ -178,7 +178,7 @@ func TestManagerRunPropagatesAsynchronousGateReplayFailure(t *testing.T) {
 
 func TestConfigureOptionsUsesSharedGateAndRequiredMiddlewareOrder(t *testing.T) {
 	journal := &memoryJournal{}
-	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}})
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: journal, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}, Health: NewHealth()})
 	var options telegram.Options
 	ConfigureOptions(&options, gate, manager)
 	if options.UpdateHandler != gate {
@@ -186,5 +186,17 @@ func TestConfigureOptionsUsesSharedGateAndRequiredMiddlewareOrder(t *testing.T) 
 	}
 	if len(options.Middlewares) != 2 {
 		t.Fatalf("middleware count = %d", len(options.Middlewares))
+	}
+}
+
+func TestNewManagerUsesCallerSharedHealth(t *testing.T) {
+	health := NewHealth()
+	_, _, callbacks, returned := NewManager(ManagerConfig{APIStorage: &memState{}, Journal: &memoryJournal{}, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}, Health: health})
+	if returned != health {
+		t.Fatal("manager replaced shared health")
+	}
+	callbacks.OnTooLong()
+	if ready, reasons := health.Ready(); ready || len(reasons) != 1 {
+		t.Fatalf("shared health ready=%v reasons=%+v", ready, reasons)
 	}
 }

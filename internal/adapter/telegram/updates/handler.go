@@ -64,6 +64,9 @@ func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
 	if err != nil {
 		return h.fail(ctx, "common", 0, "normalize manager batch", err)
 	}
+	if len(batch.Users) > telegramstore.MaxCaptureRows || len(batch.Chats) > telegramstore.MaxCaptureRows-len(batch.Users) {
+		return h.fail(ctx, "common", 0, "peer batch too large", telegramstore.ErrInputTooLarge)
+	}
 	peers, err := encodePeers(batch.Users, batch.Chats)
 	if err != nil {
 		return h.fail(ctx, "common", 0, "encode peers", err)
@@ -73,26 +76,36 @@ func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
 	}
 	complete := journalComplete(ctx)
 	captures := make([]telegramstore.Capture, 0, max(1, len(batch.Updates)))
-	for index, value := range batch.Updates {
+	peersAttached := false
+	for _, value := range batch.Updates {
 		if placeholder, ok := shortSentPlaceholder(value); ok {
 			payload, err := encodeTL(value)
 			if err != nil {
 				return h.fail(ctx, "common", 0, "encode short sent placeholder", err)
 			}
-			captures = append(captures, telegramstore.Capture{JournalID: journalID, KeepJournalPending: !complete, Box: "common", Position: int64(placeholder.Pts), Quarantine: &telegramstore.QuarantineInput{SourceKey: fmt.Sprintf("telegram:short-sent:%d:%d", placeholder.Message.ID, placeholder.Pts), Kind: "telegram.short-sent.pts-only", Payload: payload}})
+			capture := telegramstore.Capture{JournalID: journalID, KeepJournalPending: !complete, Box: "common", Position: int64(placeholder.Pts), Quarantine: &telegramstore.QuarantineInput{SourceKey: fmt.Sprintf("telegram:short-sent:%d:%d", placeholder.Message.ID, placeholder.Pts), Kind: "telegram.short-sent.pts-only", Payload: payload}}
+			if !peersAttached {
+				capture.Peers = peers
+				peersAttached = true
+			}
+			captures = append(captures, capture)
 			continue
 		}
 		result, err := h.mapper.Map(value)
 		if err != nil {
 			return h.fail(ctx, "common", 0, "map update", err)
 		}
-		capture := telegramstore.Capture{JournalID: journalID, KeepJournalPending: !complete, Box: result.Box, Position: int64(result.Position)}
-		if index == 0 {
-			capture.Peers = peers
+		if result.Quarantine != nil && result.Box == "" {
+			result.Box, result.Position = updateProgress(value)
 		}
+		capture := telegramstore.Capture{JournalID: journalID, KeepJournalPending: !complete, Box: result.Box, Position: int64(result.Position)}
 		capture.Locators = make([]telegramstore.Locator, len(result.Locators))
 		for i, locator := range result.Locators {
 			capture.Locators[i] = telegramstore.Locator{Namespace: locator.Namespace, MessageID: int64(locator.MessageID), Conversation: locator.Conversation, Payload: locator.Payload}
+		}
+		if !peersAttached && len(result.Deletes) == 0 {
+			capture.Peers = peers
+			peersAttached = true
 		}
 		if len(captures)+len(result.Deletes) > telegramstore.MaxCaptureRows {
 			return h.fail(ctx, capture.Box, capture.Position, "capture batch too large", telegramstore.ErrInputTooLarge)
@@ -102,8 +115,9 @@ func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
 			if err != nil {
 				return h.fail(ctx, capture.Box, capture.Position, "map deletion", err)
 			}
-			if index == 0 && len(deletionCaptures) > 0 {
+			if !peersAttached && len(deletionCaptures) > 0 {
 				deletionCaptures[0].Peers = peers
+				peersAttached = true
 			}
 			captures = append(captures, deletionCaptures...)
 			continue
@@ -222,6 +236,16 @@ func normalizedBatch(update tg.UpdatesClass) (*tg.Updates, error) {
 	default:
 		return nil, fmt.Errorf("unexpected post-manager update %T", update)
 	}
+}
+
+func updateProgress(update tg.UpdateClass) (string, int) {
+	if channelID, pts, _, ok, err := tg.IsChannelPtsUpdate(update); err == nil && ok {
+		return fmt.Sprintf("channel:%d", channelID), max(0, pts)
+	}
+	if pts, _, ok := tg.IsPtsUpdate(update); ok {
+		return "common", max(0, pts)
+	}
+	return "", 0
 }
 
 func encodePeers(users []tg.UserClass, chats []tg.ChatClass) ([]telegramstore.Peer, error) {

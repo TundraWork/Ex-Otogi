@@ -29,3 +29,15 @@ Task 5 persists readiness-blocking degraded/resync-required state; it does not e
 ## Consistency Note
 
 The implementation does not claim atomicity between gotd cursor writes and inbox capture because gotd v0.161.0 exposes these as separate operations and suppresses some setter errors after logging. Durable journal retention, source correlation/completion, stable source deduplication, consistency markers, and monitored storage failures provide the recovery boundary.
+
+## Review Fix Round 1
+
+- Attached learned peers to the first emitted capture even when an index-zero pts-only placeholder precedes the routed update.
+- Validated every channel cursor enumerated during startup against durable consistency/degraded state before gotd receives it; ahead cursors now durably degrade and fail loading.
+- Required one caller-owned `Health` shared by manager callbacks/storage and downstream capture.
+- Derived common/channel consistency progress for quarantined pts updates, including read-history updates.
+- Completed source journals for empty, too-long, and difference-empty manager outcomes without opening the startup gate to live overtaking.
+- Bounded the combined user/chat entity count before peer encoding allocation.
+- Returned errors for common/channel cursors ahead of normalized markers instead of handing gotd unsafe state.
+- Preserved channel-specific consistency boxes for channel deletion capture.
+- Made archcheck source classification repository-root-relative even when invoked on a nested subtree, while retaining the narrow same-Telegram-adapter allowance.

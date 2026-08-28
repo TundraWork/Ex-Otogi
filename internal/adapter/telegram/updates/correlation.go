@@ -147,7 +147,18 @@ type correlatingHandler struct {
 func (h correlatingHandler) Handle(ctx context.Context, packet tg.UpdatesClass) error {
 	updates := packetUpdates(packet)
 	if len(updates) == 0 {
-		return h.next.Handle(ctx, packet)
+		ids := h.correlation.claimSuperseded()
+		for _, id := range ids {
+			completed := context.WithValue(ctx, journalContextKey{}, id)
+			completed = context.WithValue(completed, journalCompleteKey{}, true)
+			if err := h.next.Handle(completed, &tg.Updates{}); err != nil {
+				return err
+			}
+		}
+		if len(ids) == 0 {
+			return h.next.Handle(ctx, packet)
+		}
+		return nil
 	}
 	matched := false
 	for _, update := range updates {

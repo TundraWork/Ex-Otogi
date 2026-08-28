@@ -79,8 +79,8 @@ func TestMapChannelAndDeleteUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deleted.Deletes) != 2 || deleted.Deletes[0].Conversation != "channel:77" || deleted.Deletes[0].MessageID != 12 {
-		t.Fatalf("deletes=%+v", deleted.Deletes)
+	if deleted.Box != "channel:77" || len(deleted.Deletes) != 2 || deleted.Deletes[0].Conversation != "channel:77" || deleted.Deletes[0].MessageID != 12 {
+		t.Fatalf("delete box=%q deletes=%+v", deleted.Box, deleted.Deletes)
 	}
 
 	unresolved, err := New(testConfig(t)).Map(&tg.UpdateDeleteMessages{Messages: []int{99}, Pts: 11, PtsCount: 1})
