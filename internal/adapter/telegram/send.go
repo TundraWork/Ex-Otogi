@@ -135,6 +135,40 @@ func requestDigest(req *tg.MessagesSendMessageRequest) ([]byte, error) {
 	return digest, nil
 }
 
+func legacyRequestDigest(req *tg.MessagesSendMessageRequest) ([]byte, error) {
+	if req == nil {
+		return nil, errors.New("nil send request")
+	}
+	var b bin.Buffer
+	if err := req.Encode(&b); err != nil {
+		return nil, err
+	}
+	h := sha256.New()
+	var version [2]byte
+	binary.BigEndian.PutUint16(version[:], 1)
+	_, _ = h.Write(version[:])
+	_, _ = h.Write(b.Raw())
+	return h.Sum(nil), nil
+}
+
+func digestMatches(intent telegramstore.SendIntent, logical *tg.MessagesSendMessageRequest, current []byte) bool {
+	if bytes.Equal(intent.RequestDigest, current) {
+		return true
+	}
+	if len(intent.RequestDigest) != sha256.Size {
+		return false
+	}
+	peer, err := decodePeerRecord(intent.PeerLocator)
+	if err != nil {
+		return false
+	}
+	legacy := *logical
+	legacy.Peer = peer
+	legacy.RandomID = intent.RandomID
+	digest, err := legacyRequestDigest(&legacy)
+	return err == nil && bytes.Equal(intent.RequestDigest, digest)
+}
+
 func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error {
 	template, err := encodeMessage(message)
 	if err != nil {
@@ -151,7 +185,7 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 		return err
 	}
 	if found {
-		if !bytes.Equal(intent.RequestDigest, digest) {
+		if !digestMatches(intent, template, digest) {
 			return telegramstore.ErrSendConflict
 		}
 		switch intent.Status {
@@ -178,8 +212,7 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 			return err
 		}
 		if !created {
-			found = true
-			if !bytes.Equal(intent.RequestDigest, digest) {
+			if !digestMatches(intent, template, digest) {
 				return telegramstore.ErrSendConflict
 			}
 			switch intent.Status {
