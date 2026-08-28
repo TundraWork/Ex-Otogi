@@ -3,6 +3,8 @@ package updates
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -107,6 +109,80 @@ func TestDownstreamRejectsUpdateQueuedBehindFailedBoundary(t *testing.T) {
 	if store.next != 0 || len(store.captures) != 0 {
 		t.Fatalf("journal=%d captures=%d", store.next, len(store.captures))
 	}
+}
+
+func TestDownstreamDoesNotCapturePastConcurrentFailureBoundary(t *testing.T) {
+	for _, armed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("armed=%v", armed), func(t *testing.T) {
+			captureEntered := make(chan struct{})
+			failCapture := make(chan struct{})
+			store := &blockingFailureStore{
+				captureStore:   captureStore{err: errors.New("sqlite full")},
+				captureEntered: captureEntered,
+				failCapture:    failCapture,
+			}
+			health := NewHealth()
+			if armed {
+				health.arm()
+			}
+			secondMapped := make(chan struct{})
+			continueSecond := make(chan struct{})
+			var encodeCalls atomic.Int64
+			handler := NewDownstream(store, testMapper(t), func(input otogi.EventInput) ([]byte, error) {
+				if encodeCalls.Add(1) == 2 {
+					close(secondMapped)
+					<-continueSecond
+				}
+				return []byte(input.Action().String()), nil
+			}, health)
+
+			firstDone := make(chan error, 1)
+			go func() { firstDone <- handler.Handle(context.Background(), mappedMessageBatch("first", 5)) }()
+			<-captureEntered
+			secondDone := make(chan error, 1)
+			go func() { secondDone <- handler.Handle(context.Background(), mappedMessageBatch("second", 6)) }()
+			<-secondMapped
+
+			close(failCapture)
+			firstErr := <-firstDone
+			if !errors.Is(firstErr, store.err) {
+				t.Fatalf("first error = %v", firstErr)
+			}
+			close(continueSecond)
+			secondErr := <-secondDone
+			if !errors.Is(secondErr, store.err) {
+				t.Fatalf("second error = %v", secondErr)
+			}
+			if calls := store.captureCalls.Load(); calls != 1 {
+				t.Fatalf("CaptureBatch calls = %d, want 1", calls)
+			}
+			if len(store.gaps) != 1 {
+				t.Fatalf("gaps = %v", store.gaps)
+			}
+			if ready, reasons := health.Ready(); ready || len(reasons) != 1 {
+				t.Fatalf("health ready=%v reasons=%+v", ready, reasons)
+			}
+		})
+	}
+}
+
+type blockingFailureStore struct {
+	captureStore
+	captureCalls   atomic.Int64
+	captureEntered chan struct{}
+	failCapture    chan struct{}
+}
+
+func (s *blockingFailureStore) CaptureBatch(context.Context, []telegramstore.Capture) (bool, error) {
+	if s.captureCalls.Add(1) == 1 {
+		close(s.captureEntered)
+		<-s.failCapture
+	}
+	return false, s.err
+}
+
+func mappedMessageBatch(message string, id int) *tg.Updates {
+	return &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateNewMessage{Message: &tg.Message{ID: id, PeerID: &tg.PeerUser{UserID: 7}, FromID: &tg.PeerUser{UserID: 7}, Date: 10, Message: message}, Pts: id, PtsCount: 1}}, Users: []tg.UserClass{&tg.User{ID: 7, AccessHash: 8, FirstName: "A"}}, Date: 10, Seq: -1}
 }
 
 func TestDownstreamJournalsManagerDifferenceOutputAndExcludesNegativeSequence(t *testing.T) {

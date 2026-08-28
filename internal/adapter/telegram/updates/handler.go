@@ -149,12 +149,16 @@ func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
 	} else if len(sendCorrelations) > 0 {
 		captures[0].SendCorrelations = sendCorrelations
 	}
+	if err := h.health.enterCaptureBoundary(); err != nil {
+		return err
+	}
+	defer h.health.leaveCaptureBoundary()
 	if _, err := h.store.CaptureBatch(ctx, captures); err != nil {
 		box, position := captures[0].Box, captures[0].Position
 		if box == "" {
 			box = "common"
 		}
-		return h.fail(ctx, box, position, "capture normalized update", err)
+		return h.failWithinCaptureBoundary(ctx, box, position, "capture normalized update", err)
 	}
 	return nil
 }
@@ -232,8 +236,16 @@ func (h *Downstream) deletionEvent(deletion mapper.DeleteRecord, conversation st
 	return h.mapper.MapDeletion(deletion, conversation)
 }
 func (h *Downstream) fail(ctx context.Context, box string, position int64, reason string, cause error) error {
+	h.health.boundary.Lock()
+	defer h.health.boundary.Unlock()
+	return h.failWithinCaptureBoundary(ctx, box, position, reason, cause)
+}
+
+func (h *Downstream) failWithinCaptureBoundary(ctx context.Context, box string, position int64, reason string, cause error) error {
+	// Durable gap I/O precedes the degradation commit. The store must not call
+	// back into Health; degradeCaptureWithinBoundary does not reacquire boundary.
 	recordErr := h.store.RecordGap(ctx, box, position, reason+": "+cause.Error())
-	h.health.degrade(DegradedReason{Box: box, Position: position, Reason: reason, Cause: cause, Err: recordErr})
+	h.health.degradeCaptureWithinBoundary(DegradedReason{Box: box, Position: position, Reason: reason, Cause: cause, Err: recordErr})
 	return fmt.Errorf("%s: %w", reason, cause)
 }
 

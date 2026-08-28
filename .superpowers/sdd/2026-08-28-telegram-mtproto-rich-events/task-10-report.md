@@ -62,3 +62,14 @@ Final verification:
 - Focused lifecycle/degradation regressions under `-race -count=10` — PASS.
 - Focused lifecycle/degradation regressions under package `goleak` harnesses with `-count=50` — PASS.
 - `make quality` — PASS, including lint, documentation and architecture checks, all unit and race tests, bounded fuzz targets, corpus, leak suites, and offline smoke.
+
+## Concurrent capture degradation boundary fix
+
+A deterministic two-worker red regression queued both deliveries, blocked the first `CaptureBatch`, allowed the second worker to finish mapping, then released the first capture to fail and commit degradation. Before the fix the second worker entered `CaptureBatch` (`calls = 2, want 1`). The regression covers both startup replay before lifecycle notification is armed and normal post-open delivery. Shared `Health` now owns an explicit capture-boundary mutex: mapper work remains concurrent, while the final degraded-reason check through `CaptureBatch` is serialized. Capture failures commit durable `RecordGap` and the first health degradation while retaining boundary ownership; mapping/encoding failures acquire the same boundary before recording their gap. Lock order is capture boundary, durable gap I/O, then the health state mutex, and no path reacquires the capture boundary, preventing reentrancy deadlock. Later queued deliveries observe the first degraded reason and cannot capture or advance their journal row; lifecycle publication remains separately armed and one-shot.
+
+Final evidence:
+
+- Red: focused regression failed before the production change with `CaptureBatch calls = 2, want 1`.
+- Focused unit/count/leak: `./scripts/quality/go.sh test ./internal/adapter/telegram/updates -count=10 -timeout=60s` — PASS; package `TestMain` runs `goleak.VerifyTestMain`.
+- Focused race/repetition: `./scripts/quality/go.sh test -race ./internal/adapter/telegram/updates -run 'TestDownstreamDoesNotCapturePastConcurrentFailureBoundary|TestHealthPublishesFirstDegradationOnceWithoutBlocking' -count=20 -timeout=60s` — PASS.
+- Full stale-toolchain gate: `GOROOT=/definitely/stale make quality` — PASS, including lint (0 issues), documentation and architecture checks, unit/race tests, bounded fuzz targets, corpus, leak suites, and offline smoke.

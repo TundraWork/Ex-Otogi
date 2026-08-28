@@ -33,25 +33,68 @@ type DegradedReason struct {
 
 // Health tracks update consistency readiness and publishes its first armed failure.
 type Health struct {
-	mu      sync.RWMutex
-	reasons []DegradedReason
-	failure error
-	armed   bool
-	failed  chan error
+	// boundary orders degradation commits with downstream health checks and capture.
+	// Lock order is boundary, then mu; durable gap I/O is never performed by degrade.
+	boundary       sync.Mutex
+	mu             sync.RWMutex
+	reasons        []DegradedReason
+	failure        error
+	captureFailure error
+	armed          bool
+	failed         chan error
 }
 
 // NewHealth creates healthy update readiness state.
 func NewHealth() *Health { return &Health{failed: make(chan error, 1)} }
 
 func (h *Health) degrade(reason DegradedReason) {
+	h.boundary.Lock()
+	h.degradeWithinBoundary(reason)
+	h.boundary.Unlock()
+}
+
+// degradeWithinBoundary records a failure while the caller owns boundary.
+func (h *Health) degradeWithinBoundary(reason DegradedReason) {
 	h.mu.Lock()
+	h.recordDegradationLocked(reason)
+	h.mu.Unlock()
+}
+
+// degradeCaptureWithinBoundary additionally latches a downstream failure even
+// before lifecycle notifications are armed during startup replay.
+func (h *Health) degradeCaptureWithinBoundary(reason DegradedReason) {
+	h.mu.Lock()
+	if h.captureFailure == nil {
+		h.captureFailure = degradationError(reason)
+	}
+	h.recordDegradationLocked(reason)
+	h.mu.Unlock()
+}
+
+func (h *Health) recordDegradationLocked(reason DegradedReason) {
 	h.reasons = append(h.reasons, reason)
 	if h.armed && h.failure == nil {
 		h.failure = degradationError(reason)
 		h.failed <- h.failure
 	}
-	h.mu.Unlock()
 }
+
+// enterCaptureBoundary serializes a downstream-failure check through normalized
+// capture. A nil error transfers boundary ownership to the caller, which must
+// leave it. The capture latch applies before lifecycle notification is armed.
+func (h *Health) enterCaptureBoundary() error {
+	h.boundary.Lock()
+	h.mu.RLock()
+	err := h.captureFailure
+	h.mu.RUnlock()
+	if err != nil {
+		h.boundary.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (h *Health) leaveCaptureBoundary() { h.boundary.Unlock() }
 
 func degradationError(reason DegradedReason) error {
 	message := fmt.Sprintf("updates degraded for %s at %d: %s", reason.Box, reason.Position, reason.Reason)
