@@ -41,3 +41,7 @@ Runtime, quality, and security review findings were corrected with focused regre
 - restore instructions require a vetted no-follow restore tool, externally authenticated encrypted artifacts, strict flat-member allowlisting, integrity/binding verification, and atomic publication.
 
 Focused verification passed with the repository wrapper: Telegram/store unit tests, selected runtime race tests, both bounded fuzz targets, command/quality contract tests, doccheck, and archcheck. No full `make quality` was run in this review round, per controller instruction.
+
+## Fix round 2
+
+Corrected the degraded-gap runbook: full `Driver`/`NewComposition` startup checks SQLite `RecoveryReady` and refuses readiness for unacknowledged degraded records, while `telegram-smoke` verifies preauthorized session connectivity only and cannot assess SQLite, account binding, recovery state, or full-driver readiness.
