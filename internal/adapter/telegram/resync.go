@@ -213,10 +213,11 @@ func (r *Resynchronizer) backfillKnown(ctx context.Context) error {
 func (r *Resynchronizer) backfill(ctx context.Context, box string, peer tg.InputPeerClass) error {
 	offset:=0
 	for page:=0;page<r.limits.MaxHistoryPages;page++{
-		call,cancel:=r.callContext(ctx); result,err:=r.api.MessagesGetHistory(call,&tg.MessagesGetHistoryRequest{Peer:peer,OffsetID:offset,Limit:min(r.limits.HistoryPageSize,r.limits.MaxResponseItems)});cancel();if err!=nil{return err}
+		effectiveLimit:=min(r.limits.HistoryPageSize,r.limits.MaxResponseItems)
+		call,cancel:=r.callContext(ctx); result,err:=r.api.MessagesGetHistory(call,&tg.MessagesGetHistoryRequest{Peer:peer,OffsetID:offset,Limit:effectiveLimit});cancel();if err!=nil{return err}
 		if err:=r.validateResponse(result);err!=nil{return err}
 		if err:=r.replay.History(ctx,box,result);err!=nil{return err}
-		messages:=historyMessages(result);if len(messages)==0||len(messages)<r.limits.HistoryPageSize{return nil}
+		messages:=historyMessages(result);if len(messages)==0||len(messages)<effectiveLimit{return nil}
 		oldest:=oldestMessageID(messages);if oldest<=0||(offset!=0&&oldest>=offset){return fmt.Errorf("%w: history made no progress",ErrRecoveryBound)};offset=oldest
 	}
 	return ErrRecoveryBound

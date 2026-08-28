@@ -40,3 +40,8 @@ Both completed successfully, including the package-level goleak harness in `upda
 - `Resynchronizer.Run` has one cancellable serialized owner, preventing duplicate callbacks and writes.
 - Repeated identical callbacks preserve acknowledged permanent degradation; new positions or causes explicitly reopen recovery.
 - Recovery failures are persisted with operator-visible causes rather than leaving a transient resynchronizing state.
+
+## Review Fix Round 2
+
+- History backfill now computes one effective page limit from `min(HistoryPageSize, MaxResponseItems)` and uses that same bound for both the RPC request and short-page termination.
+- Common and channel too-long regressions cover multiple full capped pages followed by a short page, preserving monotonic offsets, no-loop detection, and the configured maximum-page bound.

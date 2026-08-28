@@ -72,6 +72,38 @@ func TestOversizedDifferenceRejectedBeforeReplay(t *testing.T) {
 	if !errors.Is(err, ErrRecoveryBound) || r.differences != 0 { t.Fatalf("err=%v replay=%+v", err, r) }
 }
 
+func TestCommonBackfillContinuesAcrossFullEffectiveLimitPages(t *testing.T) {
+	s := &fakeRecoveryStore{records: map[string]telegramstore.RecoveryRecord{"common": {Box: "common", State: telegramstore.RecoveryDegraded}}, peers: []PeerState{{Kind: "chat", ID: 7}}}
+	a := &fakeResyncAPI{
+		state: &tg.UpdatesState{},
+		differences: []tg.UpdatesDifferenceClass{&tg.UpdatesDifferenceTooLong{Pts: 5}, &tg.UpdatesDifferenceEmpty{}},
+		history: []tg.MessagesMessagesClass{
+			&tg.MessagesMessages{Messages: []tg.MessageClass{&tg.MessageEmpty{ID: 6}, &tg.MessageEmpty{ID: 5}}},
+			&tg.MessagesMessages{Messages: []tg.MessageClass{&tg.MessageEmpty{ID: 4}, &tg.MessageEmpty{ID: 3}}},
+			&tg.MessagesMessages{Messages: []tg.MessageClass{&tg.MessageEmpty{ID: 2}}},
+		},
+	}
+	limits := testLimits(); limits.HistoryPageSize = 5; limits.MaxResponseItems = 2; limits.MaxHistoryPages = 4
+	if err := NewResynchronizer(a, s, &fakeReplay{}, limits).Run(context.Background()); err != nil { t.Fatal(err) }
+	if a.historyCalls != 3 { t.Fatalf("history calls=%d", a.historyCalls) }
+}
+
+func TestChannelBackfillContinuesAcrossFullEffectiveLimitPages(t *testing.T) {
+	s := &fakeRecoveryStore{records: map[string]telegramstore.RecoveryRecord{"channel:4": {Box: "channel:4", State: telegramstore.RecoveryDegraded}}, channels: []ChannelState{{ID: 4, AccessHash: 5, Pts: 1}}}
+	dialog := &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 4}, Pts: 8, NotifySettings: tg.PeerNotifySettings{}}; dialog.SetPts(8)
+	a := &fakeResyncAPI{
+		channels: []tg.UpdatesChannelDifferenceClass{&tg.UpdatesChannelDifferenceTooLong{Final: true, Dialog: dialog}},
+		history: []tg.MessagesMessagesClass{
+			&tg.MessagesMessages{Messages: []tg.MessageClass{&tg.MessageEmpty{ID: 6}, &tg.MessageEmpty{ID: 5}}},
+			&tg.MessagesMessages{Messages: []tg.MessageClass{&tg.MessageEmpty{ID: 4}, &tg.MessageEmpty{ID: 3}}},
+			&tg.MessagesMessages{Messages: []tg.MessageClass{&tg.MessageEmpty{ID: 2}}},
+		},
+	}
+	limits := testLimits(); limits.HistoryPageSize = 5; limits.MaxResponseItems = 2; limits.MaxHistoryPages = 4
+	if err := NewResynchronizer(a, s, &fakeReplay{}, limits).Run(context.Background()); err != nil { t.Fatal(err) }
+	if a.historyCalls != 3 { t.Fatalf("history calls=%d", a.historyCalls) }
+}
+
 func TestConcurrentRunsSerializeCancellably(t *testing.T) {
 	s := &fakeRecoveryStore{records: map[string]telegramstore.RecoveryRecord{"common": {Box: "common", State: telegramstore.RecoveryDegraded}}}
 	entered := make(chan struct{}); release := make(chan struct{})
