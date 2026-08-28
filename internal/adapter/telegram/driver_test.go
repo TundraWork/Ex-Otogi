@@ -245,6 +245,47 @@ func TestDriverCallerCanceledDrainFailsLifecycle(t *testing.T) {
 	_ = d.Stop(context.Background())
 }
 
+func TestDriverCallerCancellationWinsStopRace(t *testing.T) {
+	cfg := validDriverConfig(t)
+	callbackCanceled := make(chan struct{})
+	release := make(chan struct{})
+	cfg.DrainDispatcher = func(ctx context.Context) error { <-ctx.Done(); close(callbackCanceled); <-release; return ctx.Err() }
+	d := NewDriver(cfg)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	drainCtx, cancel := context.WithCancel(context.Background())
+	drained := make(chan error, 1)
+	go func() { drained <- d.Drain(drainCtx) }()
+	cancel()
+	<-callbackCanceled
+	stopped := make(chan error, 1)
+	go func() { stopped <- d.Stop(context.Background()) }()
+	deadline := time.After(time.Second)
+	for {
+		d.mu.Lock()
+		stopping := d.stopping
+		d.mu.Unlock()
+		if stopping {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("Stop did not publish stopping")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	close(release)
+	if err := <-drained; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Drain error=%v", err)
+	}
+	if !errors.Is(d.Err(), context.Canceled) || d.State() != StateFailed {
+		t.Fatalf("state=%s cause=%v", d.State(), d.Err())
+	}
+	<-stopped
+}
+
 func TestDriverWaitsForManagerGateAndPropagatesGateFailure(t *testing.T) {
 	t.Run("blocks until gate open", func(t *testing.T) {
 		cfg := validDriverConfig(t)

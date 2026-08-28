@@ -60,3 +60,13 @@ Focused green evidence:
 - `go test ./internal/adapter/telegram -timeout 30s` — PASS.
 - `go test -race ./internal/adapter/telegram -timeout 45s` — PASS.
 - `go test ./internal/adapter/telegram -count=10 -timeout 60s` — PASS with goleak coverage.
+
+## Fix round 3
+
+Added a deterministic caller-cancellation/Stop race regression: the drain caller cancels first, the callback observes cancellation but blocks its return, then Stop publishes stopping before classification. The red test showed `Drain error=<nil>` because classification used the later lifecycle flag rather than cancellation source. Drain now uses `context.WithCancelCause`; Stop alone supplies a private `errStopDrain` cause. Context first-cause semantics preserve earlier caller cancellation/deadline identity, while the private Stop cause classifies only shutdown-originated `context.Canceled` as normal. The sentinel is private and fixed, so errors remain bounded and secret-safe.
+
+Focused green evidence:
+
+- `go test ./internal/adapter/telegram -timeout 30s` — PASS.
+- `go test -race ./internal/adapter/telegram -timeout 45s` — PASS.
+- `go test ./internal/adapter/telegram -count=10 -timeout 60s` — PASS with goleak coverage.

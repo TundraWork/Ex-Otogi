@@ -19,6 +19,8 @@ var (
 	ErrDegraded         = errors.New("telegram: durable recovery is degraded")
 )
 
+var errStopDrain = errors.New("telegram: stop drain")
+
 // State is the serialized driver lifecycle state.
 type State string
 
@@ -86,7 +88,7 @@ type Driver struct {
 	stopOnce       sync.Once
 	children       sync.WaitGroup
 	drainDone      chan struct{}
-	drainCancel    context.CancelFunc
+	drainCancel    context.CancelCauseFunc
 	stopDone       chan struct{}
 	stopErr        error
 }
@@ -325,20 +327,17 @@ func (d *Driver) Drain(ctx context.Context) (err error) {
 		return ErrInvalidLifecycle
 	}
 	d.state = StateDraining
-	drainCtx, cancel := context.WithCancel(ctx)
+	drainCtx, cancel := context.WithCancelCause(ctx)
 	d.drainCancel = cancel
 	d.drainDone = make(chan struct{})
 	done := d.drainDone
 	d.mu.Unlock()
-	defer func() { cancel(); close(done) }()
+	defer func() { cancel(nil); close(done) }()
 	err = panicError("dispatcher drain", func() error { return d.cfg.DrainDispatcher(drainCtx) })
 	if err == nil {
 		return nil
 	}
-	d.mu.Lock()
-	stopping := d.stopping
-	d.mu.Unlock()
-	if stopping && errors.Is(err, context.Canceled) {
+	if errors.Is(context.Cause(drainCtx), errStopDrain) && errors.Is(err, context.Canceled) {
 		return nil
 	}
 	d.fail(err)
@@ -359,7 +358,7 @@ func (d *Driver) Stop(ctx context.Context) error {
 			cancel()
 		}
 		if drainCancel != nil {
-			drainCancel()
+			drainCancel(errStopDrain)
 		}
 		go func() {
 			var errs []error
