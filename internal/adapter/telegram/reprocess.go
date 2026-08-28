@@ -41,7 +41,8 @@ func(r *DurableReprocessor)Reprocess(ctx context.Context,limit int)error{
 var _ RecoveryReplay = (*DurableReprocessorReplay)(nil)
 
 // DurableReprocessorReplay composes protocol recovery capture with raw-source reprocessing.
-type DurableReprocessorReplay struct{DifferenceFunc func(context.Context,tg.UpdatesDifferenceClass)error;HistoryFunc func(context.Context,string,tg.MessagesMessagesClass)error;Raw *DurableReprocessor}
+type DurableReprocessorReplay struct{DifferenceFunc func(context.Context,tg.UpdatesDifferenceClass)error;UpdatesFunc func(context.Context,string,tg.UpdatesClass)error;HistoryFunc func(context.Context,string,tg.MessagesMessagesClass)error;Raw *DurableReprocessor}
 func(r *DurableReprocessorReplay)Difference(ctx context.Context,value tg.UpdatesDifferenceClass)error{return r.DifferenceFunc(ctx,value)}
+func(r *DurableReprocessorReplay)Updates(ctx context.Context,box string,value tg.UpdatesClass)error{return r.UpdatesFunc(ctx,box,value)}
 func(r *DurableReprocessorReplay)History(ctx context.Context,box string,value tg.MessagesMessagesClass)error{return r.HistoryFunc(ctx,box,value)}
 func(r *DurableReprocessorReplay)Reprocess(ctx context.Context,limit int)error{return r.Raw.Reprocess(ctx,limit)}

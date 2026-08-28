@@ -431,30 +431,27 @@ func (s *Store) FindLocators(ctx context.Context, namespace string, id int64) ([
 	return locators, rows.Err()
 }
 
-// KnownPeers returns bounded durable peers in stable kind/ID order for history recovery.
-func (s *Store) KnownPeers(ctx context.Context, limit int) ([]Peer, error) {
-	if limit <= 0 || limit > MaxCaptureRows { return nil, ErrInputTooLarge }
-	rows, err := s.db.QueryContext(ctx, "SELECT kind,peer_id,access_hash,payload FROM peers WHERE account_key=? ORDER BY kind,peer_id LIMIT ?", s.accountKey, limit)
-	if err != nil { return nil, err }
+// KnownPeers returns one stable bounded page and whether more peers remain.
+func (s *Store) KnownPeers(ctx context.Context, offset, limit int) ([]Peer, bool, error) {
+	if offset < 0 || limit <= 0 || limit > MaxCaptureRows { return nil, false, ErrInputTooLarge }
+	rows, err := s.db.QueryContext(ctx, "SELECT kind,peer_id,access_hash,payload FROM peers WHERE account_key=? ORDER BY kind,peer_id LIMIT ? OFFSET ?", s.accountKey, limit+1, offset)
+	if err != nil { return nil, false, err }
 	defer rows.Close()
-	var peers []Peer
-	for rows.Next() { var peer Peer; if err:=rows.Scan(&peer.Kind,&peer.ID,&peer.AccessHash,&peer.Payload);err!=nil{return nil,err};peers=append(peers,peer) }
-	return peers,rows.Err()
+	peers:=make([]Peer,0,limit+1)
+	for rows.Next() { var peer Peer; if err:=rows.Scan(&peer.Kind,&peer.ID,&peer.AccessHash,&peer.Payload);err!=nil{return nil,false,err};peers=append(peers,peer) }
+	if err:=rows.Err();err!=nil{return nil,false,err};more:=len(peers)>limit;if more{peers=peers[:limit]};return peers,more,nil
 }
+
+// RecoveryChannels returns all access-hash channels, using zero for a missing cursor.
+func(s *Store)RecoveryChannels(ctx context.Context,userID int64)([]struct{ID,AccessHash int64;Pts int},error){rows,err:=s.db.QueryContext(ctx,"SELECT h.channel_id,h.access_hash,coalesce(c.pts,0) FROM channel_access_hash h LEFT JOIN channel_state c ON c.account_key=h.account_key AND c.user_id=h.user_id AND c.channel_id=h.channel_id WHERE h.account_key=? AND h.user_id=? ORDER BY h.channel_id",s.accountKey,userID);if err!=nil{return nil,err};defer rows.Close();var result []struct{ID,AccessHash int64;Pts int};for rows.Next(){var v struct{ID,AccessHash int64;Pts int};if err:=rows.Scan(&v.ID,&v.AccessHash,&v.Pts);err!=nil{return nil,err};result=append(result,v)};return result,rows.Err()}
 
 // RecordGap marks a consistency box degraded at a durable boundary.
 func (s *Store) RecordGap(ctx context.Context, b string, p int64, r string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, "INSERT INTO consistency(account_key,box,position,degraded,reason) VALUES(?,?,?,1,?) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position),degraded=1,reason=excluded.reason", s.accountKey, b, p, r); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO recovery(account_key,box,position,state,cause,acknowledged) VALUES(?,?,?,?,?,0) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position),state=excluded.state,cause=excluded.cause,acknowledged=0", s.accountKey, b, p, RecoveryDegraded, r); err != nil {
-		return err
-	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO consistency(account_key,box,position,degraded,reason) VALUES(?,?,?,1,?) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position),degraded=1,reason=excluded.reason", s.accountKey, b, p, r); err != nil { return err }
+	if _, err = tx.ExecContext(ctx, "INSERT INTO recovery(account_key,box,position,state,cause,acknowledged) VALUES(?,?,?,?,?,0) ON CONFLICT(account_key,box) DO UPDATE SET position=max(position,excluded.position),state=CASE WHEN recovery.state=? AND recovery.acknowledged=1 AND recovery.cause=excluded.cause AND recovery.position>=excluded.position THEN recovery.state ELSE excluded.state END,cause=CASE WHEN recovery.state=? AND recovery.acknowledged=1 AND recovery.cause=excluded.cause AND recovery.position>=excluded.position THEN recovery.cause ELSE excluded.cause END,acknowledged=CASE WHEN recovery.state=? AND recovery.acknowledged=1 AND recovery.cause=excluded.cause AND recovery.position>=excluded.position THEN 1 ELSE 0 END", s.accountKey, b, p, RecoveryDegraded, r, RecoveryPermanentDegraded, RecoveryPermanentDegraded, RecoveryPermanentDegraded); err != nil { return err }
 	return tx.Commit()
 }
 

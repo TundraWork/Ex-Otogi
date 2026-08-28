@@ -28,3 +28,15 @@ Both completed successfully, including the package-level goleak harness in `upda
 - Dispatcher admission, claims, completion acknowledgements, and delivery lifecycle remain Task 7+.
 - Authentication and outbound send/correlation remain later tasks.
 - Concrete production replay callbacks must be assembled with the driver-owned downstream mapper and journal decoder when lifecycle composition is implemented; Task 6 provides the bounded durable orchestration seams.
+
+## Review Fix Round 1
+
+- Schema-v2/v3 upgrades now seed every degraded consistency row into the persisted recovery state machine before schema-v4 validation.
+- Common empty differences preserve newer local PTS/QTS, all terminal state components advance monotonically, and too-long results reset to the returned server PTS then continue bounded difference retrieval rather than declaring readiness early.
+- Difference requests now set explicit PTS/QTS/total limits; common, channel, and history responses are rejected before replay when item or deterministic encoded-byte bounds are exceeded.
+- Channel recovery replays both messages and non-message updates before cursor advancement, validates `channelDifferenceTooLong` dialog PTS, and persists the replacement boundary after bounded backfill.
+- Channel access hashes are independently enumerable when channel cursor state is absent, beginning recovery at PTS zero.
+- Known-dialog traversal is explicitly paged and detects truncation instead of silently accepting a prefix.
+- `Resynchronizer.Run` has one cancellable serialized owner, preventing duplicate callbacks and writes.
+- Repeated identical callbacks preserve acknowledged permanent degradation; new positions or causes explicitly reopen recovery.
+- Recovery failures are persisted with operator-visible causes rather than leaving a transient resynchronizing state.
