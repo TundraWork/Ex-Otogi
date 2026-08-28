@@ -153,7 +153,10 @@ func (g *JournalGate) Open(ctx context.Context) error {
 		}
 	}
 	g.pending = nil
-	g.health.arm()
+	if err := g.health.arm(); err != nil {
+		g.failed = err
+		return err
+	}
 	g.open = true
 	return nil
 }

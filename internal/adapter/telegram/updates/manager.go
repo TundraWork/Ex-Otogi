@@ -79,13 +79,17 @@ func (h *Health) recordDegradationLocked(reason DegradedReason) {
 	}
 }
 
-// enterCaptureBoundary serializes a downstream-failure check through normalized
+// enterCaptureBoundary serializes the final health check through normalized
 // capture. A nil error transfers boundary ownership to the caller, which must
-// leave it. The capture latch applies before lifecycle notification is armed.
+// leave it. An armed lifecycle failure takes precedence; the capture latch also
+// rejects queued startup work before lifecycle notification is armed.
 func (h *Health) enterCaptureBoundary() error {
 	h.boundary.Lock()
 	h.mu.RLock()
-	err := h.captureFailure
+	err := h.failure
+	if err == nil {
+		err = h.captureFailure
+	}
 	h.mu.RUnlock()
 	if err != nil {
 		h.boundary.Unlock()
@@ -110,10 +114,17 @@ func degradationError(reason DegradedReason) error {
 	}
 }
 
-func (h *Health) arm() {
+func (h *Health) arm() error {
+	h.boundary.Lock()
+	defer h.boundary.Unlock()
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.armed = true
-	h.mu.Unlock()
+	if h.failure == nil && h.captureFailure != nil {
+		h.failure = h.captureFailure
+		h.failed <- h.failure
+	}
+	return h.failure
 }
 
 // Failed returns the bounded one-shot lifecycle failure notification.

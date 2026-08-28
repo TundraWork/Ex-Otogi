@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
+
 	"github.com/gotd/td/telegram"
 	gotdupdates "github.com/gotd/td/telegram/updates"
 	"github.com/gotd/td/tg"
@@ -248,7 +250,9 @@ func TestNewManagerUsesCallerSharedHealth(t *testing.T) {
 
 func TestHealthPublishesFirstDegradationOnceWithoutBlocking(t *testing.T) {
 	health := NewHealth()
-	health.arm()
+	if err := health.arm(); err != nil {
+		t.Fatal(err)
+	}
 	first := errors.New("sqlite full")
 	health.degrade(DegradedReason{Box: "common", Position: 4, Reason: "capture normalized update", Err: first})
 	for i := 0; i < 100; i++ {
@@ -293,6 +297,69 @@ func TestManagerRunReturnsPostReadyHealthFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("manager did not stop after degradation")
+	}
+}
+
+type startupCaptureFailureStore struct {
+	captureStore
+	recordErr error
+}
+
+func (s *startupCaptureFailureStore) RecordGap(context.Context, string, int64, string) error {
+	return s.recordErr
+}
+
+func TestManagerRunPublishesPreArmCaptureFailureBeforeReady(t *testing.T) {
+	cause := errors.New("capture failed")
+	recordErr := errors.New("record gap failed")
+	journal := &memoryJournal{}
+	health := NewHealth()
+	store := &startupCaptureFailureStore{captureStore: captureStore{err: cause}, recordErr: recordErr}
+	downstream := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, health)
+	if err := downstream.Handle(context.Background(), mappedBatch()); !errors.Is(err, cause) {
+		t.Fatalf("startup capture error = %v", err)
+	}
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{found: true}, Journal: journal, Downstream: downstream, GapStore: journal, Health: health})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ready := make(chan struct{}, 1)
+	err := RunManager(ctx, manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{}, func() { ready <- struct{}{} })
+	if !errors.Is(err, cause) || !errors.Is(err, recordErr) {
+		t.Fatalf("manager error = %v", err)
+	}
+	select {
+	case <-ready:
+		t.Fatal("ready signaled after startup capture failure")
+	default:
+	}
+}
+
+func TestHealthArmWaitsForInFlightStartupCaptureFailure(t *testing.T) {
+	health := NewHealth()
+	health.boundary.Lock()
+	started := make(chan struct{})
+	armed := make(chan error, 1)
+	go func() {
+		close(started)
+		armed <- health.arm()
+	}()
+	<-started
+	select {
+	case err := <-armed:
+		t.Fatalf("arm completed before capture boundary: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cause := errors.New("capture failed")
+	recordErr := errors.New("record gap failed")
+	health.degradeCaptureWithinBoundary(DegradedReason{Box: "common", Position: 4, Reason: "capture normalized update", Cause: cause, Err: recordErr})
+	health.boundary.Unlock()
+	select {
+	case err := <-armed:
+		if !errors.Is(err, cause) || !errors.Is(err, recordErr) {
+			t.Fatalf("arm error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("arm did not complete after capture boundary")
 	}
 }
 

@@ -99,7 +99,9 @@ func TestDownstreamStorageFailureRetainsJournalAndDegrades(t *testing.T) {
 func TestDownstreamRejectsUpdateQueuedBehindFailedBoundary(t *testing.T) {
 	store := &captureStore{}
 	health := NewHealth()
-	health.arm()
+	if err := health.arm(); err != nil {
+		t.Fatal(err)
+	}
 	cause := errors.New("first capture failed")
 	health.degrade(DegradedReason{Box: "common", Position: 4, Reason: "capture normalized update", Cause: cause})
 	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, health)
@@ -123,7 +125,9 @@ func TestDownstreamDoesNotCapturePastConcurrentFailureBoundary(t *testing.T) {
 			}
 			health := NewHealth()
 			if armed {
-				health.arm()
+				if err := health.arm(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			secondMapped := make(chan struct{})
 			continueSecond := make(chan struct{})
@@ -163,6 +167,34 @@ func TestDownstreamDoesNotCapturePastConcurrentFailureBoundary(t *testing.T) {
 				t.Fatalf("health ready=%v reasons=%+v", ready, reasons)
 			}
 		})
+	}
+}
+
+func TestDownstreamDoesNotCaptureAfterConcurrentGeneralDegradation(t *testing.T) {
+	store := &captureStore{}
+	health := NewHealth()
+	if err := health.arm(); err != nil {
+		t.Fatal(err)
+	}
+	mapped := make(chan struct{})
+	continueCapture := make(chan struct{})
+	handler := NewDownstream(store, testMapper(t), func(input otogi.EventInput) ([]byte, error) {
+		close(mapped)
+		<-continueCapture
+		return []byte(input.Action().String()), nil
+	}, health)
+
+	done := make(chan error, 1)
+	go func() { done <- handler.Handle(context.Background(), mappedBatch()) }()
+	<-mapped
+	cause := errors.New("state storage failed")
+	health.degrade(DegradedReason{Box: "common", Position: 4, Reason: "set state", Cause: cause})
+	close(continueCapture)
+	if err := <-done; !errors.Is(err, cause) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(store.captures) != 0 {
+		t.Fatalf("CaptureBatch calls = %d, want 0", len(store.captures))
 	}
 }
 

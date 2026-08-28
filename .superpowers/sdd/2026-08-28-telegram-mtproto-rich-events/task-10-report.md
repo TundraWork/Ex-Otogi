@@ -73,3 +73,17 @@ Final evidence:
 - Focused unit/count/leak: `./scripts/quality/go.sh test ./internal/adapter/telegram/updates -count=10 -timeout=60s` — PASS; package `TestMain` runs `goleak.VerifyTestMain`.
 - Focused race/repetition: `./scripts/quality/go.sh test -race ./internal/adapter/telegram/updates -run 'TestDownstreamDoesNotCapturePastConcurrentFailureBoundary|TestHealthPublishesFirstDegradationOnceWithoutBlocking' -count=20 -timeout=60s` — PASS.
 - Full stale-toolchain gate: `GOROOT=/definitely/stale make quality` — PASS, including lint (0 issues), documentation and architecture checks, unit/race tests, bounded fuzz targets, corpus, leak suites, and offline smoke.
+
+## Health arm and general degradation boundary fix
+
+Two deterministic regressions closed the remaining state-machine gaps. The first blocks a worker after mapping, commits an armed non-capture degradation, then releases the worker; before the fix `Handle` returned nil and called `CaptureBatch`, while the capture boundary now rejects the first armed general failure. The second latches a pre-arm capture failure whose durable `RecordGap` also fails, then starts the manager; before the fix the manager timed out (and, once the latch was merely published, readiness still raced ahead), while arm now promotes the exact latched composite error through the bounded one-shot failure channel and gate opening refuses readiness.
+
+Lock order remains capture boundary before `Health.mu`: arm now takes both in that order so it cannot race an in-flight startup capture, while durable `RecordGap` completes before the capture degradation takes `Health.mu`. The promoted latch retains first-failure and both capture-cause and record-gap error identity.
+
+Final evidence:
+
+- Red: the general degradation regression failed with `error = <nil>` after reaching the capture boundary; the pre-arm regression failed with `manager error = context deadline exceeded`, then exposed premature readiness until gate opening consumed arm's failure result.
+- Focused updates/count/goleak: `./scripts/quality/go.sh test ./internal/adapter/telegram/updates -count=10 -timeout=60s` and focused regressions with `-count=50` — PASS.
+- Focused race: `./scripts/quality/go.sh test -race ./internal/adapter/telegram/updates -run 'TestHealthArmWaitsForInFlightStartupCaptureFailure|TestDownstreamDoesNotCaptureAfterConcurrentGeneralDegradation|TestManagerRunPublishesPreArmCaptureFailureBeforeReady|TestDownstreamDoesNotCapturePastConcurrentFailureBoundary|TestManagerRunReturnsPostReadyHealthFailure' -count=20 -timeout=120s` — PASS.
+- Startup replay/post-ready composition: focused updates lifecycle tests with `-count=20` and real composition startup/post-ready tests with `-count=10` — PASS.
+- Full stale-toolchain gate: `GOROOT=/definitely/stale make quality` — PASS, including lint (0 issues), docs/architecture checks, unit/race tests, bounded fuzz targets, corpus, leak suites, and offline smoke.
