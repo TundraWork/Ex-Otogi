@@ -14,9 +14,11 @@ import (
 )
 
 type sendStoreFake struct {
-	intents map[string]telegramstore.SendIntent
-	peer    telegramstore.Peer
-	creates int
+	intents     map[string]telegramstore.SendIntent
+	peer        telegramstore.Peer
+	creates     int
+	peerLookups int
+	transitions int
 }
 
 func (s *sendStoreFake) CreateSendIntent(_ context.Context, in telegramstore.SendIntent, at time.Time) (telegramstore.SendIntent, bool, error) {
@@ -36,6 +38,7 @@ func (s *sendStoreFake) GetSendIntent(_ context.Context, key string) (telegramst
 	return v, ok, nil
 }
 func (s *sendStoreFake) TransitionSend(_ context.Context, key string, from, to telegramstore.SendStatus, tr telegramstore.SendTransition) error {
+	s.transitions++
 	v := s.intents[key]
 	if v.Status != from {
 		return telegramstore.ErrSendConflict
@@ -46,6 +49,7 @@ func (s *sendStoreFake) TransitionSend(_ context.Context, key string, from, to t
 	return nil
 }
 func (s *sendStoreFake) GetPeer(_ context.Context, kind string, id int64) (telegramstore.Peer, bool, error) {
+	s.peerLookups++
 	return s.peer, s.peer.Kind == kind && s.peer.ID == id, nil
 }
 func (s *sendStoreFake) RecoverableSends(context.Context, time.Time) ([]telegramstore.SendIntent, error) {
@@ -145,7 +149,7 @@ func TestSendCodecGoldenDigestRandomIDAndJournalCorrelation(t *testing.T) {
 	if intent.Status != telegramstore.SendSucceeded || intent.ProviderMessageID != 55 {
 		t.Fatalf("intent=%+v", intent)
 	}
-	if got := RequestDigest(api.req); got != "bdf6a6700110a54c05840b186a248f6f180ac346a22ff835b52028549805d1d2" {
+	if got := RequestDigest(api.req); got != "000268354de87f5e7fe225c10d5a7357249edd98f6cc673eb07d874457b04c412ccc" {
 		t.Fatalf("digest=%s", got)
 	}
 }
@@ -287,5 +291,79 @@ func TestSameKeyDifferentPayloadConflictsWithoutSecondRPC(t *testing.T) {
 	err := sender.Send(context.Background(), outboundText(t, "same", "user:7", "second", nil, nil))
 	if !errors.Is(err, telegramstore.ErrSendConflict) || api.calls != 1 {
 		t.Fatalf("err=%v calls=%d", err, api.calls)
+	}
+}
+
+func TestAmbiguousRedeliveryDoesNotTransitionOrCallRPC(t *testing.T) {
+	now := time.Unix(5000, 0).UTC()
+	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}, peer: telegramstore.Peer{Kind: "user", ID: 7, AccessHash: 8}}
+	api := &sendAPIFake{err: context.DeadlineExceeded}
+	sender := NewSender(api, s, &gateFake{}, func() time.Time { return now })
+	message := outboundText(t, "ambiguous-key", "user:7", "x", nil, nil)
+	if err := sender.Send(context.Background(), message); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	transitions := s.transitions
+	if err := sender.Send(context.Background(), message); !errors.Is(err, ErrAmbiguousSend) {
+		t.Fatalf("err=%v", err)
+	}
+	if api.calls != 1 || s.transitions != transitions {
+		t.Fatalf("rpc=%d transitions=%d want=%d", api.calls, s.transitions, transitions)
+	}
+}
+
+func TestSucceededReplayDoesNotRequireCurrentPeer(t *testing.T) {
+	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}, peer: telegramstore.Peer{Kind: "user", ID: 7, AccessHash: 8}}
+	api := &sendAPIFake{result: &tg.UpdateShortSentMessage{ID: 9}}
+	sender := NewSender(api, s, &gateFake{}, time.Now)
+	message := outboundText(t, "succeeded-replay", "user:7", "x", nil, nil)
+	if err := sender.Send(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	s.peer = telegramstore.Peer{}
+	lookups := s.peerLookups
+	if err := sender.Send(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	if api.calls != 1 || s.peerLookups != lookups {
+		t.Fatalf("rpc=%d peer lookups=%d want=%d", api.calls, s.peerLookups, lookups)
+	}
+}
+
+func TestDifferentPayloadConflictsBeforePeerLookup(t *testing.T) {
+	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}, peer: telegramstore.Peer{Kind: "user", ID: 7, AccessHash: 8}}
+	api := &sendAPIFake{result: &tg.UpdateShortSentMessage{ID: 9}}
+	sender := NewSender(api, s, &gateFake{}, time.Now)
+	if err := sender.Send(context.Background(), outboundText(t, "digest-first", "user:7", "first", nil, nil)); err != nil {
+		t.Fatal(err)
+	}
+	s.peer = telegramstore.Peer{}
+	lookups := s.peerLookups
+	err := sender.Send(context.Background(), outboundText(t, "digest-first", "user:7", "second", nil, nil))
+	if !errors.Is(err, telegramstore.ErrSendConflict) || s.peerLookups != lookups || api.calls != 1 {
+		t.Fatalf("err=%v lookups=%d rpc=%d", err, s.peerLookups, api.calls)
+	}
+}
+
+func TestEligibleRetryUsesDurablePeerWhenAccessHashChanges(t *testing.T) {
+	start := time.Unix(6000, 0).UTC()
+	now := start
+	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}, peer: telegramstore.Peer{Kind: "user", ID: 7, AccessHash: 8}}
+	api := &sendAPIFake{err: tgerr.New(420, "FLOOD_WAIT_1")}
+	sender := NewSender(api, s, &gateFake{}, func() time.Time { return now })
+	message := outboundText(t, "retry-peer", "user:7", "x", nil, nil)
+	if err := sender.Send(context.Background(), message); err == nil {
+		t.Fatal("missing rate limit")
+	}
+	now = start.Add(2 * time.Second)
+	s.peer.AccessHash = 99
+	api.err = nil
+	api.result = &tg.UpdateShortSentMessage{ID: 10}
+	if err := sender.Send(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	peer := api.req.Peer.(*tg.InputPeerUser)
+	if peer.AccessHash != 8 || api.calls != 2 {
+		t.Fatalf("peer=%+v calls=%d", peer, api.calls)
 	}
 }

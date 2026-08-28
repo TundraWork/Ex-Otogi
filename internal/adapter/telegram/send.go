@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -22,6 +23,8 @@ import (
 )
 
 const sendCodecVersion uint16 = 1
+
+var ErrAmbiguousSend = errors.New("telegram: ambiguous send outcome")
 
 type sendAPI interface {
 	MessagesSendMessage(context.Context, *tg.MessagesSendMessageRequest) (tg.UpdatesClass, error)
@@ -99,7 +102,8 @@ func RandomID(key string) int64 {
 	return id
 }
 
-// RequestDigest returns the versioned canonical SHA-256 request digest.
+// RequestDigest returns the explicitly versioned canonical logical request digest.
+// Peer access hashes and random_id are excluded because they are durable transport material.
 func RequestDigest(req *tg.MessagesSendMessageRequest) string {
 	d, _ := requestDigest(req)
 	return hex.EncodeToString(d)
@@ -108,49 +112,105 @@ func requestDigest(req *tg.MessagesSendMessageRequest) ([]byte, error) {
 	if req == nil {
 		return nil, errors.New("nil send request")
 	}
+	logical := *req
+	switch peer := req.Peer.(type) {
+	case *tg.InputPeerUser:
+		logical.Peer = &tg.InputPeerUser{UserID: peer.UserID}
+	case *tg.InputPeerChannel:
+		logical.Peer = &tg.InputPeerChannel{ChannelID: peer.ChannelID}
+	case *tg.InputPeerChat:
+		logical.Peer = &tg.InputPeerChat{ChatID: peer.ChatID}
+	default:
+		return nil, errors.New("telegram: invalid logical peer")
+	}
+	logical.RandomID = 0
 	var b bin.Buffer
-	if err := req.Encode(&b); err != nil {
+	if err := logical.Encode(&b); err != nil {
 		return nil, err
 	}
-	h := sha256.New()
-	var v [2]byte
-	binary.BigEndian.PutUint16(v[:], sendCodecVersion)
-	_, _ = h.Write(v[:])
-	_, _ = h.Write(b.Raw())
-	return h.Sum(nil), nil
+	hash := sha256.Sum256(b.Raw())
+	digest := make([]byte, 2+len(hash))
+	binary.BigEndian.PutUint16(digest, 2)
+	copy(digest[2:], hash[:])
+	return digest, nil
 }
 
 func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error {
-	req, locator, err := s.encode(ctx, message)
+	template, err := encodeMessage(message)
 	if err != nil {
 		return err
 	}
-	digest, err := requestDigest(req)
+	digest, err := requestDigest(template)
 	if err != nil {
 		return fmt.Errorf("telegram: digest request: %w", err)
 	}
 	now := s.now().UTC()
 	key := message.IdempotencyKey().String()
-	intent, _, err := s.store.CreateSendIntent(ctx, telegramstore.SendIntent{Key: key, RequestDigest: digest, RandomID: req.RandomID, PeerLocator: locator}, now)
+	intent, found, err := s.store.GetSendIntent(ctx, key)
 	if err != nil {
 		return err
 	}
-	switch intent.Status {
-	case telegramstore.SendSucceeded:
-		return nil
-	case telegramstore.SendPermanentFailed:
-		return fmt.Errorf("telegram: prior permanent send failure: %s", intent.Error)
-	case telegramstore.SendInFlight:
-		return fmt.Errorf("telegram: send outcome ambiguous")
-	case telegramstore.SendRetryable:
-		if intent.RetryAt != nil && now.Before(*intent.RetryAt) {
-			return &RateLimitError{RetryAt: *intent.RetryAt, Cause: errors.New(intent.Error)}
+	if found {
+		if !bytes.Equal(intent.RequestDigest, digest) {
+			return telegramstore.ErrSendConflict
 		}
+		switch intent.Status {
+		case telegramstore.SendSucceeded:
+			return nil
+		case telegramstore.SendPermanentFailed:
+			return fmt.Errorf("telegram: prior permanent send failure: %s", intent.Error)
+		case telegramstore.SendInFlight, telegramstore.SendAmbiguous:
+			return ErrAmbiguousSend
+		case telegramstore.SendRetryable:
+			if intent.RetryAt != nil && now.Before(*intent.RetryAt) {
+				return &RateLimitError{RetryAt: *intent.RetryAt, Cause: errors.New(intent.Error)}
+			}
+		}
+	} else {
+		peer, record, peerErr := s.inputPeer(ctx, message.Conversation().String())
+		if peerErr != nil {
+			return peerErr
+		}
+		locator := encodePeerRecord(record)
+		var created bool
+		intent, created, err = s.store.CreateSendIntent(ctx, telegramstore.SendIntent{Key: key, RequestDigest: digest, RandomID: RandomID(key), PeerLocator: locator}, now)
+		if err != nil {
+			return err
+		}
+		if !created {
+			found = true
+			if !bytes.Equal(intent.RequestDigest, digest) {
+				return telegramstore.ErrSendConflict
+			}
+			switch intent.Status {
+			case telegramstore.SendSucceeded:
+				return nil
+			case telegramstore.SendPermanentFailed:
+				return fmt.Errorf("telegram: prior permanent send failure: %s", intent.Error)
+			case telegramstore.SendInFlight, telegramstore.SendAmbiguous:
+				return ErrAmbiguousSend
+			case telegramstore.SendRetryable:
+				if intent.RetryAt != nil && now.Before(*intent.RetryAt) {
+					return &RateLimitError{RetryAt: *intent.RetryAt, Cause: errors.New(intent.Error)}
+				}
+			}
+		} else {
+			template.Peer = peer
+			template.RandomID = intent.RandomID
+		}
+	}
+	if found {
+		peer, peerErr := decodePeerRecord(intent.PeerLocator)
+		if peerErr != nil {
+			return peerErr
+		}
+		template.Peer = peer
+		template.RandomID = intent.RandomID
 	}
 	if err = s.store.TransitionSend(ctx, key, intent.Status, telegramstore.SendInFlight, telegramstore.SendTransition{At: now}); err != nil {
 		return err
 	}
-	updates, rpcErr := s.api.MessagesSendMessage(ctx, req)
+	updates, rpcErr := s.api.MessagesSendMessage(ctx, template)
 	completedAt := s.now().UTC()
 	persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -168,7 +228,7 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 		transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: completedAt, Error: "journal returned updates"})
 		return errors.Join(fmt.Errorf("telegram: journal returned updates: %w", err), transitionErr)
 	}
-	id := correlatedMessageID(updates, req.RandomID)
+	id := correlatedMessageID(updates, template.RandomID)
 	if id <= 0 {
 		e := errors.New("telegram: missing message correlation")
 		if transitionErr := s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendAmbiguous, telegramstore.SendTransition{At: completedAt, Error: "missing message correlation"}); transitionErr != nil {
@@ -183,10 +243,7 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 	if found && current.Status == telegramstore.SendSucceeded {
 		return nil
 	}
-	if err = s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendSucceeded, telegramstore.SendTransition{At: completedAt, ProviderMessageID: int64(id)}); err != nil {
-		return err
-	}
-	return nil
+	return s.store.TransitionSend(persist, key, telegramstore.SendInFlight, telegramstore.SendSucceeded, telegramstore.SendTransition{At: completedAt, ProviderMessageID: int64(id)})
 }
 
 func (s *Sender) recordSendError(ctx context.Context, key string, cause error, at time.Time) error {
@@ -212,75 +269,82 @@ func (s *Sender) recordSendError(ctx context.Context, key string, cause error, a
 	return cause
 }
 
-func (s *Sender) encode(ctx context.Context, m otogi.OutboundMessage) (*tg.MessagesSendMessageRequest, []byte, error) {
+func encodeMessage(m otogi.OutboundMessage) (*tg.MessagesSendMessageRequest, error) {
 	parts := m.Message().Parts()
 	roots := m.Message().Roots()
 	if len(parts) != 1 || len(roots) != 1 || parts[0].Kind() != otogi.PartText || len(parts[0].Children()) != 0 || len(parts[0].Extensions()) != 0 || len(m.Message().Extensions()) != 0 {
-		return nil, nil, fmt.Errorf("telegram rich text codec: %w", otogi.ErrUnsupported)
+		return nil, fmt.Errorf("telegram rich text codec: %w", otogi.ErrUnsupported)
 	}
 	text, anns, _ := parts[0].Text()
 	entities := make([]tg.MessageEntityClass, 0, len(anns))
 	for _, a := range anns {
 		e, err := encodeEntity(text, a)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		entities = append(entities, e)
 	}
 	var reply, thread int
 	for _, r := range m.Message().Relations() {
 		if len(r.Extensions()) != 0 || r.Key() != "" || (r.Kind() != otogi.RelationReply && r.Kind() != otogi.RelationThread) || !r.Target().HasLocator() {
-			return nil, nil, fmt.Errorf("telegram relation: %w", otogi.ErrUnsupported)
+			return nil, fmt.Errorf("telegram relation: %w", otogi.ErrUnsupported)
 		}
 		l := r.Target().Locator()
 		if !strings.HasSuffix(l.NamespaceURI(), "/message") || l.SchemaVersion() != 1 {
-			return nil, nil, fmt.Errorf("telegram relation locator: %w", otogi.ErrUnsupported)
+			return nil, fmt.Errorf("telegram relation locator: %w", otogi.ErrUnsupported)
 		}
 		ml, e := mapper.DecodeMessageLocator(l.Data())
-		if e != nil {
-			return nil, nil, fmt.Errorf("telegram relation locator: %w", otogi.ErrUnsupported)
-		}
-		if ml.Peer != m.Conversation().String() {
-			return nil, nil, fmt.Errorf("cross-peer relation: %w", otogi.ErrUnsupported)
+		if e != nil || ml.Peer != m.Conversation().String() {
+			return nil, fmt.Errorf("telegram relation locator: %w", otogi.ErrUnsupported)
 		}
 		if r.Kind() == otogi.RelationReply {
 			if reply != 0 {
-				return nil, nil, fmt.Errorf("multiple replies: %w", otogi.ErrUnsupported)
+				return nil, fmt.Errorf("multiple replies: %w", otogi.ErrUnsupported)
 			}
 			reply = ml.MessageID
 		} else {
 			if thread != 0 {
-				return nil, nil, fmt.Errorf("multiple threads: %w", otogi.ErrUnsupported)
+				return nil, fmt.Errorf("multiple threads: %w", otogi.ErrUnsupported)
 			}
 			thread = ml.MessageID
 		}
 	}
-	var replyTo *tg.InputReplyToMessage
+	peer, err := logicalPeer(m.Conversation().String())
+	if err != nil {
+		return nil, err
+	}
+	req := &tg.MessagesSendMessageRequest{Peer: peer, Message: text}
+	if len(entities) > 0 {
+		req.SetEntities(entities)
+	}
 	if reply != 0 || thread != 0 {
 		if reply == 0 {
 			reply = thread
 		}
-		replyTo = &tg.InputReplyToMessage{ReplyToMsgID: reply}
+		replyTo := &tg.InputReplyToMessage{ReplyToMsgID: reply}
 		if thread != 0 && thread != reply {
 			replyTo.SetTopMsgID(thread)
 		}
-	}
-	peer, record, err := s.inputPeer(ctx, m.Conversation().String())
-	if err != nil {
-		return nil, nil, err
-	}
-	locator, err := encodePeerRecord(record)
-	if err != nil {
-		return nil, nil, err
-	}
-	req := &tg.MessagesSendMessageRequest{Peer: peer, Message: text, RandomID: RandomID(m.IdempotencyKey().String())}
-	if len(entities) > 0 {
-		req.SetEntities(entities)
-	}
-	if replyTo != nil {
 		req.SetReplyTo(replyTo)
 	}
-	return req, locator, nil
+	return req, nil
+}
+
+func logicalPeer(conversation string) (tg.InputPeerClass, error) {
+	kind, id, err := parsePeer(conversation)
+	if err != nil {
+		return nil, err
+	}
+	switch kind {
+	case "user":
+		return &tg.InputPeerUser{UserID: id}, nil
+	case "chat":
+		return &tg.InputPeerChat{ChatID: id}, nil
+	case "channel":
+		return &tg.InputPeerChannel{ChannelID: id}, nil
+	default:
+		return nil, errors.New("telegram: invalid logical peer")
+	}
 }
 
 func encodeEntity(text string, a otogi.Annotation) (tg.MessageEntityClass, error) {
@@ -365,8 +429,34 @@ func parsePeer(value string) (string, int64, error) {
 	}
 	return kind, id, nil
 }
-func encodePeerRecord(p telegramstore.Peer) ([]byte, error) {
-	return []byte(fmt.Sprintf("%d:%s:%d:%d", sendCodecVersion, p.Kind, p.ID, p.AccessHash)), nil
+func encodePeerRecord(p telegramstore.Peer) []byte {
+	return []byte(fmt.Sprintf("%d:%s:%d:%d", sendCodecVersion, p.Kind, p.ID, p.AccessHash))
+}
+func decodePeerRecord(data []byte) (tg.InputPeerClass, error) {
+	fields := strings.Split(string(data), ":")
+	if len(fields) != 4 || fields[0] != strconv.Itoa(int(sendCodecVersion)) {
+		return nil, errors.New("telegram: invalid durable peer locator")
+	}
+	id, idErr := strconv.ParseInt(fields[2], 10, 64)
+	hash, hashErr := strconv.ParseInt(fields[3], 10, 64)
+	if idErr != nil || hashErr != nil || id <= 0 {
+		return nil, errors.New("telegram: invalid durable peer locator")
+	}
+	switch fields[1] {
+	case "user":
+		if hash == 0 {
+			break
+		}
+		return &tg.InputPeerUser{UserID: id, AccessHash: hash}, nil
+	case "chat":
+		return &tg.InputPeerChat{ChatID: id}, nil
+	case "channel":
+		if hash == 0 {
+			break
+		}
+		return &tg.InputPeerChannel{ChannelID: id, AccessHash: hash}, nil
+	}
+	return nil, errors.New("telegram: invalid durable peer locator")
 }
 func correlatedMessageID(packet tg.UpdatesClass, randomID int64) int {
 	switch v := packet.(type) {
