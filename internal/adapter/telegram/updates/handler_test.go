@@ -94,6 +94,21 @@ func TestDownstreamStorageFailureRetainsJournalAndDegrades(t *testing.T) {
 	}
 }
 
+func TestDownstreamRejectsUpdateQueuedBehindFailedBoundary(t *testing.T) {
+	store := &captureStore{}
+	health := NewHealth()
+	health.arm()
+	cause := errors.New("first capture failed")
+	health.degrade(DegradedReason{Box: "common", Position: 4, Reason: "capture normalized update", Cause: cause})
+	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, health)
+	if err := handler.Handle(context.Background(), mappedBatch()); !errors.Is(err, cause) {
+		t.Fatalf("error=%v", err)
+	}
+	if store.next != 0 || len(store.captures) != 0 {
+		t.Fatalf("journal=%d captures=%d", store.next, len(store.captures))
+	}
+}
+
 func TestDownstreamJournalsManagerDifferenceOutputAndExcludesNegativeSequence(t *testing.T) {
 	store := &captureStore{}
 	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, NewHealth())

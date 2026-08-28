@@ -49,3 +49,16 @@ Corrected the degraded-gap runbook: full `Driver`/`NewComposition` startup check
 ## Authoritative quality correction
 
 The controller's authoritative gate exposed one `errorlint` finding in codec classification. A red regression proved the classified error preserved `otogi.ErrInvalid` but not its concrete cause. `classifyCodecError` now uses dual `%w` wrapping, preserving both identities while context cancellation/deadline errors remain unchanged. The focused codec/dispatcher tests and full `make quality` then passed, including lint, documentation and architecture checks, all unit and race tests, both bounded fuzz targets, corpus, leak suites, and the unchanged offline smoke.
+
+## Final degradation propagation fix
+
+Traced the post-open failure path from `JournalGate.Handle` through gotd manager delivery to `Downstream.fail`: durable `RecordGap` and pending journal state were preserved, but gotd treated the returned handler error as nonfatal and the concrete manager runner had no lifecycle signal. A red-green fix added one bounded, nonblocking, first-failure notification owned by shared updates `Health`. The notification is armed only after successful gate replay, so persisted startup degradation still blocks readiness without racing a runtime failure. The concrete manager runner now returns the structured degradation error and cancels its worker; Driver child supervision then transitions ready to failed and cancels manager, dispatcher, and client siblings. `JournalGate` latches the failed boundary before accepting another packet, and `Downstream` rejects packets already queued inside gotd behind that boundary, so later traffic cannot append, normalize, or overtake it. Normal cancellation remains classified as clean stop.
+
+Regression coverage proves the first signal is one-shot under 100 repeated degradations, post-ready manager failure retains both the capture cause and durable-recording error identity, gate ingress rejects later packets without appending them, queued downstream work cannot capture past degraded health, and a real SQLite composition reaches ready then fails on an oversized mapper deletion batch. The integration assertion observes Driver failed/not-ready, sibling cancellation, one pending journal row, durable degraded consistency, and no later packet advancement.
+
+Final verification:
+
+- Focused updates and Telegram unit suites — PASS.
+- Focused lifecycle/degradation regressions under `-race -count=10` — PASS.
+- Focused lifecycle/degradation regressions under package `goleak` harnesses with `-count=50` — PASS.
+- `make quality` — PASS, including lint, documentation and architecture checks, all unit and race tests, bounded fuzz targets, corpus, leak suites, and offline smoke.

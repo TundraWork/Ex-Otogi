@@ -2,10 +2,14 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/mapper"
+	telegramstore "github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/store"
+	telegramupdates "github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/updates"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 	"github.com/gotd/td/bin"
 	gotdtelegram "github.com/gotd/td/telegram"
@@ -310,6 +314,68 @@ func TestCompositionStartsRealGraphAndStopsInReverseOrder(t *testing.T) {
 	}
 	if _, _, err := store.RecoveryReady(context.Background()); err == nil {
 		t.Fatal("real SQLite store remained open after children stopped")
+	}
+}
+
+func TestCompositionPostReadyCaptureFailureFailsDriverAndStopsLaterDelivery(t *testing.T) {
+	api := &compositionAPIFake{}
+	client := &compositionClientSession{api: api, stopped: make(chan struct{})}
+	factory := &compositionClientFactory{client: client, api: api}
+	admitter := &compositionSmokeAdmitter{api: api, submitted: make(chan otogi.EventInput, 2), complete: make(map[otogi.EventID]chan otogi.EventID)}
+	config := validProductionCompositionConfig(t)
+	config.Driver.ClientFactory = factory
+	config.Admitter = admitter
+	composition, err := NewComposition(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := composition.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-admitter.submitted:
+	case <-time.After(time.Second):
+		t.Fatal("startup update was not dispatched")
+	}
+	failing := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateDeleteMessages{Messages: make([]int, mapper.MaxDeleteMessages+1), Pts: 2, PtsCount: 1}}}
+	if err := api.handler(context.Background(), failing); err != nil {
+		t.Fatalf("gotd ingress unexpectedly returned synchronously: %v", err)
+	}
+	select {
+	case <-composition.Driver().Done():
+	case <-time.After(time.Second):
+		t.Fatal("driver did not fail after post-ready degradation")
+	}
+	if composition.Driver().State() != StateFailed || composition.Ready() || composition.Driver().Err() == nil {
+		t.Fatalf("state=%s ready=%v error=%v", composition.Driver().State(), composition.Ready(), composition.Driver().Err())
+	}
+	select {
+	case <-client.stopped:
+	default:
+		t.Fatal("manager failure did not cancel client and sibling children")
+	}
+	store, ok := composition.driver.store.(*telegramstore.Store)
+	if !ok {
+		t.Fatalf("store=%T", composition.driver.store)
+	}
+	ids, err := store.StartupJournalIDs(context.Background(), telegramupdates.StartupJournalLimit)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("pending journal=%v error=%v", ids, err)
+	}
+	_, degraded, reason, err := store.Consistency(context.Background(), "common")
+	if err != nil || !degraded || reason == "" {
+		t.Fatalf("degraded=%v reason=%q error=%v", degraded, reason, err)
+	}
+	later := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateUserTyping{UserID: 9, Action: &tg.SendMessageTypingAction{}}}}
+	if err := api.handler(context.Background(), later); err == nil {
+		t.Fatal("later packet passed failed gate")
+	}
+	idsAfter, err := store.StartupJournalIDs(context.Background(), telegramupdates.StartupJournalLimit)
+	if err != nil || len(idsAfter) != 1 || idsAfter[0] != ids[0] {
+		t.Fatalf("later packet changed pending journal: before=%v after=%v error=%v", ids, idsAfter, err)
+	}
+	if err := composition.Stop(context.Background()); err != nil && !errors.Is(err, composition.Driver().Err()) {
+		t.Fatal(err)
 	}
 }
 

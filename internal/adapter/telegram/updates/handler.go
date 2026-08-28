@@ -49,6 +49,9 @@ var _ telegram.UpdateHandler = (*Downstream)(nil)
 // Handle implements telegram.UpdateHandler. Gotd cursor writes occur separately
 // after this method, so cursor+inbox atomicity is intentionally not claimed.
 func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
+	if err := h.health.failureCause(); err != nil {
+		return err
+	}
 	journalID := JournalID(ctx)
 	if journalID == 0 {
 		payload, err := encodeUpdates(update)
@@ -230,7 +233,7 @@ func (h *Downstream) deletionEvent(deletion mapper.DeleteRecord, conversation st
 }
 func (h *Downstream) fail(ctx context.Context, box string, position int64, reason string, cause error) error {
 	recordErr := h.store.RecordGap(ctx, box, position, reason+": "+cause.Error())
-	h.health.degrade(DegradedReason{Box: box, Position: position, Reason: reason, Err: recordErr})
+	h.health.degrade(DegradedReason{Box: box, Position: position, Reason: reason, Cause: cause, Err: recordErr})
 	return fmt.Errorf("%s: %w", reason, cause)
 }
 

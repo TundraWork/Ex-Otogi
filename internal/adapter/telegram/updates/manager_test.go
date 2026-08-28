@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,6 +243,56 @@ func TestNewManagerUsesCallerSharedHealth(t *testing.T) {
 	callbacks.OnTooLong()
 	if ready, reasons := health.Ready(); ready || len(reasons) != 1 {
 		t.Fatalf("shared health ready=%v reasons=%+v", ready, reasons)
+	}
+}
+
+func TestHealthPublishesFirstDegradationOnceWithoutBlocking(t *testing.T) {
+	health := NewHealth()
+	health.arm()
+	first := errors.New("sqlite full")
+	health.degrade(DegradedReason{Box: "common", Position: 4, Reason: "capture normalized update", Err: first})
+	for i := 0; i < 100; i++ {
+		health.degrade(DegradedReason{Box: "common", Position: int64(i + 5), Reason: "later failure"})
+	}
+	select {
+	case err := <-health.Failed():
+		if !errors.Is(err, first) || !strings.Contains(err.Error(), "capture normalized update") {
+			t.Fatalf("failure=%v", err)
+		}
+	default:
+		t.Fatal("degradation was not published")
+	}
+	select {
+	case err := <-health.Failed():
+		t.Fatalf("second failure=%v", err)
+	default:
+	}
+}
+
+func TestManagerRunReturnsPostReadyHealthFailure(t *testing.T) {
+	health := NewHealth()
+	manager, gate, _, _ := NewManager(ManagerConfig{APIStorage: &memState{found: true}, Journal: &memoryJournal{}, Downstream: telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error { return nil }), GapStore: &gapStore{}, Health: health})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- RunManager(ctx, manager, gate, &fakeAPI{state: &tg.UpdatesState{}}, 42, gotdupdates.AuthOptions{}, func() { close(ready) })
+	}()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("manager not ready")
+	}
+	cause := errors.New("capture failed")
+	health.degrade(DegradedReason{Box: "common", Position: 9, Reason: "capture normalized update", Err: cause})
+	select {
+	case err := <-done:
+		if !errors.Is(err, cause) {
+			t.Fatalf("manager error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manager did not stop after degradation")
 	}
 }
 

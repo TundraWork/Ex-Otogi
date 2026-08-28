@@ -2,6 +2,7 @@ package updates
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -24,23 +25,61 @@ type DegradedReason struct {
 	Position int64
 	// Reason classifies the consistency failure.
 	Reason string
+	// Cause is the operation failure that caused degradation, when available.
+	Cause error
 	// Err is the persistence failure, when durable recording also failed.
 	Err error
 }
 
-// Health tracks update consistency readiness independently of logging.
+// Health tracks update consistency readiness and publishes its first armed failure.
 type Health struct {
 	mu      sync.RWMutex
 	reasons []DegradedReason
+	failure error
+	armed   bool
+	failed  chan error
 }
 
 // NewHealth creates healthy update readiness state.
-func NewHealth() *Health { return &Health{} }
+func NewHealth() *Health { return &Health{failed: make(chan error, 1)} }
 
 func (h *Health) degrade(reason DegradedReason) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.reasons = append(h.reasons, reason)
+	if h.armed && h.failure == nil {
+		h.failure = degradationError(reason)
+		h.failed <- h.failure
+	}
+	h.mu.Unlock()
+}
+
+func degradationError(reason DegradedReason) error {
+	message := fmt.Sprintf("updates degraded for %s at %d: %s", reason.Box, reason.Position, reason.Reason)
+	switch {
+	case reason.Cause != nil && reason.Err != nil:
+		return fmt.Errorf("%s: %w (record degraded state: %w)", message, reason.Cause, reason.Err)
+	case reason.Cause != nil:
+		return fmt.Errorf("%s: %w", message, reason.Cause)
+	case reason.Err != nil:
+		return fmt.Errorf("%s: record degraded state: %w", message, reason.Err)
+	default:
+		return errors.New(message)
+	}
+}
+
+func (h *Health) arm() {
+	h.mu.Lock()
+	h.armed = true
+	h.mu.Unlock()
+}
+
+// Failed returns the bounded one-shot lifecycle failure notification.
+func (h *Health) Failed() <-chan error { return h.failed }
+
+func (h *Health) failureCause() error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.failure
 }
 
 // Ready reports whether update consistency is intact and returns an owned copy
@@ -52,9 +91,12 @@ func (h *Health) Ready() (bool, []DegradedReason) {
 }
 
 func recordGap(ctx context.Context, store GapStore, health *Health, reason DegradedReason) error {
+	if reason.Cause == nil {
+		reason.Cause = reason.Err
+	}
 	durableReason := reason.Reason
-	if reason.Err != nil {
-		durableReason += ": " + reason.Err.Error()
+	if reason.Cause != nil {
+		durableReason += ": " + reason.Cause.Error()
 	}
 	err := store.RecordGap(ctx, reason.Box, reason.Position, durableReason)
 	reason.Err = err
@@ -176,6 +218,15 @@ func RunManager(ctx context.Context, manager *gotdupdates.Manager, gate *Journal
 			callerStart(ctx)
 		}
 	}
+	healthResult := make(chan error, 1)
+	go func() {
+		select {
+		case err := <-gate.health.Failed():
+			healthResult <- err
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	managerErr := manager.Run(ctx, api, userID, options)
 	select {
 	case <-started:
@@ -183,6 +234,14 @@ func RunManager(ctx context.Context, manager *gotdupdates.Manager, gate *Journal
 			return gateErr
 		}
 	default:
+	}
+	select {
+	case healthErr := <-healthResult:
+		return healthErr
+	default:
+		if healthErr := gate.health.failureCause(); healthErr != nil {
+			return healthErr
+		}
 	}
 	return managerErr
 }

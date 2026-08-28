@@ -81,6 +81,10 @@ func newJournalGate(store journalStore, gaps GapStore, health *Health, next tele
 func (g *JournalGate) Handle(ctx context.Context, update tg.UpdatesClass) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if healthErr := g.health.failureCause(); healthErr != nil {
+		g.failed = healthErr
+		return healthErr
+	}
 	if g.failed != nil {
 		return g.failed
 	}
@@ -100,7 +104,11 @@ func (g *JournalGate) Handle(ctx context.Context, update tg.UpdatesClass) error 
 		g.pending = append(g.pending, id)
 		return nil
 	}
-	return g.deliver(ctx, id, update)
+	err = g.deliver(ctx, id, update)
+	if err != nil {
+		g.failed = err
+	}
+	return err
 }
 
 // Open recovers pending journal rows, atomically opens the gate, and replays all
@@ -140,10 +148,12 @@ func (g *JournalGate) Open(ctx context.Context) error {
 			return fmt.Errorf("decode update journal %d: %w", id, err)
 		}
 		if err := g.deliver(ctx, id, update); err != nil {
+			g.failed = err
 			return err
 		}
 	}
 	g.pending = nil
+	g.health.arm()
 	g.open = true
 	return nil
 }

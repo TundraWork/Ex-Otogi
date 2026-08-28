@@ -207,6 +207,26 @@ func TestJournalGateRecoversPendingRowsOnOpen(t *testing.T) {
 	}
 }
 
+func TestJournalGateLatchesDownstreamFailureAndRejectsLaterPackets(t *testing.T) {
+	journal := &memoryJournal{}
+	calls := 0
+	cause := errors.New("capture failed")
+	gate := NewJournalGate(journal, journal, NewHealth(), telegram.UpdateHandlerFunc(func(context.Context, tg.UpdatesClass) error {
+		calls++
+		return cause
+	}))
+	gate.open = true
+	if err := gate.Handle(context.Background(), packet(1)); !errors.Is(err, cause) {
+		t.Fatalf("first error=%v", err)
+	}
+	if err := gate.Handle(context.Background(), packet(2)); !errors.Is(err, cause) {
+		t.Fatalf("second error=%v", err)
+	}
+	if calls != 1 || journal.next != 1 {
+		t.Fatalf("calls=%d journal rows=%d", calls, journal.next)
+	}
+}
+
 func TestCorrelatingHandlerPreservesEachSourceAcrossCombinedDelivery(t *testing.T) {
 	correlation := newJournalCorrelation()
 	first := &tg.UpdateUserStatus{UserID: 1, Status: &tg.UserStatusEmpty{}}
