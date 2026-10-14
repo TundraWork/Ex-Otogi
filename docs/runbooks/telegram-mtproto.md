@@ -93,7 +93,7 @@ export OTOGI_TELEGRAM_SESSION_PATH='/srv/ex-otogi/telegram-smoke/session.json'
 make telegram-smoke
 ```
 
-The target rejects missing configuration before network access. It requires only the application ID, application hash, and existing session path. On success it prints `telegram smoke: session connectivity verified`. This means only that the session connected, was authorized, and loaded its Telegram account; it does not validate SQLite, account binding, or recovery readiness, and it never claims that the full driver is ready. It is deliberately excluded from `make quality`; default quality is offline and must never consume these values or contact Telegram. Unset the environment after the run:
+The target builds the smoke binary into a new private temporary directory with these three variables removed from the Go toolchain environment, runs that binary as the only process that receives them, and deletes the directory on exit. The binary rejects missing configuration before network access. It requires only the application ID, application hash, and existing session path. On success it prints `telegram smoke: session connectivity verified`. This means only that the session connected, was authorized, and loaded its Telegram account; it does not validate SQLite, account binding, or recovery readiness, and it never claims that the full driver is ready. It is deliberately excluded from `make quality`; default quality is offline and must never consume these values or contact Telegram. Unset the environment after the run:
 
 ```sh
 unset OTOGI_TELEGRAM_APP_ID OTOGI_TELEGRAM_APP_HASH OTOGI_TELEGRAM_SESSION_PATH

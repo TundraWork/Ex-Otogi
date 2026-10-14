@@ -38,8 +38,11 @@ test-corpus:
 test-leak:
 	$(GO) test ./internal/kernel ./internal/adapter/scripted ./internal/adapter/telegram ./internal/adapter/telegram/updates
 
+# Build without Telegram credentials so only the final smoke process receives them.
 telegram-smoke:
-	$(GO) run ./cmd/telegram-smoke
+	@dir="$$(mktemp -d)" || exit; trap 'rm -rf "$$dir"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; \
+	(unset OTOGI_TELEGRAM_APP_ID OTOGI_TELEGRAM_APP_HASH OTOGI_TELEGRAM_SESSION_PATH; exec $(GO) build -o "$$dir/telegram-smoke" ./cmd/telegram-smoke) && \
+	"$$dir/telegram-smoke"
 
 smoke:
 	@output="$$($(SMOKE_COMMAND))"; status=$$?; [ $$status -eq 0 ] || exit $$status; [ "$$output" = "echo: hello" ]

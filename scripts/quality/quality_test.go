@@ -123,6 +123,67 @@ func TestSmokePreservesCommandFailure(t *testing.T) {
 	}
 }
 
+func TestTelegramSmokeInjectsCredentialsOnlyIntoFinalProcess(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		exitCode string
+		wantErr  bool
+	}{
+		{name: "success", exitCode: "0"},
+		{name: "failure", exitCode: "3", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			record := t.TempDir()
+			fakeGo := filepath.Join(t.TempDir(), "go")
+			script := "#!/bin/sh\nset -eu\nenv > \"$RECORD_DIR/build.env\"\nprintf '%s\\n' \"$@\" > \"$RECORD_DIR/build.args\"\n" +
+				"[ \"$1\" = build ] && [ \"$2\" = -o ]\n" +
+				"printf '#!/bin/sh\\nenv > \"$RECORD_DIR/run.env\"\\nexit %s\\n' \"$SMOKE_EXIT\" > \"$3\"\nchmod 0700 \"$3\"\n"
+			if err := os.WriteFile(fakeGo, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("make", "--no-print-directory", "GO="+fakeGo, "telegram-smoke")
+			command.Dir = "../.."
+			command.Env = append(os.Environ(),
+				"RECORD_DIR="+record, "SMOKE_EXIT="+test.exitCode,
+				"OTOGI_TELEGRAM_APP_ID=12345", "OTOGI_TELEGRAM_APP_HASH=secret-app-hash", "OTOGI_TELEGRAM_SESSION_PATH=/private/session.json")
+			output, err := command.CombinedOutput()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("make telegram-smoke error = %v, want error %v; output: %s", err, test.wantErr, output)
+			}
+			if strings.Contains(string(output), "secret-app-hash") {
+				t.Fatalf("make output exposed app hash: %s", output)
+			}
+
+			args := strings.Fields(readFile(t, filepath.Join(record, "build.args")))
+			if len(args) != 4 || args[3] != "./cmd/telegram-smoke" {
+				t.Fatalf("build arguments = %q, want build -o <binary> ./cmd/telegram-smoke", args)
+			}
+			if _, err := os.Stat(args[2]); !os.IsNotExist(err) {
+				t.Errorf("built smoke binary %s was not removed: %v", args[2], err)
+			}
+			buildEnv := readFile(t, filepath.Join(record, "build.env"))
+			runEnv := readFile(t, filepath.Join(record, "run.env"))
+			for _, variable := range []string{"OTOGI_TELEGRAM_APP_ID=", "OTOGI_TELEGRAM_APP_HASH=", "OTOGI_TELEGRAM_SESSION_PATH="} {
+				if regexp.MustCompile(`(?m)^` + variable).MatchString(buildEnv) {
+					t.Errorf("build tool environment contains %s", variable)
+				}
+				if !regexp.MustCompile(`(?m)^` + variable).MatchString(runEnv) {
+					t.Errorf("smoke process environment is missing %s", variable)
+				}
+			}
+		})
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func TestArchitectureFixturesFail(t *testing.T) {
 	for _, fixture := range []string{"arch_adapter_kernel", "arch_adapter_module", "arch_adapter_sibling", "arch_adapter_prefix_sibling", "arch_contract_external", "arch_local_internal", "arch_local_pkg"} {
 		t.Run(fixture, func(t *testing.T) {
