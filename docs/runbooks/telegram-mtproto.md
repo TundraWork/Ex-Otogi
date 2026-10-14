@@ -52,8 +52,8 @@ On success it prints `telegram smoke: session connectivity verified`. It is neve
 gotd is pinned at `v0.161.0` with generated `tg.Layer == 228`; `internal/adapter/telegram/store/version_test.go` asserts both.
 
 ```sh
-./scripts/quality/go.sh get github.com/gotd/td@<version>
-./scripts/quality/go.sh mod tidy
+go get github.com/gotd/td@<version>
+go mod tidy
 # update the version and layer in internal/adapter/telegram/store/version_test.go
 make quality
 make telegram-smoke

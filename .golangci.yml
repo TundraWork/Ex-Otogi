@@ -3,6 +3,7 @@ version: "2"
 linters:
   default: none
   enable:
+    - depguard
     - errcheck
     - errorlint
     - gocritic
@@ -12,6 +13,38 @@ linters:
     - staticcheck
     - unused
   settings:
+    # Import boundaries from docs/architecture.md.
+    depguard:
+      rules:
+        contracts:
+          files: ["**/pkg/otogi/**"]
+          allow: [$gostd]
+        # Tests may wire real collaborators (for example the kernel) together.
+        layers:
+          files:
+            - "**/internal/kernel/**"
+            - "**/modules/**"
+            - "**/internal/adapter/**"
+            - "!**/internal/adapter/telegram/**"
+            - "!$test"
+          deny: &repository-internals
+            - pkg: github.com/TundraWork/Ex-Otogi/internal
+              desc: kernel, modules, and adapters import only pkg/otogi from this repository
+            - pkg: github.com/TundraWork/Ex-Otogi/modules
+              desc: kernel, modules, and adapters import only pkg/otogi from this repository
+            - pkg: github.com/TundraWork/Ex-Otogi/cmd
+              desc: kernel, modules, and adapters import only pkg/otogi from this repository
+        # Sub-packages of one adapter may import each other.
+        telegram-adapter:
+          list-mode: lax
+          files: ["**/internal/adapter/telegram/**", "!$test"]
+          allow: [github.com/TundraWork/Ex-Otogi/internal/adapter/telegram]
+          deny: *repository-internals
+        platform-sdks:
+          files: ["$all", "!**/internal/adapter/telegram/**"]
+          deny:
+            - pkg: github.com/gotd/td
+              desc: gotd is confined to internal/adapter/telegram
     revive:
       rules:
         - name: exported
@@ -35,4 +68,4 @@ linters:
         text: SA1019
 
 formatters:
-  enable: []
+  enable: [gofmt]

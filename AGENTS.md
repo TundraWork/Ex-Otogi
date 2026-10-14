@@ -14,7 +14,7 @@ In order:
 ## What not to do
 
 - No hand-rolled infrastructure: when a modern, mature, well-maintained library solves the problem (serialization, HTTP, SQL, migrations, config, logging, lint rules), use it instead of writing our own. Heavy dependencies are fine if they are high quality.
-- No over-engineering: no speculative abstractions, extension points, configuration knobs, or layers without a current use.
+- No over-engineering: no speculative abstractions, configuration knobs, or layers without a current use. Lean is not closed: keep the extension seams the roadmap needs. The rich event model and driver contract stay protocol-neutral, with no platform assumptions in `pkg/otogi` or the kernel. The module contract grows new capabilities additively.
 - No over-defensive programming: no validation, permission checks, retries, fallbacks, or tests that guard against failures that cannot realistically happen. Every safeguard names the real failure it prevents.
 - No data hiding: telemetry, event logs, and diagnostics are never redacted or silently trimmed. Message content is recorded in full. Credentials are kept out simply by not logging them.
 - No ceremony: no compliance-style process, release attestations, or documentation that restates code. Do not test documentation wording.
@@ -36,7 +36,7 @@ Do not ask the user for facts available from the repository or toolchain. Stop f
 ## System invariants
 
 - Single-node Go modular monolith with SQLite on local disk. Modules and drivers are compiled in and registered explicitly at the composition root.
-- Dependencies flow `pkg/otogi` (contracts) ← `internal/kernel` ← `internal/adapter/*`. The kernel never imports adapters or modules. Platform SDK types (gotd, etc.) stay inside their adapter. Enforced by `make arch-check`.
+- Dependencies flow `pkg/otogi` (contracts) ← `internal/kernel` ← `internal/adapter/*`. The kernel never imports adapters or modules. Platform SDK types (gotd, etc.) stay inside their adapter. Enforced by depguard in `make lint`.
 - Every goroutine, queue, timer, and external resource has one owner and stops on shutdown.
 - Queues are bounded. When full, the caller gets an explicit error or blocks under its context; nothing is dropped silently.
 - `context.Context` flows through every blocking call.
@@ -46,7 +46,7 @@ Do not ask the user for facts available from the repository or toolchain. Stop f
 
 ## Go rules
 
-- Toolchain is pinned by `scripts/quality/go.sh`; use it (or `make`) rather than a bare `go`.
+- The `go` directive in `go.mod` selects the toolchain (plain `go` switches to it automatically). golangci-lint is pinned in `tools/go.mod`.
 - `ctx context.Context` is the first parameter of blocking or long-lived operations; never stored in structs.
 - Prefer synchronous code. Add concurrency only when it is needed and its lifecycle is obvious.
 - Construct dependencies explicitly; no mutable package globals or service locators.

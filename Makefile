@@ -1,26 +1,16 @@
 SHELL := /bin/sh
-GO := ./scripts/quality/go.sh
-GOFMT := ./scripts/quality/format.sh
-GOLANGCI_LINT := ./scripts/quality/golangci-lint.sh
-SMOKE_COMMAND := $(GO) run ./cmd/otogi
+GO ?= go
+LINT := $(GO) tool -modfile=tools/go.mod golangci-lint
 TELEGRAM_FUZZTIME ?= 1x
-GO_FILES := $(shell find . -type f -name '*.go' -not -path './.git/*' -not -path './.cache/*' -not -path './scripts/quality/testdata/*')
 
-# Experimental milestone gates; these are not the full release gate.
-.PHONY: format fmt-check lint arch-check test test-race test-fuzz-smoke test-corpus test-leak telegram-smoke smoke quality
+.PHONY: format lint test test-race test-fuzz-smoke smoke telegram-smoke quality
 
 format:
-	$(GOFMT) -w $(GO_FILES)
+	$(LINT) fmt
 
-fmt-check:
-	@output="$$($(GOFMT) -l $(GO_FILES))"; status=$$?; [ $$status -eq 0 ] || exit $$status; [ -z "$$output" ] || { printf '%s\n' "$$output"; exit 1; }
-
+# Formatting, static analysis, Godoc, and import boundaries (depguard).
 lint:
-	$(GOLANGCI_LINT) run ./...
-	$(GO) run ./scripts/quality/cmd/doccheck
-
-arch-check:
-	$(GO) run ./scripts/quality/cmd/archcheck
+	$(LINT) run ./...
 
 test:
 	$(GO) test ./...
@@ -32,19 +22,11 @@ test-fuzz-smoke:
 	$(GO) test -run '^$$' -fuzz '^FuzzConvertEntitiesUTF16$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram/mapper
 	$(GO) test -run '^$$' -fuzz '^FuzzDecodeEventInput$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram
 
-test-corpus:
-	$(GO) test ./pkg/otogi -run 'Corpus'
-
-test-leak:
-	$(GO) test ./internal/kernel ./internal/adapter/scripted ./internal/adapter/telegram ./internal/adapter/telegram/updates
-
-# Build without Telegram credentials so only the final smoke process receives them.
-telegram-smoke:
-	@dir="$$(mktemp -d)" || exit; trap 'rm -rf "$$dir"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; \
-	(unset OTOGI_TELEGRAM_APP_ID OTOGI_TELEGRAM_APP_HASH OTOGI_TELEGRAM_SESSION_PATH; exec $(GO) build -o "$$dir/telegram-smoke" ./cmd/telegram-smoke) && \
-	"$$dir/telegram-smoke"
-
 smoke:
-	@output="$$($(SMOKE_COMMAND))"; status=$$?; [ $$status -eq 0 ] || exit $$status; [ "$$output" = "echo: hello" ]
+	@output="$$($(GO) run ./cmd/otogi)" && [ "$$output" = "echo: hello" ] || { printf 'smoke: got %s\n' "$$output"; exit 1; }
 
-quality: fmt-check lint arch-check test test-race test-fuzz-smoke test-corpus test-leak smoke
+# Opt-in live check against Telegram; never part of quality.
+telegram-smoke:
+	$(GO) run ./cmd/telegram-smoke
+
+quality: lint test-race test-fuzz-smoke smoke

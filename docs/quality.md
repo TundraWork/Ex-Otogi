@@ -2,26 +2,22 @@
 
 ## Toolchain
 
-`scripts/quality/go.sh` pins the Go toolchain (currently Go 1.27.0) and ignores an inherited `GOROOT`. The golangci-lint version is pinned in `scripts/quality/golangci-lint.sh`. Upgrade Go before the pinned release leaves upstream security support.
+The `go` directive in `go.mod` pins the Go toolchain (currently 1.27.0); an older local Go switches to it automatically. golangci-lint is pinned in `tools/go.mod` and runs through `go tool -modfile=tools/go.mod golangci-lint`, so its dependencies stay out of the main module. Upgrade Go before the pinned release leaves upstream security support.
 
 ## Gates
 
 | Command | What it does |
 | --- | --- |
-| `make format` | Apply `gofmt` |
-| `make fmt-check` | Fail on unformatted files |
-| `make lint` | golangci-lint plus the exported-Godoc check |
-| `make arch-check` | Enforce the import rules in `architecture.md` |
-| `make test` | All unit and integration tests |
+| `make format` | Apply formatting (`golangci-lint fmt`, gofmt) |
+| `make lint` | golangci-lint: formatting, static analysis, Godoc (`revive`), and import boundaries (`depguard`) |
+| `make test` | All tests, including goroutine leak checks (`goleak`) and the cross-protocol corpus |
 | `make test-race` | All tests under the race detector |
 | `make test-fuzz-smoke` | Short runs of the fuzz targets |
-| `make test-corpus` | Cross-protocol rich event corpus |
-| `make test-leak` | Goroutine leak checks for long-lived components |
 | `make smoke` | Run the offline scripted bot and check its output |
-| `make quality` | All of the above except `format` |
+| `make quality` | `lint`, `test-race`, `test-fuzz-smoke`, `smoke` |
 | `make telegram-smoke` | Opt-in live Telegram check; never part of `quality` |
 
-`make quality` must pass before a change is complete. `make quality` never contacts Telegram.
+`make quality` must pass before a change is complete. It never contacts Telegram.
 
 ## Testing approach
 

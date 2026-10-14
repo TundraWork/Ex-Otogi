@@ -1,3 +1,0 @@
-package invalidformat
-
-func Broken( {
