@@ -4,7 +4,7 @@ These documents describe the design of the `next` runtime: a self-hosted, single
 
 ## Status
 
-`next` is a work in progress, not a release. It currently contains the core kernel, an echo module, an offline smoke, and a Telegram MTProto user-account driver that can only be started from Go code. The 2026-10-14 cleanup ([contracts](superpowers/specs/2026-10-14-lean-core-contracts-design.md), [Telegram](superpowers/specs/2026-10-14-telegram-on-gotd-design.md)) brought the code in line with these documents.
+`next` is a work in progress, not a release. It runs as a single `otogi` binary configured by `otogi.yaml`, with the core kernel, an echo module, and a Telegram MTProto user-account driver ([runbook](runbooks/core-runtime-smoke.md#run-the-bot)). The 2026-10-14 cleanup ([contracts](superpowers/specs/2026-10-14-lean-core-contracts-design.md), [Telegram](superpowers/specs/2026-10-14-telegram-on-gotd-design.md)) brought the code in line with these documents.
 
 ## Documents
 

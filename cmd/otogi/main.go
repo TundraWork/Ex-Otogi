@@ -1,62 +1,116 @@
-// Command otogi runs the offline smoke: one "hello" event through the kernel
-// and the echo module, printing the captured reply. It becomes the real bot
-// entrypoint in the runnable-bot milestone.
+// Command otogi runs the Ex-Otogi bot. See docs/runbooks for operations.
+//
+//	otogi [-config otogi.yaml] [run]        run until SIGINT or SIGTERM
+//	otogi [-config otogi.yaml] validate     check the config file
+//	otogi [-config otogi.yaml] login ACCOUNT  log a Telegram account in
+//	otogi smoke                             offline smoke test
 package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
-	"github.com/TundraWork/Ex-Otogi/internal/adapter/capture"
-	"github.com/TundraWork/Ex-Otogi/internal/kernel"
-	"github.com/TundraWork/Ex-Otogi/modules/echo"
-	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
+	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram"
 )
 
-func main() {
-	if err := run(context.Background(), os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+func main() { os.Exit(mainExit()) }
+
+func mainExit() int {
+	flags := flag.NewFlagSet("otogi", flag.ContinueOnError)
+	configPath := flags.String("config", "otogi.yaml", "path to the config file")
+	if err := flags.Parse(os.Args[1:]); err != nil {
+		return 2
 	}
+	command, args := "run", flags.Args()
+	if len(args) > 0 {
+		command, args = args[0], args[1:]
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop() // restore default handling: a second signal ends the process
+	}()
+
+	var err error
+	switch command {
+	case "smoke":
+		err = smoke(ctx, os.Stdout)
+	case "run", "validate", "login":
+		err = withConfig(ctx, *configPath, command, args)
+	default:
+		err = fmt.Errorf("unknown command %q (want run, validate, login, or smoke)", command)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "otogi:", err)
+		return 1
+	}
+	return 0
 }
 
-func run(ctx context.Context, output io.Writer) error {
-	captured := capture.New()
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	k, err := kernel.New(kernel.Config{}, []otogi.Module{echo.New()}, nil, captured, log)
+func withConfig(ctx context.Context, path, command string, args []string) error {
+	cfg, err := loadConfig(path)
 	if err != nil {
 		return err
 	}
-	if err := k.Start(ctx); err != nil {
-		return err
+	switch command {
+	case "validate":
+		if _, err := buildModules(cfg.Modules); err != nil {
+			return err
+		}
+		fmt.Printf("%s: OK (%d Telegram account(s), %d module(s))\n", path, len(cfg.Telegram), len(cfg.Modules))
+		return nil
+	case "login":
+		if len(args) != 1 {
+			return errors.New("usage: otogi login ACCOUNT")
+		}
+		return login(ctx, cfg, args[0])
+	default:
+		log, err := newLogger(cfg.Log)
+		if err != nil {
+			return err
+		}
+		return run(ctx, cfg, log)
 	}
-	defer func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = k.Stop(stopCtx)
-	}()
+}
 
-	outcomes := make(chan otogi.Outcome, 1)
-	hello := otogi.Event{
-		Platform: "scripted", Account: "local", Conversation: otogi.Conversation{ID: "smoke"},
-		Action: otogi.ActionMessageCreated, Direction: otogi.DirectionIncoming,
-		OccurredAt: time.Now(), Message: otogi.TextMessage("hello"),
+func login(ctx context.Context, cfg Config, account string) error {
+	for _, a := range cfg.Telegram {
+		if a.Account == account {
+			who, err := telegram.Login(ctx, telegram.SessionConfig{AppID: a.AppID, AppHash: a.AppHash, SessionPath: a.Session}, newTerminal())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Logged in %s as %s\n", account, who)
+			return nil
+		}
 	}
-	if err := k.Submit(ctx, hello, func(o otogi.Outcome) { outcomes <- o }); err != nil {
-		return err
+	return fmt.Errorf("no Telegram account %q in the config", account)
+}
+
+func newLogger(cfg LogConfig) (*slog.Logger, error) {
+	level, err := logLevel(cfg.Level)
+	if err != nil {
+		return nil, err
 	}
-	outcome := <-outcomes
-	if outcome.Err != nil || len(outcome.Modules) != 1 || outcome.Modules[0].Err != nil {
-		return fmt.Errorf("smoke event failed: %+v", outcome)
+	options := &slog.HandlerOptions{Level: level}
+	if cfg.Format == "text" {
+		return slog.New(slog.NewTextHandler(os.Stdout, options)), nil
 	}
-	messages := captured.Messages()
-	if len(messages) != 1 {
-		return fmt.Errorf("smoke: captured %d messages, want 1", len(messages))
+	return slog.New(slog.NewJSONHandler(os.Stdout, options)), nil
+}
+
+func logLevel(name string) (slog.Level, error) {
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(name)); err != nil {
+		return 0, fmt.Errorf("log.level %q: want debug, info, warn, or error", name)
 	}
-	_, err = fmt.Fprintln(output, messages[0].Message.PlainText())
-	return err
+	return level, nil
 }

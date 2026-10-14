@@ -22,7 +22,7 @@ test-fuzz-smoke:
 	$(GO) test -run '^$$' -fuzz '^FuzzConvertEntitiesUTF16$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram/mapper
 
 smoke:
-	@output="$$($(GO) run ./cmd/otogi)" && [ "$$output" = "echo: hello" ] || { printf 'smoke: got %s\n' "$$output"; exit 1; }
+	@output="$$($(GO) run ./cmd/otogi smoke)" && [ "$$output" = "echo: hello" ] || { printf 'smoke: got %s\n' "$$output"; exit 1; }
 
 # Opt-in live check against Telegram; never part of quality.
 telegram-smoke:

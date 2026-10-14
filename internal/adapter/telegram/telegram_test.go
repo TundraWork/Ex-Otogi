@@ -121,7 +121,7 @@ func TestDriverDeliversUpdatesToModulesAndStops(t *testing.T) {
 	h.deliver(t, 2, "hello")
 	select {
 	case e := <-h.seen:
-		if e.Platform != Platform || e.Account != "main:user:42" || e.Message.PlainText() != "hello" {
+		if e.Platform != Platform || e.Account != "main" || e.Message.PlainText() != "hello" {
 			t.Fatalf("module saw %+v", e)
 		}
 	case <-time.After(5 * time.Second):
@@ -180,9 +180,9 @@ func TestDriverDrainLeavesNewRowsPending(t *testing.T) {
 }
 
 func TestDriverStartFailures(t *testing.T) {
-	t.Run("not logged in without authenticator", func(t *testing.T) {
+	t.Run("not logged in", func(t *testing.T) {
 		h := newDriverHarness(t, telegramAPI{authorized: false})
-		if err := h.driver.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		if err := h.driver.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "otogi login") {
 			t.Fatalf("Start = %v", err)
 		}
 		<-h.driver.Done()

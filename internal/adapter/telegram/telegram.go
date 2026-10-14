@@ -43,9 +43,6 @@ type Config struct {
 	SessionPath string
 	// DatabasePath is the account's SQLite database.
 	DatabasePath string
-	// Authenticator supplies credentials when the session is not logged in.
-	// If nil, an unauthorized session is a startup error.
-	Authenticator Authenticator
 	// Kernel receives events.
 	Kernel Submitter
 	// Logger receives driver logs; nil means slog.Default().
@@ -89,7 +86,7 @@ func New(cfg Config) *Driver {
 	return d
 }
 
-// Start opens the database, connects, logs in if needed, and returns once
+// Start opens the database, connects, checks the login, and returns once
 // the driver receives updates, or with the reason it could not.
 func (d *Driver) Start(ctx context.Context) error {
 	d.mu.Lock()
@@ -158,7 +155,7 @@ func (d *Driver) Start(ctx context.Context) error {
 	}
 }
 
-// connected runs once the client is connected: log in, bind the database to
+// connected runs once the client is connected: check the login, bind the database to
 // the account, then run the update manager, dispatcher, and pruner until one
 // fails or ctx ends.
 func (d *Driver) connected(ctx context.Context, c client, store *telegramstore.Store, manager *updates.Manager, handler *inboxHandler, wake chan struct{}, failures <-chan error) error {
@@ -172,7 +169,7 @@ func (d *Driver) connected(ctx context.Context, c client, store *telegramstore.S
 	if err := store.Bind(ctx, d.cfg.AccountKey, self.ID); err != nil {
 		return err
 	}
-	m := mapper.New(mapper.Config{Platform: Platform, Account: otogi.AccountID(d.cfg.AccountKey), AuthorizedUserID: self.ID})
+	m := mapper.New(mapper.Config{Platform: Platform, Account: otogi.AccountID(d.cfg.AccountKey)})
 	d.mu.Lock()
 	d.sender = &sender{api: c.API(), store: store, resolve: peerResolver(handler.peers), updates: manager, ref: m.MessageRef, log: d.log, now: time.Now}
 	d.mu.Unlock()
@@ -207,15 +204,8 @@ func (d *Driver) authorize(ctx context.Context, c client) error {
 	if err != nil {
 		return fmt.Errorf("telegram: check login: %w", err)
 	}
-	if status.Authorized {
-		return nil
-	}
-	if d.cfg.Authenticator == nil {
-		return errors.New("telegram: session is not logged in and no authenticator is configured")
-	}
-	d.log.Info("telegram: logging in")
-	if err := auth.NewFlow(userAuthenticator{d.cfg.Authenticator}, auth.SendCodeOptions{}).Run(ctx, c.Auth()); err != nil {
-		return fmt.Errorf("telegram: log in: %w", err)
+	if !status.Authorized {
+		return fmt.Errorf("telegram: account %q is not logged in; run `otogi login %s`", d.cfg.AccountKey, d.cfg.AccountKey)
 	}
 	return nil
 }

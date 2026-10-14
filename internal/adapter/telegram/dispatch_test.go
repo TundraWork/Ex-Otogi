@@ -35,7 +35,7 @@ func (h *dispatchHarness) run(t *testing.T) func() {
 	t.Helper()
 	d := &dispatcher{
 		store: h.store, kernel: h.kernel, wake: h.wake, poll: 10 * time.Millisecond, log: quiet, now: time.Now,
-		mapper:  mapper.New(mapper.Config{Platform: Platform, Account: "main", AuthorizedUserID: 42}),
+		mapper:  mapper.New(mapper.Config{Platform: Platform, Account: "main"}),
 		pending: map[int64]*rowProgress{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -139,7 +139,7 @@ func TestDispatcherStopsQuietlyWhenKernelRefuses(t *testing.T) {
 	h.kernel.err = fmt.Errorf("draining: %w", otogi.ErrUnavailable)
 	h.insert(t, "a", &tg.UpdateNewMessage{Message: newMessage(1, &tg.PeerUser{UserID: 2}, "a"), Pts: 1, PtsCount: 1})
 	d := &dispatcher{store: h.store, kernel: h.kernel, wake: h.wake, poll: time.Hour, log: quiet, now: time.Now,
-		mapper: mapper.New(mapper.Config{Platform: Platform, Account: "main", AuthorizedUserID: 42}), pending: map[int64]*rowProgress{}}
+		mapper: mapper.New(mapper.Config{Platform: Platform, Account: "main"}), pending: map[int64]*rowProgress{}}
 	if err := d.run(context.Background()); err != nil {
 		t.Fatalf("run = %v, want nil", err)
 	}

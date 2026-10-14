@@ -33,7 +33,7 @@ func newSender(t *testing.T, api *sendAPIFake) (*sender, *telegramstore.Store, *
 	t.Helper()
 	store := openStore(t)
 	var handled []tg.UpdatesClass
-	m := mapper.New(mapper.Config{Platform: Platform, Account: "main", AuthorizedUserID: 42})
+	m := mapper.New(mapper.Config{Platform: Platform, Account: "main"})
 	return &sender{
 		api: api, store: store, log: quiet, now: time.Now, ref: m.MessageRef,
 		resolve: func(_ context.Context, conversation string) (tg.InputPeerClass, error) {
@@ -108,7 +108,7 @@ func TestSendReturnsOtherErrorsWithoutRecording(t *testing.T) {
 }
 
 func TestEncodeMessageEntitiesAndReply(t *testing.T) {
-	m := mapper.New(mapper.Config{Platform: Platform, Account: "main", AuthorizedUserID: 42})
+	m := mapper.New(mapper.Config{Platform: Platform, Account: "main"})
 	msg := otogi.OutboundMessage{Conversation: "user:7", Message: otogi.Message{
 		Roots:     []otogi.PartID{"t"},
 		Parts:     []otogi.Part{{ID: "t", Kind: otogi.PartText, Text: "A😀B", Annotations: []otogi.Annotation{{Offset: 1, Length: 4, Kind: otogi.AnnotationBold}}}},

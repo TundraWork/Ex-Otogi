@@ -1,0 +1,25 @@
+# Ex-Otogi configuration. Copy to otogi.yaml and adjust.
+# ${VAR} in any value is read from the environment; an unset variable is an error.
+# Unknown keys are errors, so typos surface at startup. Check with: otogi validate
+
+data_dir: data            # Telegram state lives in <data_dir>/telegram/<account>/
+shutdown_timeout: 30s
+
+log:
+  level: info             # debug | info | warn | error
+  format: json            # json | text
+
+kernel:
+  workers: 32             # goroutines running module deliveries
+  max_in_flight: 1024     # events admitted but not finished; intake waits beyond this
+  handler_timeout: 10m    # per delivery, unless a module sets its own
+
+telegram:
+  - account: main         # becomes the event account ID; log in with: otogi login main
+    app_id: ${OTOGI_TELEGRAM_APP_ID}
+    app_hash: ${OTOGI_TELEGRAM_APP_HASH}
+    # session: data/telegram/main/session.json
+    # database: data/telegram/main/state.sqlite
+
+modules:
+  echo: {}                # replies "echo: <text>" to every text message

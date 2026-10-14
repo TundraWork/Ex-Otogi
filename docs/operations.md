@@ -6,9 +6,10 @@ One `otogi` process plus its data directory on one host, run under a supervisor 
 
 ## Configuration
 
-- One config file holds all settings, with one section per driver and module. The format is chosen with the runnable-bot milestone.
-- Environment variables may supply secrets and simple deploy-specific overrides. Command-line flags select the config file and the mode.
-- The whole config is validated at startup before anything starts. Errors name the field path. Unknown fields are errors, so typos surface.
+- One YAML file (`otogi.yaml`; see [`otogi.example.yaml`](../otogi.example.yaml)) holds all settings, with one section per Telegram account and module.
+- `${VAR}` in any value is read from the environment, which is how secrets such as the app hash stay out of the file. An unset variable is an error. Use block style for such values; in flow style (`{...}`) quote them.
+- `-config PATH` selects the file (default `otogi.yaml`); the first argument selects the command: `run` (default), `validate`, `login ACCOUNT`, or `smoke`.
+- The whole config is validated at startup before anything starts. Errors name the field or the line. Unknown fields are errors, so typos surface.
 - `otogi validate` checks a config file without starting drivers or touching data.
 - Changing configuration means restarting. Live reload is added only if a concrete need appears.
 

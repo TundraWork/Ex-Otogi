@@ -12,7 +12,7 @@ import (
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
-	return Config{Platform: "telegram", Account: "deployment:42", AuthorizedUserID: 42, IngestedAt: func() time.Time { return time.Unix(200, 0).UTC() }}
+	return Config{Platform: "telegram", Account: "deployment:42", IngestedAt: func() time.Time { return time.Unix(200, 0).UTC() }}
 }
 
 func TestMapNewAndEditMessages(t *testing.T) {

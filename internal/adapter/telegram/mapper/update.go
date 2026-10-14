@@ -17,8 +17,6 @@ type Config struct {
 	Platform otogi.PlatformID
 	// Account is the configured deployment account plus authorized-user identity.
 	Account otogi.AccountID
-	// AuthorizedUserID is the signed-in Telegram user ID.
-	AuthorizedUserID int64
 	// IngestedAt supplies the deterministic capture timestamp.
 	IngestedAt func() time.Time
 }
@@ -336,11 +334,7 @@ func namespaceForBox(box string) string {
 	return NamespaceCommon
 }
 
-func (m *Mapper) accountScope() string {
-	return fmt.Sprintf("%s:user:%d", m.config.Account, m.config.AuthorizedUserID)
-}
-
-func (m *Mapper) account() otogi.AccountID { return otogi.AccountID(m.accountScope()) }
+func (m *Mapper) account() otogi.AccountID { return m.config.Account }
 
 func (m *Mapper) now() time.Time {
 	if m.config.IngestedAt != nil {

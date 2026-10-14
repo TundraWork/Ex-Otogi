@@ -63,7 +63,7 @@ func mainExit() int {
 }
 
 func liveSmoke(ctx context.Context, cfg liveConfig) error {
-	return telegram.RunLiveSmoke(ctx, telegram.LiveSmokeConfig{
+	return telegram.CheckSession(ctx, telegram.SessionConfig{
 		AppID: cfg.AppID, AppHash: cfg.AppHash, SessionPath: cfg.SessionPath,
 	})
 }

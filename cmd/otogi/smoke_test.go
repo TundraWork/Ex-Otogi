@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-func TestRunComposesScriptedEchoBridge(t *testing.T) {
+func TestSmokeEchoesHello(t *testing.T) {
 	t.Parallel()
 	var output bytes.Buffer
 
-	if err := run(context.Background(), &output); err != nil {
-		t.Fatalf("run: %v", err)
+	if err := smoke(context.Background(), &output); err != nil {
+		t.Fatalf("smoke: %v", err)
 	}
 	if got, want := output.String(), "echo: hello\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)

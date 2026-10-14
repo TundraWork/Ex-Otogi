@@ -46,3 +46,6 @@ coverage.out
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local bot configuration
+/otogi.yaml

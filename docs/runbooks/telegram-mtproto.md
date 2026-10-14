@@ -1,6 +1,6 @@
 # Telegram MTProto Driver
 
-The Telegram driver logs in as a **user account** through gotd (MTProto). `telegram.New(Config)` in `internal/adapter/telegram` builds it; `cmd/otogi` will wire it in the runnable-bot milestone. Run commands from the repository root.
+The Telegram driver logs in as a **user account** through gotd (MTProto). `otogi run` starts one driver per account listed under `telegram:` in `otogi.yaml`. Run commands from the repository root.
 
 ## Storage
 
@@ -19,7 +19,13 @@ The schema is managed by goose migrations embedded in the binary and applied at 
 
 ## Login
 
-Startup reuses a valid session. Otherwise the driver runs gotd's login flow with the configured `Authenticator`, which supplies the phone number, the login code, and the 2FA password if one is set. Without an authenticator, an unauthorized session is a startup error. Signing up new accounts is not supported; create the account with an official client first.
+Log in once per account, interactively:
+
+```sh
+otogi login main
+```
+
+It prompts for the phone number, the login code Telegram sends, and the 2FA password if one is set (not echoed), then saves the session and exits. It touches no database. `otogi run` never prompts: if a session is not logged in, startup fails with a message to run `otogi login`. Signing up new accounts is not supported; create the account with an official client first.
 
 ## How updates flow
 
