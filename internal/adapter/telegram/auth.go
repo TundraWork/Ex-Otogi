@@ -3,205 +3,36 @@ package telegram
 import (
 	"context"
 	"errors"
-	"fmt"
 
-	gotdauth "github.com/gotd/td/telegram/auth"
+	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 )
 
-// ErrUnsupportedAuth reports an authorization path the driver deliberately refuses.
-var ErrUnsupportedAuth = errors.New("telegram: unsupported authorization flow")
-
-// AuthFlowKind identifies a refused interactive authorization path.
-type AuthFlowKind string
-
-// Supported and explicitly unsupported authorization flow kinds.
-const (
-	AuthFlowSignup  AuthFlowKind = "signup"
-	AuthFlowQR      AuthFlowKind = "QR"
-	AuthFlowPasskey AuthFlowKind = "passkey"
-	AuthFlowPayment AuthFlowKind = "payment-required code"
-	AuthFlowEmail   AuthFlowKind = "email verification"
-	AuthFlowOAuth   AuthFlowKind = "OAuth"
-)
-
-// UnsupportedAuthorization returns a stable, secret-free refusal.
-func UnsupportedAuthorization(flow AuthFlowKind) error {
-	return fmt.Errorf("%w: %s", ErrUnsupportedAuth, flow)
-}
-
-// CodeDelivery describes a supported login-code channel without exposing gotd types.
-type CodeDelivery string
-
-// Supported login code delivery channels.
-const (
-	CodeDeliveryApp        CodeDelivery = "app"
-	CodeDeliverySMS        CodeDelivery = "sms"
-	CodeDeliveryCall       CodeDelivery = "call"
-	CodeDeliveryFlashCall  CodeDelivery = "flash-call"
-	CodeDeliveryMissedCall CodeDelivery = "missed-call"
-)
-
-// CodeChallenge contains the non-secret prompt metadata needed by an authenticator.
-type CodeChallenge struct {
-	// Delivery identifies the supported code channel.
-	Delivery CodeDelivery
-	// Length is the expected code length when available.
-	Length int
-}
-
-// Authenticator supplies credentials transiently for phone/code/2FA authorization.
+// Authenticator supplies login credentials when the saved session is not
+// authorized. Implementations typically prompt an operator at a terminal.
 type Authenticator interface {
-	// Phone returns the account phone number.
-	Phone(context.Context) (string, error)
-	// Code returns the login code for a challenge.
-	Code(context.Context, CodeChallenge) (string, error)
-	// Password returns the account 2FA password.
-	Password(context.Context) (string, error)
+	// Phone returns the account's phone number in international format.
+	Phone(ctx context.Context) (string, error)
+	// Code returns the login code Telegram just sent.
+	Code(ctx context.Context) (string, error)
+	// Password returns the two-step verification password.
+	Password(ctx context.Context) (string, error)
 }
 
-// AuthenticatorFuncs adapts three callbacks to Authenticator.
-type AuthenticatorFuncs struct {
-	// PhoneFunc supplies the account phone number.
-	PhoneFunc func(context.Context) (string, error)
-	// CodeFunc supplies a login code for a challenge.
-	CodeFunc func(context.Context, CodeChallenge) (string, error)
-	// PasswordFunc supplies the account 2FA password.
-	PasswordFunc func(context.Context) (string, error)
+var errSignUpUnsupported = errors.New("telegram: the phone number has no account; sign up with an official client first")
+
+// userAuthenticator adapts Authenticator to gotd's auth flow. Signing up new
+// accounts is not supported.
+type userAuthenticator struct{ Authenticator }
+
+func (a userAuthenticator) Code(ctx context.Context, _ *tg.AuthSentCode) (string, error) {
+	return a.Authenticator.Code(ctx)
 }
 
-// Phone invokes the configured phone-number callback.
-func (a AuthenticatorFuncs) Phone(ctx context.Context) (string, error) {
-	if a.PhoneFunc == nil {
-		return "", fmt.Errorf("auth phone: %w", ErrInvalidConfig)
-	}
-	return a.PhoneFunc(ctx)
+func (userAuthenticator) AcceptTermsOfService(context.Context, tg.HelpTermsOfService) error {
+	return errSignUpUnsupported
 }
 
-// Code invokes the configured login-code callback.
-func (a AuthenticatorFuncs) Code(ctx context.Context, c CodeChallenge) (string, error) {
-	if a.CodeFunc == nil {
-		return "", fmt.Errorf("auth code: %w", ErrInvalidConfig)
-	}
-	return a.CodeFunc(ctx, c)
-}
-
-// Password invokes the configured 2FA password callback.
-func (a AuthenticatorFuncs) Password(ctx context.Context) (string, error) {
-	if a.PasswordFunc == nil {
-		return "", fmt.Errorf("auth password: %w", ErrInvalidConfig)
-	}
-	return a.PasswordFunc(ctx)
-}
-
-// AuthFlow is the narrow authorization operation consumed by a client session.
-type AuthFlow interface {
-	// Run performs authorization against a gotd flow client.
-	Run(context.Context, gotdauth.FlowClient) error
-}
-
-// NewAuthFlow creates a phone/code/2FA flow with explicit unsupported outcomes.
-func NewAuthFlow(a Authenticator) AuthFlow { return userAuthFlow{auth: userAuthenticator{next: a}} }
-
-type userAuthFlow struct{ auth userAuthenticator }
-
-func (f userAuthFlow) Run(ctx context.Context, client gotdauth.FlowClient) error {
-	phone, err := f.auth.Phone(ctx)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-		return errors.New("telegram: obtain phone credential")
-	}
-	sent, err := client.SendCode(ctx, phone, gotdauth.SendCodeOptions{})
-	if err != nil {
-		return fmt.Errorf("telegram: send authorization code: %w", err)
-	}
-	codeSent, ok := sent.(*tg.AuthSentCode)
-	if !ok {
-		if _, payment := sent.(*tg.AuthSentCodePaymentRequired); payment {
-			return UnsupportedAuthorization(AuthFlowPayment)
-		}
-		if success, authorized := sent.(*tg.AuthSentCodeSuccess); authorized {
-			if _, signup := success.Authorization.(*tg.AuthAuthorizationSignUpRequired); signup {
-				return UnsupportedAuthorization(AuthFlowSignup)
-			}
-			if _, complete := success.Authorization.(*tg.AuthAuthorization); complete {
-				return nil
-			}
-		}
-		return fmt.Errorf("%w: code response", ErrUnsupportedAuth)
-	}
-	code, err := f.auth.Code(ctx, codeSent)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrUnsupportedAuth) {
-			return err
-		}
-		return errors.New("telegram: obtain authorization code")
-	}
-	_, err = client.SignIn(ctx, phone, code, codeSent.PhoneCodeHash)
-	if errors.Is(err, gotdauth.ErrPasswordAuthNeeded) {
-		password, passwordErr := f.auth.Password(ctx)
-		if passwordErr != nil {
-			if errors.Is(passwordErr, context.Canceled) || errors.Is(passwordErr, context.DeadlineExceeded) {
-				return passwordErr
-			}
-			return errors.New("telegram: obtain 2FA credential")
-		}
-		if _, passwordErr = client.Password(ctx, password); passwordErr != nil {
-			return fmt.Errorf("telegram: authorize with 2FA: %w", passwordErr)
-		}
-		return nil
-	}
-	var signup *gotdauth.SignUpRequired
-	if errors.As(err, &signup) {
-		return UnsupportedAuthorization(AuthFlowSignup)
-	}
-	if err != nil {
-		return fmt.Errorf("telegram: authorize with code: %w", err)
-	}
-	return nil
-}
-
-type userAuthenticator struct{ next Authenticator }
-
-func (a userAuthenticator) Phone(ctx context.Context) (string, error)    { return a.next.Phone(ctx) }
-func (a userAuthenticator) Password(ctx context.Context) (string, error) { return a.next.Password(ctx) }
-func (a userAuthenticator) SignUp(context.Context) (gotdauth.UserInfo, error) {
-	return gotdauth.UserInfo{}, UnsupportedAuthorization(AuthFlowSignup)
-}
-func (a userAuthenticator) AcceptTermsOfService(context.Context, tg.HelpTermsOfService) error {
-	return UnsupportedAuthorization(AuthFlowSignup)
-}
-func (a userAuthenticator) Code(ctx context.Context, s *tg.AuthSentCode) (string, error) {
-	challenge, err := codeChallenge(s)
-	if err != nil {
-		return "", err
-	}
-	return a.next.Code(ctx, challenge)
-}
-func codeChallenge(s *tg.AuthSentCode) (CodeChallenge, error) {
-	if s == nil {
-		return CodeChallenge{}, fmt.Errorf("%w: missing code challenge", ErrUnsupportedAuth)
-	}
-	switch v := s.Type.(type) {
-	case *tg.AuthSentCodeTypeApp:
-		return CodeChallenge{CodeDeliveryApp, v.Length}, nil
-	case *tg.AuthSentCodeTypeSMS:
-		return CodeChallenge{CodeDeliverySMS, v.Length}, nil
-	case *tg.AuthSentCodeTypeCall:
-		return CodeChallenge{CodeDeliveryCall, v.Length}, nil
-	case *tg.AuthSentCodeTypeFlashCall:
-		return CodeChallenge{Delivery: CodeDeliveryFlashCall}, nil
-	case *tg.AuthSentCodeTypeMissedCall:
-		return CodeChallenge{CodeDeliveryMissedCall, v.Length}, nil
-	case *tg.AuthSentCodeTypeEmailCode:
-		return CodeChallenge{}, UnsupportedAuthorization(AuthFlowEmail)
-	case *tg.AuthSentCodeTypeSetUpEmailRequired:
-		return CodeChallenge{}, UnsupportedAuthorization(AuthFlowEmail)
-	case *tg.AuthSentCodeTypeFragmentSMS:
-		return CodeChallenge{}, UnsupportedAuthorization(AuthFlowPayment)
-	default:
-		return CodeChallenge{}, fmt.Errorf("%w: code delivery", ErrUnsupportedAuth)
-	}
+func (userAuthenticator) SignUp(context.Context) (auth.UserInfo, error) {
+	return auth.UserInfo{}, errSignUpUnsupported
 }

@@ -3,441 +3,223 @@ package store
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/gotd/td/telegram/peers"
 	"github.com/gotd/td/telegram/updates"
 )
 
-func privateStoreDirectory(t *testing.T) string {
+func open(t *testing.T) (*Store, string) {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-func openTestStore(t *testing.T) *Store {
-	t.Helper()
-	s, err := Open(context.Background(), Config{Path: filepath.Join(privateStoreDirectory(t), "telegram.db"), AccountKey: "deployment", AuthorizedUserID: 42, GotdVersion: "v0.161.0", TGLayer: 228, MaxReaders: 2, BusyTimeout: time.Second})
+	path := filepath.Join(t.TempDir(), "account", "state.sqlite")
+	s, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	return s
+	return s, path
 }
 
-func TestOpenBindingPragmasAndPathValidation(t *testing.T) {
+func TestOpenConfiguresSQLiteAndReopens(t *testing.T) {
 	ctx := context.Background()
-	dir := privateStoreDirectory(t)
-	path := filepath.Join(dir, "db.sqlite")
-	s, err := Open(ctx, Config{Path: path, AccountKey: "a", AuthorizedUserID: 7, GotdVersion: "v", TGLayer: 228})
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := s.Info(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.SchemaVersion != CurrentSchemaVersion || info.JournalMode != "wal" || !info.ForeignKeys || info.BusyTimeoutMS <= 0 || info.MaxOpenConnections < 2 {
-		t.Fatalf("bad info: %+v", info)
-	}
-	_ = s.Close()
-	if _, err := Open(ctx, Config{Path: path, AccountKey: "other", AuthorizedUserID: 7}); !errors.Is(err, ErrAccountMismatch) {
-		t.Fatalf("binding mismatch: %v", err)
-	}
-	if _, err := Open(ctx, Config{Path: ":memory:", AccountKey: "a", AuthorizedUserID: 7}); !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("memory path: %v", err)
-	}
-	if _, err := Open(ctx, Config{Path: dir, AccountKey: "a", AuthorizedUserID: 7}); !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("directory: %v", err)
-	}
-	target := filepath.Join(dir, "target")
-	if err := os.WriteFile(target, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(dir, "link")
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(ctx, Config{Path: link, AccountKey: "a", AuthorizedUserID: 7}); !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("symlink: %v", err)
-	}
-}
-
-func TestGotdStateAndHashesAreScopedAndMissingUpdatesFail(t *testing.T) {
-	ctx := context.Background()
-	s := openTestStore(t)
-	var _ updates.StateStorage = s
-	var _ updates.ChannelAccessHasher = s
-	var _ updates.UserAccessHasher = s
-	if _, found, err := s.GetState(ctx, 42); err != nil || found {
-		t.Fatalf("missing state: %v %v", found, err)
-	}
-	if err := s.SetPts(ctx, 42, 1); !errors.Is(err, ErrStateNotFound) {
-		t.Fatalf("missing update: %v", err)
-	}
-	want := updates.State{Pts: 1, Qts: 2, Date: 3, Seq: 4}
-	if err := s.SetState(ctx, 42, want); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetPts(ctx, 42, 11); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetQts(ctx, 42, 12); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetDate(ctx, 42, 13); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetSeq(ctx, 42, 14); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetDateSeq(ctx, 42, 15, 16); err != nil {
-		t.Fatal(err)
-	}
-	got, found, err := s.GetState(ctx, 42)
-	if err != nil || !found || got != (updates.State{Pts: 11, Qts: 12, Date: 15, Seq: 16}) {
-		t.Fatalf("state: %+v %v %v", got, found, err)
-	}
-	if err := s.SetChannelPts(ctx, 42, 9, 21); err != nil {
-		t.Fatal(err)
-	}
-	pts, found, err := s.GetChannelPts(ctx, 42, 9)
-	if err != nil || !found || pts != 21 {
-		t.Fatalf("channel: %d %v %v", pts, found, err)
-	}
-	var seen []int64
-	if err := s.ForEachChannels(ctx, 42, func(_ context.Context, id int64, pts int) error { seen = append(seen, id); return nil }); err != nil || len(seen) != 1 || seen[0] != 9 {
-		t.Fatalf("foreach: %v %v", seen, err)
-	}
-	if err := s.SetChannelAccessHash(ctx, 42, 9, 99); err != nil {
-		t.Fatal(err)
-	}
-	if h, ok, e := s.GetChannelAccessHash(ctx, 42, 9); e != nil || !ok || h != 99 {
-		t.Fatalf("channel hash %d %v %v", h, ok, e)
-	}
-	if err := s.SetUserAccessHash(ctx, 42, 8, 88); err != nil {
-		t.Fatal(err)
-	}
-	if h, ok, e := s.GetUserAccessHash(ctx, 42, 8); e != nil || !ok || h != 88 {
-		t.Fatalf("user hash %d %v %v", h, ok, e)
-	}
-	if _, ok, _ := s.GetChannelPts(ctx, 99, 9); ok {
-		t.Fatal("channel state leaked between accounts")
-	}
-}
-
-func TestPeerJournalCaptureDedupeAndStartup(t *testing.T) {
-	ctx := context.Background()
-	s := openTestStore(t)
-	now := time.Unix(1000, 0).UTC()
-	peer := Peer{Kind: "channel", ID: 7, AccessHash: 8, Payload: []byte("peer")}
-	if err := s.PutPeer(ctx, peer); err != nil {
-		t.Fatal(err)
-	}
-	if got, ok, e := s.GetPeer(ctx, "channel", 7); e != nil || !ok || string(got.Payload) != "peer" {
-		t.Fatalf("peer %+v %v %v", got, ok, e)
-	}
-	j1, err := s.AppendJournal(ctx, []byte("raw1"), now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	j2, _ := s.AppendJournal(ctx, []byte("raw2"), now.Add(time.Second))
-	ids, err := s.StartupJournalIDs(ctx, 1)
-	if !errors.Is(err, ErrStartupOverflow) || len(ids) != 1 || ids[0] != j1 {
-		t.Fatalf("startup %v %v", ids, err)
-	}
-	in := InboxInput{ID: "event-1", SourceKey: "stable", Conversation: "chat:1", Sequence: 1, Payload: []byte("normalized"), AvailableAt: now}
-	q := &QuarantineInput{SourceKey: "unknown", Kind: "new-layer", Payload: []byte("tl")}
-	inserted, err := s.Capture(ctx, Capture{JournalID: j1, Inbox: &in, Quarantine: q, Locators: []Locator{{Namespace: "common", MessageID: 5, Conversation: "chat:1", Payload: []byte("loc")}}, Box: "common", Position: 10})
-	if err != nil || !inserted {
-		t.Fatalf("capture %v %v", inserted, err)
-	}
-	inserted, err = s.Capture(ctx, Capture{JournalID: j2, Inbox: &in})
-	if err != nil || inserted {
-		t.Fatalf("dedupe %v %v", inserted, err)
-	}
-	row, ok, err := s.Journal(ctx, j1)
-	if err != nil || !ok || row.NormalizedAt == nil {
-		t.Fatalf("journal %+v %v %v", row, ok, err)
-	}
-	loc, ok, err := s.GetLocator(ctx, "common", 5, "chat:1")
-	if err != nil || !ok || loc.Conversation != "chat:1" {
-		t.Fatalf("locator %+v %v %v", loc, ok, err)
-	}
-	pos, degraded, reason, err := s.Consistency(ctx, "common")
-	if err != nil || pos != 10 || degraded || reason != "" {
-		t.Fatalf("consistency %d %v %q %v", pos, degraded, reason, err)
-	}
-	if err := s.RecordGap(ctx, "common", 11, "cursor ahead"); err != nil {
-		t.Fatal(err)
-	}
-	_, degraded, reason, _ = s.Consistency(ctx, "common")
-	if !degraded || reason != "cursor ahead" {
-		t.Fatalf("gap %v %q", degraded, reason)
-	}
-}
-
-func TestCaptureBatchLeavesJournalPendingUntilCompleteDelivery(t *testing.T) {
-	ctx := context.Background()
-	s := openTestStore(t)
-	now := time.Unix(1500, 0).UTC()
-	journalID, err := s.AppendJournal(ctx, []byte("raw"), now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := InboxInput{ID: "first", SourceKey: "first", Conversation: "chat:1", Sequence: 1, Payload: []byte("first"), AvailableAt: now}
-	if _, err := s.Capture(ctx, Capture{JournalID: journalID, KeepJournalPending: true, Inbox: &first}); err != nil {
-		t.Fatal(err)
-	}
-	row, _, err := s.Journal(ctx, journalID)
-	if err != nil || row.NormalizedAt != nil {
-		t.Fatalf("journal normalized before completion: %+v err=%v", row, err)
-	}
-	second := InboxInput{ID: "second", SourceKey: "second", Conversation: "chat:1", Sequence: 2, Payload: []byte("second"), AvailableAt: now}
-	if _, err := s.Capture(ctx, Capture{JournalID: journalID, Inbox: &second}); err != nil {
-		t.Fatal(err)
-	}
-	row, _, err = s.Journal(ctx, journalID)
-	if err != nil || row.NormalizedAt == nil {
-		t.Fatalf("completed journal remained pending: %+v err=%v", row, err)
-	}
-}
-
-func TestCaptureBatchRejectsUnboundedRowsBeforeTransaction(t *testing.T) {
-	ctx := context.Background()
-	s := openTestStore(t)
-	journalID, err := s.AppendJournal(ctx, []byte("raw"), time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	captures := make([]Capture, MaxCaptureRows+1)
-	for i := range captures {
-		captures[i].JournalID = journalID
-	}
-	if _, err := s.CaptureBatch(ctx, captures); !errors.Is(err, ErrInputTooLarge) {
-		t.Fatalf("oversized capture error = %v", err)
-	}
-	row, _, err := s.Journal(ctx, journalID)
-	if err != nil || row.NormalizedAt != nil {
-		t.Fatalf("oversized capture mutated journal: %+v err=%v", row, err)
-	}
-}
-
-func TestClaimsPreserveConversationOrderAndRecoverLeases(t *testing.T) {
-	ctx := context.Background()
-	s := openTestStore(t)
-	now := time.Unix(2000, 0).UTC()
-	for _, in := range []InboxInput{{ID: "a1", SourceKey: "s1", Conversation: "a", Sequence: 1, Payload: []byte("1"), AvailableAt: now}, {ID: "a2", SourceKey: "s2", Conversation: "a", Sequence: 2, Payload: []byte("2"), AvailableAt: now}, {ID: "b1", SourceKey: "s3", Conversation: "b", Sequence: 1, Payload: []byte("3"), AvailableAt: now}} {
-		if ok, err := s.EnqueueInbox(ctx, in); err != nil || !ok {
-			t.Fatalf("enqueue %v %v", ok, err)
+	s, path := open(t)
+	for pragma, want := range map[string]string{"journal_mode": "wal", "synchronous": "1", "foreign_keys": "1", "busy_timeout": "5000"} {
+		var got string
+		if err := s.db.QueryRowContext(ctx, "PRAGMA "+pragma).Scan(&got); err != nil || got != want {
+			t.Errorf("PRAGMA %s = %q, %v; want %q", pragma, got, err, want)
 		}
 	}
-	c1, ok, err := s.ClaimNext(ctx, "w1", now, time.Minute)
-	if err != nil || !ok || c1.ID != "a1" {
-		t.Fatalf("claim1 %+v %v %v", c1, ok, err)
-	}
-	c2, ok, err := s.ClaimNext(ctx, "w2", now, time.Minute)
-	if err != nil || !ok || c2.ID != "b1" {
-		t.Fatalf("claim2 %+v %v %v", c2, ok, err)
-	}
-	if err := s.CompleteClaim(ctx, "b1", "w2", now); err != nil {
+	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ReleaseClaim(ctx, "a1", "w1", now.Add(time.Hour), "capacity"); err != nil {
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	_ = reopened.Close()
+}
+
+func TestBind(t *testing.T) {
+	ctx := context.Background()
+	s, _ := open(t)
+	if err := s.Bind(ctx, "main", 42); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := s.ClaimNext(ctx, "w", now, time.Minute); ok {
-		t.Fatal("later conversation row overtook delayed head")
+	if err := s.Bind(ctx, "main", 42); err != nil {
+		t.Fatalf("rebinding same account: %v", err)
 	}
-	c, ok, err := s.ClaimNext(ctx, "w", now.Add(2*time.Hour), time.Minute)
-	if err != nil || !ok || c.ID != "a1" || c.Attempts != 2 {
-		t.Fatalf("reclaim %+v %v %v", c, ok, err)
-	}
-	if err := s.CompleteClaim(ctx, "a1", "wrong", now); !errors.Is(err, ErrClaimConflict) {
-		t.Fatalf("owner conflict %v", err)
-	}
-	if err := s.CompleteClaim(ctx, "a1", "w", now); err != nil {
-		t.Fatal(err)
-	}
-	c, ok, err = s.ClaimNext(ctx, "w", now.Add(2*time.Hour), time.Minute)
-	if err != nil || !ok || c.ID != "a2" {
-		t.Fatalf("ordered successor %+v %v %v", c, ok, err)
-	}
-	if err := s.FailClaim(ctx, "a2", "w", "invalid", now); err != nil {
-		t.Fatal(err)
+	for _, other := range []struct {
+		account string
+		user    int64
+	}{{"other", 42}, {"main", 7}} {
+		if err := s.Bind(ctx, other.account, other.user); !errors.Is(err, ErrAccountMismatch) {
+			t.Errorf("Bind(%q, %d) = %v, want ErrAccountMismatch", other.account, other.user, err)
+		}
 	}
 }
 
-func TestClaimsProgressDistinctConversationBeforeLaterSameConversationRow(t *testing.T) {
+func TestUpdateState(t *testing.T) {
 	ctx := context.Background()
-	s := openTestStore(t)
-	now := time.Unix(2500, 0).UTC()
-	for _, in := range []InboxInput{
-		{ID: "a1", SourceKey: "fair-a1", Conversation: "a", Sequence: 1, Payload: []byte("1"), AvailableAt: now},
-		{ID: "a2", SourceKey: "fair-a2", Conversation: "a", Sequence: 2, Payload: []byte("2"), AvailableAt: now},
-		{ID: "b1", SourceKey: "fair-b1", Conversation: "b", Sequence: 1, Payload: []byte("3"), AvailableAt: now},
+	s, _ := open(t)
+	if _, found, err := s.GetState(ctx, 1); found || err != nil {
+		t.Fatalf("empty GetState found=%v err=%v", found, err)
+	}
+	// Individual setters work even before SetState.
+	if err := s.SetPts(ctx, 1, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetState(ctx, 1, updates.State{Pts: 10, Qts: 2, Date: 3, Seq: 4}); err != nil {
+		t.Fatal(err)
+	}
+	for _, set := range []func() error{
+		func() error { return s.SetPts(ctx, 1, 11) },
+		func() error { return s.SetQts(ctx, 1, 12) },
+		func() error { return s.SetDateSeq(ctx, 1, 13, 14) },
 	} {
-		if ok, err := s.EnqueueInbox(ctx, in); err != nil || !ok {
-			t.Fatalf("enqueue %v %v", ok, err)
+		if err := set(); err != nil {
+			t.Fatal(err)
 		}
 	}
-	first, ok, err := s.ClaimNext(ctx, "worker", now, time.Minute)
-	if err != nil || !ok || first.ID != "a1" {
-		t.Fatalf("first claim=%+v ok=%v err=%v", first, ok, err)
-	}
-	if err := s.CompleteClaim(ctx, first.ID, "worker", now); err != nil {
-		t.Fatal(err)
-	}
-	second, ok, err := s.ClaimNextAfter(ctx, "worker", now, time.Minute, first.Conversation)
-	if err != nil || !ok || second.ID != "b1" {
-		t.Fatalf("distinct conversation did not progress: claim=%+v ok=%v err=%v", second, ok, err)
+	got, found, err := s.GetState(ctx, 1)
+	if err != nil || !found || got != (updates.State{Pts: 11, Qts: 12, Date: 13, Seq: 14}) {
+		t.Fatalf("GetState = %+v, %v, %v", got, found, err)
 	}
 }
 
-func TestClaimsPreserveInsertionOrderForEqualConversationSequence(t *testing.T) {
+func TestChannelStateAndAccessHashes(t *testing.T) {
 	ctx := context.Background()
-	s := openTestStore(t)
-	now := time.Unix(2600, 0).UTC()
-	for _, in := range []InboxInput{
-		{ID: "first", SourceKey: "equal-first", Conversation: "a", Sequence: 7, Payload: []byte("1"), AvailableAt: now},
-		{ID: "second", SourceKey: "equal-second", Conversation: "a", Sequence: 7, Payload: []byte("2"), AvailableAt: now},
-	} {
-		if ok, err := s.EnqueueInbox(ctx, in); err != nil || !ok {
-			t.Fatalf("enqueue %v %v", ok, err)
+	s, _ := open(t)
+	for id, pts := range map[int64]int{100: 1, 200: 2} {
+		if err := s.SetChannelPts(ctx, 1, id, pts); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetChannelAccessHash(ctx, 1, id, id*10); err != nil {
+			t.Fatal(err)
 		}
 	}
-	first, ok, err := s.ClaimNext(ctx, "worker", now, time.Minute)
-	if err != nil || !ok || first.ID != "first" {
-		t.Fatalf("first claim=%+v ok=%v err=%v", first, ok, err)
+	seen := map[int64]int{}
+	// The callback queries the store, as gotd does; this must not deadlock on
+	// the single connection.
+	err := s.ForEachChannels(ctx, 1, func(ctx context.Context, id int64, pts int) error {
+		if hash, found, err := s.GetChannelAccessHash(ctx, 1, id); err != nil || !found || hash != id*10 {
+			t.Errorf("channel %d hash = %d, %v, %v", id, hash, found, err)
+		}
+		seen[id] = pts
+		return nil
+	})
+	if err != nil || len(seen) != 2 || seen[100] != 1 || seen[200] != 2 {
+		t.Fatalf("ForEachChannels saw %v, %v", seen, err)
 	}
-	if err := s.CompleteClaim(ctx, first.ID, "worker", now); err != nil {
+	// The update manager's hashers and gotd's peers.Manager share one table.
+	if err := s.SetUserAccessHash(ctx, 1, 7, 70); err != nil {
 		t.Fatal(err)
 	}
-	second, ok, err := s.ClaimNext(ctx, "worker", now, time.Minute)
-	if err != nil || !ok || second.ID != "second" {
-		t.Fatalf("second claim=%+v ok=%v err=%v", second, ok, err)
+	if v, found, err := s.Find(ctx, peers.Key{Prefix: usersPrefix, ID: 7}); err != nil || !found || v.AccessHash != 70 {
+		t.Fatalf("peers.Find user = %+v, %v, %v", v, found, err)
 	}
 }
 
-func TestRetentionCompactionAndAccountErasure(t *testing.T) {
+func TestPeersStorage(t *testing.T) {
 	ctx := context.Background()
-	s := openTestStore(t)
-	old := time.Now().UTC().Add(-40 * 24 * time.Hour)
-	_, _ = s.EnqueueInbox(ctx, InboxInput{ID: "old", SourceKey: "old-source", Conversation: "a", Sequence: 1, Payload: []byte("secret"), AvailableAt: old})
-	c, _, _ := s.ClaimNext(ctx, "w", old, time.Hour)
-	_ = c
-	if err := s.CompleteClaim(ctx, "old", "w", old); err != nil {
+	s, _ := open(t)
+	key := peers.Key{Prefix: usersPrefix, ID: 9}
+	if err := s.Save(ctx, key, peers.Value{AccessHash: 90}); err != nil {
 		t.Fatal(err)
 	}
-	jid, _ := s.AppendJournal(ctx, []byte("raw"), old)
-	if err := s.MarkJournalNormalized(ctx, jid, old); err != nil {
+	if err := s.SavePhone(ctx, "+100", key); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Compact(ctx, time.Now().UTC()); err != nil {
+	gotKey, value, found, err := s.FindPhone(ctx, "+100")
+	if err != nil || !found || gotKey != key || value.AccessHash != 90 {
+		t.Fatalf("FindPhone = %+v, %+v, %v, %v", gotKey, value, found, err)
+	}
+	if hash, err := s.GetContactsHash(ctx); err != nil || hash != 0 {
+		t.Fatalf("empty contacts hash = %d, %v", hash, err)
+	}
+	if err := s.SaveContactsHash(ctx, 5); err != nil {
 		t.Fatal(err)
 	}
-	row, ok, err := s.GetInbox(ctx, "old")
-	if err != nil || ok || row.Payload != nil {
-		t.Fatalf("expired inbox %+v %v %v", row, ok, err)
-	}
-	if _, ok, _ := s.Journal(ctx, jid); ok {
-		t.Fatal("expired normalized journal retained")
-	}
-	if err := s.EraseAccount(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, found, _ := s.GetState(ctx, 42); found {
-		t.Fatal("state survived erasure")
-	}
-	if _, ok, _ := s.GetPeer(ctx, "channel", 7); ok {
-		t.Fatal("peer survived erasure")
+	if hash, err := s.GetContactsHash(ctx); err != nil || hash != 5 {
+		t.Fatalf("contacts hash = %d, %v", hash, err)
 	}
 }
 
-func TestSendIntentTransitionsConflictRestartAndRetention(t *testing.T) {
+func TestInbox(t *testing.T) {
 	ctx := context.Background()
-	s := openTestStore(t)
-	now := time.Unix(3000, 0).UTC()
-	in := SendIntent{Key: "key", RequestDigest: []byte("digest"), RandomID: 99, PeerLocator: []byte("peer")}
-	got, created, err := s.CreateSendIntent(ctx, in, now)
-	if err != nil || !created || got.Status != SendCreated {
-		t.Fatalf("create %+v %v %v", got, created, err)
+	s, _ := open(t)
+	now := time.Unix(1000, 0)
+	for _, key := range []string{"a", "b", "a", "c"} {
+		if _, err := s.InsertInbox(ctx, key, []byte(key), now); err != nil {
+			t.Fatal(err)
+		}
 	}
-	_, created, err = s.CreateSendIntent(ctx, in, now)
-	if err != nil || created {
-		t.Fatalf("idempotent %v %v", created, err)
+	if inserted, err := s.InsertInbox(ctx, "b", []byte("again"), now); err != nil || inserted {
+		t.Fatal("duplicate dedup key inserted")
 	}
-	other := in
-	other.RequestDigest = []byte("other")
-	if _, _, err = s.CreateSendIntent(ctx, other, now); !errors.Is(err, ErrSendConflict) {
-		t.Fatalf("digest conflict %v", err)
+	rows, err := s.PendingInbox(ctx, 0, 10)
+	if err != nil || len(rows) != 3 || string(rows[0].Payload) != "a" || string(rows[2].Payload) != "c" {
+		t.Fatalf("pending = %+v, %v", rows, err)
 	}
-	if err := s.TransitionSend(ctx, "key", SendCreated, SendSucceeded, SendTransition{At: now}); !errors.Is(err, ErrInvalidTransition) {
-		t.Fatalf("invalid edge %v", err)
-	}
-	if err := s.TransitionSend(ctx, "key", SendCreated, SendInFlight, SendTransition{At: now}); err != nil {
+	if err := s.MarkInboxDone(ctx, rows[0].ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.TransitionSend(ctx, "key", SendCreated, SendInFlight, SendTransition{At: now}); !errors.Is(err, ErrSendConflict) {
-		t.Fatalf("stale edge %v", err)
-	}
-	retry := now.Add(time.Hour)
-	if err := s.TransitionSend(ctx, "key", SendInFlight, SendRetryable, SendTransition{At: now, RetryAt: &retry, Error: "flood"}); err != nil {
+	if err := s.MarkInboxFailed(ctx, rows[1].ID, "bad mapping", now); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := s.RecoverableSends(ctx, now.Add(2*time.Hour))
-	if err != nil || len(pending) != 1 || pending[0].RandomID != 99 {
-		t.Fatalf("recoverable %+v %v", pending, err)
+	pending, _ := s.PendingInbox(ctx, 0, 10)
+	if len(pending) != 1 || pending[0].ID != rows[2].ID {
+		t.Fatalf("pending after finishing two = %+v", pending)
 	}
-	if err := s.TransitionSend(ctx, "key", SendRetryable, SendInFlight, SendTransition{At: retry}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.TransitionSend(ctx, "key", SendInFlight, SendSucceeded, SendTransition{At: retry, ProviderMessageID: 123}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.PurgeTerminalSends(ctx, retry.Add(31*24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, _ := s.GetSendIntent(ctx, "key"); ok {
-		t.Fatal("terminal send retained")
-	}
-	amb := SendIntent{Key: "amb", RequestDigest: []byte("d"), RandomID: 100}
-	_, _, _ = s.CreateSendIntent(ctx, amb, oldTime())
-	_ = s.TransitionSend(ctx, "amb", SendCreated, SendInFlight, SendTransition{At: oldTime()})
-	_ = s.TransitionSend(ctx, "amb", SendInFlight, SendAmbiguous, SendTransition{At: oldTime()})
-	_ = s.PurgeTerminalSends(ctx, time.Now().UTC())
-	if _, ok, _ := s.GetSendIntent(ctx, "amb"); !ok {
-		t.Fatal("ambiguous send purged")
+	if after, _ := s.PendingInbox(ctx, rows[2].ID, 10); len(after) != 0 {
+		t.Fatalf("pending after last ID = %+v", after)
 	}
 }
 
-func TestCaptureBatchCompletesCorrelatedSendAtomically(t *testing.T) {
+func TestRecordsAndPrune(t *testing.T) {
 	ctx := context.Background()
-	s := openTestStore(t)
-	now := time.Unix(4000, 0).UTC()
-	_, _, err := s.CreateSendIntent(ctx, SendIntent{Key: "correlated", RequestDigest: []byte("digest"), RandomID: 77}, now)
-	if err != nil {
+	s, _ := open(t)
+	old, now := time.Unix(0, 0), time.Unix(0, 0).Add(LocatorRetention+time.Hour)
+
+	if err := s.PutLocator(ctx, "common", 5, "user:1", old); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.TransitionSend(ctx, "correlated", SendCreated, SendInFlight, SendTransition{At: now}); err != nil {
+	if conv, found, err := s.FindLocator(ctx, "common", 5); err != nil || !found || conv != "user:1" {
+		t.Fatalf("FindLocator = %q, %v, %v", conv, found, err)
+	}
+	if err := s.PutSent(ctx, Sent{Key: "k", Conversation: "user:1", MessageID: 9}, old); err != nil {
 		t.Fatal(err)
 	}
-	journal, err := s.AppendJournal(ctx, []byte("packet"), now)
-	if err != nil {
+	if sent, found, err := s.FindSent(ctx, "k"); err != nil || !found || sent.MessageID != 9 {
+		t.Fatalf("FindSent = %+v, %v, %v", sent, found, err)
+	}
+	if err := s.RecordGap(ctx, "too_long", 0, old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CaptureBatch(ctx, []Capture{{JournalID: journal, CapturedAt: now, SendCorrelations: []SendCorrelation{{RandomID: 77, MessageID: 88}}}}); err != nil {
+	for _, key := range []string{"done", "pending"} {
+		if _, err := s.InsertInbox(ctx, key, []byte(key), old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, _ := s.PendingInbox(ctx, 0, 10)
+	_ = s.MarkInboxDone(ctx, rows[0].ID, old)
+
+	if err := s.Prune(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	got, ok, err := s.GetSendIntent(ctx, "correlated")
-	if err != nil || !ok || got.Status != SendSucceeded || got.ProviderMessageID != 88 {
-		t.Fatalf("got=%+v ok=%v err=%v", got, ok, err)
+	if _, found, _ := s.FindLocator(ctx, "common", 5); found {
+		t.Error("old locator survived prune")
+	}
+	if _, found, _ := s.FindSent(ctx, "k"); found {
+		t.Error("old send survived prune")
+	}
+	if pending, _ := s.PendingInbox(ctx, 0, 10); len(pending) != 1 {
+		t.Errorf("prune touched pending rows: %+v", pending)
+	}
+	var finished int
+	_ = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM inbox WHERE state = 'done'").Scan(&finished)
+	if finished != 0 {
+		t.Error("old done inbox row survived prune")
 	}
 }
-
-func oldTime() time.Time { return time.Unix(1, 0).UTC() }

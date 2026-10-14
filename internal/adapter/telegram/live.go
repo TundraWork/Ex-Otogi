@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
+	"github.com/gotd/td/session"
 	gotdtelegram "github.com/gotd/td/telegram"
 )
 
@@ -21,14 +21,7 @@ type LiveSmokeConfig struct {
 
 // RunLiveSmoke verifies an existing session against Telegram without prompting for credentials.
 func RunLiveSmoke(ctx context.Context, cfg LiveSmokeConfig) error {
-	if cfg.AppID <= 0 || strings.TrimSpace(cfg.AppHash) == "" || strings.TrimSpace(cfg.SessionPath) == "" {
-		return ErrInvalidConfig
-	}
-	storage, err := NewSessionStorage(cfg.SessionPath)
-	if err != nil {
-		return err
-	}
-	client := gotdtelegram.NewClient(cfg.AppID, cfg.AppHash, gotdtelegram.Options{SessionStorage: storage})
+	client := gotdtelegram.NewClient(cfg.AppID, cfg.AppHash, gotdtelegram.Options{SessionStorage: &session.FileStorage{Path: cfg.SessionPath}})
 	return client.Run(ctx, func(ctx context.Context) error {
 		status, err := client.Auth().Status(ctx)
 		if err != nil {

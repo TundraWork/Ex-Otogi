@@ -23,6 +23,7 @@ type OutboundMessage struct {
 // Messenger delivers outbound messages. Drivers implement it; with several
 // drivers, the composition root routes by Platform and Account.
 type Messenger interface {
-	// Send delivers msg or returns why it could not.
-	Send(ctx context.Context, msg OutboundMessage) error
+	// Send delivers msg, or recognizes msg.Key as already delivered, and
+	// returns a reference to the sent message.
+	Send(ctx context.Context, msg OutboundMessage) (EventRef, error)
 }

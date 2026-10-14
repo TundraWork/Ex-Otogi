@@ -45,11 +45,11 @@ type messenger struct {
 	sent []otogi.OutboundMessage
 }
 
-func (m *messenger) Send(_ context.Context, msg otogi.OutboundMessage) error {
+func (m *messenger) Send(_ context.Context, msg otogi.OutboundMessage) (otogi.EventRef, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sent = append(m.sent, msg)
-	return nil
+	return otogi.EventRef{Platform: msg.Platform, Account: msg.Account, Conversation: msg.Conversation, SourceEvent: "sent"}, nil
 }
 
 func event(conversation string, text string) otogi.Event {
@@ -318,10 +318,14 @@ func TestSendAddressesTheEventAndRejectsReusedSlots(t *testing.T) {
 	m := &messenger{}
 	var reuse error
 	echo := module("echo", func(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
-		if err := inv.Send(ctx, "reply", e.Message); err != nil {
+		ref, err := inv.Send(ctx, "reply", e.Message)
+		if err != nil {
 			return err
 		}
-		reuse = inv.Send(ctx, "reply", e.Message)
+		if ref.SourceEvent != "sent" {
+			return fmt.Errorf("Send returned %+v", ref)
+		}
+		_, reuse = inv.Send(ctx, "reply", e.Message)
 		return nil
 	})
 	k := start(t, Config{}, []otogi.Module{echo}, nil, m)

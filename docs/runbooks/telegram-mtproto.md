@@ -1,42 +1,81 @@
 # Telegram MTProto Driver
 
-The Telegram driver logs in as a **user account** through gotd (MTProto). There is no operator entrypoint yet: `NewComposition` in `internal/adapter/telegram` builds the full driver, and `cmd/otogi` will wire it in the runnable-bot milestone. Run commands from the repository root.
+The Telegram driver logs in as a **user account** through gotd (MTProto). `telegram.New(Config)` in `internal/adapter/telegram` builds it; `cmd/otogi` will wire it in the runnable-bot milestone. Run commands from the repository root.
 
 ## Storage
 
-Each account uses two files in its own directory:
+Each account uses two files, normally in one directory:
 
-```sh
-install -d -m 0700 /srv/ex-otogi/telegram/<account>
-# session: /srv/ex-otogi/telegram/<account>/session.json  (gotd login session)
-# state:   /srv/ex-otogi/telegram/<account>/state.sqlite  (inbox, update state, send records)
+```text
+/srv/ex-otogi/telegram/<account>/session.json  # gotd login session
+/srv/ex-otogi/telegram/<account>/state.sqlite  # inbox, update state, peers, locators, sends, gaps
 ```
 
-The database is bound on first use to the configured account key, the authorized Telegram user ID, the gotd version, and the Telegram layer. Startup refuses a database bound to a different account.
+The driver creates missing directories with mode `0700`. Keep the directory readable only by the service user: the session is a logged-in account, and the database holds full message content.
 
-Current code is stricter than `docs/security.md` requires. It insists on absolute, distinct, local paths, a `0700` parent owned by the service user, `0600` single-link files, and Linux. These checks are scheduled for simplification.
+On first use the database is bound to the configured account key and the logged-in Telegram user. Startup refuses a database bound to a different account or user. gotd upgrades do not affect the binding.
+
+The schema is managed by goose migrations embedded in the binary and applied at startup. Databases created before the 2026-10-14 rewrite are not migrated: delete them and let Telegram re-sync.
 
 ## Login
 
-Startup reuses a valid session. Otherwise the driver calls an injected authenticator for the phone number, login code (app, SMS, call, flash-call, or missed-call), and 2FA password. Signup, QR login, and other flows are not supported. Until `cmd/otogi` provides an interactive login, a session must be created by code that supplies the authenticator.
+Startup reuses a valid session. Otherwise the driver runs gotd's login flow with the configured `Authenticator`, which supplies the phone number, the login code, and the 2FA password if one is set. Without an authenticator, an unauthorized session is a startup error. Signing up new accounts is not supported; create the account with an official client first.
+
+## How updates flow
+
+1. gotd's update manager receives updates and calls the driver's inbox handler.
+2. The handler writes new, edited, and deleted message updates to the `inbox` table. Writes are deduplicated by (box, pts), so gotd re-deliveries are harmless.
+3. gotd saves its position only after the handler returns.
+4. A dispatcher maps inbox rows to events in order and submits them to the kernel. A row is marked done when all its events finish.
+5. Other update kinds (typing, read receipts, and so on) are not stored yet.
+
+If an inbox write fails, the driver stops gotd from saving positions and fails. After the process restarts, gotd resumes from its last saved position, so nothing is skipped.
 
 ## Backup and restore
 
-Follow [`../operations.md`](../operations.md#backup-and-restore): copy the account directory with the driver stopped, or run `sqlite3 state.sqlite ".backup <dest>"` and copy `session.json` while it runs. To restore, stop, put both files back, and start. Telegram catches up on updates newer than the restored state.
+Follow [`../operations.md`](../operations.md#backup-and-restore).
 
-## Update gaps
+- **Backup:** copy the account directory with the driver stopped, or, while it runs, run `sqlite3 state.sqlite ".backup <dest>"` and copy `session.json`.
+- **Restore:** stop the bot, put both files back, and start it. Telegram catches up on updates newer than the restored state. Inbox rows that were pending in the backup are processed again; sends are not repeated.
 
-When Telegram cannot provide missed updates, the driver records a degraded recovery entry (box, position, cause) in `state.sqlite`.
+## Gaps
 
-Current code still differs from the design in [`../reliability.md`](../reliability.md). A degraded entry blocks readiness until it is acknowledged, and there is no operator command to acknowledge it. Moving to "record the gap and continue" is scheduled for the code cleanup.
+When Telegram cannot provide missed updates, gotd reports it and the driver records a row in the `gaps` table and logs a warning. The bot keeps running. Gap kinds:
+
+| Kind | Meaning |
+| --- | --- |
+| `too_long` | The account was offline too long; Telegram returned no full history. |
+| `channel_too_long` | The same, for one channel. |
+| `channel_inaccessible` | The account lost access to a channel. |
+| `no_saved_state` | No saved update state, which is normal on first start. |
+| `no_saved_channel_state` | A channel's saved state was incomplete. |
+
+Inspect them with:
+
+```sh
+sqlite3 state.sqlite "SELECT kind, channel_id, datetime(detected_at/1000, 'unixepoch') FROM gaps"
+```
+
+## Failed rows
+
+An inbox row that cannot be decoded or mapped is marked `failed` and keeps its error. This is a mapper bug: the row will not succeed on retry. Inspect failed rows with:
+
+```sh
+sqlite3 state.sqlite "SELECT id, error FROM inbox WHERE state = 'failed'"
+```
 
 ## Retention
 
-`Store.Compact` removes journal rows after 24 hours, strips payloads from finished inbox, quarantine, and locator rows after 7 days, and removes them after 30 days. Nothing schedules it automatically yet.
+The driver prunes hourly:
+- finished inbox rows after 7 days;
+- message locators, which route deletions, after 30 days;
+- sent-message records after 7 days.
+
+Pending rows are never pruned.
 
 ## Live smoke
 
-Checks that an existing, already-authorized session can connect and load its account. It does not exercise SQLite, recovery, or the full driver.
+Checks that an existing, already-authorized session can connect and load its account. It does not exercise the database or the full driver.
 
 ```sh
 export OTOGI_TELEGRAM_APP_ID='<app-id>'
@@ -49,16 +88,11 @@ On success it prints `telegram smoke: session connectivity verified`. It is neve
 
 ## gotd upgrade
 
-gotd is pinned at `v0.161.0` with generated `tg.Layer == 228`; `internal/adapter/telegram/store/version_test.go` asserts both.
-
 ```sh
 go get github.com/gotd/td@<version>
 go mod tidy
-# update the version and layer in internal/adapter/telegram/store/version_test.go
 make quality
 make telegram-smoke
 ```
 
-Review mapper and codec changes for new or changed constructors.
-
-Current code binds `state.sqlite` to the exact gotd version and layer. After an upgrade, startup refuses the existing database, so an upgrade currently needs a fresh state database: Telegram re-syncs from scratch, and the old inbox and send records are lost. Removing the version and layer from the binding is scheduled for the code cleanup.
+`TestGotdSavesPositionOnlyAfterHandlerReturns` checks the gotd behavior the inbox relies on, and it fails if an upgrade changes it. Also review mapper changes for new or changed constructors.

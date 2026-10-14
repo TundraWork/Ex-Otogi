@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -22,20 +23,20 @@ func TestMapNewAndEditMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Event.Action != otogi.ActionMessageCreated || result.Event.Conversation.ID != "user:9" || result.Event.Direction != otogi.DirectionIncoming {
-		t.Fatalf("event action=%s conversation=%s direction=%s", result.Event.Action, result.Event.Conversation, result.Event.Direction)
+	if result.Events[0].Action != otogi.ActionMessageCreated || result.Events[0].Conversation.ID != "user:9" || result.Events[0].Direction != otogi.DirectionIncoming {
+		t.Fatalf("event action=%s conversation=%s direction=%s", result.Events[0].Action, result.Events[0].Conversation, result.Events[0].Direction)
 	}
-	if result.Event.Actor.ID != "user:9" || result.Event.Conversation.Kind != otogi.ConversationDirect {
-		t.Fatalf("actor=%v conversation=%v", result.Event.Actor, result.Event.Conversation)
+	if result.Events[0].Actor.ID != "user:9" || result.Events[0].Conversation.Kind != otogi.ConversationDirect {
+		t.Fatalf("actor=%v conversation=%v", result.Events[0].Actor, result.Events[0].Conversation)
 	}
-	if part := result.Event.Message.Parts[0]; part.Text != "hello" || len(part.Annotations) != 1 {
+	if part := result.Events[0].Message.Parts[0]; part.Text != "hello" || len(part.Annotations) != 1 {
 		t.Fatalf("text=%q annotations=%d", part.Text, len(part.Annotations))
 	}
-	if err := result.Event.Validate(); err != nil {
+	if err := result.Events[0].Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if result.SourceKey == "" || result.Box != "common" || result.Position != 5 || len(result.Locators) != 1 {
-		t.Fatalf("result=%+v", result)
+	if len(result.Locators) != 1 || result.Locators[0] != (Locator{Box: "common", MessageID: 11, Conversation: "user:9"}) {
+		t.Fatalf("locators=%+v", result.Locators)
 	}
 
 	m.SetEditDate(150)
@@ -43,20 +44,17 @@ func TestMapNewAndEditMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if edited.Event.Action != otogi.ActionMessageEdited {
-		t.Fatalf("action=%s", edited.Event.Action)
+	if edited.Events[0].Action != otogi.ActionMessageEdited {
+		t.Fatalf("action=%s", edited.Events[0].Action)
 	}
-	if got := edited.Event.EditedAt; !got.Equal(time.Unix(150, 0)) {
+	if got := edited.Events[0].EditedAt; !got.Equal(time.Unix(150, 0)) {
 		t.Fatalf("edited=%v", got)
 	}
-	if edited.SourceKey == result.SourceKey {
-		t.Fatal("edit source key did not include action/fingerprint")
-	}
-	createdID := result.Event.SourceID
+	createdID := result.Events[0].SourceID
 	if createdID != "telegram:common:user:9:11" {
 		t.Fatalf("created source ID=%s", createdID)
 	}
-	editedID := edited.Event.SourceID
+	editedID := edited.Events[0].SourceID
 	if editedID != createdID {
 		t.Fatalf("edited source ID=%s created=%s", editedID, createdID)
 	}
@@ -69,7 +67,7 @@ func TestMapChannelAndDeleteUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Box != "channel:77" || created.Event.Conversation.ID != "channel:77" || created.Event.Direction != otogi.DirectionOutgoing {
+	if created.Locators[0].Box != "channel:77" || created.Events[0].Conversation.ID != "channel:77" || created.Events[0].Direction != otogi.DirectionOutgoing {
 		t.Fatalf("created=%+v", created)
 	}
 
@@ -77,15 +75,18 @@ func TestMapChannelAndDeleteUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted.Box != "channel:77" || len(deleted.Deletes) != 2 || deleted.Deletes[0].Conversation != "channel:77" || deleted.Deletes[0].MessageID != 12 {
-		t.Fatalf("delete box=%q deletes=%+v", deleted.Box, deleted.Deletes)
+	if len(deleted.Deletes) != 2 || deleted.Deletes[0] != (Delete{Box: "channel:77", MessageID: 12, Conversation: "channel:77"}) {
+		t.Fatalf("deletes=%+v", deleted.Deletes)
+	}
+	if event := New(testConfig(t)).MapDeletion(deleted.Deletes[0], "channel:77"); event.Validate() != nil || event.Action != otogi.ActionMessageDeleted || event.SourceID != "telegram:channel:channel:77:12" {
+		t.Fatalf("deletion event=%+v", event)
 	}
 
 	unresolved, err := New(testConfig(t)).Map(&tg.UpdateDeleteMessages{Messages: []int{99}, Pts: 11, PtsCount: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(unresolved.Deletes) != 1 || unresolved.Deletes[0].Conversation != "" || !unresolved.Deletes[0].Unresolved {
+	if len(unresolved.Deletes) != 1 || unresolved.Deletes[0] != (Delete{Box: "common", MessageID: 99}) {
 		t.Fatalf("unresolved=%+v", unresolved.Deletes)
 	}
 }
@@ -96,8 +97,8 @@ func TestMapServiceEmptyAndUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mapped.Event.Action != otogi.ActionMessageService || len(mapped.Event.Message.Parts) != 1 || mapped.Event.Message.Parts[0].Kind != otogi.PartOpaque {
-		t.Fatalf("service event=%+v", mapped.Event)
+	if mapped.Events[0].Action != otogi.ActionMessageService || len(mapped.Events[0].Message.Parts) != 1 || mapped.Events[0].Message.Parts[0].Kind != otogi.PartOpaque {
+		t.Fatalf("service event=%+v", mapped.Events)
 	}
 
 	empty := &tg.MessageEmpty{ID: 7, PeerID: &tg.PeerUser{UserID: 8}}
@@ -106,34 +107,12 @@ func TestMapServiceEmptyAndUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mapped.Event.Completeness != otogi.CompletenessUnavailable {
-		t.Fatalf("completeness=%s", mapped.Event.Completeness)
+	if mapped.Events[0].Completeness != otogi.CompletenessUnavailable {
+		t.Fatalf("completeness=%s", mapped.Events[0].Completeness)
 	}
 
-	mapped, err = New(testConfig(t)).Map(&tg.UpdateUserTyping{UserID: 8, Action: &tg.SendMessageTypingAction{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mapped.Quarantine == nil || mapped.HasEvent {
-		t.Fatalf("unsupported=%+v", mapped)
-	}
-}
-
-func TestNegativePositionsAreNormalizedInResults(t *testing.T) {
-	message := &tg.Message{ID: 1, PeerID: &tg.PeerUser{UserID: 2}, Date: 100, Message: "position"}
-	mapped, err := New(testConfig(t)).Map(&tg.UpdateNewMessage{Message: message, Pts: -2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mapped.Position != 0 {
-		t.Fatalf("message position=%d", mapped.Position)
-	}
-	deleted, err := New(testConfig(t)).Map(&tg.UpdateDeleteMessages{Messages: []int{1}, Pts: -2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deleted.Position != 0 {
-		t.Fatalf("delete position=%d", deleted.Position)
+	if _, err = New(testConfig(t)).Map(&tg.UpdateUserTyping{UserID: 8, Action: &tg.SendMessageTypingAction{}}); !errors.Is(err, otogi.ErrUnsupported) {
+		t.Fatalf("unrouted update error = %v", err)
 	}
 }
 
@@ -147,7 +126,7 @@ func TestServicePreservesCompleteMessageAndRelations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	part := mapped.Event.Message.Parts[0]
+	part := mapped.Events[0].Message.Parts[0]
 	value := part.Opaque
 	if value == nil {
 		t.Fatal("service part not opaque")
@@ -163,7 +142,7 @@ func TestServicePreservesCompleteMessageAndRelations(t *testing.T) {
 	if !decoded.Silent || decoded.TTLPeriod != 60 || decoded.SavedPeerID == nil || decoded.Reactions.Results == nil || decoded.ReplyTo == nil {
 		t.Fatalf("decoded service=%+v", decoded)
 	}
-	relations := mapped.Event.Message.Relations
+	relations := mapped.Events[0].Message.Relations
 	if len(relations) != 2 || relations[0].Kind != otogi.RelationReply || relations[1].Kind != otogi.RelationThread {
 		t.Fatalf("relations=%+v", relations)
 	}

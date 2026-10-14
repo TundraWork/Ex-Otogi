@@ -17,7 +17,7 @@ func TestMessageMetadataExtensionsAreOrdered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extensions := mapped.Event.Message.Extensions
+	extensions := mapped.Events[0].Message.Extensions
 	want := []string{"message-reply", "message-forward", "message-grouped", "message-reactions", "message-raw"}
 	if len(extensions) != len(want) {
 		t.Fatalf("extensions=%d", len(extensions))
@@ -36,7 +36,7 @@ func TestReplyMapsToTypedRelation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relations := mapped.Event.Message.Relations
+	relations := mapped.Events[0].Message.Relations
 	if len(relations) != 1 || relations[0].Kind != otogi.RelationReply || string(relations[0].Target.SourceEvent) != "telegram:common:user:4:19" {
 		t.Fatalf("relations=%+v", relations)
 	}
@@ -52,7 +52,7 @@ func TestReplyUsesTargetPeerAndMapsTopic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relations := mapped.Event.Message.Relations
+	relations := mapped.Events[0].Message.Relations
 	if len(relations) != 2 {
 		t.Fatalf("relations=%d", len(relations))
 	}

@@ -19,17 +19,17 @@ type invocation struct {
 // Send addresses msg to the event's conversation and hands it to the messenger.
 // Reusing a slot within one delivery is an error, because both sends would
 // share an idempotency key and the driver would drop the second.
-func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) error {
+func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) (otogi.EventRef, error) {
 	if slot == "" || len(msg.Parts) == 0 {
-		return fmt.Errorf("send: empty slot or message: %w", otogi.ErrInvalid)
+		return otogi.EventRef{}, fmt.Errorf("send: empty slot or message: %w", otogi.ErrInvalid)
 	}
 	if err := msg.Validate(); err != nil {
-		return fmt.Errorf("send: %w", err)
+		return otogi.EventRef{}, fmt.Errorf("send: %w", err)
 	}
 	i.mu.Lock()
 	if i.slots[slot] {
 		i.mu.Unlock()
-		return fmt.Errorf("send: slot %q already used for this event: %w", slot, otogi.ErrInvalid)
+		return otogi.EventRef{}, fmt.Errorf("send: slot %q already used for this event: %w", slot, otogi.ErrInvalid)
 	}
 	if i.slots == nil {
 		i.slots = make(map[string]bool)

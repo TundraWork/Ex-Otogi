@@ -50,10 +50,14 @@ type Module interface {
 // Invocation gives a module the capabilities it may use while handling one
 // event. The kernel implements it; new capabilities are added as new methods.
 type Invocation interface {
-	// Send sends msg to the event's conversation. slot names this effect
-	// within the module's handling of the event, for example "reply", so a
-	// replayed event derives the same idempotency key and is not sent twice.
-	Send(ctx context.Context, slot string, msg Message) error
+	// Send sends msg to the event's conversation and returns a reference to
+	// the sent message, which later capabilities accept for edits, replies, and
+	// deletes. slot names this effect within the module's handling of the
+	// event, for example "reply", so a replayed event derives the same
+	// idempotency key and is not sent twice; a replay returns the original
+	// reference. The reference's SourceEvent may be empty when the platform
+	// confirms a duplicate without identifying the message.
+	Send(ctx context.Context, slot string, msg Message) (EventRef, error)
 }
 
 // Verdict is a middleware decision.

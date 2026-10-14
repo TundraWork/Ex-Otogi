@@ -2,296 +2,211 @@ package telegram
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
-	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/tg"
+
+	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/mapper"
 	telegramstore "github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/store"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// InboxStore is the durable claim boundary required by InboxDispatcher.
-type InboxStore interface {
-	// ClaimNextAfter atomically leases the next eligible conversation head.
-	ClaimNextAfter(context.Context, string, time.Time, time.Duration, string) (telegramstore.InboxRow, bool, error)
-	// ReleaseClaim returns an owned row to pending with its next eligibility time.
-	ReleaseClaim(context.Context, string, string, time.Time, string) error
-	// CompleteClaim marks an owned row terminal after exact kernel acknowledgement.
-	CompleteClaim(context.Context, string, string, time.Time) error
-	// FailClaim marks an owned row permanently failed with a bounded reason.
-	FailClaim(context.Context, string, string, string, time.Time) error
+// Submitter admits events into the kernel; *kernel.Kernel implements it.
+type Submitter interface {
+	// Submit admits event and calls done exactly once when it is processed.
+	Submit(ctx context.Context, event otogi.Event, done func(otogi.Outcome)) error
 }
 
-// EventDecoder decodes one bounded normalized inbox payload and observes attempt cancellation.
-type EventDecoder func(context.Context, []byte) (otogi.Event, error)
-
-// EventSubmitter admits events and reports their completion; *kernel.Kernel implements it.
-type EventSubmitter interface {
-	// Submit admits event and calls done exactly once when it has been processed.
-	Submit(context.Context, otogi.Event, func(otogi.Outcome)) error
+type dispatchStore interface {
+	PendingInbox(context.Context, int64, int) ([]telegramstore.InboxRow, error)
+	MarkInboxDone(context.Context, int64, time.Time) error
+	MarkInboxFailed(context.Context, int64, string, time.Time) error
+	PutLocator(context.Context, string, int, string, time.Time) error
+	FindLocator(context.Context, string, int) (string, bool, error)
 }
 
-// InboxDispatcherConfig bounds claim ownership, retries, polling, and shutdown cleanup.
-type InboxDispatcherConfig struct {
-	// Owner identifies this dispatcher instance in durable claims.
-	Owner string
-	// Lease bounds exclusive ownership across claim, attempt, and cleanup.
-	Lease time.Duration
-	// ClaimTimeout bounds acquisition latency deducted from the lease.
-	ClaimTimeout time.Duration
-	// AttemptTimeout bounds decode, admission, and acknowledgement together.
-	AttemptTimeout time.Duration
-	// CleanupTimeout bounds durable release, completion, or failure updates.
-	CleanupTimeout time.Duration
-	// PollInterval bounds idle waiting before another claim attempt.
-	PollInterval time.Duration
-	// RetryBase is the initial retry delay.
-	RetryBase time.Duration
-	// RetryMax caps exponential retry delay.
-	RetryMax time.Duration
-	// Now supplies UTC-compatible wall time for durable schedules.
-	Now func() time.Time
+const dispatchBatch = 100
+
+// dispatcher maps inbox rows to events in arrival order and submits them to
+// the kernel without waiting for them to finish; the kernel provides ordering
+// per conversation and backpressure. A row is marked done once all its events
+// are done. Rows left pending (because the process stopped first) are
+// dispatched again on the next start.
+type dispatcher struct {
+	store  dispatchStore
+	mapper *mapper.Mapper
+	kernel Submitter
+	wake   <-chan struct{}
+	poll   time.Duration
+	log    *slog.Logger
+	now    func() time.Time
+
+	mu      sync.Mutex
+	pending map[int64]*rowProgress
+	failed  error // first error from a done callback, surfaced by run
 }
 
-// InboxDispatcher is the single owner of durable Telegram inbox delivery.
-type InboxDispatcher struct {
-	store       InboxStore
-	admitter    EventSubmitter
-	decode      EventDecoder
-	config      InboxDispatcherConfig
-	mu          sync.Mutex
-	active      bool
-	draining    bool
-	attempting  bool
-	stateChange chan struct{}
-	claimPrefix string
-	claimCount  uint64
-	after       string
+type rowProgress struct {
+	remaining int
+	abandoned bool
 }
 
-// NewInboxDispatcher constructs a bounded durable inbox dispatcher.
-func NewInboxDispatcher(store InboxStore, admitter EventSubmitter, decode EventDecoder, config InboxDispatcherConfig) *InboxDispatcher {
-	if store == nil || admitter == nil || decode == nil || config.Owner == "" || len(config.Owner) > 128 || !validDispatchDurations(config) || config.PollInterval <= 0 || config.RetryBase <= 0 || config.RetryMax < config.RetryBase || config.Now == nil {
-		panic("telegram: invalid inbox dispatcher dependency or bound")
-	}
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		panic("telegram: generate inbox claim owner: " + err.Error())
-	}
-	return &InboxDispatcher{store: store, admitter: admitter, decode: decode, config: config, claimPrefix: config.Owner + ":" + hex.EncodeToString(nonce[:]), stateChange: make(chan struct{})}
-}
-
-func validDispatchDurations(config InboxDispatcherConfig) bool {
-	if config.Lease <= 0 || config.ClaimTimeout <= 0 || config.AttemptTimeout <= 0 || config.CleanupTimeout <= 0 || config.ClaimTimeout >= config.Lease {
-		return false
-	}
-	remaining := config.Lease - config.ClaimTimeout
-	if config.AttemptTimeout >= remaining {
-		return false
-	}
-	return config.CleanupTimeout < remaining-config.AttemptTimeout
-}
-
-// Run claims and dispatches eligible rows until ctx is canceled. Only one Run may own the dispatcher.
-func (d *InboxDispatcher) Run(ctx context.Context, ready func()) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	d.mu.Lock()
-	if d.active {
-		d.mu.Unlock()
-		return fmt.Errorf("run inbox dispatcher: already running: %w", otogi.ErrUnavailable)
-	}
-	d.active = true
-	d.draining = false
-	d.notifyLocked()
-	d.mu.Unlock()
-	defer func() {
-		d.mu.Lock()
-		d.active = false
-		d.attempting = false
-		d.notifyLocked()
-		d.mu.Unlock()
-	}()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if ready != nil {
-		ready()
-	}
-
-	timer := time.NewTimer(0)
-	defer timer.Stop()
+// run dispatches rows until ctx ends, the kernel stops admitting events, or
+// a store write fails (the only error it returns).
+func (d *dispatcher) run(ctx context.Context) error {
+	var after int64
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-		}
-		d.mu.Lock()
-		draining := d.draining
-		d.mu.Unlock()
-		if draining {
-			timer.Reset(d.config.PollInterval)
-			continue
-		}
-		worked, err := d.dispatchOne(ctx)
+		rows, err := d.store.PendingInbox(ctx, after, dispatchBatch)
 		if err != nil {
+			return ignoreCancel(ctx, err)
+		}
+		for _, row := range rows {
+			admitted, err := d.dispatch(ctx, row)
+			if err != nil {
+				return ignoreCancel(ctx, err)
+			}
+			if !admitted {
+				return nil // the kernel is shutting down
+			}
+			after = row.ID
+		}
+		if err := d.callbackError(); err != nil {
 			return err
 		}
-		if worked {
-			timer.Reset(0)
-		} else {
-			timer.Reset(d.config.PollInterval)
+		if len(rows) == dispatchBatch {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-d.wake:
+		case <-time.After(d.poll):
 		}
 	}
 }
 
-func (d *InboxDispatcher) running() bool {
+// dispatch maps and submits one row. It reports false when the kernel no
+// longer admits events; the row then stays pending for the next start.
+func (d *dispatcher) dispatch(ctx context.Context, row telegramstore.InboxRow) (bool, error) {
+	events, err := d.mapRow(ctx, row)
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if err != nil {
+		d.log.Error("telegram: cannot map inbox row; marking failed", "row", row.ID, "error", err)
+		return true, d.store.MarkInboxFailed(ctx, row.ID, err.Error(), d.now())
+	}
+	if len(events) == 0 {
+		return true, d.store.MarkInboxDone(ctx, row.ID, d.now())
+	}
+	d.mu.Lock()
+	d.pending[row.ID] = &rowProgress{remaining: len(events)}
+	d.mu.Unlock()
+	for i, event := range events {
+		event.ID = inboxEventID(row.ID, i)
+		if err := d.kernel.Submit(ctx, event, func(o otogi.Outcome) { d.finish(row.ID, o) }); err != nil {
+			// Events are validated in mapRow, so the kernel is shutting down
+			// or ctx ended. The row stays pending for the next start.
+			d.log.Info("telegram: event not admitted; row left pending", "row", row.ID, "event", event.ID, "error", err)
+			d.mu.Lock()
+			d.pending[row.ID].abandoned = true
+			d.mu.Unlock()
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// mapRow decodes a row, records its locators, and maps it to events,
+// resolving common-box deletions through earlier locators.
+func (d *dispatcher) mapRow(ctx context.Context, row telegramstore.InboxRow) ([]otogi.Event, error) {
+	update, err := tg.DecodeUpdate(&bin.Buffer{Buf: row.Payload})
+	if err != nil {
+		return nil, fmt.Errorf("decode update: %w", err)
+	}
+	result, err := d.mapper.Map(update)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range result.Locators {
+		if err := d.store.PutLocator(ctx, l.Box, l.MessageID, l.Conversation, row.ReceivedAt); err != nil {
+			return nil, err
+		}
+	}
+	events := result.Events
+	for _, del := range result.Deletes {
+		conversation := del.Conversation
+		if conversation == "" {
+			found := false
+			if conversation, found, err = d.store.FindLocator(ctx, del.Box, del.MessageID); err != nil {
+				return nil, err
+			}
+			if !found {
+				d.log.Warn("telegram: deleted message has no known conversation; skipping", "box", del.Box, "message", del.MessageID)
+				continue
+			}
+		}
+		events = append(events, d.mapper.MapDeletion(del, conversation))
+	}
+	for _, event := range events {
+		if err := event.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return events, nil
+}
+
+// finish runs on a kernel goroutine when one event of a row completes.
+func (d *dispatcher) finish(rowID int64, outcome otogi.Outcome) {
+	d.mu.Lock()
+	progress := d.pending[rowID]
+	progress.remaining--
+	if outcome.Err != nil && outcome.DroppedBy == "" {
+		progress.abandoned = true // kernel stopped first; replay on next start
+	}
+	last, abandoned := progress.remaining == 0, progress.abandoned
+	if last {
+		delete(d.pending, rowID)
+	}
+	d.mu.Unlock()
+	if !last || abandoned {
+		return
+	}
+	// A short, independent context: the dispatcher's may already be cancelled
+	// during shutdown, and losing this write only causes a harmless replay.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := d.store.MarkInboxDone(ctx, rowID, d.now()); err != nil {
+		d.mu.Lock()
+		if d.failed == nil {
+			d.failed = fmt.Errorf("telegram: mark inbox row %d done: %w", rowID, err)
+		}
+		d.mu.Unlock()
+	}
+}
+
+func (d *dispatcher) callbackError() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.active
+	return d.failed
 }
 
-// Drain prevents new claims and waits for the current claimed attempt and its durable cleanup.
-func (d *InboxDispatcher) Drain(ctx context.Context) error {
-	d.mu.Lock()
-	if !d.active {
-		d.mu.Unlock()
-		return fmt.Errorf("drain inbox dispatcher: not running: %w", otogi.ErrUnavailable)
+func ignoreCancel(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
 	}
-	d.draining = true
-	d.notifyLocked()
-	for d.attempting {
-		changed := d.stateChange
-		d.mu.Unlock()
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		d.mu.Lock()
-	}
-	d.mu.Unlock()
-	return nil
+	return err
 }
 
-func (d *InboxDispatcher) notifyLocked() {
-	close(d.stateChange)
-	d.stateChange = make(chan struct{})
-}
-
-func (d *InboxDispatcher) dispatchOne(ctx context.Context) (worked bool, result error) {
-	d.mu.Lock()
-	if d.draining {
-		d.mu.Unlock()
-		return false, nil
-	}
-	d.attempting = true
-	d.notifyLocked()
-	d.mu.Unlock()
-	defer func() {
-		d.mu.Lock()
-		d.attempting = false
-		d.notifyLocked()
-		d.mu.Unlock()
-	}()
-	now := d.config.Now().UTC()
-	d.mu.Lock()
-	d.claimCount++
-	owner := fmt.Sprintf("%s:%x", d.claimPrefix, d.claimCount)
-	after := d.after
-	d.mu.Unlock()
-	claimCtx, cancelClaim := context.WithTimeout(ctx, d.config.ClaimTimeout)
-	row, ok, err := d.store.ClaimNextAfter(claimCtx, owner, now, d.config.Lease, after)
-	cancelClaim()
-	if err != nil || !ok {
-		return false, err
-	}
-	d.mu.Lock()
-	d.after = row.Conversation
-	d.mu.Unlock()
-
-	attempt, cancel := context.WithTimeout(ctx, d.config.AttemptTimeout)
-	defer cancel()
-	event, err := d.decode(attempt, row.Payload)
-	if err != nil {
-		if permanentDispatchError(err) {
-			return true, d.fail(row, owner, err)
-		}
-		return true, d.release(row, owner, err)
-	}
-	event.ID = deterministicInboxEventID(row.ID)
-	completion := make(chan otogi.Outcome, 1)
-	if err = d.admitter.Submit(attempt, event, func(o otogi.Outcome) { completion <- o }); err != nil {
-		if permanentDispatchError(err) {
-			return true, d.fail(row, owner, err)
-		}
-		return true, d.release(row, owner, err)
-	}
-	select {
-	case outcome := <-completion:
-		if outcome.Err != nil && outcome.DroppedBy == "" {
-			return true, d.release(row, owner, outcome.Err)
-		}
-		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), d.config.CleanupTimeout)
-		defer stop()
-		return true, d.store.CompleteClaim(cleanup, row.ID, owner, d.config.Now().UTC())
-	case <-attempt.Done():
-		return true, d.release(row, owner, attempt.Err())
-	}
-}
-
-func deterministicInboxEventID(inboxID string) otogi.EventID {
-	digest := sha256.Sum256([]byte("telegram-inbox\x00" + inboxID))
-	return otogi.EventID(fmt.Sprintf("evt_tg_%x", digest))
-}
-
-func permanentDispatchError(err error) bool {
-	return errors.Is(err, otogi.ErrInvalid) || errors.Is(err, otogi.ErrUnsupported)
-}
-
-func (d *InboxDispatcher) release(row telegramstore.InboxRow, owner string, cause error) error {
-	cleanup, cancel := context.WithTimeout(context.Background(), d.config.CleanupTimeout)
-	defer cancel()
-	reason := dispatchReason(cause)
-	return d.store.ReleaseClaim(cleanup, row.ID, owner, d.config.Now().UTC().Add(d.retryDelay(row.Attempts)), reason)
-}
-
-func (d *InboxDispatcher) fail(row telegramstore.InboxRow, owner string, cause error) error {
-	cleanup, cancel := context.WithTimeout(context.Background(), d.config.CleanupTimeout)
-	defer cancel()
-	return d.store.FailClaim(cleanup, row.ID, owner, dispatchReason(cause), d.config.Now().UTC())
-}
-
-func (d *InboxDispatcher) retryDelay(attempts int) time.Duration {
-	delay := d.config.RetryBase
-	for remaining := max(0, attempts-1); remaining > 0; remaining-- {
-		if delay >= d.config.RetryMax || delay > d.config.RetryMax/2 {
-			return d.config.RetryMax
-		}
-		delay *= 2
-	}
-	return min(delay, d.config.RetryMax)
-}
-
-func dispatchReason(err error) string {
-	switch {
-	case errors.Is(err, otogi.ErrUnavailable):
-		return "kernel unavailable"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "completion timeout"
-	case errors.Is(err, context.Canceled):
-		return "dispatcher canceled"
-	case errors.Is(err, otogi.ErrUnsupported):
-		return "unsupported event"
-	case errors.Is(err, otogi.ErrInvalid):
-		return "invalid event"
-	default:
-		return "dispatch unavailable"
-	}
+// inboxEventID derives a stable event ID, so a replayed row produces the same
+// event IDs and therefore the same send idempotency keys.
+func inboxEventID(rowID int64, index int) otogi.EventID {
+	sum := sha256.Sum256([]byte("telegram-inbox:" + strconv.FormatInt(rowID, 10) + ":" + strconv.Itoa(index)))
+	return otogi.EventID(fmt.Sprintf("tg-%x", sum[:16]))
 }

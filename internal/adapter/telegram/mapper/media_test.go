@@ -22,7 +22,7 @@ func TestKnownMediaGetsTypedProjectionAndRawExtension(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		part := mapped.Event.Message.Parts[0]
+		part := mapped.Events[0].Message.Parts[0]
 		if part.Kind != tc.kind || len(part.Extensions) != 1 || part.Extensions[0].Name != "message-media" {
 			t.Fatalf("part kind=%s extensions=%v", part.Kind, part.Extensions)
 		}
@@ -46,7 +46,7 @@ func TestDocumentAndPhotoUseOpaqueRefreshLocators(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		media := mapped.Event.Message.Parts[0].Media
+		media := mapped.Events[0].Message.Parts[0].Media
 		if media == nil || media.Role != tc.role || media.Source.Kind != otogi.MediaSourceOpaque {
 			t.Fatalf("media role=%s source=%s", media.Role, media.Source.Kind)
 		}

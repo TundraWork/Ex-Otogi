@@ -15,7 +15,7 @@ References the design relies on. A newer external version does not change the de
 ## Telegram
 
 - [Telegram API](https://core.telegram.org/api) and [working with updates](https://core.telegram.org/api/updates): update sequences, gaps, and `getDifference`.
-- [gotd/td](https://github.com/gotd/td): the MTProto client. Its version and generated `tg.Layer` are pinned (see the Telegram runbook).
+- [gotd/td](https://github.com/gotd/td): the MTProto client, its update manager, peer cache, and login flow. Its version is pinned in `go.mod`; see the Telegram runbook for upgrades.
 
 ## HTTP
 

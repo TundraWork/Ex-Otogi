@@ -4,7 +4,7 @@ These documents describe the design of the `next` runtime: a self-hosted, single
 
 ## Status
 
-`next` is a work in progress, not a release. It currently contains the core kernel, an echo module, an offline smoke, and a Telegram MTProto user-account driver that can only be started from Go code. Code that predates the 2026-10-14 priority reset may still contain defensive machinery these docs no longer require; it is removed as each area is revisited.
+`next` is a work in progress, not a release. It currently contains the core kernel, an echo module, an offline smoke, and a Telegram MTProto user-account driver that can only be started from Go code. The 2026-10-14 cleanup ([contracts](superpowers/specs/2026-10-14-lean-core-contracts-design.md), [Telegram](superpowers/specs/2026-10-14-telegram-on-gotd-design.md)) brought the code in line with these documents.
 
 ## Documents
 

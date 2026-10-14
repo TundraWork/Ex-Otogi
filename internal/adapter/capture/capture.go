@@ -5,6 +5,7 @@ package capture
 import (
 	"context"
 	"slices"
+	"strconv"
 	"sync"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
@@ -19,12 +20,12 @@ type Messenger struct {
 // New returns an empty messenger.
 func New() *Messenger { return &Messenger{} }
 
-// Send records msg.
-func (m *Messenger) Send(_ context.Context, msg otogi.OutboundMessage) error {
+// Send records msg and returns a reference numbered by send order.
+func (m *Messenger) Send(_ context.Context, msg otogi.OutboundMessage) (otogi.EventRef, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, msg)
-	return nil
+	return otogi.EventRef{Platform: msg.Platform, Account: msg.Account, Conversation: msg.Conversation, SourceEvent: otogi.SourceEventID(strconv.Itoa(len(m.messages)))}, nil
 }
 
 // Messages returns the recorded messages in send order.

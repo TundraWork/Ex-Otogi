@@ -2,128 +2,64 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
+	"fmt"
 	"time"
 )
 
-func scanInbox(row interface{ Scan(...any) error }) (InboxRow, bool, error) {
-	var r InboxRow
-	var available int64
-	var lease, done sql.NullInt64
-	var payload []byte
-	e := row.Scan(&r.ID, &r.SourceKey, &r.Conversation, &r.Sequence, &payload, &available, &r.Status, &r.Owner, &lease, &r.Attempts, &done, &r.Error)
-	if errors.Is(e, sql.ErrNoRows) {
-		return r, false, nil
-	}
-	r.Payload = payload
-	r.AvailableAt = time.Unix(0, available).UTC()
-	if lease.Valid {
-		v := time.Unix(0, lease.Int64).UTC()
-		r.LeaseUntil = &v
-	}
-	if done.Valid {
-		v := time.Unix(0, done.Int64).UTC()
-		r.CompletedAt = &v
-	}
-	return r, e == nil, e
+// InboxRow is one persisted raw update.
+type InboxRow struct {
+	// ID orders rows by arrival.
+	ID int64
+	// Payload is the TL-encoded update.
+	Payload []byte
+	// ReceivedAt is when the row was persisted.
+	ReceivedAt time.Time
 }
 
-// GetInbox returns a normalized inbox row.
-func (s *Store) GetInbox(ctx context.Context, id string) (InboxRow, bool, error) {
-	return scanInbox(s.db.QueryRowContext(ctx, "SELECT id,source_key,conversation,sequence,payload,available_at,status,coalesce(owner,''),lease_until,attempts,completed_at,coalesce(error,'') FROM inbox WHERE account_key=? AND id=?", s.accountKey, id))
+// InsertInbox persists a raw update unless one with the same dedup key exists.
+// It reports whether a row was inserted.
+func (s *Store) InsertInbox(ctx context.Context, dedupKey string, payload []byte, at time.Time) (bool, error) {
+	result, err := s.db.ExecContext(ctx, "INSERT INTO inbox (dedup_key, payload, received_at) VALUES (?, ?, ?) ON CONFLICT (dedup_key) DO NOTHING",
+		dedupKey, payload, at.UnixMilli())
+	if err != nil {
+		return false, fmt.Errorf("insert inbox row: %w", err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("insert inbox row: %w", err)
+	}
+	return n == 1, nil
 }
 
-// ClaimNext atomically claims the oldest eligible conversation head.
-func (s *Store) ClaimNext(ctx context.Context, owner string, now time.Time, lease time.Duration) (InboxRow, bool, error) {
-	return s.ClaimNextAfter(ctx, owner, now, lease, "")
-}
-
-// ClaimNextAfter atomically claims the next eligible conversation head after
-// the supplied conversation, wrapping lexically for fair single-worker service.
-func (s *Store) ClaimNextAfter(ctx context.Context, owner string, now time.Time, lease time.Duration, afterConversation string) (InboxRow, bool, error) {
-	if err := validateText("claim owner", owner); err != nil {
-		return InboxRow{}, false, err
+// PendingInbox returns up to limit pending rows with ID greater than after, in order.
+func (s *Store) PendingInbox(ctx context.Context, after int64, limit int) ([]InboxRow, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, payload, received_at FROM inbox WHERE state = 'pending' AND id > ? ORDER BY id LIMIT ?", after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list pending inbox: %w", err)
 	}
-	if err := validateText("claim cursor", afterConversation); err != nil {
-		return InboxRow{}, false, err
-	}
-	until := now.Add(lease)
-	return scanInbox(s.db.QueryRowContext(ctx, `UPDATE inbox SET status='claimed',owner=?,lease_until=?,attempts=attempts+1 WHERE account_key=? AND rowid=(SELECT i.rowid FROM inbox i WHERE i.account_key=? AND i.status IN ('pending','claimed') AND i.available_at<=? AND (i.status='pending' OR i.lease_until<=?) AND NOT EXISTS (SELECT 1 FROM inbox h WHERE h.account_key=i.account_key AND h.conversation=i.conversation AND (h.sequence<i.sequence OR (h.sequence=i.sequence AND h.rowid<i.rowid)) AND h.status NOT IN ('terminal','failed')) ORDER BY i.conversation<=?,i.conversation,i.sequence,i.rowid LIMIT 1) AND (status='pending' OR lease_until<=?) RETURNING id,source_key,conversation,sequence,payload,available_at,status,coalesce(owner,''),lease_until,attempts,completed_at,coalesce(error,'')`, owner, until.UnixNano(), s.accountKey, s.accountKey, now.UnixNano(), now.UnixNano(), afterConversation, now.UnixNano()))
-}
-
-// ReleaseClaim returns a claimed row with a retry schedule.
-func (s *Store) ReleaseClaim(ctx context.Context, id, owner string, next time.Time, reason string) error {
-	return s.claimUpdate(ctx, id, owner, "UPDATE inbox SET status='pending',owner=NULL,lease_until=NULL,available_at=?,error=? WHERE account_key=? AND id=? AND status='claimed' AND owner=?", next.UnixNano(), reason)
-}
-
-// CompleteClaim marks an owned claim terminal.
-func (s *Store) CompleteClaim(ctx context.Context, id, owner string, at time.Time) error {
-	return s.claimUpdate(ctx, id, owner, "UPDATE inbox SET status='terminal',owner=NULL,lease_until=NULL,completed_at=? WHERE account_key=? AND id=? AND status='claimed' AND owner=?", at.UnixNano())
-}
-
-// FailClaim marks an owned claim permanently failed.
-func (s *Store) FailClaim(ctx context.Context, id, owner, reason string, at time.Time) error {
-	return s.claimUpdate(ctx, id, owner, "UPDATE inbox SET status='failed',owner=NULL,lease_until=NULL,completed_at=?,error=? WHERE account_key=? AND id=? AND status='claimed' AND owner=?", at.UnixNano(), reason)
-}
-func (s *Store) claimUpdate(ctx context.Context, id, owner, q string, a ...any) error {
-	a = append(a, s.accountKey, id, owner)
-	r, e := s.db.ExecContext(ctx, q, a...)
-	if e != nil {
-		return e
-	}
-	n, _ := r.RowsAffected()
-	if n != 1 {
-		return ErrClaimConflict
-	}
-	return nil
-}
-
-// Compact applies journal and participant-payload retention.
-func (s *Store) Compact(ctx context.Context, now time.Time) error {
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	defer func() { _ = tx.Rollback() }()
-	compact := now.Add(-7 * 24 * time.Hour).UnixNano()
-	expire := now.Add(-30 * 24 * time.Hour).UnixNano()
-	journal := now.Add(-24 * time.Hour).UnixNano()
-	if _, e = tx.ExecContext(ctx, "UPDATE inbox SET payload=NULL WHERE account_key=? AND status IN ('terminal','failed') AND completed_at<?", s.accountKey, compact); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "UPDATE quarantine SET payload=NULL WHERE account_key=? AND created_at<?", s.accountKey, compact); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "UPDATE locators SET payload=NULL WHERE account_key=? AND updated_at<?", s.accountKey, compact); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM inbox WHERE account_key=? AND status IN ('terminal','failed') AND completed_at<?", s.accountKey, expire); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM quarantine WHERE account_key=? AND created_at<?", s.accountKey, expire); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM locators WHERE account_key=? AND updated_at<?", s.accountKey, expire); e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM journal WHERE account_key=? AND normalized_at IS NOT NULL AND normalized_at<?", s.accountKey, journal); e != nil {
-		return e
-	}
-	return tx.Commit()
-}
-
-// EraseAccount deletes all mutable data for the bound account.
-func (s *Store) EraseAccount(ctx context.Context) error {
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, table := range []string{"update_state", "channel_state", "channel_access_hash", "user_hash", "peers", "journal", "inbox", "quarantine", "locators", "consistency", "recovery", "sends"} {
-		if _, e = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_key=?", s.accountKey); e != nil {
-			return e
+	defer func() { _ = rows.Close() }()
+	var out []InboxRow
+	for rows.Next() {
+		var row InboxRow
+		var received int64
+		if err := rows.Scan(&row.ID, &row.Payload, &received); err != nil {
+			return nil, fmt.Errorf("list pending inbox: %w", err)
 		}
+		row.ReceivedAt = time.UnixMilli(received).UTC()
+		out = append(out, row)
 	}
-	return tx.Commit()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list pending inbox: %w", err)
+	}
+	return out, nil
+}
+
+// MarkInboxDone marks a row processed.
+func (s *Store) MarkInboxDone(ctx context.Context, id int64, at time.Time) error {
+	return s.exec(ctx, "mark inbox done", "UPDATE inbox SET state = 'done', finished_at = ? WHERE id = ?", at.UnixMilli(), id)
+}
+
+// MarkInboxFailed marks a row that cannot be processed, keeping the reason.
+func (s *Store) MarkInboxFailed(ctx context.Context, id int64, reason string, at time.Time) error {
+	return s.exec(ctx, "mark inbox failed", "UPDATE inbox SET state = 'failed', error = ?, finished_at = ? WHERE id = ?", reason, at.UnixMilli(), id)
 }

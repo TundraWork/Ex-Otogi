@@ -25,5 +25,6 @@ func (*Module) Handle(ctx context.Context, event otogi.Event, inv otogi.Invocati
 	if text == "" {
 		return nil
 	}
-	return inv.Send(ctx, "echo", otogi.TextMessage("echo: "+text))
+	_, err := inv.Send(ctx, "echo", otogi.TextMessage("echo: "+text))
+	return err
 }

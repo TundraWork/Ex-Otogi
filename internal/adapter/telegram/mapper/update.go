@@ -1,12 +1,11 @@
 package mapper
 
 import (
-	"crypto/sha256"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
@@ -24,103 +23,79 @@ type Config struct {
 	IngestedAt func() time.Time
 }
 
-// Mapper deterministically maps layer-228 Telegram values without network access.
+// Mapper converts Telegram updates into rich events. It has no I/O.
 type Mapper struct{ config Config }
 
-// LocatorRecord associates a mapped provider message with its durable origin.
-type LocatorRecord struct {
-	// Namespace identifies the common or channel message ID space.
-	Namespace string
-	// MessageID is the positive Telegram message ID.
-	MessageID int
-	// Conversation is the canonical tagged conversation identity.
-	Conversation string
-	// Payload is the encoded provider locator.
-	Payload []byte
-}
-
-// DeleteRecord describes a Telegram deletion, retaining unresolved common IDs without inventing a peer.
-type DeleteRecord struct {
-	// Namespace identifies the common or channel message ID space.
-	Namespace string
-	// MessageID is the deleted Telegram message ID.
-	MessageID int
-	// Conversation is empty only when a common delete remains unresolved.
-	Conversation string
-	// Unresolved reports that locator lookup is required before routing.
-	Unresolved bool
-	// SourceKey is the stable deletion deduplication key.
-	SourceKey string
-}
-
-// Result is one deterministic mapping outcome.
+// Result is what one update maps to.
 type Result struct {
-	// Event is the mapped rich event when HasEvent is true.
-	Event otogi.Event
-	// HasEvent reports whether Event contains a routed update.
-	HasEvent bool
-	// SourceKey is the stable provider deduplication key.
-	SourceKey string
-	// Box identifies the common or channel consistency stream.
-	Box string
-	// Position is the nonnegative Telegram pts position when available.
-	Position int
-	// Locators are provider identities learned while mapping.
-	Locators []LocatorRecord
-	// Deletes contains one item for every deleted message ID.
-	Deletes []DeleteRecord
-	// Quarantine contains a non-routed update preservation record.
-	Quarantine *QuarantineRecord
+	// Events are the routed events: one for a new or edited message.
+	Events []otogi.Event
+	// Locators record which conversation each mapped message belongs to.
+	Locators []Locator
+	// Deletes are deleted messages. A common-box deletion has no Conversation;
+	// the caller resolves it from recorded locators and calls MapDeletion.
+	Deletes []Delete
 }
 
-// New creates a mapper with immutable scope configuration.
+// Locator records that a message ID in a box belongs to a conversation.
+type Locator struct {
+	// Box is "common" or "channel:<id>".
+	Box string
+	// MessageID is Telegram's message ID within Box.
+	MessageID int
+	// Conversation is the message's conversation.
+	Conversation string
+}
+
+// Delete is one deleted message.
+type Delete struct {
+	// Box is "common" or "channel:<id>".
+	Box string
+	// MessageID is Telegram's message ID within Box.
+	MessageID int
+	// Conversation is set for channel deletions and empty for common ones.
+	Conversation string
+}
+
+// New creates a mapper.
 func New(config Config) *Mapper { return &Mapper{config: config} }
 
-// MapDeletion builds the deletion event for one message once its conversation is known.
-func (m *Mapper) MapDeletion(deletion DeleteRecord, conversation string) (otogi.Event, error) {
-	if deletion.MessageID <= 0 || conversation == "" {
-		return otogi.Event{}, fmt.Errorf("invalid Telegram deletion: %w", otogi.ErrInvalid)
-	}
-	locatorData, err := EncodeMessageLocator(MessageLocator{Namespace: deletion.Namespace, Peer: conversation, MessageID: deletion.MessageID})
-	if err != nil {
-		return otogi.Event{}, err
-	}
+// MapDeletion builds the deletion event for one message in conversation.
+func (m *Mapper) MapDeletion(d Delete, conversation string) otogi.Event {
+	namespace := namespaceForBox(d.Box)
+	data, _ := EncodeMessageLocator(MessageLocator{Namespace: namespace, Peer: conversation, MessageID: d.MessageID})
 	now := m.now()
 	return otogi.Event{
 		Platform: m.config.Platform, Account: m.account(),
 		Conversation: otogi.Conversation{ID: otogi.ConversationID(conversation), Kind: conversationKind(conversation)},
-		SourceID:     sourceID(deletion.Namespace, conversation, deletion.MessageID),
+		SourceID:     sourceID(namespace, conversation, d.MessageID),
 		Action:       otogi.ActionMessageDeleted, Direction: otogi.DirectionSystem,
 		OccurredAt: now, ReceivedAt: now, Completeness: otogi.CompletenessUnavailable,
-		Locator: messageLocator(locatorData),
-	}, nil
-}
-
-// Map maps a supported update or returns a raw quarantine record for a non-routed update.
-func (m *Mapper) Map(update tg.UpdateClass) (Result, error) {
-	switch value := update.(type) {
-	case *tg.UpdateNewMessage:
-		return m.mapMessage(value.Message, otogi.ActionMessageCreated, NamespaceCommon, value.Pts)
-	case *tg.UpdateEditMessage:
-		return m.mapMessage(value.Message, otogi.ActionMessageEdited, NamespaceCommon, value.Pts)
-	case *tg.UpdateNewChannelMessage:
-		return m.mapMessage(value.Message, otogi.ActionMessageCreated, NamespaceChannel, value.Pts)
-	case *tg.UpdateEditChannelMessage:
-		return m.mapMessage(value.Message, otogi.ActionMessageEdited, NamespaceChannel, value.Pts)
-	case *tg.UpdateDeleteMessages:
-		return m.mapDeletes(NamespaceCommon, 0, value.Messages, value.Pts)
-	case *tg.UpdateDeleteChannelMessages:
-		return m.mapDeletes(NamespaceChannel, value.ChannelID, value.Messages, value.Pts)
-	default:
-		record, err := Quarantine(update, m.accountScope(), 0)
-		if err != nil {
-			return Result{}, err
-		}
-		return Result{Quarantine: &record}, nil
+		Locator: messageLocator(data),
 	}
 }
 
-func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, namespace string, position int) (Result, error) {
+// Map maps a routed update (see Routed). Other updates return an error.
+func (m *Mapper) Map(update tg.UpdateClass) (Result, error) {
+	switch value := update.(type) {
+	case *tg.UpdateNewMessage:
+		return m.mapMessage(value.Message, otogi.ActionMessageCreated, NamespaceCommon)
+	case *tg.UpdateEditMessage:
+		return m.mapMessage(value.Message, otogi.ActionMessageEdited, NamespaceCommon)
+	case *tg.UpdateNewChannelMessage:
+		return m.mapMessage(value.Message, otogi.ActionMessageCreated, NamespaceChannel)
+	case *tg.UpdateEditChannelMessage:
+		return m.mapMessage(value.Message, otogi.ActionMessageEdited, NamespaceChannel)
+	case *tg.UpdateDeleteMessages:
+		return mapDeletes(NamespaceCommon, "", value.Messages), nil
+	case *tg.UpdateDeleteChannelMessages:
+		return mapDeletes("channel:"+strconv.FormatInt(value.ChannelID, 10), "channel:"+strconv.FormatInt(value.ChannelID, 10), value.Messages), nil
+	default:
+		return Result{}, fmt.Errorf("telegram update %T is not routed: %w", update, otogi.ErrUnsupported)
+	}
+}
+
+func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, namespace string) (Result, error) {
 	var peer tg.PeerClass
 	var id, date int
 	var actor string
@@ -182,10 +157,6 @@ func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, n
 	if err != nil {
 		return Result{}, err
 	}
-	sourceKey, err := stableSourceKey(m.accountScope(), locator, messageAction, position, message)
-	if err != nil {
-		return Result{}, err
-	}
 	received := m.now()
 	occurred := received
 	if date > 0 {
@@ -204,7 +175,7 @@ func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, n
 	if namespace == NamespaceChannel {
 		box = conversation
 	}
-	return Result{Event: event, HasEvent: true, SourceKey: sourceKey, Box: box, Position: normalizedPosition(position), Locators: []LocatorRecord{{Namespace: namespace, MessageID: id, Conversation: conversation, Payload: locatorData}}}, nil
+	return Result{Events: []otogi.Event{event}, Locators: []Locator{{Box: box, MessageID: id, Conversation: conversation}}}, nil
 }
 
 func (m *Mapper) mapServiceMessage(message *tg.MessageService) (otogi.Message, error) {
@@ -350,34 +321,19 @@ func mediaPart(part otogi.Part, role otogi.MediaRole, mediaType string, size int
 	return part, nil
 }
 
-func (m *Mapper) mapDeletes(namespace string, channelID int64, ids []int, position int) (Result, error) {
-	result := Result{Box: NamespaceCommon, Position: normalizedPosition(position), Deletes: make([]DeleteRecord, 0, len(ids))}
-	conversation := ""
-	if namespace == NamespaceChannel {
-		conversation = fmt.Sprintf("channel:%d", channelID)
-		result.Box = conversation
-	}
+func mapDeletes(box, conversation string, ids []int) Result {
+	result := Result{Deletes: make([]Delete, 0, len(ids))}
 	for _, id := range ids {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%d", m.accountScope(), namespace, conversation, id, normalizedPosition(position))))
-		result.Deletes = append(result.Deletes, DeleteRecord{Namespace: namespace, MessageID: id, Conversation: conversation, Unresolved: conversation == "", SourceKey: fmt.Sprintf("telegram:delete:%x", sum[:])})
+		result.Deletes = append(result.Deletes, Delete{Box: box, MessageID: id, Conversation: conversation})
 	}
-	return result, nil
+	return result
 }
 
-func stableSourceKey(account string, locator MessageLocator, action otogi.EventAction, position int, message tg.MessageClass) (string, error) {
-	var raw bin.Buffer
-	if err := message.Encode(&raw); err != nil {
-		return "", err
+func namespaceForBox(box string) string {
+	if strings.HasPrefix(box, "channel:") {
+		return NamespaceChannel
 	}
-	sum := sha256.Sum256(append([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s\x00%d\x00", account, locator.Namespace, locator.Peer, locator.MessageID, action, normalizedPosition(position))), raw.Buf...))
-	return fmt.Sprintf("telegram:%x", sum[:]), nil
-}
-
-func normalizedPosition(position int) int {
-	if position < 0 {
-		return 0
-	}
-	return position
+	return NamespaceCommon
 }
 
 func (m *Mapper) accountScope() string {
@@ -411,4 +367,22 @@ func conversationKind(conversation string) otogi.ConversationKind {
 	default:
 		return otogi.ConversationChannel
 	}
+}
+
+// MessageRef returns a reference to message messageID in conversation, in the
+// same form as inbound events use. A zero messageID gives a reference with only
+// the conversation, for sends Telegram confirmed without identifying.
+func (m *Mapper) MessageRef(conversation string, messageID int) otogi.EventRef {
+	ref := otogi.EventRef{Platform: m.config.Platform, Account: m.account(), Conversation: otogi.ConversationID(conversation)}
+	if messageID == 0 {
+		return ref
+	}
+	namespace := NamespaceCommon
+	if strings.HasPrefix(conversation, "channel:") {
+		namespace = NamespaceChannel
+	}
+	data, _ := EncodeMessageLocator(MessageLocator{Namespace: namespace, Peer: conversation, MessageID: messageID})
+	ref.SourceEvent = sourceID(namespace, conversation, messageID)
+	ref.Locator = messageLocator(data)
+	return ref
 }

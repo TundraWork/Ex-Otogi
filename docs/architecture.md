@@ -43,13 +43,13 @@ Constructors do no I/O and start no goroutines; `Start` does. Modules and driver
 
 SQLite on local disk is the store. Each component that persists data owns its own schema and queries; others go through its API, never its tables. Transactions start and end inside the owning component. Today's owners:
 
-- the Telegram adapter, for its durable inbox, update state, and send records (one database per account, next to its gotd session file);
+- the Telegram adapter, for its durable inbox, gotd update state, peer access hashes, message locators, sent messages, and gaps (one database per account; migrations via goose);
 - the event log (see `observability.md`), when implemented.
 
 ## Data flow
 
 1. A driver receives a platform update, durably records it, and converts it to a rich event.
-2. The driver submits the event to the kernel and waits for its completion acknowledgement before marking it done.
+2. The driver submits the event to the kernel and marks it done when the kernel reports completion.
 3. The kernel routes the event to subscribed modules.
 4. Modules act through capabilities such as `Invocation.Send`, which the kernel routes back to the right driver.
 5. Each step is recorded in the event log.

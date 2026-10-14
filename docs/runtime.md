@@ -17,11 +17,11 @@ The model is designed against Telegram, Matrix, XMPP, Discord, and QQ, so one mo
 
 Delivery is at-least-once from the platform to modules:
 
-1. The driver writes each inbound update to its durable inbox before processing.
-2. It submits the converted event to the kernel and waits for the kernel's completion acknowledgement.
-3. Only then does it mark the inbox row done. After a crash, unfinished rows are replayed.
+1. The driver writes each inbound update to its durable inbox before the platform library records the update as received. For Telegram, the inbox write happens inside gotd's update handler, which runs before gotd saves its position.
+2. A dispatcher converts inbox rows to events in arrival order and submits them to the kernel without waiting.
+3. When the kernel reports an event finished, the driver marks its row done. After a crash, unfinished rows are dispatched again, with the same event IDs.
 
-Because events can be replayed, outbound effects carry an idempotency key derived from (event ID, module, effect slot). A driver that records sends by key does not repeat a send on replay; Telegram does this. Modules with their own side effects use the same key.
+Because events can be replayed, outbound effects carry an idempotency key derived from (event ID, module, effect slot). A driver that records sends by key does not repeat a send on replay, and returns the original message reference. Telegram also derives `random_id` from the key, so a resend after a crash is rejected by Telegram as a duplicate. Modules with their own side effects use the same key.
 
 Missed platform history is the driver's job. Telegram, for example, fetches updates it missed while offline. If history cannot be recovered, the driver records a gap in the event log and keeps running; it does not block the bot.
 

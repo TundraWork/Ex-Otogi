@@ -9,9 +9,9 @@ import (
 
 type invocation struct{ sent []otogi.Message }
 
-func (i *invocation) Send(_ context.Context, _ string, msg otogi.Message) error {
+func (i *invocation) Send(_ context.Context, _ string, msg otogi.Message) (otogi.EventRef, error) {
 	i.sent = append(i.sent, msg)
-	return nil
+	return otogi.EventRef{}, nil
 }
 
 func TestHandle(t *testing.T) {

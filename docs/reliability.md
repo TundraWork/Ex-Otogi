@@ -10,8 +10,8 @@ The bot loses no inbound events, recovers on its own from ordinary failures (net
 | --- | --- |
 | Network or platform outage | The driver reconnects with backoff (gotd handles MTProto reconnects), then catches up on missed updates. |
 | Platform rate limit (Telegram `FLOOD_WAIT`) | Wait the indicated time within the operation's context, then retry once the wait ends. |
-| Process crash or kill | Unfinished durable inbox rows are replayed on restart. Sends are not repeated because they are recorded by idempotency key. |
-| Missed history cannot be recovered | Record a gap (account, box, position, cause) in the event log and status, and continue. |
+| Process crash or kill | Unfinished durable inbox rows are dispatched again on restart. Sends are not repeated: they are recorded by idempotency key, and Telegram rejects a reused `random_id`. |
+| Missed history cannot be recovered | Record a gap (kind, channel, time) and continue. For Telegram, gotd reports these through its gap hooks. |
 | Module error or panic | Record the failed outcome or panic with its stack; other modules and events continue. |
 | Required component fails | Record the cause, shut down gracefully, and exit non-zero so the supervisor restarts the process. |
 | Invalid configuration or unreadable database at startup | Exit non-zero with a message naming the field or file. Never silently create fresh state over an unreadable database. |
@@ -29,4 +29,6 @@ Retry only operations that are safe to repeat (reads, or writes carrying an idem
 
 ## Startup recovery
 
-On start, a driver replays unfinished inbox rows, then catches up on platform history, then accepts new updates. The process becomes ready once drivers are connected and replay has started; a recorded gap does not block readiness.
+On start, a driver dispatches unfinished inbox rows, and the platform library catches up on history missed while offline (for Telegram, gotd's `getDifference`). The driver becomes ready once updates flow; a recorded gap does not block readiness.
+
+If the Telegram inbox cannot be written, the driver stops gotd from saving its position and fails, so the process restarts and gotd re-fetches from the last saved position.
