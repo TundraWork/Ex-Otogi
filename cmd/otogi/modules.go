@@ -7,6 +7,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/TundraWork/Ex-Otogi/modules/echo"
+	"github.com/TundraWork/Ex-Otogi/modules/notes"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -23,6 +24,13 @@ var moduleRegistry = map[string]moduleFactory{
 			return nil, err
 		}
 		return echo.New(), nil
+	},
+	"notes": func(config *yaml.Node) (otogi.Module, error) {
+		var cfg notes.Config
+		if err := decodeSection(config, &cfg); err != nil {
+			return nil, err
+		}
+		return notes.New(cfg), nil
 	},
 }
 

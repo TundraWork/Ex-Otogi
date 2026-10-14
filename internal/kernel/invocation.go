@@ -15,9 +15,12 @@ type invocation struct {
 	event  otogi.Event
 	origin string
 	module otogi.ModuleID
+	host   *host
 	mu     sync.Mutex
 	slots  map[string]bool
 }
+
+func (i *invocation) Host() otogi.Host { return i.host }
 
 func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) (otogi.EventRef, error) {
 	if i.event.Conversation.ID == "" {

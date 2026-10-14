@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -519,5 +520,79 @@ func TestEffectsAreAddressedAndValidated(t *testing.T) {
 	}
 	if len(kinds) != 4 || kinds[0] != otogi.EffectSend || m.sent[0].To.Conversation != "other" || kinds[1] != otogi.EffectEdit || m.sent[2].Reaction != "👍" || m.sent[3].Ref.SourceEvent != ref.SourceEvent {
 		t.Fatalf("effects = %+v", m.sent)
+	}
+}
+
+type lifecycleModule struct {
+	moduleFunc
+	log      *[]string
+	startErr error
+}
+
+func (m lifecycleModule) Start(_ context.Context, h otogi.Host) error {
+	*m.log = append(*m.log, "start "+string(h.Module()))
+	return m.startErr
+}
+
+func (m lifecycleModule) Stop(context.Context) error {
+	*m.log = append(*m.log, "stop "+string(m.descriptor.ID))
+	return nil
+}
+
+func TestModulesStartAndStopInOrder(t *testing.T) {
+	var log []string
+	var hostSeen otogi.ModuleID
+	mods := []otogi.Module{
+		lifecycleModule{moduleFunc: module("b", func(_ context.Context, _ otogi.Event, inv otogi.Invocation) error {
+			hostSeen = inv.Host().Module()
+			_, _, err := inv.Host().Store().Get(context.Background(), "k") // no storage configured
+			if !errors.Is(err, otogi.ErrUnavailable) {
+				return fmt.Errorf("store without storage = %w", err)
+			}
+			return nil
+		}), log: &log},
+		lifecycleModule{moduleFunc: module("a", func(context.Context, otogi.Event, otogi.Invocation) error { return nil }), log: &log},
+	}
+	k, err := New(Config{}, mods, nil, &messenger{}, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	o := await(t, submit(t, k, event("c", "hi")))
+	for _, m := range o.Modules {
+		if m.Err != nil {
+			t.Fatal(m.Err)
+		}
+	}
+	if err := k.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hostSeen != "b" || !slices.Equal(log, []string{"start a", "start b", "stop b", "stop a"}) {
+		t.Fatalf("host = %q, lifecycle = %v", hostSeen, log)
+	}
+}
+
+func TestFailedModuleStartStopsStartedModules(t *testing.T) {
+	var log []string
+	ok := func(context.Context, otogi.Event, otogi.Invocation) error { return nil }
+	mods := []otogi.Module{
+		lifecycleModule{moduleFunc: module("a", ok), log: &log},
+		lifecycleModule{moduleFunc: module("b", ok), log: &log, startErr: errors.New("no config")},
+		lifecycleModule{moduleFunc: module("c", ok), log: &log},
+	}
+	k, err := New(Config{}, mods, nil, &messenger{}, quiet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Start(context.Background()); err == nil || !strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("Start = %v", err)
+	}
+	if !slices.Equal(log, []string{"start a", "start b", "stop a"}) {
+		t.Fatalf("lifecycle = %v", log)
+	}
+	if err := k.Submit(context.Background(), event("c", "x"), nil); !errors.Is(err, otogi.ErrUnavailable) {
+		t.Fatalf("Submit after failed start = %v", err)
 	}
 }

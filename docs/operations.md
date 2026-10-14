@@ -18,6 +18,8 @@ One `otogi` process plus its data directory on one host, run under a supervisor 
 ```text
 <data>/
   eventlog.sqlite                 # event log
+  modules.sqlite                  # module key/value state (and, later, timers)
+  modules/<id>.sqlite             # a module's private database, if it uses one
   telegram/<account>/session.json # gotd session (login)
   telegram/<account>/state.sqlite # inbox, update state, send records
 ```

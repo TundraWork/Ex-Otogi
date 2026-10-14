@@ -31,6 +31,9 @@ type Config struct {
 	// Recorder receives the event log records the kernel writes (see
 	// docs/observability.md). Default: discard.
 	Recorder otogi.Recorder
+	// Storage backs module stores and private databases. Without it, module
+	// storage calls return ErrUnavailable.
+	Storage ModuleStorage
 }
 
 func (c Config) withDefaults() Config {
@@ -59,6 +62,7 @@ const (
 )
 
 type moduleEntry struct {
+	host       *host
 	module     otogi.Module
 	descriptor otogi.ModuleDescriptor
 	subscribes map[otogi.EventAction]bool
@@ -134,19 +138,37 @@ func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, effe
 		slots:      make(chan struct{}, cfg.MaxInFlight),
 	}
 	k.sched.init(&k.mu)
+	for _, entry := range entries {
+		entry.host = &host{kernel: k, module: entry.descriptor.ID, log: log.With("module", entry.descriptor.ID)}
+	}
 	return k, nil
 }
 
-// Start starts the worker pool. ctx is not retained; Stop ends the workers.
+// Start starts every module implementing otogi.Starter, then the worker
+// pool. If a module fails to start, the modules already started are stopped
+// and the error is returned. ctx is not retained; Stop ends the workers.
 func (k *Kernel) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	if k.state != stateNew {
+		k.mu.Unlock()
 		return fmt.Errorf("start kernel: already started: %w", otogi.ErrUnavailable)
 	}
+	k.mu.Unlock()
+	for i, entry := range k.modules {
+		starter, ok := entry.module.(otogi.Starter)
+		if !ok {
+			continue
+		}
+		if err := guard(func() error { return starter.Start(ctx, entry.host) }); err != nil {
+			stopErr := k.stopModules(ctx, k.modules[:i])
+			return errors.Join(fmt.Errorf("start module %q: %w", entry.descriptor.ID, err), stopErr)
+		}
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	k.runCtx, k.cancel = context.WithCancel(context.Background())
 	for range k.cfg.Workers {
 		k.workers.Go(k.work)
@@ -262,7 +284,33 @@ func (k *Kernel) Stop(ctx context.Context) error {
 	k.cancel()
 	k.sched.stop()
 	k.mu.Unlock()
-	return wait(ctx, &k.workers)
+	if err := wait(ctx, &k.workers); err != nil {
+		return err
+	}
+	return k.stopModules(ctx, k.modules)
+}
+
+// stopModules stops modules implementing otogi.Stopper, in reverse order.
+func (k *Kernel) stopModules(ctx context.Context, entries []*moduleEntry) error {
+	var errs []error
+	for _, entry := range slices.Backward(entries) {
+		if stopper, ok := entry.module.(otogi.Stopper); ok {
+			if err := guard(func() error { return stopper.Stop(ctx) }); err != nil {
+				errs = append(errs, fmt.Errorf("stop module %q: %w", entry.descriptor.ID, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// guard turns a panic in fn into an error.
+func guard(fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v\n%s", r, debug.Stack())
+		}
+	}()
+	return fn()
 }
 
 func wait(ctx context.Context, wg *sync.WaitGroup) error {
@@ -362,7 +410,7 @@ func (k *Kernel) invoke(d *delivery) (err error) {
 			err = p
 		}
 	}()
-	return d.module.module.Handle(ctx, d.event.event, &invocation{kernel: k, event: d.event.event, origin: string(d.event.event.ID), module: d.module.descriptor.ID})
+	return d.module.module.Handle(ctx, d.event.event, &invocation{kernel: k, event: d.event.event, origin: string(d.event.event.ID), module: d.module.descriptor.ID, host: d.module.host})
 }
 
 // panicError is a recovered module panic, with its stack.

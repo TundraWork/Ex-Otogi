@@ -96,6 +96,9 @@ type Module interface {
 // a replayed event repeats no effect. Platforms that cannot perform an effect
 // return ErrUnsupported.
 type Invocation interface {
+	// Host returns the module's long-lived capabilities: store, database,
+	// logger, and event log.
+	Host() Host
 	// Send sends msg to the event's conversation and returns a reference to
 	// the sent message. A replay returns the original reference. Its
 	// SourceEvent may be empty when the platform confirms a duplicate without

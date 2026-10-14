@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/management"
+	"github.com/TundraWork/Ex-Otogi/internal/adapter/modulestore"
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram"
 	"github.com/TundraWork/Ex-Otogi/internal/kernel"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
@@ -64,9 +65,18 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 	if err != nil {
 		return err
 	}
+	storage, err := modulestore.Open(ctx, cfg.DataDir)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := storage.Close(); err != nil && failure == nil {
+			failure = err
+		}
+	}()
 	routes := router{}
 	kernelConfig := cfg.Kernel.kernel()
-	kernelConfig.Recorder = events
+	kernelConfig.Recorder, kernelConfig.Storage = events, storage
 	var middleware []otogi.Middleware
 	if len(cfg.Commands.Prefixes) > 0 {
 		middleware = append(middleware, kernel.CommandParser(cfg.Commands.Prefixes))

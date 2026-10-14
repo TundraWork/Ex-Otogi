@@ -19,7 +19,7 @@ The module SDK is designed in [`2026-10-14-module-sdk-design.md`](superpowers/sp
 
 - messaging: send, send to other conversations, reply and quote (relations), edit, delete, react, send and fetch media (implemented);
 - commands and filters declared in the descriptor (implemented): a declared command goes only to its module, and modules receive incoming events only unless their filter opts in to outgoing or system events;
-- per-module key/value store, private SQLite database, and typed config;
+- per-module key/value store, private SQLite database, `Starter`/`Stopper`, and typed config (implemented; see `modules/notes`);
 - cron jobs, persistent timers, and typed services shared between modules.
 
 Every effect names a slot; the kernel derives its idempotency key from the unit of work (event, job run, or timer run), the module, and the slot, so replays never repeat effects. Drivers receive effects through `otogi.Effector` and return `ErrUnsupported` for kinds they do not implement.
@@ -39,6 +39,8 @@ A driver does not decide routing or module behavior.
 ## Configuration
 
 Each module and driver has its own typed section in the main config file. Unknown fields are rejected so typos surface at startup. Defaults are documented next to the config struct.
+
+The module convention: a `Config` struct with `yaml` tags and a `New(Config)` constructor in `modules/<id>`, plus one entry in `cmd/otogi/modules.go` that decodes the section. A module is enabled by listing its ID under `modules:`.
 
 ## Failure isolation
 
