@@ -16,17 +16,19 @@ func (i *invocation) Send(_ context.Context, _ string, msg otogi.Message) (otogi
 
 func TestHandle(t *testing.T) {
 	tests := []struct {
-		name    string
-		message otogi.Message
-		want    []string
+		name      string
+		message   otogi.Message
+		direction otogi.Direction
+		want      []string
 	}{
-		{"text", otogi.TextMessage("hello"), []string{"echo: hello"}},
-		{"no text", otogi.Message{Roots: []otogi.PartID{"m"}, Parts: []otogi.Part{{ID: "m", Kind: otogi.PartMedia, Media: &otogi.Media{}}}}, nil},
+		{"text", otogi.TextMessage("hello"), otogi.DirectionIncoming, []string{"echo: hello"}},
+		{"no text", otogi.Message{Roots: []otogi.PartID{"m"}, Parts: []otogi.Part{{ID: "m", Kind: otogi.PartMedia, Media: &otogi.Media{}}}}, otogi.DirectionIncoming, nil},
+		{"own message", otogi.TextMessage("echo: hello"), otogi.DirectionOutgoing, nil},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			inv := &invocation{}
-			if err := New().Handle(context.Background(), otogi.Event{Message: test.message}, inv); err != nil {
+			if err := New().Handle(context.Background(), otogi.Event{Message: test.message, Direction: test.direction}, inv); err != nil {
 				t.Fatal(err)
 			}
 			if len(inv.sent) != len(test.want) {
