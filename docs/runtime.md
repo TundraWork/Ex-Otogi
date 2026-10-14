@@ -37,6 +37,12 @@ Modules are independent: there is no order between modules for the same event. A
 
 When every delivery of an event has finished, the kernel calls the driver's `done` callback with the outcome. Details are in the [lean core contracts design](superpowers/specs/2026-10-14-lean-core-contracts-design.md).
 
+## Jobs and timers
+
+Besides events, module work comes from jobs (`Host.Schedule`, cron or `@every` specs, in memory) and persistent timers (`Host.SetTimer`, stored in `modules.sqlite`). A kernel-owned clock checks both once a second while the kernel is ready. Each run is a delivery in its own lane per (module, job name or timer key), with the same timeout, panic containment, and event log records as events; its `Invocation.Origin` names the job or timer, and effects are keyed by the run ID (job name and scheduled time, or timer key and due time).
+
+A job run is skipped while the previous run of the same job is still pending, so slow jobs never pile up; runs missed while the process was down are not replayed. A timer is deleted after its run succeeds and retried a minute later if it fails, keeping its run ID; a timer that came due while the process was down fires on start. Timers of modules that are not enabled stay stored until the module is enabled again.
+
 ## Queues
 
 Every queue has a fixed capacity and one owner. When a queue is full, the producer either gets an explicit capacity error or blocks under its context. A driver with a durable inbox simply leaves the work in the inbox and retries later. Nothing is dropped silently.

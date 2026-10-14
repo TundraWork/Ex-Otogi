@@ -36,6 +36,11 @@ type ModuleDescriptor struct {
 	Commands []CommandSpec
 	// Filter narrows which events the module receives.
 	Filter Filter
+	// Provides lists the services the module registers with Host.Provide.
+	Provides []string
+	// Requires lists the services the module uses. Modules start after the
+	// providers of what they require.
+	Requires []string
 }
 
 // CommandSpec declares a command a module handles.
@@ -96,9 +101,11 @@ type Module interface {
 // a replayed event repeats no effect. Platforms that cannot perform an effect
 // return ErrUnsupported.
 type Invocation interface {
-	// Host returns the module's long-lived capabilities: store, database,
-	// logger, and event log.
+	// Host returns the module's long-lived capabilities.
 	Host() Host
+	// Origin says what this unit of work is for: an event, a job run, or a
+	// timer.
+	Origin() Origin
 	// Send sends msg to the event's conversation and returns a reference to
 	// the sent message. A replay returns the original reference. Its
 	// SourceEvent may be empty when the platform confirms a duplicate without

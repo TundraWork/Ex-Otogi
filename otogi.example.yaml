@@ -35,3 +35,5 @@ modules:
   echo: {}                # replies "echo: <text>" to every text message
   notes:                  # /note <text>, /note, /note clear
     max_notes: 50
+  reminders:              # /remind 10m tea  (survives restarts)
+    max_delay: 720h

@@ -63,6 +63,8 @@ const (
 
 type moduleEntry struct {
 	host       *host
+	provides   map[string]bool
+	requires   map[string]bool
 	module     otogi.Module
 	descriptor otogi.ModuleDescriptor
 	subscribes map[otogi.EventAction]bool
@@ -77,6 +79,8 @@ type Kernel struct {
 	effector   otogi.Effector
 	middleware []otogi.Middleware
 	modules    []*moduleEntry
+	startOrder []*moduleEntry // providers before the modules requiring them
+	byID       map[otogi.ModuleID]*moduleEntry
 	commands   map[string][]*moduleEntry // command name -> declaring module
 	slots      chan struct{}
 
@@ -87,6 +91,10 @@ type Kernel struct {
 	cancel   context.CancelFunc
 	sched    scheduler
 	workers  sync.WaitGroup
+	starting bool // modules may Schedule and Provide only while starting
+	services map[string]any
+	jobs     []*job
+	timers   map[string]bool // module/key of timers running now
 }
 
 // New validates the module set and returns a kernel that is not yet started.
@@ -107,7 +115,7 @@ func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, effe
 			return nil, fmt.Errorf("new kernel: empty or duplicate module ID %q: %w", d.ID, otogi.ErrInvalid)
 		}
 		seen[d.ID] = true
-		entry := &moduleEntry{module: module, descriptor: d, subscribes: make(map[otogi.EventAction]bool, len(d.Subscribes)), timeout: cfg.HandlerTimeout}
+		entry := &moduleEntry{module: module, descriptor: d, subscribes: make(map[otogi.EventAction]bool, len(d.Subscribes)), timeout: cfg.HandlerTimeout, provides: set(d.Provides), requires: set(d.Requires)}
 		for _, action := range d.Subscribes {
 			if !action.Valid() {
 				return nil, fmt.Errorf("new kernel: module %q subscribes to invalid action %q: %w", d.ID, action, otogi.ErrInvalid)
@@ -132,14 +140,22 @@ func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, effe
 			commands[c.Name] = []*moduleEntry{entry}
 		}
 	}
+	order, err := startOrder(entries)
+	if err != nil {
+		return nil, fmt.Errorf("new kernel: %w", err)
+	}
 	k := &Kernel{
-		cfg: cfg, log: log, effector: effector, modules: entries, commands: commands,
+		cfg: cfg, log: log, effector: effector, modules: entries, startOrder: order, commands: commands,
+		byID:       map[otogi.ModuleID]*moduleEntry{},
 		middleware: slices.Clone(middleware),
 		slots:      make(chan struct{}, cfg.MaxInFlight),
+		services:   map[string]any{},
+		timers:     map[string]bool{},
 	}
 	k.sched.init(&k.mu)
 	for _, entry := range entries {
-		entry.host = &host{kernel: k, module: entry.descriptor.ID, log: log.With("module", entry.descriptor.ID)}
+		entry.host = &host{kernel: k, entry: entry, log: log.With("module", entry.descriptor.ID)}
+		k.byID[entry.descriptor.ID] = entry
 	}
 	return k, nil
 }
@@ -156,23 +172,29 @@ func (k *Kernel) Start(ctx context.Context) error {
 		k.mu.Unlock()
 		return fmt.Errorf("start kernel: already started: %w", otogi.ErrUnavailable)
 	}
+	k.starting = true
 	k.mu.Unlock()
-	for i, entry := range k.modules {
+	for i, entry := range k.startOrder {
 		starter, ok := entry.module.(otogi.Starter)
 		if !ok {
 			continue
 		}
 		if err := guard(func() error { return starter.Start(ctx, entry.host) }); err != nil {
-			stopErr := k.stopModules(ctx, k.modules[:i])
+			k.mu.Lock()
+			k.starting = false
+			k.mu.Unlock()
+			stopErr := k.stopModules(ctx, k.startOrder[:i])
 			return errors.Join(fmt.Errorf("start module %q: %w", entry.descriptor.ID, err), stopErr)
 		}
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.starting = false
 	k.runCtx, k.cancel = context.WithCancel(context.Background())
 	for range k.cfg.Workers {
 		k.workers.Go(k.work)
 	}
+	k.workers.Go(k.clock)
 	k.state = stateReady
 	return nil
 }
@@ -213,7 +235,7 @@ func (k *Kernel) Submit(ctx context.Context, event otogi.Event, done func(otogi.
 	}
 	var deliveries []*delivery
 	for _, entry := range k.recipients(tracked.event) {
-		deliveries = append(deliveries, &delivery{event: tracked, module: entry})
+		deliveries = append(deliveries, eventDelivery(tracked, entry))
 	}
 	tracked.begin(len(deliveries))
 	k.mu.Lock()
@@ -287,7 +309,7 @@ func (k *Kernel) Stop(ctx context.Context) error {
 	if err := wait(ctx, &k.workers); err != nil {
 		return err
 	}
-	return k.stopModules(ctx, k.modules)
+	return k.stopModules(ctx, k.startOrder)
 }
 
 // stopModules stops modules implementing otogi.Stopper, in reverse order.
@@ -374,6 +396,23 @@ func (t *tracked) finish() {
 	k.inFlight.Done()
 }
 
+// eventDelivery is one event for one module, in the module's lane for the
+// event's conversation.
+func eventDelivery(t *tracked, entry *moduleEntry) *delivery {
+	e := t.event
+	return &delivery{
+		module:   entry,
+		lane:     laneKey{module: entry.descriptor.ID, platform: e.Platform, account: e.Account, conversation: e.Conversation.ID},
+		scope:    e,
+		origin:   otogi.Origin{Event: &t.event},
+		originID: string(e.ID),
+		call: func(ctx context.Context, inv *invocation) error {
+			return entry.module.Handle(ctx, e, inv)
+		},
+		done: t.record,
+	}
+}
+
 // run executes one delivery on a worker goroutine.
 func (k *Kernel) run(d *delivery) {
 	started := time.Now()
@@ -383,15 +422,17 @@ func (k *Kernel) run(d *delivery) {
 	var panicked *panicError
 	switch {
 	case errors.As(err, &panicked):
-		k.record(d.event.event, "module.panicked", component, "error", outcome.Duration, map[string]any{"error": err.Error(), "stack": panicked.stack})
+		k.record(d.scope, "module.panicked", component, "error", outcome.Duration, map[string]any{"origin": d.originID, "error": err.Error(), "stack": panicked.stack})
 	case err != nil:
-		k.log.Error("module failed", "event", d.event.event.ID, "module", outcome.Module, "duration", outcome.Duration, "error", err)
-		k.record(d.event.event, "module.failed", component, "error", outcome.Duration, map[string]any{"error": err.Error()})
+		k.log.Error("module failed", "origin", d.originID, "module", outcome.Module, "duration", outcome.Duration, "error", err)
+		k.record(d.scope, "module.failed", component, "error", outcome.Duration, map[string]any{"origin": d.originID, "error": err.Error()})
 	default:
-		k.log.Debug("module completed", "event", d.event.event.ID, "module", outcome.Module, "duration", outcome.Duration)
-		k.record(d.event.event, "module.completed", component, "ok", outcome.Duration, nil)
+		k.log.Debug("module completed", "origin", d.originID, "module", outcome.Module, "duration", outcome.Duration)
+		k.record(d.scope, "module.completed", component, "ok", outcome.Duration, map[string]any{"origin": d.originID})
 	}
-	d.event.record(outcome)
+	if d.done != nil {
+		d.done(outcome)
+	}
 }
 
 func (k *Kernel) invoke(d *delivery) (err error) {
@@ -406,11 +447,11 @@ func (k *Kernel) invoke(d *delivery) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			p := &panicError{module: d.module.descriptor.ID, value: r, stack: string(debug.Stack())}
-			k.log.Error("module panicked", "event", d.event.event.ID, "module", p.module, "panic", r, "stack", p.stack)
+			k.log.Error("module panicked", "origin", d.originID, "module", p.module, "panic", r, "stack", p.stack)
 			err = p
 		}
 	}()
-	return d.module.module.Handle(ctx, d.event.event, &invocation{kernel: k, event: d.event.event, origin: string(d.event.event.ID), module: d.module.descriptor.ID, host: d.module.host})
+	return d.call(ctx, &invocation{kernel: k, event: d.scope, origin: d.origin, originID: d.originID, module: d.module.descriptor.ID, host: d.module.host})
 }
 
 // panicError is a recovered module panic, with its stack.

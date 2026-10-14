@@ -20,7 +20,12 @@ func (s memoryStore) Put(_ context.Context, k string, v []byte) error { s[k] = v
 func (s memoryStore) Delete(_ context.Context, k string) error        { delete(s, k); return nil }
 func (s memoryStore) List(context.Context, string) ([]string, error)  { return nil, nil }
 
-type host struct{ store memoryStore }
+// host implements the Host methods notes uses; the embedded interface stands
+// in for the rest.
+type host struct {
+	otogi.Host
+	store memoryStore
+}
 
 func (h host) Module() otogi.ModuleID                    { return "notes" }
 func (h host) Logger() *slog.Logger                      { return slog.Default() }

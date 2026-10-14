@@ -11,16 +11,19 @@ import (
 
 // invocation is one unit of module work: an event delivery for now.
 type invocation struct {
-	kernel *Kernel
-	event  otogi.Event
-	origin string
-	module otogi.ModuleID
-	host   *host
-	mu     sync.Mutex
-	slots  map[string]bool
+	kernel   *Kernel
+	event    otogi.Event
+	origin   otogi.Origin
+	originID string
+	module   otogi.ModuleID
+	host     *host
+	mu       sync.Mutex
+	slots    map[string]bool
 }
 
 func (i *invocation) Host() otogi.Host { return i.host }
+
+func (i *invocation) Origin() otogi.Origin { return i.origin }
 
 func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) (otogi.EventRef, error) {
 	if i.event.Conversation.ID == "" {
@@ -90,7 +93,7 @@ func (i *invocation) apply(ctx context.Context, slot string, e otogi.Effect) (ot
 	i.slots[slot] = true
 	i.mu.Unlock()
 
-	e.Module, e.Origin, e.Key = i.module, i.origin, otogi.IdempotencyKeyFor(i.origin, i.module, slot)
+	e.Module, e.Origin, e.Key = i.module, i.originID, otogi.IdempotencyKeyFor(i.originID, i.module, slot)
 	started := time.Now()
 	ref, err := i.kernel.effector.Apply(ctx, e)
 	component := "module:" + string(i.module)

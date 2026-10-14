@@ -20,7 +20,7 @@ The module SDK is designed in [`2026-10-14-module-sdk-design.md`](superpowers/sp
 - messaging: send, send to other conversations, reply and quote (relations), edit, delete, react, send and fetch media (implemented);
 - commands and filters declared in the descriptor (implemented): a declared command goes only to its module, and modules receive incoming events only unless their filter opts in to outgoing or system events;
 - per-module key/value store, private SQLite database, `Starter`/`Stopper`, and typed config (implemented; see `modules/notes`);
-- cron jobs, persistent timers, and typed services shared between modules.
+- cron jobs, persistent timers, and typed services shared between modules (implemented; see `modules/reminders`).
 
 Every effect names a slot; the kernel derives its idempotency key from the unit of work (event, job run, or timer run), the module, and the slot, so replays never repeat effects. Drivers receive effects through `otogi.Effector` and return `ErrUnsupported` for kinds they do not implement.
 

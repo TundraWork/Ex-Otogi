@@ -8,6 +8,7 @@ import (
 
 	"github.com/TundraWork/Ex-Otogi/modules/echo"
 	"github.com/TundraWork/Ex-Otogi/modules/notes"
+	"github.com/TundraWork/Ex-Otogi/modules/reminders"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -31,6 +32,13 @@ var moduleRegistry = map[string]moduleFactory{
 			return nil, err
 		}
 		return notes.New(cfg), nil
+	},
+	"reminders": func(config *yaml.Node) (otogi.Module, error) {
+		var cfg reminders.Config
+		if err := decodeSection(config, &cfg); err != nil {
+			return nil, err
+		}
+		return reminders.New(cfg), nil
 	},
 }
 

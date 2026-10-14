@@ -1,15 +1,22 @@
 package kernel
 
 import (
+	"context"
 	"sync"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// delivery is one event for one module.
+// delivery is one unit of work for one module: an event, a job run, or a
+// timer run.
 type delivery struct {
-	event  *tracked
-	module *moduleEntry
+	module   *moduleEntry
+	lane     laneKey
+	scope    otogi.Event  // the event, or a zero event for jobs and timers
+	origin   otogi.Origin // what the work is for
+	originID string       // event ID or run ID; part of effect keys
+	call     func(context.Context, *invocation) error
+	done     func(otogi.ModuleOutcome)
 }
 
 // laneKey groups deliveries that must run one at a time, in order.
@@ -45,8 +52,7 @@ func (s *scheduler) init(mu *sync.Mutex) {
 }
 
 func (s *scheduler) enqueue(d *delivery) {
-	e := d.event.event
-	key := laneKey{module: d.module.descriptor.ID, platform: e.Platform, account: e.Account, conversation: e.Conversation.ID}
+	key := d.lane
 	if d.module.descriptor.Ordering == otogi.OrderNone {
 		s.sequence++
 		key = laneKey{module: d.module.descriptor.ID, unordered: s.sequence}
