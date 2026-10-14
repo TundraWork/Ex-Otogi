@@ -49,23 +49,6 @@ linters:
       rules:
         - name: exported
         - name: package-comments
-  exclusions:
-    rules:
-      - path: internal/kernel/routing_test\.go
-        linters: [errorlint]
-        text: non-wrapping format verb
-      - path: pkg/otogi/contracts_test\.go
-        linters: [errorlint]
-        text: comparing with !=
-      - path: internal/kernel/review_regression_test\.go
-        linters: [govet]
-        text: lostcancel
-      - path: internal/adapter/capture/capture_test\.go
-        linters: [ineffassign, staticcheck]
-        text: (ineffectual assignment|SA4006)
-      - path: pkg/otogi/api_shape_test\.go
-        linters: [staticcheck]
-        text: SA1019
 
 formatters:
   enable: [gofmt]

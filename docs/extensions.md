@@ -8,8 +8,8 @@ Modules and drivers are Go packages compiled into the binary and registered expl
 
 A module implements bot behavior. It:
 
-- declares its identity and the events it subscribes to (today: a `ModuleDescriptor` with consumed actions);
-- handles each event through `Handle(ctx, event, invocation)` and returns a result;
+- declares its identity, subscribed actions, ordering, and timeout in a `ModuleDescriptor`;
+- handles each event through `Handle(ctx, event, invocation)` and returns an error or nil;
 - acts only through capabilities handed to it (today: `Invocation.Send`);
 - never imports platform SDKs, kernel internals, or another module's package.
 
@@ -45,7 +45,11 @@ Each module and driver has its own typed section in the main config file. Unknow
 
 ## Failure isolation
 
-A module panic or error affects only that invocation. It is recorded in the event log with the module identity, and other modules still receive the event.
+A module panic, error, or timeout affects only that delivery. It is recorded with the module identity, and other modules still receive the event.
+
+## Middleware
+
+Middleware runs on every event before modules, in registration order, and may modify or drop it. It is where cross-cutting policy goes: allowlists, sleep mode, rate limits, command parsing. It must be fast.
 
 ## Compatibility
 

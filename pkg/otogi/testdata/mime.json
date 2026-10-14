@@ -1,1 +1,14 @@
-{"roots":["multipart"],"children":["cid:a","cid:b"]}
+{
+  "platform": "email",
+  "account": "bot@example.org",
+  "conversation": {"id": "thread-1"},
+  "action": "message.created",
+  "message": {
+    "roots": ["multipart"],
+    "parts": [
+      {"id": "multipart", "kind": "embedded_message", "children": ["cid:a", "cid:b"], "embedded": {"summary": "multipart/mixed"}},
+      {"id": "cid:a", "kind": "text", "text": "a"},
+      {"id": "cid:b", "kind": "text", "text": "b"}
+    ]
+  }
+}

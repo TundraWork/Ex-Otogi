@@ -13,10 +13,10 @@ import (
 
 func TestDownstreamRoutesResolvedChannelDeletion(t *testing.T) {
 	store := &captureStore{}
-	var routed []otogi.EventInput
-	handler := NewDownstream(store, testMapper(t), func(input otogi.EventInput) ([]byte, error) {
+	var routed []otogi.Event
+	handler := NewDownstream(store, testMapper(t), func(input otogi.Event) ([]byte, error) {
 		routed = append(routed, input)
-		return []byte(input.Action().String()), nil
+		return []byte(input.Action), nil
 	}, NewHealth())
 	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 	batch := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateDeleteChannelMessages{ChannelID: 77, Messages: []int{5}, Pts: 8, PtsCount: 1}}}
@@ -26,15 +26,15 @@ func TestDownstreamRoutesResolvedChannelDeletion(t *testing.T) {
 	if len(store.captures) != 1 || store.captures[0].Inbox == nil || len(routed) != 1 {
 		t.Fatalf("captures=%+v routed=%d", store.captures, len(routed))
 	}
-	if routed[0].Action() != otogi.ActionMessageDeleted || routed[0].Conversation().String() != "channel:77" || routed[0].Completeness() != otogi.CompletenessUnavailable {
-		t.Fatalf("deletion event = action=%s conversation=%s completeness=%s", routed[0].Action(), routed[0].Conversation(), routed[0].Completeness())
+	if routed[0].Action != otogi.ActionMessageDeleted || routed[0].Conversation.ID != "channel:77" || routed[0].Completeness != otogi.CompletenessUnavailable {
+		t.Fatalf("deletion event = action=%s conversation=%s completeness=%s", routed[0].Action, routed[0].Conversation.ID, routed[0].Completeness)
 	}
 }
 
 func TestDownstreamResolvesCommonDeletionThroughLocator(t *testing.T) {
 	store := &captureStore{locators: []telegramstore.Locator{{Namespace: "common", MessageID: 5, Conversation: "user:7", Payload: []byte("locator")}}}
-	var routed otogi.EventInput
-	handler := NewDownstream(store, testMapper(t), func(input otogi.EventInput) ([]byte, error) {
+	var routed otogi.Event
+	handler := NewDownstream(store, testMapper(t), func(input otogi.Event) ([]byte, error) {
 		routed = input
 		return []byte("deleted"), nil
 	}, NewHealth())
@@ -43,14 +43,14 @@ func TestDownstreamResolvesCommonDeletionThroughLocator(t *testing.T) {
 	if err := handler.Handle(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.captures) != 1 || store.captures[0].Inbox == nil || routed.Conversation().String() != "user:7" || routed.Action() != otogi.ActionMessageDeleted {
-		t.Fatalf("capture=%+v event=%s/%s", store.captures, routed.Conversation(), routed.Action())
+	if len(store.captures) != 1 || store.captures[0].Inbox == nil || routed.Conversation.ID != "user:7" || routed.Action != otogi.ActionMessageDeleted {
+		t.Fatalf("capture=%+v event=%s/%s", store.captures, routed.Conversation.ID, routed.Action)
 	}
 }
 
 func TestDownstreamStoresStructuredUnresolvedDeletionTombstone(t *testing.T) {
 	store := &captureStore{}
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return nil, nil }, NewHealth())
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return nil, nil }, NewHealth())
 	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 	batch := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateDeleteMessages{Messages: []int{5}, Pts: 8, PtsCount: 1}}}
 	if err := handler.Handle(ctx, batch); err != nil {
@@ -71,7 +71,7 @@ func TestDownstreamStoresStructuredUnresolvedDeletionTombstone(t *testing.T) {
 func TestDownstreamRejectsOversizedDeletionBeforeCapture(t *testing.T) {
 	store := &captureStore{}
 	health := NewHealth()
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("deleted"), nil }, health)
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("deleted"), nil }, health)
 	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 	batch := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateDeleteChannelMessages{ChannelID: 77, Messages: make([]int, telegramstore.MaxCaptureRows+1), Pts: 8, PtsCount: 1}}}
 	for i := range batch.Updates[0].(*tg.UpdateDeleteChannelMessages).Messages {
@@ -94,7 +94,7 @@ func TestDownstreamBoundsLocatorExpandedCommonDeletion(t *testing.T) {
 		store.locators[i] = telegramstore.Locator{Namespace: "common", MessageID: 5, Conversation: fmt.Sprintf("user:%d", i+1)}
 	}
 	health := NewHealth()
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("deleted"), nil }, health)
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("deleted"), nil }, health)
 	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 	batch := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateDeleteMessages{Messages: []int{5}, Pts: 8, PtsCount: 1}}}
 	if err := handler.Handle(ctx, batch); err == nil {

@@ -153,7 +153,7 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 		return fmt.Errorf("telegram: digest request: %w", err)
 	}
 	now := s.now().UTC()
-	key := message.IdempotencyKey().String()
+	key := string(message.Key)
 	intent, found, err := s.store.GetSendIntent(ctx, key)
 	if err != nil {
 		return err
@@ -175,7 +175,7 @@ func (s *Sender) Send(ctx context.Context, message otogi.OutboundMessage) error 
 			}
 		}
 	} else {
-		peer, record, peerErr := s.inputPeer(ctx, message.Conversation().String())
+		peer, record, peerErr := s.inputPeer(ctx, string(message.Conversation))
 		if peerErr != nil {
 			return peerErr
 		}
@@ -278,12 +278,11 @@ func (s *Sender) recordSendError(ctx context.Context, key string, cause error, a
 }
 
 func encodeMessage(m otogi.OutboundMessage) (*tg.MessagesSendMessageRequest, error) {
-	parts := m.Message().Parts()
-	roots := m.Message().Roots()
-	if len(parts) != 1 || len(roots) != 1 || parts[0].Kind() != otogi.PartText || len(parts[0].Children()) != 0 || len(parts[0].Extensions()) != 0 || len(m.Message().Extensions()) != 0 {
-		return nil, fmt.Errorf("telegram rich text codec: %w", otogi.ErrUnsupported)
+	parts := m.Message.Parts
+	if len(parts) != 1 || parts[0].Kind != otogi.PartText || len(parts[0].Children) != 0 {
+		return nil, fmt.Errorf("telegram sender supports one text part: %w", otogi.ErrUnsupported)
 	}
-	text, anns, _ := parts[0].Text()
+	text, anns := parts[0].Text, parts[0].Annotations
 	entities := make([]tg.MessageEntityClass, 0, len(anns))
 	for _, a := range anns {
 		e, err := encodeEntity(text, a)
@@ -293,19 +292,19 @@ func encodeMessage(m otogi.OutboundMessage) (*tg.MessagesSendMessageRequest, err
 		entities = append(entities, e)
 	}
 	var reply, thread int
-	for _, r := range m.Message().Relations() {
-		if len(r.Extensions()) != 0 || r.Key() != "" || (r.Kind() != otogi.RelationReply && r.Kind() != otogi.RelationThread) || !r.Target().HasLocator() {
-			return nil, fmt.Errorf("telegram relation: %w", otogi.ErrUnsupported)
+	for _, r := range m.Message.Relations {
+		if r.Kind != otogi.RelationReply && r.Kind != otogi.RelationThread {
+			return nil, fmt.Errorf("telegram relation %s: %w", r.Kind, otogi.ErrUnsupported)
 		}
-		l := r.Target().Locator()
-		if !strings.HasSuffix(l.NamespaceURI(), "/message") || l.SchemaVersion() != 1 {
+		l := r.Target.Locator
+		if !strings.HasSuffix(l.Namespace, "/message") || l.Version != 1 {
 			return nil, fmt.Errorf("telegram relation locator: %w", otogi.ErrUnsupported)
 		}
-		ml, e := mapper.DecodeMessageLocator(l.Data())
-		if e != nil || ml.Peer != m.Conversation().String() {
+		ml, e := mapper.DecodeMessageLocator(l.Data)
+		if e != nil || ml.Peer != string(m.Conversation) {
 			return nil, fmt.Errorf("telegram relation locator: %w", otogi.ErrUnsupported)
 		}
-		if r.Kind() == otogi.RelationReply {
+		if r.Kind == otogi.RelationReply {
 			if reply != 0 {
 				return nil, fmt.Errorf("multiple replies: %w", otogi.ErrUnsupported)
 			}
@@ -317,7 +316,7 @@ func encodeMessage(m otogi.OutboundMessage) (*tg.MessagesSendMessageRequest, err
 			thread = ml.MessageID
 		}
 	}
-	peer, err := logicalPeer(m.Conversation().String())
+	peer, err := logicalPeer(string(m.Conversation))
 	if err != nil {
 		return nil, err
 	}
@@ -356,17 +355,11 @@ func logicalPeer(conversation string) (tg.InputPeerClass, error) {
 }
 
 func encodeEntity(text string, a otogi.Annotation) (tg.MessageEntityClass, error) {
-	if len(a.Extensions()) != 0 {
-		return nil, fmt.Errorf("telegram annotation extension: %w", otogi.ErrUnsupported)
-	}
-	if a.Kind() != otogi.AnnotationLink && a.Kind() != otogi.AnnotationPreformatted && a.Target() != "" {
-		return nil, fmt.Errorf("telegram annotation target: %w", otogi.ErrUnsupported)
-	}
-	off, length, ok := utf16Range(text, a.Offset(), a.Length())
+	off, length, ok := utf16Range(text, a.Offset, a.Length)
 	if !ok {
 		return nil, fmt.Errorf("telegram annotation range: %w", otogi.ErrUnsupported)
 	}
-	switch a.Kind() {
+	switch a.Kind {
 	case otogi.AnnotationBold:
 		return &tg.MessageEntityBold{Offset: off, Length: length}, nil
 	case otogi.AnnotationItalic:
@@ -380,16 +373,16 @@ func encodeEntity(text string, a otogi.Annotation) (tg.MessageEntityClass, error
 	case otogi.AnnotationCode:
 		return &tg.MessageEntityCode{Offset: off, Length: length}, nil
 	case otogi.AnnotationPreformatted:
-		return &tg.MessageEntityPre{Offset: off, Length: length, Language: a.Target()}, nil
+		return &tg.MessageEntityPre{Offset: off, Length: length, Language: a.Target}, nil
 	case otogi.AnnotationBlockQuote:
 		return &tg.MessageEntityBlockquote{Offset: off, Length: length}, nil
 	case otogi.AnnotationLink:
-		if a.Target() == "" {
+		if a.Target == "" {
 			return &tg.MessageEntityURL{Offset: off, Length: length}, nil
 		}
-		return &tg.MessageEntityTextURL{Offset: off, Length: length, URL: a.Target()}, nil
+		return &tg.MessageEntityTextURL{Offset: off, Length: length, URL: a.Target}, nil
 	default:
-		return nil, fmt.Errorf("telegram annotation %s: %w", a.Kind(), otogi.ErrUnsupported)
+		return nil, fmt.Errorf("telegram annotation %s: %w", a.Kind, otogi.ErrUnsupported)
 	}
 }
 func utf16Range(s string, byteOffset, byteLength int) (int, int, bool) {

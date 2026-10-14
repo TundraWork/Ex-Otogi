@@ -76,65 +76,42 @@ func (s *dispatchStore) FailClaim(_ context.Context, id, _, _ string, _ time.Tim
 
 type dispatchAdmitter struct {
 	mu           sync.Mutex
-	subscribeErr error
 	submitErr    error
 	submitted    []otogi.EventID
-	subscribed   []otogi.EventID
-	completion   chan otogi.EventID
 	autoComplete bool
-	onSubmit     func(otogi.EventID, otogi.EventInput)
+	onSubmit     func(otogi.Event)
 }
 
-func (a *dispatchAdmitter) SubscribeCompletion(_ context.Context, id otogi.EventID) (<-chan otogi.EventID, error) {
+func (a *dispatchAdmitter) Submit(_ context.Context, event otogi.Event, done func(otogi.Outcome)) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.subscribed = append(a.subscribed, id)
-	if a.subscribeErr != nil {
-		return nil, a.subscribeErr
-	}
-	if a.completion == nil {
-		a.completion = make(chan otogi.EventID, 1)
-	}
-	return a.completion, nil
-}
-func (a *dispatchAdmitter) SubmitTrusted(_ context.Context, id otogi.EventID, input otogi.EventInput) error {
-	a.mu.Lock()
-	a.submitted = append(a.submitted, id)
-	err := a.submitErr
-	hook := a.onSubmit
-	completion := a.completion
-	auto := a.autoComplete
+	a.submitted = append(a.submitted, event.ID)
+	err, hook, auto := a.submitErr, a.onSubmit, a.autoComplete
 	a.mu.Unlock()
 	if hook != nil {
-		hook(id, input)
+		hook(event)
 	}
 	if err == nil && auto {
-		completion <- id
+		done(otogi.Outcome{EventID: event.ID})
 	}
 	return err
 }
 
-func TestDispatcherSubscribesBeforeAdmissionAndCompletesAcknowledgedRichEvent(t *testing.T) {
+func TestDispatcherDecodesSubmitsAndCompletesAcknowledgedEvent(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	row := dispatchRow(t, "018f47a6-f5f7-7cac-9000-111111111111", "chat:1", []byte("rich"))
 	store := &dispatchStore{rows: []telegramstore.InboxRow{row}}
 	admitter := &dispatchAdmitter{autoComplete: true}
 	var decoded bool
-	decoder := func(_ context.Context, payload []byte) (otogi.EventInput, error) {
+	decoder := func(_ context.Context, payload []byte) (otogi.Event, error) {
 		if string(payload) != "rich" {
 			t.Fatalf("payload=%q", payload)
 		}
 		decoded = true
 		return dispatchInput(t, "chat:1"), nil
 	}
-	admitter.onSubmit = func(id otogi.EventID, input otogi.EventInput) {
-		if !decoded || input.Action() != otogi.ActionMessageEdited {
-			t.Fatal("event was not richly decoded before admission")
-		}
-		admitter.mu.Lock()
-		defer admitter.mu.Unlock()
-		if len(admitter.subscribed) != 1 || admitter.subscribed[0] != id {
-			t.Fatal("admission happened before completion subscription")
+	admitter.onSubmit = func(event otogi.Event) {
+		if !decoded || event.Action != otogi.ActionMessageEdited || event.ID != deterministicInboxEventID(row.ID) {
+			t.Fatalf("submitted event = %+v", event)
 		}
 	}
 	d := NewInboxDispatcher(store, admitter, decoder, dispatchConfig(now))
@@ -155,10 +132,10 @@ func TestDispatcherDerivesStableEventIDAndReplaysAfterLostAcknowledgement(t *tes
 	}
 	now := time.Unix(200, 0).UTC()
 	store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, inboxID, "chat:1", []byte("event"))}}
-	admitter := &dispatchAdmitter{completion: make(chan otogi.EventID)}
-	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(now))
+	admitter := &dispatchAdmitter{}
+	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.Event, error) { return dispatchInput(t, "chat:1"), nil }, dispatchConfig(now))
 	ctx, cancel := context.WithCancel(context.Background())
-	admitter.onSubmit = func(otogi.EventID, otogi.EventInput) { cancel() }
+	admitter.onSubmit = func(otogi.Event) { cancel() }
 	if worked, err := d.dispatchOne(ctx); !worked || err != nil {
 		t.Fatalf("lost ack dispatch = %v, %v", worked, err)
 	}
@@ -168,7 +145,6 @@ func TestDispatcherDerivesStableEventIDAndReplaysAfterLostAcknowledgement(t *tes
 	store.rows = []telegramstore.InboxRow{dispatchRow(t, inboxID, "chat:1", []byte("event"))}
 	admitter.onSubmit = nil
 	admitter.autoComplete = true
-	admitter.completion = nil
 	if worked, err := d.dispatchOne(context.Background()); err != nil || !worked {
 		t.Fatalf("replay = %v, %v", worked, err)
 	}
@@ -177,7 +153,7 @@ func TestDispatcherDerivesStableEventIDAndReplaysAfterLostAcknowledgement(t *tes
 	}
 }
 
-func TestDispatcherRetriesCapacityWithBoundedExponentialSchedule(t *testing.T) {
+func TestDispatcherRetriesUnavailableKernelWithBoundedExponentialSchedule(t *testing.T) {
 	now := time.Unix(300, 0).UTC()
 	cfg := dispatchConfig(now)
 	cfg.RetryBase = 2 * time.Second
@@ -185,13 +161,13 @@ func TestDispatcherRetriesCapacityWithBoundedExponentialSchedule(t *testing.T) {
 	for _, attempts := range []int{1, 2, 20} {
 		store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, "row", "a", []byte("event"))}}
 		store.rows[0].Attempts = attempts - 1
-		admitter := &dispatchAdmitter{subscribeErr: otogi.ErrCapacity}
-		d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) { return dispatchInput(t, "a"), nil }, cfg)
+		admitter := &dispatchAdmitter{submitErr: fmt.Errorf("kernel draining: %w", otogi.ErrUnavailable)}
+		d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.Event, error) { return dispatchInput(t, "a"), nil }, cfg)
 		if worked, err := d.dispatchOne(context.Background()); err != nil || !worked {
 			t.Fatalf("attempt %d = %v, %v", attempts, worked, err)
 		}
 		want := now.Add(min(5*time.Second, 2*time.Second*time.Duration(1<<min(attempts-1, 2))))
-		if len(store.released) != 1 || !store.released[0].next.Equal(want) || store.released[0].reason != "kernel capacity" {
+		if len(store.released) != 1 || !store.released[0].next.Equal(want) || store.released[0].reason != "kernel unavailable" {
 			t.Fatalf("attempt %d release=%+v want=%s", attempts, store.released, want)
 		}
 	}
@@ -201,12 +177,12 @@ func TestDispatcherPermanentlyFailsInvalidPayloadWithoutAdmission(t *testing.T) 
 	now := time.Unix(400, 0).UTC()
 	store := &dispatchStore{rows: []telegramstore.InboxRow{dispatchRow(t, "bad", "a", []byte("invalid"))}}
 	admitter := &dispatchAdmitter{}
-	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) { return otogi.EventInput{}, otogi.ErrInvalid }, dispatchConfig(now))
+	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.Event, error) { return otogi.Event{}, otogi.ErrInvalid }, dispatchConfig(now))
 	if worked, err := d.dispatchOne(context.Background()); err != nil || !worked {
 		t.Fatalf("dispatch = %v, %v", worked, err)
 	}
-	if len(store.failed) != 1 || len(admitter.subscribed) != 0 || len(admitter.submitted) != 0 {
-		t.Fatalf("failed=%v subscribed=%v submitted=%v", store.failed, admitter.subscribed, admitter.submitted)
+	if len(store.failed) != 1 || len(admitter.submitted) != 0 {
+		t.Fatalf("failed=%v submitted=%v", store.failed, admitter.submitted)
 	}
 }
 
@@ -217,9 +193,9 @@ func TestDispatcherPoisonRowFailsAndSuccessorProceeds(t *testing.T) {
 		dispatchRow(t, "successor", "a", []byte("good")),
 	}}
 	admitter := &dispatchAdmitter{autoComplete: true}
-	d := NewInboxDispatcher(store, admitter, func(_ context.Context, payload []byte) (otogi.EventInput, error) {
+	d := NewInboxDispatcher(store, admitter, func(_ context.Context, payload []byte) (otogi.Event, error) {
 		if string(payload) == "bad" {
-			return otogi.EventInput{}, fmt.Errorf("decode poison: %w", otogi.ErrInvalid)
+			return otogi.Event{}, fmt.Errorf("decode poison: %w", otogi.ErrInvalid)
 		}
 		return dispatchInput(t, "a"), nil
 	}, dispatchConfig(now))
@@ -242,7 +218,7 @@ func TestDispatcherDrainClosesClaimsAndWaitsForActiveCleanup(t *testing.T) {
 		dispatchRow(t, "active", "a", []byte("good")),
 		dispatchRow(t, "unclaimed", "b", []byte("good")),
 	}, completeHook: func(context.Context) { close(cleanupStarted); <-cleanupRelease }}
-	d := NewInboxDispatcher(store, &dispatchAdmitter{autoComplete: true}, func(context.Context, []byte) (otogi.EventInput, error) {
+	d := NewInboxDispatcher(store, &dispatchAdmitter{autoComplete: true}, func(context.Context, []byte) (otogi.Event, error) {
 		return dispatchInput(t, "a"), nil
 	}, dispatchConfig(now))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -276,14 +252,14 @@ func TestDispatcherRunIsSingleOwnerAndStopsOnCancellation(t *testing.T) {
 	now := time.Unix(500, 0).UTC()
 	cfg := dispatchConfig(now)
 	cfg.PollInterval = time.Hour
-	d := NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func(_ context.Context, _ []byte) (otogi.EventInput, error) { return dispatchInput(t, "a"), nil }, cfg)
+	d := NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func(_ context.Context, _ []byte) (otogi.Event, error) { return dispatchInput(t, "a"), nil }, cfg)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- d.Run(ctx, nil) }()
 	for i := 0; i < 100 && !d.running(); i++ {
 		time.Sleep(time.Millisecond)
 	}
-	if err := d.Run(context.Background(), nil); !errors.Is(err, otogi.ErrInvalidState) {
+	if err := d.Run(context.Background(), nil); !errors.Is(err, otogi.ErrUnavailable) {
 		t.Fatalf("concurrent Run error=%v", err)
 	}
 	cancel()
@@ -304,7 +280,7 @@ func TestDispatcherClaimTimeoutCancelsStoreWithoutDispatch(t *testing.T) {
 	decoded := false
 	cfg := dispatchConfig(now)
 	cfg.ClaimTimeout = time.Millisecond
-	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.EventInput, error) {
+	d := NewInboxDispatcher(store, admitter, func(context.Context, []byte) (otogi.Event, error) {
 		decoded = true
 		return dispatchInput(t, "a"), nil
 	}, cfg)
@@ -329,7 +305,7 @@ func TestDispatcherAttemptDeadlineStartsAfterClaimReturns(t *testing.T) {
 	cfg.ClaimTimeout = time.Second
 	cfg.AttemptTimeout = 100 * time.Millisecond
 	remaining := time.Duration(0)
-	d := NewInboxDispatcher(store, &dispatchAdmitter{autoComplete: true}, func(ctx context.Context, _ []byte) (otogi.EventInput, error) {
+	d := NewInboxDispatcher(store, &dispatchAdmitter{autoComplete: true}, func(ctx context.Context, _ []byte) (otogi.Event, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok {
 			t.Fatal("decoder context has no deadline")
@@ -355,10 +331,10 @@ func TestDispatcherCanceledDecoderReleasesWithoutSubmission(t *testing.T) {
 	admitter := &dispatchAdmitter{}
 	entered := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	d := NewInboxDispatcher(store, admitter, func(ctx context.Context, _ []byte) (otogi.EventInput, error) {
+	d := NewInboxDispatcher(store, admitter, func(ctx context.Context, _ []byte) (otogi.Event, error) {
 		close(entered)
 		<-ctx.Done()
-		return otogi.EventInput{}, ctx.Err()
+		return otogi.Event{}, ctx.Err()
 	}, dispatchConfig(now))
 	done := make(chan error, 1)
 	go func() { _, err := d.dispatchOne(ctx); done <- err }()
@@ -386,7 +362,7 @@ func TestDispatcherRejectsLeaseWithoutClaimAttemptCleanupBudget(t *testing.T) {
 					t.Fatalf("lease=%s accepted invalid budget", lease)
 				}
 			}()
-			NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func(context.Context, []byte) (otogi.EventInput, error) {
+			NewInboxDispatcher(&dispatchStore{}, &dispatchAdmitter{}, func(context.Context, []byte) (otogi.Event, error) {
 				return dispatchInput(t, "a"), nil
 			}, cfg)
 		}()
@@ -400,16 +376,7 @@ func dispatchRow(t *testing.T, id, conversation string, payload []byte) telegram
 	t.Helper()
 	return telegramstore.InboxRow{InboxInput: telegramstore.InboxInput{ID: id, SourceKey: id, Conversation: conversation, Sequence: 1, Payload: payload, AvailableAt: time.Unix(1, 0).UTC()}}
 }
-func dispatchInput(t *testing.T, conversation string) otogi.EventInput {
+func dispatchInput(t *testing.T, conversation string) otogi.Event {
 	t.Helper()
-	platform, _ := otogi.NewPlatformID("telegram")
-	account, _ := otogi.NewAccountID("account")
-	tenant, _ := otogi.NewTenantID("tenant")
-	conversationID, _ := otogi.NewConversationID(conversation)
-	source, _ := otogi.NewSourceEventID("source")
-	input, err := otogi.NewEventInput(otogi.EventInputParams{Platform: platform, Account: account, Tenant: tenant, Conversation: conversationID, SourceEventID: source, Action: otogi.ActionMessageEdited, Direction: otogi.DirectionIncoming, OccurredAt: time.Unix(1, 0).UTC(), IngestedAt: time.Unix(2, 0).UTC(), Completeness: otogi.CompletenessPartial})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return input
+	return otogi.Event{Platform: "telegram", Account: "account", Conversation: otogi.Conversation{ID: otogi.ConversationID(conversation)}, SourceID: "source", Action: otogi.ActionMessageEdited, Direction: otogi.DirectionIncoming, OccurredAt: time.Unix(1, 0).UTC(), ReceivedAt: time.Unix(2, 0).UTC(), Completeness: otogi.CompletenessPartial}
 }

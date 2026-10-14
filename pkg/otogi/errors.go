@@ -3,16 +3,13 @@ package otogi
 import "errors"
 
 var (
-	// ErrInvalid identifies input that violates a contract.
+	// ErrInvalid reports a value that violates a contract, such as an event
+	// that fails Validate.
 	ErrInvalid = errors.New("invalid")
-	// ErrUnavailable identifies a dependency that cannot currently serve work.
+	// ErrUnavailable reports a component that cannot take work right now,
+	// for example a kernel that is not started or is draining.
 	ErrUnavailable = errors.New("unavailable")
-	// ErrCapacity identifies work rejected because bounded capacity is exhausted.
-	ErrCapacity = errors.New("capacity exceeded")
-	// ErrInvalidState identifies an operation forbidden by the current lifecycle state.
-	ErrInvalidState = errors.New("invalid state")
-	// ErrModulePanic identifies a module invocation that panicked.
-	ErrModulePanic = errors.New("module panic")
-	// ErrUnsupported identifies valid content that an adapter cannot represent.
+	// ErrUnsupported reports valid content that a driver cannot represent on
+	// its platform.
 	ErrUnsupported = errors.New("unsupported")
 )

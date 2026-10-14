@@ -2,7 +2,6 @@ package mapper
 
 import (
 	"fmt"
-	"reflect"
 	"unicode/utf8"
 
 	"github.com/gotd/td/bin"
@@ -13,24 +12,13 @@ import (
 
 const extensionNamespace = "https://ex-otogi.dev/protocol/telegram/layer228"
 
-// MaxEntities bounds one Telegram text entity vector before allocation.
-const MaxEntities = 128
-
-// ConvertEntities converts Telegram UTF-16 entity ranges into UTF-8 byte annotations.
-// Unsupported and malformed entities are retained as deterministic Telegram extensions.
+// ConvertEntities converts Telegram UTF-16 entity ranges into UTF-8 byte
+// annotations. Unknown entities, and entities whose range does not fall on
+// character boundaries, are kept as Telegram extensions instead.
 func ConvertEntities(text string, entities []tg.MessageEntityClass) ([]otogi.Annotation, []otogi.Extension, error) {
-	if !utf8.ValidString(text) {
-		return nil, nil, fmt.Errorf("telegram entity text is not UTF-8: %w", otogi.ErrInvalid)
-	}
-	if len(entities) > MaxEntities {
-		return nil, nil, fmt.Errorf("telegram entity count exceeds %d: %w", MaxEntities, otogi.ErrCapacity)
-	}
-	annotations := make([]otogi.Annotation, 0, len(entities))
-	extensions := make([]otogi.Extension, 0)
+	var annotations []otogi.Annotation
+	var extensions []otogi.Extension
 	for i, entity := range entities {
-		if entity == nil || reflect.ValueOf(entity).Kind() == reflect.Pointer && reflect.ValueOf(entity).IsNil() {
-			return nil, nil, fmt.Errorf("telegram entity %d is nil: %w", i, otogi.ErrInvalid)
-		}
 		kind, target, known := entityProjection(entity)
 		start, end, valid := utf16Range(text, entity.GetOffset(), entity.GetLength())
 		if !known || !valid {
@@ -42,20 +30,10 @@ func ConvertEntities(text string, entities []tg.MessageEntityClass) ([]otogi.Ann
 			if err != nil {
 				return nil, nil, err
 			}
-			if len(ext.Data()) > MaxPreservationBytes {
-				return nil, nil, fmt.Errorf("telegram entity preservation exceeds %d bytes: %w", MaxPreservationBytes, otogi.ErrCapacity)
-			}
-			if len(extensions) == 64 {
-				return nil, nil, fmt.Errorf("telegram entity preservation count exceeds 64: %w", otogi.ErrCapacity)
-			}
 			extensions = append(extensions, ext)
 			continue
 		}
-		annotation, err := otogi.NewAnnotation(fmt.Sprintf("telegram-entity-%d", i), start, end-start, kind, target, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-		annotations = append(annotations, annotation)
+		annotations = append(annotations, otogi.Annotation{ID: fmt.Sprintf("telegram-entity-%d", i), Offset: start, Length: end - start, Kind: kind, Target: target})
 	}
 	return annotations, extensions, nil
 }
@@ -135,7 +113,8 @@ func utf16Range(text string, offset, length int) (int, int, bool) {
 	if units == wantEnd {
 		end = len(text)
 	}
-	return start, end, start >= 0 && end >= start
+	boundary := func(i int) bool { return i == len(text) || utf8.RuneStart(text[i]) }
+	return start, end, start >= 0 && end >= start && boundary(start) && boundary(end)
 }
 
 func telegramExtension(name string, value interface{ Encode(*bin.Buffer) error }) (otogi.Extension, error) {
@@ -143,9 +122,5 @@ func telegramExtension(name string, value interface{ Encode(*bin.Buffer) error }
 	if err := value.Encode(&b); err != nil {
 		return otogi.Extension{}, fmt.Errorf("encode Telegram %s: %w", name, err)
 	}
-	return otogi.NewExtension(extensionNamespace, name, 1, "application/x.telegram-tl", b.Copy())
-}
-
-func utf8Boundary(s string, offset int) bool {
-	return offset >= 0 && offset <= len(s) && (offset == len(s) || utf8.RuneStart(s[offset]))
+	return otogi.Extension{Namespace: extensionNamespace, Name: name, Version: 1, MediaType: "application/x.telegram-tl", Data: b.Copy()}, nil
 }

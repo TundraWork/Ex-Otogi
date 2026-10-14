@@ -315,7 +315,7 @@ func TestManagerRunPublishesPreArmCaptureFailureBeforeReady(t *testing.T) {
 	journal := &memoryJournal{}
 	health := NewHealth()
 	store := &startupCaptureFailureStore{captureStore: captureStore{err: cause}, recordErr: recordErr}
-	downstream := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, health)
+	downstream := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("payload"), nil }, health)
 	if err := downstream.Handle(context.Background(), mappedBatch()); !errors.Is(err, cause) {
 		t.Fatalf("startup capture error = %v", err)
 	}

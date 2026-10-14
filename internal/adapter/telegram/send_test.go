@@ -84,39 +84,18 @@ func (g *gateFake) Handle(context.Context, tg.UpdatesClass) error { g.calls++; r
 
 func outboundText(t *testing.T, key, conversation, text string, anns []otogi.Annotation, rels []otogi.Relation) otogi.OutboundMessage {
 	t.Helper()
-	id, _ := otogi.NewPartID("text")
-	part, err := otogi.NewTextPart(id, text, anns, nil, nil)
-	if err != nil {
+	msg := otogi.Message{Roots: []otogi.PartID{"text"}, Parts: []otogi.Part{{ID: "text", Kind: otogi.PartText, Text: text, Annotations: anns}}, Relations: rels}
+	if err := msg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	msg, err := otogi.NewMessage([]otogi.PartID{id}, []otogi.Part{part}, rels, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tenant, _ := otogi.NewTenantID("tenant")
-	platform, _ := otogi.NewPlatformID("telegram")
-	account, _ := otogi.NewAccountID("account")
-	conv, _ := otogi.NewConversationID(conversation)
-	event, _ := otogi.NewEventID("event")
-	module, _ := otogi.NewModuleID("module")
-	idem, _ := otogi.NewIdempotencyKey(key)
-	out, err := otogi.NewOutboundMessage(otogi.OutboundMessageParams{Tenant: tenant, Platform: platform, Account: account, Conversation: conv, OriginatingEvent: event, OriginatingModule: module, Message: msg, IdempotencyKey: idem})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return otogi.OutboundMessage{Platform: "telegram", Account: "account", Conversation: otogi.ConversationID(conversation), Event: "event", Module: "module", Key: otogi.IdempotencyKey(key), Message: msg}
 }
 
 func TestSendCodecGoldenDigestRandomIDAndJournalCorrelation(t *testing.T) {
-	ann, _ := otogi.NewAnnotation("bold", 1, 4, otogi.AnnotationBold, "", nil)
+	ann := otogi.Annotation{ID: "bold", Offset: 1, Length: 4, Kind: otogi.AnnotationBold}
 	locData, _ := mapper.EncodeMessageLocator(mapper.MessageLocator{Namespace: mapper.NamespaceCommon, Peer: "user:7", MessageID: 44})
-	loc, _ := otogi.NewProviderLocator("https://ex-otogi.dev/protocol/telegram/layer228/message", 1, locData)
-	platform, _ := otogi.NewPlatformID("telegram")
-	account, _ := otogi.NewAccountID("account")
-	conv, _ := otogi.NewConversationID("user:7")
-	src, _ := otogi.NewSourceEventID("44")
-	ref, _ := otogi.NewEventRef(otogi.EventRefParams{Platform: platform, Account: account, Conversation: conv, SourceEvent: src, Locator: loc})
-	rel, _ := otogi.NewRelation(otogi.RelationReply, ref, "", nil)
+	loc := otogi.ProviderLocator{Namespace: "https://ex-otogi.dev/protocol/telegram/layer228/message", Version: 1, Data: locData}
+	rel := otogi.Relation{Kind: otogi.RelationReply, Target: otogi.EventRef{Platform: "telegram", Account: "account", Conversation: "user:7", SourceEvent: "44", Locator: loc}}
 	msg := outboundText(t, "golden-key", "user:7", "A😀B", []otogi.Annotation{ann}, []otogi.Relation{rel})
 	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}, peer: telegramstore.Peer{Kind: "user", ID: 7, AccessHash: 8}}
 	api := &sendAPIFake{result: &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateMessageID{RandomID: RandomID("golden-key"), ID: 55}}}}
@@ -155,12 +134,11 @@ func TestSendCodecGoldenDigestRandomIDAndJournalCorrelation(t *testing.T) {
 }
 
 func TestUnsupportedGraphIsRejectedBeforeStoreOrRPC(t *testing.T) {
-	id, _ := otogi.NewPartID("opaque")
-	ext, _ := otogi.NewExtension("https://example.test/x", "x", 1, "application/octet-stream", []byte{1})
-	part, _ := otogi.NewOpaquePart(id, ext, nil, nil)
-	msg0, _ := otogi.NewMessage([]otogi.PartID{id}, []otogi.Part{part}, nil, nil)
+	ext := otogi.Extension{Namespace: "https://example.test/x", Name: "x", Version: 1, MediaType: "application/octet-stream", Data: []byte{1}}
+	msg0 := otogi.Message{Roots: []otogi.PartID{"opaque"}, Parts: []otogi.Part{{ID: "opaque", Kind: otogi.PartOpaque, Opaque: &ext}}}
 	base := outboundText(t, "key", "user:7", "x", nil, nil)
-	out, _ := otogi.NewOutboundMessage(otogi.OutboundMessageParams{Tenant: base.Tenant(), Platform: base.Platform(), Account: base.Account(), Conversation: base.Conversation(), OriginatingEvent: base.OriginatingEvent(), OriginatingModule: base.OriginatingModule(), Message: msg0, IdempotencyKey: base.IdempotencyKey()})
+	out := base
+	out.Message = msg0
 	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}}
 	api := &sendAPIFake{}
 	err := NewSender(api, s, &gateFake{}, time.Now).Send(context.Background(), out)
@@ -245,16 +223,11 @@ func TestRestartReconciliationMarksUncertainInFlightAmbiguous(t *testing.T) {
 }
 
 func TestUnsupportedAnnotationAndRelationAreRejectedBeforeMutation(t *testing.T) {
-	unsupported, _ := otogi.NewAnnotation("mention", 0, 1, otogi.AnnotationMention, "", nil)
+	unsupported := otogi.Annotation{ID: "mention", Offset: 0, Length: 1, Kind: otogi.AnnotationMention}
 	for _, message := range []otogi.OutboundMessage{
 		outboundText(t, "annotation", "user:7", "x", []otogi.Annotation{unsupported}, nil),
 		outboundText(t, "relation", "user:7", "x", nil, []otogi.Relation{func() otogi.Relation {
-			platform, _ := otogi.NewPlatformID("telegram")
-			account, _ := otogi.NewAccountID("account")
-			conversation, _ := otogi.NewConversationID("user:7")
-			source, _ := otogi.NewSourceEventID("1")
-			ref, _ := otogi.NewEventRef(otogi.EventRefParams{Platform: platform, Account: account, Conversation: conversation, SourceEvent: source})
-			relation, _ := otogi.NewRelation(otogi.RelationForward, ref, "", nil)
+			relation := otogi.Relation{Kind: otogi.RelationForward, Target: otogi.EventRef{Platform: "telegram", Account: "account", Conversation: "user:7", SourceEvent: "1"}}
 			return relation
 		}()}),
 	} {
@@ -268,12 +241,7 @@ func TestUnsupportedAnnotationAndRelationAreRejectedBeforeMutation(t *testing.T)
 }
 
 func TestUnsupportedRelationWinsBeforeMissingPeerLookup(t *testing.T) {
-	platform, _ := otogi.NewPlatformID("telegram")
-	account, _ := otogi.NewAccountID("account")
-	conversation, _ := otogi.NewConversationID("user:7")
-	source, _ := otogi.NewSourceEventID("1")
-	ref, _ := otogi.NewEventRef(otogi.EventRefParams{Platform: platform, Account: account, Conversation: conversation, SourceEvent: source})
-	relation, _ := otogi.NewRelation(otogi.RelationForward, ref, "", nil)
+	relation := otogi.Relation{Kind: otogi.RelationForward, Target: otogi.EventRef{Platform: "telegram", Account: "account", Conversation: "user:7", SourceEvent: "1"}}
 	s := &sendStoreFake{intents: map[string]telegramstore.SendIntent{}}
 	err := NewSender(&sendAPIFake{}, s, &gateFake{}, time.Now).Send(context.Background(), outboundText(t, "relation-first", "user:7", "x", nil, []otogi.Relation{relation}))
 	if !errors.Is(err, otogi.ErrUnsupported) || s.creates != 0 {

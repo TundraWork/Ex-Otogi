@@ -1,1 +1,12 @@
-{"text":"edited","replacement":"$original"}
+{
+  "platform": "matrix",
+  "account": "@bot:example.org",
+  "conversation": {"id": "!room:example.org", "kind": "group"},
+  "source_id": "$edit",
+  "action": "message.edited",
+  "message": {
+    "roots": ["body"],
+    "parts": [{"id": "body", "kind": "text", "text": "edited"}],
+    "relations": [{"kind": "replacement", "target": {"source_event": "$original"}}]
+  }
+}

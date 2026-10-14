@@ -1,356 +1,338 @@
-// Package kernel provides bounded in-memory event admission, routing, and lifecycle management.
+// Package kernel admits events, runs middleware, and fans events out to
+// modules on a bounded worker pool with per-module, per-conversation ordering.
 package kernel
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log/slog"
 	"runtime/debug"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-type state uint8
+// Config tunes the kernel. Zero fields take the defaults below.
+type Config struct {
+	// Workers is the number of goroutines running module deliveries. Default 32.
+	Workers int
+	// MaxInFlight bounds events admitted but not yet completed; Submit blocks
+	// while it is reached. Default 1024.
+	MaxInFlight int
+	// HandlerTimeout bounds one delivery unless the module sets its own.
+	// Default 10 minutes; negative disables the timeout.
+	HandlerTimeout time.Duration
+}
+
+func (c Config) withDefaults() Config {
+	if c.Workers <= 0 {
+		c.Workers = 32
+	}
+	if c.MaxInFlight <= 0 {
+		c.MaxInFlight = 1024
+	}
+	if c.HandlerTimeout == 0 {
+		c.HandlerTimeout = 10 * time.Minute
+	}
+	return c
+}
+
+type state int
 
 const (
 	stateNew state = iota
-	stateStarting
 	stateReady
 	stateDraining
 	stateStopped
-	stateFailed
 )
 
-// Kernel owns one bounded event worker and its lifecycle.
+type moduleEntry struct {
+	module     otogi.Module
+	descriptor otogi.ModuleDescriptor
+	subscribes map[otogi.EventAction]bool
+	timeout    time.Duration
+}
+
+// Kernel routes events to modules. Create it with New, then Start, Submit
+// events, and finally Drain and Stop.
 type Kernel struct {
-	mu               sync.Mutex
-	state            state
-	terminalErr      error
-	config           Config
-	modules          []otogi.Module
-	messenger        otogi.Messenger
-	generator        *otogi.EventIDGenerator
-	queue            chan event
-	workerCtx        context.Context
-	cancel           context.CancelFunc
-	wake             chan struct{}
-	done             chan struct{}
-	drain            bool
-	drainInterrupted bool
-	deliveries       []Delivery
-	panics           []PanicReport
-	active           map[otogi.EventID]struct{}
-	completions      map[otogi.EventID]*completionSubscription
+	cfg        Config
+	log        *slog.Logger
+	messenger  otogi.Messenger
+	middleware []otogi.Middleware
+	modules    []*moduleEntry
+	slots      chan struct{}
+
+	mu       sync.Mutex
+	state    state
+	inFlight sync.WaitGroup
+	runCtx   context.Context
+	cancel   context.CancelFunc
+	sched    scheduler
+	workers  sync.WaitGroup
 }
 
-// New validates dependencies and module descriptors and returns an inert kernel.
-func New(config Config, modules []otogi.Module, messenger otogi.Messenger, generator *otogi.EventIDGenerator) (*Kernel, error) {
-	if config.queueCapacity < 1 || config.queueCapacity > 1024 || len(modules) == 0 || messenger == nil || generator == nil {
-		return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
+// New validates the module set and returns a kernel that is not yet started.
+// Modules are run in module-ID order where order is observable (outcomes).
+func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, messenger otogi.Messenger, log *slog.Logger) (*Kernel, error) {
+	if messenger == nil {
+		return nil, fmt.Errorf("new kernel: nil messenger: %w", otogi.ErrInvalid)
 	}
-	owned := append([]otogi.Module(nil), modules...)
-	seen := make(map[otogi.ModuleID]struct{}, len(owned))
-	for _, module := range owned {
-		if module == nil {
-			return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
+	if log == nil {
+		log = slog.Default()
+	}
+	cfg = cfg.withDefaults()
+	entries := make([]*moduleEntry, 0, len(modules))
+	seen := make(map[otogi.ModuleID]bool, len(modules))
+	for _, module := range modules {
+		d := module.Descriptor()
+		if d.ID == "" || seen[d.ID] {
+			return nil, fmt.Errorf("new kernel: empty or duplicate module ID %q: %w", d.ID, otogi.ErrInvalid)
 		}
-		descriptor := module.Descriptor()
-		if descriptor.ID().String() == "" || len(descriptor.Consumes()) == 0 {
-			return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
-		}
-		if _, exists := seen[descriptor.ID()]; exists {
-			return nil, fmt.Errorf("new kernel duplicate module: %w", otogi.ErrInvalid)
-		}
-		seen[descriptor.ID()] = struct{}{}
-		for _, action := range descriptor.Consumes() {
-			if action.String() == "" {
-				return nil, fmt.Errorf("new kernel: %w", otogi.ErrInvalid)
+		seen[d.ID] = true
+		entry := &moduleEntry{module: module, descriptor: d, subscribes: make(map[otogi.EventAction]bool, len(d.Subscribes)), timeout: cfg.HandlerTimeout}
+		for _, action := range d.Subscribes {
+			if !action.Valid() {
+				return nil, fmt.Errorf("new kernel: module %q subscribes to invalid action %q: %w", d.ID, action, otogi.ErrInvalid)
 			}
+			entry.subscribes[action] = true
 		}
+		if d.Timeout != 0 {
+			entry.timeout = d.Timeout
+		}
+		entries = append(entries, entry)
 	}
-	sort.Slice(owned, func(i, j int) bool { return owned[i].Descriptor().ID().String() < owned[j].Descriptor().ID().String() })
-	return &Kernel{state: stateNew, config: config, modules: owned, messenger: messenger, generator: generator, queue: make(chan event, config.queueCapacity), wake: make(chan struct{}, 1), done: make(chan struct{}), active: make(map[otogi.EventID]struct{}), completions: make(map[otogi.EventID]*completionSubscription)}, nil
+	slices.SortFunc(entries, func(a, b *moduleEntry) int { return strings.Compare(string(a.descriptor.ID), string(b.descriptor.ID)) })
+	k := &Kernel{
+		cfg: cfg, log: log, messenger: messenger, modules: entries,
+		middleware: slices.Clone(middleware),
+		slots:      make(chan struct{}, cfg.MaxInFlight),
+	}
+	k.sched.init(&k.mu)
+	return k, nil
 }
 
-// Start transitions a new kernel to ready and starts its sole worker.
+// Start starts the worker pool. ctx is not retained; Stop ends the workers.
 func (k *Kernel) Start(ctx context.Context) error {
-	k.mu.Lock()
-	if k.state != stateNew {
-		k.mu.Unlock()
-		return fmt.Errorf("start kernel: %w", otogi.ErrInvalidState)
-	}
-	k.state = stateStarting
 	if err := ctx.Err(); err != nil {
-		k.state = stateFailed
-		k.terminalErr = err
-		close(k.done)
-		k.mu.Unlock()
 		return err
 	}
-	k.workerCtx, k.cancel = context.WithCancel(context.Background())
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.state != stateNew {
+		return fmt.Errorf("start kernel: already started: %w", otogi.ErrUnavailable)
+	}
+	k.runCtx, k.cancel = context.WithCancel(context.Background())
+	for range k.cfg.Workers {
+		k.workers.Go(k.work)
+	}
 	k.state = stateReady
-	k.mu.Unlock()
-	go k.run()
 	return nil
 }
 
-// Submit admits one supported event without blocking and returns its kernel-owned runtime ID.
-func (k *Kernel) Submit(ctx context.Context, input otogi.EventInput) (otogi.EventID, error) {
-	if err := ctx.Err(); err != nil {
-		return otogi.EventID{}, err
+// Submit admits event and returns once it is queued for the modules, not once
+// they have finished. If Submit returns nil, done is called exactly once, from
+// a kernel goroutine or before Submit returns, when every delivery has
+// finished or the event was dropped; done must not block for long. If Submit
+// returns an error, done is never called.
+//
+// Submit validates the event, assigns an ID if it has none, and blocks under
+// ctx while MaxInFlight events are in flight. Middleware runs synchronously
+// inside Submit, in registration order.
+func (k *Kernel) Submit(ctx context.Context, event otogi.Event, done func(otogi.Outcome)) error {
+	if err := event.Validate(); err != nil {
+		return fmt.Errorf("submit: %w", err)
 	}
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.state != stateReady {
-		return otogi.EventID{}, fmt.Errorf("submit event: %w", otogi.ErrInvalidState)
+	if event.ID == "" {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("submit: generate event ID: %w", err)
+		}
+		event.ID = otogi.EventID(id.String())
 	}
-	id, err := k.generator.Next()
-	if err != nil {
-		return otogi.EventID{}, fmt.Errorf("submit event ID: %w", err)
-	}
-	if err := k.admitLocked(id, input, false); err != nil {
-		return otogi.EventID{}, err
-	}
-	return id, nil
-}
-
-// SubmitTrusted admits one supported event with a trusted deterministic runtime ID.
-func (k *Kernel) SubmitTrusted(ctx context.Context, id otogi.EventID, input otogi.EventInput) error {
-	if err := ctx.Err(); err != nil {
+	if err := k.admit(ctx); err != nil {
 		return err
 	}
-	if id.String() == "" {
-		return fmt.Errorf("submit trusted event: %w", otogi.ErrInvalid)
+	tracked := &tracked{kernel: k, event: event, done: done}
+	for _, mw := range k.middleware {
+		verdict, err := k.intercept(ctx, mw, &tracked.event)
+		if err != nil || verdict == otogi.Drop {
+			k.log.Info("event dropped by middleware", "event", tracked.event.ID, "middleware", mw.ID(), "error", err)
+			tracked.dropped(mw.ID(), err)
+			return nil
+		}
+	}
+	var deliveries []*delivery
+	for i, entry := range k.modules {
+		if entry.subscribes[tracked.event.Action] {
+			deliveries = append(deliveries, &delivery{event: tracked, module: entry, index: i})
+		}
+	}
+	tracked.begin(len(deliveries))
+	k.mu.Lock()
+	for _, d := range deliveries {
+		k.sched.enqueue(d)
+	}
+	k.mu.Unlock()
+	return nil
+}
+
+func (k *Kernel) admit(ctx context.Context) error {
+	if !k.ready() {
+		return fmt.Errorf("submit: kernel not ready: %w", otogi.ErrUnavailable)
+	}
+	select {
+	case k.slots <- struct{}{}:
+	case <-ctx.Done():
+		return fmt.Errorf("submit: waiting for capacity: %w", ctx.Err())
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.state != stateReady {
-		return fmt.Errorf("submit trusted event: %w", otogi.ErrInvalidState)
+		<-k.slots
+		return fmt.Errorf("submit: kernel not ready: %w", otogi.ErrUnavailable)
 	}
-	return k.admitLocked(id, input, true)
+	k.inFlight.Add(1)
+	return nil
 }
 
-func (k *Kernel) admitLocked(id otogi.EventID, input otogi.EventInput, trusted bool) error {
-	if input.Action().String() == "" {
-		return fmt.Errorf("submit event action: %w", otogi.ErrInvalid)
-	}
-	if _, exists := k.active[id]; exists {
-		return fmt.Errorf("submit event duplicate: %w", otogi.ErrInvalidState)
-	}
-	if _, reserved := k.completions[id]; reserved && !trusted {
-		return fmt.Errorf("submit event reserved ID: %w", otogi.ErrInvalidState)
-	}
-	select {
-	case k.queue <- event{id: id, input: input}:
-		k.active[id] = struct{}{}
-		return nil
-	default:
-		return fmt.Errorf("submit event: %w", otogi.ErrCapacity)
-	}
-}
-
-// Ready reports whether the kernel currently accepts submissions.
-func (k *Kernel) Ready() bool {
+func (k *Kernel) ready() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.state == stateReady
 }
 
-// Drain prevents admission and waits for all accepted events to finish.
+func (k *Kernel) intercept(ctx context.Context, mw otogi.Middleware, event *otogi.Event) (verdict otogi.Verdict, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			k.log.Error("middleware panicked", "middleware", mw.ID(), "event", event.ID, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("middleware %q panicked: %v", mw.ID(), r)
+		}
+	}()
+	return mw.Intercept(ctx, event)
+}
+
+// Drain stops admitting events and waits until every admitted event has
+// completed, or ctx ends.
 func (k *Kernel) Drain(ctx context.Context) error {
 	k.mu.Lock()
-	if k.state != stateReady {
-		err := k.terminalErr
-		k.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("drain kernel: %w", otogi.ErrInvalidState)
-	}
-	k.state = stateDraining
-	k.drain = true
-	select {
-	case k.wake <- struct{}{}:
-	default:
+	if k.state == stateReady {
+		k.state = stateDraining
 	}
 	k.mu.Unlock()
-	if err := k.wait(ctx); err != nil {
-		k.mu.Lock()
-		if k.state == stateDraining {
-			k.state = stateFailed
-			if k.terminalErr == nil {
-				k.terminalErr = err
-			}
-			if k.cancel != nil {
-				k.cancel()
-			}
-		}
-		retained := k.terminalErr
-		k.mu.Unlock()
-		if retained != nil {
-			return retained
-		}
-		return err
-	}
-	k.mu.Lock()
-	err := k.terminalErr
-	if err == nil && k.drainInterrupted {
-		err = context.Canceled
-	}
-	k.mu.Unlock()
-	return err
+	return wait(ctx, &k.inFlight)
 }
 
-// Stop prevents admission, cancels active work, and waits for worker termination through ctx.
+// Stop stops admission, cancels running deliveries, completes queued ones
+// without running them (their outcomes carry an error), and waits for the
+// workers to exit or ctx to end. It is safe to call more than once.
 func (k *Kernel) Stop(ctx context.Context) error {
 	k.mu.Lock()
-	if k.state == stateNew {
+	if k.state == stateNew || k.state == stateStopped {
 		k.state = stateStopped
-		close(k.done)
 		k.mu.Unlock()
 		return nil
 	}
-	if k.state != stateStopped {
-		if k.state == stateDraining {
-			k.drainInterrupted = true
-		}
-		if k.cancel != nil {
-			k.cancel()
-		}
-		k.state = stateStopped
-	}
+	k.state = stateStopped
+	k.cancel()
+	k.sched.stop()
 	k.mu.Unlock()
-	if err := k.wait(ctx); err != nil {
-		k.mu.Lock()
-		if k.terminalErr == nil {
-			k.terminalErr = err
-		}
-		retained := k.terminalErr
-		k.mu.Unlock()
-		return retained
-	}
-	k.mu.Lock()
-	err := k.terminalErr
-	k.mu.Unlock()
-	return err
+	return wait(ctx, &k.workers)
 }
 
-// Wait observes worker termination and returns the retained terminal cause.
-func (k *Kernel) Wait(ctx context.Context) error {
-	if err := k.wait(ctx); err != nil {
-		return err
-	}
-	k.mu.Lock()
-	err := k.terminalErr
-	k.mu.Unlock()
-	return err
-}
-
-func (k *Kernel) wait(ctx context.Context) error {
+func wait(ctx context.Context, wg *sync.WaitGroup) error {
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
 	select {
-	case <-k.done:
-		return nil
-	default:
-	}
-	select {
-	case <-k.done:
+	case <-finished:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (k *Kernel) run() {
-	defer func() {
-		k.closeCompletions()
-		close(k.done)
-	}()
-	for {
-		select {
-		case <-k.workerCtx.Done():
-			return
-		case admitted := <-k.queue:
-			k.route(k.workerCtx, admitted)
-		case <-k.wake:
-		}
-		k.mu.Lock()
-		drained := k.drain && len(k.queue) == 0
-		if drained {
-			k.state = stateStopped
-		}
-		k.mu.Unlock()
-		if drained {
-			return
-		}
+// tracked is one admitted event and its pending deliveries.
+type tracked struct {
+	kernel  *Kernel
+	event   otogi.Event
+	done    func(otogi.Outcome)
+	mu      sync.Mutex
+	pending int
+	outcome otogi.Outcome
+}
+
+func (t *tracked) begin(deliveries int) {
+	t.outcome = otogi.Outcome{EventID: t.event.ID, Modules: make([]otogi.ModuleOutcome, 0, deliveries)}
+	t.pending = deliveries
+	if deliveries == 0 {
+		t.finish()
 	}
 }
 
-func (k *Kernel) route(ctx context.Context, admitted event) {
-	acknowledge := true
-	for _, module := range k.modules {
-		interested := false
-		for _, action := range module.Descriptor().Consumes() {
-			if action == admitted.Action() {
-				interested = true
-				break
-			}
-		}
-		if !interested {
-			continue
-		}
-		moduleID := module.Descriptor().ID()
-		invocation := newInvocation(ctx, k.messenger, admitted, moduleID)
-		result, report := invokeModule(ctx, module, admitted, invocation)
-		result = validModuleResult(result)
-		if result.Status() == otogi.ResultCanceled {
-			acknowledge = false
-		}
-		k.mu.Lock()
-		if report != nil {
-			k.panics = appendBounded(k.panics, *report)
-		}
-		k.deliveries = appendBounded(k.deliveries, Delivery{eventID: admitted.ID(), moduleID: moduleID, status: result.Status(), err: stableError(result.Err())})
-		k.mu.Unlock()
-	}
-	k.complete(admitted.ID(), acknowledge && ctx.Err() == nil)
+func (t *tracked) dropped(by otogi.MiddlewareID, err error) {
+	t.outcome = otogi.Outcome{EventID: t.event.ID, DroppedBy: by, Err: err}
+	t.finish()
 }
 
-func invokeModule(ctx context.Context, module otogi.Module, admitted event, invocation *invocation) (result otogi.Result, report *PanicReport) {
-	defer invocation.close()
-	defer func() {
-		if recover() != nil {
-			stack := debug.Stack()
-			if len(stack) > 32*1024 {
-				stack = stack[:32*1024]
-			}
-			result = otogi.NewFailedResult(otogi.ErrModulePanic)
-			report = &PanicReport{eventID: admitted.ID(), moduleID: module.Descriptor().ID(), stack: append([]byte(nil), stack...)}
-		}
-	}()
-	return module.Handle(ctx, admitted, invocation), nil
+func (t *tracked) record(outcome otogi.ModuleOutcome) {
+	t.mu.Lock()
+	t.outcome.Modules = append(t.outcome.Modules, outcome)
+	t.pending--
+	last := t.pending == 0
+	t.mu.Unlock()
+	if last {
+		slices.SortFunc(t.outcome.Modules, func(a, b otogi.ModuleOutcome) int { return strings.Compare(string(a.Module), string(b.Module)) })
+		t.finish()
+	}
 }
 
-func validModuleResult(result otogi.Result) otogi.Result {
-	status := result.Status()
-	err := result.Err()
-	valid := (status == otogi.ResultSucceeded || status == otogi.ResultRejected) && err == nil
-	valid = valid || (status == otogi.ResultFailed || status == otogi.ResultCanceled) && err != nil
-	if !valid {
-		return otogi.NewFailedResult(otogi.ErrInvalid)
+func (t *tracked) finish() {
+	k := t.kernel
+	if k.runCtx.Err() != nil && t.outcome.Err == nil {
+		t.outcome.Err = fmt.Errorf("kernel stopped before the event completed: %w", otogi.ErrUnavailable)
 	}
-	return result
+	if t.done != nil {
+		t.done(t.outcome)
+	}
+	<-k.slots
+	k.inFlight.Done()
 }
 
-func stableError(err error) error {
-	for _, stable := range []error{otogi.ErrModulePanic, otogi.ErrUnavailable, otogi.ErrCapacity, otogi.ErrInvalidState, otogi.ErrInvalid, context.Canceled, context.DeadlineExceeded} {
-		if errors.Is(err, stable) {
-			return stable
-		}
-	}
+// run executes one delivery on a worker goroutine.
+func (k *Kernel) run(d *delivery) {
+	started := time.Now()
+	err := k.invoke(d)
+	outcome := otogi.ModuleOutcome{Module: d.module.descriptor.ID, Err: err, Duration: time.Since(started)}
 	if err != nil {
-		return otogi.ErrUnavailable
+		k.log.Error("module failed", "event", d.event.event.ID, "module", outcome.Module, "duration", outcome.Duration, "error", err)
+	} else {
+		k.log.Debug("module completed", "event", d.event.event.ID, "module", outcome.Module, "duration", outcome.Duration)
 	}
-	return nil
+	d.event.record(outcome)
+}
+
+func (k *Kernel) invoke(d *delivery) (err error) {
+	if err := k.runCtx.Err(); err != nil {
+		return fmt.Errorf("not run: kernel stopped: %w", err)
+	}
+	ctx, cancel := k.runCtx, context.CancelFunc(func() {})
+	if d.module.timeout > 0 {
+		ctx, cancel = context.WithTimeout(k.runCtx, d.module.timeout)
+	}
+	defer cancel()
+	defer func() {
+		if r := recover(); r != nil {
+			k.log.Error("module panicked", "event", d.event.event.ID, "module", d.module.descriptor.ID, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("module %q panicked: %v", d.module.descriptor.ID, r)
+		}
+	}()
+	return d.module.module.Handle(ctx, d.event.event, &invocation{kernel: k, event: d.event.event, module: d.module.descriptor.ID})
 }

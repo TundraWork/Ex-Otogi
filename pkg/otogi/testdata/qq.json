@@ -1,1 +1,18 @@
-{"ordered":["text","reply","forward","opaque"],"reply":"100","forward":"200"}
+{
+  "platform": "qq",
+  "account": "bot",
+  "conversation": {"id": "group-1", "kind": "group"},
+  "action": "message.created",
+  "message": {
+    "roots": ["text", "face", "opaque"],
+    "parts": [
+      {"id": "text", "kind": "text", "text": "hello"},
+      {"id": "face", "kind": "opaque", "opaque": {"namespace": "https://im.qq.com/elements", "name": "face", "data": "MTQ="}},
+      {"id": "opaque", "kind": "opaque", "opaque": {"namespace": "https://im.qq.com/elements", "name": "ark", "data": "e30="}}
+    ],
+    "relations": [
+      {"kind": "reply", "target": {"source_event": "100"}},
+      {"kind": "forward", "target": {"source_event": "200"}}
+    ]
+  }
+}

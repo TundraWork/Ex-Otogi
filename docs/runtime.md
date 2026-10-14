@@ -25,9 +25,15 @@ Because events can be replayed, outbound effects carry an idempotency key derive
 
 Missed platform history is the driver's job. Telegram, for example, fetches updates it missed while offline. If history cannot be recovered, the driver records a gap in the event log and keeps running; it does not block the bot.
 
-## Ordering and concurrency
+## Pipeline, ordering, and concurrency
 
-Events from one conversation reach a module in order. Different conversations may be processed concurrently. Today the kernel runs one worker, so everything is serial. Per-conversation concurrency is added when throughput needs it.
+`Submit` validates an event, takes one of `MaxInFlight` slots (blocking under the caller's context when none is free), and runs the middleware chain synchronously in registration order. Middleware may modify or drop the event; drops are recorded. The event then fans out into one delivery per subscribed module.
+
+Each delivery goes into a lane keyed by (module, platform, account, conversation). A pool of kernel-owned workers runs lanes, one delivery at a time per lane. So a module sees one conversation's events in order, while different conversations, and different modules on the same event, run in parallel. A slow module delays only its own lane. A module may declare `OrderNone` to run every delivery independently.
+
+Modules are independent: there is no order between modules for the same event. Anything that must happen before all modules belongs in middleware.
+
+When every delivery of an event has finished, the kernel calls the driver's `done` callback with the outcome. Details are in the [lean core contracts design](superpowers/specs/2026-10-14-lean-core-contracts-design.md).
 
 ## Queues
 
@@ -60,7 +66,7 @@ Every goroutine has an owner that can cancel it and waits for it on stop. Blocki
 
 ## Panics and errors
 
-The kernel recovers module panics per invocation, records the panic and stack in the event log, and continues with other modules and events. Drivers recover panics in their goroutines and fail their lifecycle with the panic as cause.
+The kernel recovers module panics per delivery and records the panic and stack (in the process log until the event log exists); other deliveries continue. Each delivery also has a timeout (default 10 minutes, overridable per module) that cancels its context. Drivers recover panics in their goroutines and fail their lifecycle with the panic as cause.
 
 An error is handled once: returned, translated at a boundary, or recorded as a failed outcome. Logging alone does not handle an error.
 

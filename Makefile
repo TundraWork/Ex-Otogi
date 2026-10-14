@@ -20,7 +20,6 @@ test-race:
 
 test-fuzz-smoke:
 	$(GO) test -run '^$$' -fuzz '^FuzzConvertEntitiesUTF16$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram/mapper
-	$(GO) test -run '^$$' -fuzz '^FuzzDecodeEventInput$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram
 
 smoke:
 	@output="$$($(GO) run ./cmd/otogi)" && [ "$$output" = "echo: hello" ] || { printf 'smoke: got %s\n' "$$output"; exit 1; }

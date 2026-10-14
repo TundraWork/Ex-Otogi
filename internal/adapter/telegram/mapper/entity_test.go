@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 	"github.com/gotd/td/tg"
@@ -21,13 +22,13 @@ func TestConvertEntitiesUsesUTF16OffsetsAndPreservesMalformed(t *testing.T) {
 	if len(annotations) != 2 {
 		t.Fatalf("annotations=%d", len(annotations))
 	}
-	if annotations[0].Offset() != 1 || annotations[0].Length() != 4 || annotations[0].Kind() != otogi.AnnotationBold {
+	if annotations[0].Offset != 1 || annotations[0].Length != 4 || annotations[0].Kind != otogi.AnnotationBold {
 		t.Fatalf("emoji annotation=%+v", annotations[0])
 	}
-	if annotations[1].Offset() != 7 || annotations[1].Length() != 5 {
-		t.Fatalf("accent annotation offset=%d length=%d", annotations[1].Offset(), annotations[1].Length())
+	if annotations[1].Offset != 7 || annotations[1].Length != 5 {
+		t.Fatalf("accent annotation offset=%d length=%d", annotations[1].Offset, annotations[1].Length)
 	}
-	if len(extensions) != 1 || extensions[0].LocalName() != "malformed-entity" {
+	if len(extensions) != 1 || extensions[0].Name != "malformed-entity" {
 		t.Fatalf("extensions=%v", extensions)
 	}
 }
@@ -44,7 +45,7 @@ func TestConvertEntitiesPreservesUnknownInOrder(t *testing.T) {
 	if len(annotations) != 1 || len(extensions) != 1 {
 		t.Fatalf("annotations=%d extensions=%d", len(annotations), len(extensions))
 	}
-	if extensions[0].LocalName() != "unknown-entity" || len(extensions[0].Data()) == 0 {
+	if extensions[0].Name != "unknown-entity" || len(extensions[0].Data) == 0 {
 		t.Fatalf("unknown extension=%+v", extensions[0])
 	}
 }
@@ -61,20 +62,14 @@ func FuzzConvertEntitiesUTF16(f *testing.F) {
 			return
 		}
 		for _, a := range annotations {
-			end := a.Offset() + a.Length()
-			if a.Offset() < 0 || end > len(text) {
-				t.Fatalf("out of range: %d..%d/%d", a.Offset(), end, len(text))
+			end := a.Offset + a.Length
+			if a.Offset < 0 || end > len(text) {
+				t.Fatalf("out of range: %d..%d/%d", a.Offset, end, len(text))
 			}
-			if !utf8Boundary(text, a.Offset()) || !utf8Boundary(text, end) {
+			boundary := func(i int) bool { return i == len(text) || utf8.RuneStart(text[i]) }
+			if !boundary(a.Offset) || !boundary(end) {
 				t.Fatalf("not UTF-8 boundaries")
 			}
 		}
 	})
-}
-
-func TestConvertEntitiesRejectsTypedNil(t *testing.T) {
-	var entity *tg.MessageEntityBold
-	if _, _, err := ConvertEntities("x", []tg.MessageEntityClass{entity}); err == nil {
-		t.Fatal("typed-nil entity accepted")
-	}
 }

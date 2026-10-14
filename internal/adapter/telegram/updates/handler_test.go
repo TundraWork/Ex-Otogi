@@ -47,10 +47,7 @@ func (s *captureStore) FindLocators(_ context.Context, namespace string, message
 
 func testMapper(t *testing.T) *mapper.Mapper {
 	t.Helper()
-	platform, _ := otogi.NewPlatformID("telegram")
-	account, _ := otogi.NewAccountID("deployment:42")
-	tenant, _ := otogi.NewTenantID("tenant")
-	return mapper.New(mapper.Config{Platform: platform, Account: account, Tenant: tenant, AuthorizedUserID: 42, IngestedAt: func() time.Time { return time.Unix(20, 0).UTC() }})
+	return mapper.New(mapper.Config{Platform: "telegram", Account: "deployment:42", AuthorizedUserID: 42, IngestedAt: func() time.Time { return time.Unix(20, 0).UTC() }})
 }
 
 func mappedBatch() *tg.Updates {
@@ -60,7 +57,7 @@ func mappedBatch() *tg.Updates {
 func TestDownstreamAtomicallyCapturesMappedEventPeerLocatorAndConsistency(t *testing.T) {
 	store := &captureStore{}
 	health := NewHealth()
-	handler := NewDownstream(store, testMapper(t), func(input otogi.EventInput) ([]byte, error) { return []byte(input.Action().String()), nil }, health)
+	handler := NewDownstream(store, testMapper(t), func(input otogi.Event) ([]byte, error) { return []byte(input.Action), nil }, health)
 	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 	if err := handler.Handle(ctx, mappedBatch()); err != nil {
 		t.Fatal(err)
@@ -83,7 +80,7 @@ func TestDownstreamAtomicallyCapturesMappedEventPeerLocatorAndConsistency(t *tes
 func TestDownstreamStorageFailureRetainsJournalAndDegrades(t *testing.T) {
 	store := &captureStore{err: errors.New("sqlite full")}
 	health := NewHealth()
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, health)
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("payload"), nil }, health)
 	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 	if err := handler.Handle(ctx, mappedBatch()); err == nil {
 		t.Fatal("expected capture failure")
@@ -104,7 +101,7 @@ func TestDownstreamRejectsUpdateQueuedBehindFailedBoundary(t *testing.T) {
 	}
 	cause := errors.New("first capture failed")
 	health.degrade(DegradedReason{Box: "common", Position: 4, Reason: "capture normalized update", Cause: cause})
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, health)
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("payload"), nil }, health)
 	if err := handler.Handle(context.Background(), mappedBatch()); !errors.Is(err, cause) {
 		t.Fatalf("error=%v", err)
 	}
@@ -132,12 +129,12 @@ func TestDownstreamDoesNotCapturePastConcurrentFailureBoundary(t *testing.T) {
 			secondMapped := make(chan struct{})
 			continueSecond := make(chan struct{})
 			var encodeCalls atomic.Int64
-			handler := NewDownstream(store, testMapper(t), func(input otogi.EventInput) ([]byte, error) {
+			handler := NewDownstream(store, testMapper(t), func(input otogi.Event) ([]byte, error) {
 				if encodeCalls.Add(1) == 2 {
 					close(secondMapped)
 					<-continueSecond
 				}
-				return []byte(input.Action().String()), nil
+				return []byte(input.Action), nil
 			}, health)
 
 			firstDone := make(chan error, 1)
@@ -178,10 +175,10 @@ func TestDownstreamDoesNotCaptureAfterConcurrentGeneralDegradation(t *testing.T)
 	}
 	mapped := make(chan struct{})
 	continueCapture := make(chan struct{})
-	handler := NewDownstream(store, testMapper(t), func(input otogi.EventInput) ([]byte, error) {
+	handler := NewDownstream(store, testMapper(t), func(input otogi.Event) ([]byte, error) {
 		close(mapped)
 		<-continueCapture
-		return []byte(input.Action().String()), nil
+		return []byte(input.Action), nil
 	}, health)
 
 	done := make(chan error, 1)
@@ -219,7 +216,7 @@ func mappedMessageBatch(message string, id int) *tg.Updates {
 
 func TestDownstreamJournalsManagerDifferenceOutputAndExcludesNegativeSequence(t *testing.T) {
 	store := &captureStore{}
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("payload"), nil }, NewHealth())
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("payload"), nil }, NewHealth())
 	if err := handler.Handle(context.Background(), mappedBatch()); err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +230,7 @@ func TestDownstreamJournalsManagerDifferenceOutputAndExcludesNegativeSequence(t 
 
 func TestDownstreamCompletesShortSentPlaceholderWithoutRouting(t *testing.T) {
 	store := &captureStore{}
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) {
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) {
 		t.Fatal("short-sent placeholder was routed")
 		return nil, nil
 	}, NewHealth())
@@ -249,7 +246,7 @@ func TestDownstreamCompletesShortSentPlaceholderWithoutRouting(t *testing.T) {
 
 func TestDownstreamAttachesPeersToFirstEmittedCaptureAfterPlaceholder(t *testing.T) {
 	store := &captureStore{}
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("event"), nil }, NewHealth())
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("event"), nil }, NewHealth())
 	ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 	placeholder := &tg.UpdateNewMessage{Message: &tg.MessageEmpty{ID: 4}, Pts: 4, PtsCount: 1}
 	message := mappedBatch().Updates[0]
@@ -265,7 +262,7 @@ func TestDownstreamAttachesPeersToFirstEmittedCaptureAfterPlaceholder(t *testing
 func TestDownstreamBoundsCombinedPeerCountBeforeEncoding(t *testing.T) {
 	store := &captureStore{}
 	health := NewHealth()
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return nil, nil }, health)
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return nil, nil }, health)
 	users := make([]tg.UserClass, telegramstore.MaxCaptureRows)
 	for i := range users {
 		users[i] = &tg.UserEmpty{ID: int64(i + 1)}
@@ -292,7 +289,7 @@ func TestDownstreamQuarantineAdvancesCommonAndChannelConsistency(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &captureStore{}
-			handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return nil, nil }, NewHealth())
+			handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return nil, nil }, NewHealth())
 			ctx := context.WithValue(context.Background(), journalContextKey{}, int64(9))
 			if err := handler.Handle(ctx, &tg.Updates{Updates: []tg.UpdateClass{tc.update}}); err != nil {
 				t.Fatal(err)
@@ -306,7 +303,7 @@ func TestDownstreamQuarantineAdvancesCommonAndChannelConsistency(t *testing.T) {
 
 func TestDownstreamCapturesUpdateMessageIDCorrelation(t *testing.T) {
 	store := &captureStore{}
-	handler := NewDownstream(store, testMapper(t), func(otogi.EventInput) ([]byte, error) { return []byte("event"), nil }, NewHealth())
+	handler := NewDownstream(store, testMapper(t), func(otogi.Event) ([]byte, error) { return []byte("event"), nil }, NewHealth())
 	packet := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateMessageID{RandomID: 77, ID: 88}}}
 	if err := handler.Handle(context.Background(), packet); err != nil {
 		t.Fatal(err)

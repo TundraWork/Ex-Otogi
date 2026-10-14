@@ -27,14 +27,12 @@ type InboxStore interface {
 }
 
 // EventDecoder decodes one bounded normalized inbox payload and observes attempt cancellation.
-type EventDecoder func(context.Context, []byte) (otogi.EventInput, error)
+type EventDecoder func(context.Context, []byte) (otogi.Event, error)
 
-// TrustedAdmitter is the driver-facing boundary for deterministic event admission and volatile completion observation.
-type TrustedAdmitter interface {
-	// SubmitTrusted admits one event with a trusted deterministic runtime ID.
-	SubmitTrusted(context.Context, otogi.EventID, otogi.EventInput) error
-	// SubscribeCompletion observes volatile completion for one runtime event attempt.
-	SubscribeCompletion(context.Context, otogi.EventID) (<-chan otogi.EventID, error)
+// EventSubmitter admits events and reports their completion; *kernel.Kernel implements it.
+type EventSubmitter interface {
+	// Submit admits event and calls done exactly once when it has been processed.
+	Submit(context.Context, otogi.Event, func(otogi.Outcome)) error
 }
 
 // InboxDispatcherConfig bounds claim ownership, retries, polling, and shutdown cleanup.
@@ -62,7 +60,7 @@ type InboxDispatcherConfig struct {
 // InboxDispatcher is the single owner of durable Telegram inbox delivery.
 type InboxDispatcher struct {
 	store       InboxStore
-	admitter    TrustedAdmitter
+	admitter    EventSubmitter
 	decode      EventDecoder
 	config      InboxDispatcherConfig
 	mu          sync.Mutex
@@ -76,7 +74,7 @@ type InboxDispatcher struct {
 }
 
 // NewInboxDispatcher constructs a bounded durable inbox dispatcher.
-func NewInboxDispatcher(store InboxStore, admitter TrustedAdmitter, decode EventDecoder, config InboxDispatcherConfig) *InboxDispatcher {
+func NewInboxDispatcher(store InboxStore, admitter EventSubmitter, decode EventDecoder, config InboxDispatcherConfig) *InboxDispatcher {
 	if store == nil || admitter == nil || decode == nil || config.Owner == "" || len(config.Owner) > 128 || !validDispatchDurations(config) || config.PollInterval <= 0 || config.RetryBase <= 0 || config.RetryMax < config.RetryBase || config.Now == nil {
 		panic("telegram: invalid inbox dispatcher dependency or bound")
 	}
@@ -106,7 +104,7 @@ func (d *InboxDispatcher) Run(ctx context.Context, ready func()) error {
 	d.mu.Lock()
 	if d.active {
 		d.mu.Unlock()
-		return fmt.Errorf("run inbox dispatcher: %w", otogi.ErrInvalidState)
+		return fmt.Errorf("run inbox dispatcher: already running: %w", otogi.ErrUnavailable)
 	}
 	d.active = true
 	d.draining = false
@@ -164,7 +162,7 @@ func (d *InboxDispatcher) Drain(ctx context.Context) error {
 	d.mu.Lock()
 	if !d.active {
 		d.mu.Unlock()
-		return fmt.Errorf("drain inbox dispatcher: %w", otogi.ErrInvalidState)
+		return fmt.Errorf("drain inbox dispatcher: not running: %w", otogi.ErrUnavailable)
 	}
 	d.draining = true
 	d.notifyLocked()
@@ -220,32 +218,25 @@ func (d *InboxDispatcher) dispatchOne(ctx context.Context) (worked bool, result 
 
 	attempt, cancel := context.WithTimeout(ctx, d.config.AttemptTimeout)
 	defer cancel()
-	input, err := d.decode(attempt, row.Payload)
+	event, err := d.decode(attempt, row.Payload)
 	if err != nil {
 		if permanentDispatchError(err) {
 			return true, d.fail(row, owner, err)
 		}
 		return true, d.release(row, owner, err)
 	}
-	id := deterministicInboxEventID(row.ID)
-	completion, err := d.admitter.SubscribeCompletion(attempt, id)
-	if err != nil {
-		if permanentDispatchError(err) {
-			return true, d.fail(row, owner, err)
-		}
-		return true, d.release(row, owner, err)
-	}
-	if err = d.admitter.SubmitTrusted(attempt, id, input); err != nil {
-		cancel()
+	event.ID = deterministicInboxEventID(row.ID)
+	completion := make(chan otogi.Outcome, 1)
+	if err = d.admitter.Submit(attempt, event, func(o otogi.Outcome) { completion <- o }); err != nil {
 		if permanentDispatchError(err) {
 			return true, d.fail(row, owner, err)
 		}
 		return true, d.release(row, owner, err)
 	}
 	select {
-	case completed, open := <-completion:
-		if !open || completed != id {
-			return true, d.release(row, owner, otogi.ErrUnavailable)
+	case outcome := <-completion:
+		if outcome.Err != nil && outcome.DroppedBy == "" {
+			return true, d.release(row, owner, outcome.Err)
 		}
 		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), d.config.CleanupTimeout)
 		defer stop()
@@ -257,11 +248,7 @@ func (d *InboxDispatcher) dispatchOne(ctx context.Context) (worked bool, result 
 
 func deterministicInboxEventID(inboxID string) otogi.EventID {
 	digest := sha256.Sum256([]byte("telegram-inbox\x00" + inboxID))
-	id, err := otogi.NewEventID(fmt.Sprintf("evt_tg_%x", digest))
-	if err != nil {
-		panic("telegram: deterministic inbox event ID is invalid")
-	}
-	return id
+	return otogi.EventID(fmt.Sprintf("evt_tg_%x", digest))
 }
 
 func permanentDispatchError(err error) bool {
@@ -294,9 +281,7 @@ func (d *InboxDispatcher) retryDelay(attempts int) time.Duration {
 
 func dispatchReason(err error) string {
 	switch {
-	case errors.Is(err, otogi.ErrCapacity):
-		return "kernel capacity"
-	case errors.Is(err, otogi.ErrUnavailable), errors.Is(err, otogi.ErrInvalidState):
+	case errors.Is(err, otogi.ErrUnavailable):
 		return "kernel unavailable"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "completion timeout"

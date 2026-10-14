@@ -22,9 +22,9 @@ func TestKnownMediaGetsTypedProjectionAndRawExtension(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		part := mapped.Event.Message().Parts()[0]
-		if part.Kind() != tc.kind || len(part.Extensions()) != 1 || part.Extensions()[0].LocalName() != "message-media" {
-			t.Fatalf("part kind=%s extensions=%v", part.Kind(), part.Extensions())
+		part := mapped.Event.Message.Parts[0]
+		if part.Kind != tc.kind || len(part.Extensions) != 1 || part.Extensions[0].Name != "message-media" {
+			t.Fatalf("part kind=%s extensions=%v", part.Kind, part.Extensions)
 		}
 	}
 }
@@ -46,15 +46,12 @@ func TestDocumentAndPhotoUseOpaqueRefreshLocators(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		media, ok := mapped.Event.Message().Parts()[0].Media()
-		if !ok || media.Role() != tc.role || media.Source().Kind() != otogi.MediaSourceOpaque {
-			t.Fatalf("media role=%s source=%s", media.Role(), media.Source().Kind())
+		media := mapped.Event.Message.Parts[0].Media
+		if media == nil || media.Role != tc.role || media.Source.Kind != otogi.MediaSourceOpaque {
+			t.Fatalf("media role=%s source=%s", media.Role, media.Source.Kind)
 		}
-		locator, ok := media.Source().OpaqueLocator()
-		if !ok {
-			t.Fatal("missing locator")
-		}
-		decoded, err := DecodeMediaLocator(locator.Data())
+		locator := media.Source.Locator
+		decoded, err := DecodeMediaLocator(locator.Data)
 		if err != nil || decoded.ID == 0 || len(decoded.FileReference) == 0 {
 			t.Fatalf("locator=%+v err=%v", decoded, err)
 		}

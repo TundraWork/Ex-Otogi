@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/mapper"
 	telegramstore "github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/store"
 	telegramupdates "github.com/TundraWork/Ex-Otogi/internal/adapter/telegram/updates"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
@@ -90,11 +89,8 @@ func TestUpdateProxyForwardsOnlyAfterBinding(t *testing.T) {
 
 type compositionAdmitter struct{}
 
-func (compositionAdmitter) SubmitTrusted(context.Context, otogi.EventID, otogi.EventInput) error {
+func (compositionAdmitter) Submit(context.Context, otogi.Event, func(otogi.Outcome)) error {
 	return nil
-}
-func (compositionAdmitter) SubscribeCompletion(context.Context, otogi.EventID) (<-chan otogi.EventID, error) {
-	return make(chan otogi.EventID), nil
 }
 
 func validProductionCompositionConfig(t *testing.T) ProductionCompositionConfig {
@@ -106,12 +102,8 @@ func validProductionCompositionConfig(t *testing.T) ProductionCompositionConfig 
 	cfg.RunResynchronizer = nil
 	cfg.RunDispatcher = nil
 	cfg.DrainDispatcher = nil
-	tenant, err := otogi.NewTenantID("tenant")
-	if err != nil {
-		t.Fatal(err)
-	}
 	return ProductionCompositionConfig{
-		Driver: cfg, Tenant: tenant, Admitter: compositionAdmitter{}, Now: time.Now,
+		Driver: cfg, Admitter: compositionAdmitter{}, Now: time.Now,
 		Dispatcher: InboxDispatcherConfig{Owner: "test", Lease: time.Minute, ClaimTimeout: time.Second, AttemptTimeout: time.Second, CleanupTimeout: time.Second, PollInterval: time.Millisecond, RetryBase: time.Second, RetryMax: time.Minute, Now: time.Now},
 		Recovery:   ResyncLimits{MaxDifferencePages: 1, MaxHistoryPages: 1, HistoryPageSize: 1, MaxReprocessRows: 1, CallTimeout: time.Second, MaxResponseItems: 1, MaxResponseBytes: 1024, MaxPeerPages: 1, PeerPageSize: 1},
 	}
@@ -243,26 +235,13 @@ func (f *compositionClientFactory) New(_ int, _ string, options ClientOptions) C
 
 type compositionSmokeAdmitter struct {
 	api       *compositionAPIFake
-	submitted chan otogi.EventInput
-	mu        sync.Mutex
-	complete  map[otogi.EventID]chan otogi.EventID
+	submitted chan otogi.Event
 }
 
-func (a *compositionSmokeAdmitter) SubscribeCompletion(_ context.Context, id otogi.EventID) (<-chan otogi.EventID, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	completion := make(chan otogi.EventID, 1)
-	a.complete[id] = completion
-	return completion, nil
-}
-
-func (a *compositionSmokeAdmitter) SubmitTrusted(_ context.Context, id otogi.EventID, input otogi.EventInput) error {
+func (a *compositionSmokeAdmitter) Submit(_ context.Context, event otogi.Event, done func(otogi.Outcome)) error {
 	a.api.record("dispatch-submit")
-	a.submitted <- input
-	a.mu.Lock()
-	completion := a.complete[id]
-	a.mu.Unlock()
-	completion <- id
+	a.submitted <- event
+	done(otogi.Outcome{EventID: event.ID})
 	return nil
 }
 
@@ -270,7 +249,7 @@ func TestCompositionStartsRealGraphAndStopsInReverseOrder(t *testing.T) {
 	api := &compositionAPIFake{}
 	client := &compositionClientSession{api: api, stopped: make(chan struct{})}
 	factory := &compositionClientFactory{client: client, api: api}
-	admitter := &compositionSmokeAdmitter{api: api, submitted: make(chan otogi.EventInput, 1), complete: make(map[otogi.EventID]chan otogi.EventID)}
+	admitter := &compositionSmokeAdmitter{api: api, submitted: make(chan otogi.Event, 1)}
 	config := validProductionCompositionConfig(t)
 	config.Driver.ClientFactory = factory
 	config.Admitter = admitter
@@ -286,7 +265,7 @@ func TestCompositionStartsRealGraphAndStopsInReverseOrder(t *testing.T) {
 	}
 	select {
 	case input := <-admitter.submitted:
-		if len(input.Message().Parts()) == 0 {
+		if len(input.Message.Parts) == 0 {
 			t.Fatalf("dispatched input=%+v", input)
 		}
 	case <-time.After(time.Second):
@@ -321,7 +300,7 @@ func TestCompositionPostReadyCaptureFailureFailsDriverAndStopsLaterDelivery(t *t
 	api := &compositionAPIFake{}
 	client := &compositionClientSession{api: api, stopped: make(chan struct{})}
 	factory := &compositionClientFactory{client: client, api: api}
-	admitter := &compositionSmokeAdmitter{api: api, submitted: make(chan otogi.EventInput, 2), complete: make(map[otogi.EventID]chan otogi.EventID)}
+	admitter := &compositionSmokeAdmitter{api: api, submitted: make(chan otogi.Event, 2)}
 	config := validProductionCompositionConfig(t)
 	config.Driver.ClientFactory = factory
 	config.Admitter = admitter
@@ -337,7 +316,7 @@ func TestCompositionPostReadyCaptureFailureFailsDriverAndStopsLaterDelivery(t *t
 	case <-time.After(time.Second):
 		t.Fatal("startup update was not dispatched")
 	}
-	failing := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateDeleteMessages{Messages: make([]int, mapper.MaxDeleteMessages+1), Pts: 2, PtsCount: 1}}}
+	failing := &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateDeleteMessages{Messages: make([]int, telegramstore.MaxCaptureRows+1), Pts: 2, PtsCount: 1}}}
 	if err := api.handler(context.Background(), failing); err != nil {
 		t.Fatalf("gotd ingress unexpectedly returned synchronously: %v", err)
 	}

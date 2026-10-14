@@ -1,60 +1,35 @@
-// Package capture provides a bounded in-memory messenger for composition and tests.
+// Package capture provides an in-memory messenger that records outbound
+// messages instead of delivering them, for the offline smoke and tests.
 package capture
 
 import (
 	"context"
-	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-const capacity = 16
-
-// Messenger captures at most sixteen outbound messages without blocking.
+// Messenger records every message sent through it.
 type Messenger struct {
 	mu       sync.Mutex
 	messages []otogi.OutboundMessage
 }
 
-// New returns an empty capture messenger with capacity sixteen.
-func New() *Messenger {
-	return &Messenger{messages: make([]otogi.OutboundMessage, 0, capacity)}
-}
+// New returns an empty messenger.
+func New() *Messenger { return &Messenger{} }
 
-// Send captures message unless ctx is canceled or the fixed capacity is exhausted.
-func (m *Messenger) Send(ctx context.Context, message otogi.OutboundMessage) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if _, err := otogi.NewOutboundMessage(otogi.OutboundMessageParams{
-		Tenant:            message.Tenant(),
-		Platform:          message.Platform(),
-		Account:           message.Account(),
-		Conversation:      message.Conversation(),
-		OriginatingEvent:  message.OriginatingEvent(),
-		OriginatingModule: message.OriginatingModule(),
-		Message:           message.Message(),
-		IdempotencyKey:    message.IdempotencyKey(),
-	}); err != nil {
-		return fmt.Errorf("capture send: %w", err)
-	}
-
+// Send records msg.
+func (m *Messenger) Send(_ context.Context, msg otogi.OutboundMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if len(m.messages) == capacity {
-		return fmt.Errorf("capture send: %w", otogi.ErrCapacity)
-	}
-	m.messages = append(m.messages, message)
+	m.messages = append(m.messages, msg)
 	return nil
 }
 
-// Messages returns an independent snapshot of captured messages in send order.
+// Messages returns the recorded messages in send order.
 func (m *Messenger) Messages() []otogi.OutboundMessage {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]otogi.OutboundMessage(nil), m.messages...)
+	return slices.Clone(m.messages)
 }

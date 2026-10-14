@@ -1,1 +1,20 @@
-{"text":"hello","entity":{"offset":0,"length":5},"media_locator":"telegram-photo","reply":"42"}
+{
+  "id": "telegram:acct:1",
+  "platform": "telegram",
+  "account": "acct",
+  "conversation": {"id": "chat-100", "kind": "group", "title": "Test group"},
+  "source_id": "77",
+  "actor": {"id": "user-5", "name": "Alice"},
+  "action": "message.created",
+  "direction": "incoming",
+  "occurred_at": "2026-08-28T00:00:00Z",
+  "completeness": "complete",
+  "message": {
+    "roots": ["text", "media"],
+    "parts": [
+      {"id": "text", "kind": "text", "text": "héllo", "annotations": [{"id": "e0", "offset": 0, "length": 6, "kind": "bold"}]},
+      {"id": "media", "kind": "media", "media": {"role": "image", "media_type": "image/jpeg", "source": {"kind": "opaque", "locator": {"namespace": "https://telegram.org/media", "version": 1, "data": "dGVsZWdyYW0tcGhvdG8="}}}}
+    ],
+    "relations": [{"kind": "reply", "target": {"platform": "telegram", "account": "acct", "conversation": "chat-100", "source_event": "42"}}]
+  }
+}

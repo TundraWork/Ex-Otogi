@@ -1,0 +1,4 @@
+go test fuzz v1
+string("0000\xa9")
+rune('\x00')
+rune('\x04')

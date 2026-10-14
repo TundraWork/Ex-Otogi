@@ -2,327 +2,194 @@ package otogi
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
+// Message is rich content as an ordered graph of parts, plus relations to
+// other events. Roots list the top-level parts in reading order; a part's
+// Children nest under it. The graph is acyclic and every part is reachable
+// from a root. A message with no parts is valid, for example on a deletion.
+type Message struct {
+	// Roots are the top-level parts in order.
+	Roots []PartID `json:"roots,omitempty"`
+	// Parts holds every part, in original order.
+	Parts []Part `json:"parts,omitempty"`
+	// Relations link this message to other events (reply, edit target, ...).
+	Relations []Relation `json:"relations,omitempty"`
+	// Extensions carry platform message data with no portable meaning yet.
+	Extensions []Extension `json:"extensions,omitempty"`
+}
+
+// PartKind says which payload field of a Part is set.
+type PartKind string
+
 const (
-	maxMessageParts        = 256
-	maxMessageAnnotations  = 512
-	maxMessageRelations    = 64
-	maxEventExtensions     = 1024
-	maxHashEntries         = 512
-	maxMessageDepth        = 16
-	maxTotalExtensionBytes = 512 * 1024
-	maxNormalizedMetadata  = 1024 * 1024
-	maxInlineMediaBytes    = 1024 * 1024
+	// PartText carries Text and Annotations.
+	PartText PartKind = "text"
+	// PartMedia carries Media for an image, video, audio, sticker, and so on.
+	PartMedia PartKind = "media"
+	// PartFile carries Media for a generic file.
+	PartFile PartKind = "file"
+	// PartLocation carries Location.
+	PartLocation PartKind = "location"
+	// PartContact carries Contact.
+	PartContact PartKind = "contact"
+	// PartPoll carries Poll.
+	PartPoll PartKind = "poll"
+	// PartInteractive carries Interactive, such as a button or row.
+	PartInteractive PartKind = "interactive"
+	// PartEmbeddedMessage carries Embedded, such as a quoted or forwarded message.
+	PartEmbeddedMessage PartKind = "embedded_message"
+	// PartOpaque carries Opaque platform content with no portable meaning.
+	PartOpaque PartKind = "opaque"
 )
 
-// Message is an immutable bounded directed acyclic rich-content graph.
-type Message struct {
-	roots      []PartID
-	parts      []Part
-	index      map[PartID]int
-	relations  []Relation
-	extensions []Extension
+// Part is one piece of content. Kind selects which payload field is set.
+type Part struct {
+	// ID identifies the part within its message.
+	ID PartID `json:"id"`
+	// Kind selects the payload.
+	Kind PartKind `json:"kind"`
+	// Children are nested parts in order.
+	Children []PartID `json:"children,omitempty"`
+	// Text is the UTF-8 text of a text part.
+	Text string `json:"text,omitempty"`
+	// Annotations are formatting and entity ranges over Text.
+	Annotations []Annotation `json:"annotations,omitempty"`
+	// Media describes a media or file part.
+	Media *Media `json:"media,omitempty"`
+	// Location describes a location part.
+	Location *Location `json:"location,omitempty"`
+	// Contact describes a contact part.
+	Contact *Contact `json:"contact,omitempty"`
+	// Poll describes a poll part.
+	Poll *Poll `json:"poll,omitempty"`
+	// Interactive describes an interactive part.
+	Interactive *Interactive `json:"interactive,omitempty"`
+	// Embedded describes an embedded message part.
+	Embedded *EmbeddedMessage `json:"embedded,omitempty"`
+	// Opaque holds the platform content of an opaque part.
+	Opaque *Extension `json:"opaque,omitempty"`
+	// Extensions carry platform part data with no portable meaning yet.
+	Extensions []Extension `json:"extensions,omitempty"`
 }
 
-// NewMessage validates graph shape and aggregate limits before owning inputs.
-func NewMessage(roots []PartID, parts []Part, relations []Relation, extensions []Extension) (Message, error) {
-	if len(parts) > maxMessageParts || len(relations) > maxMessageRelations || len(extensions) > 64 {
-		return Message{}, fmt.Errorf("message owner limits: %w", ErrCapacity)
-	}
-	if len(roots) > maxMessageParts {
-		return Message{}, fmt.Errorf("message roots: %w", ErrCapacity)
-	}
-	if len(parts) != 0 && len(roots) == 0 {
-		return Message{}, fmt.Errorf("message roots: %w", ErrInvalid)
-	}
-	if err := validateOwnedValues(parts, relations, extensions); err != nil {
-		return Message{}, err
-	}
-	if err := validateAggregates(roots, parts, relations, extensions); err != nil {
-		return Message{}, err
-	}
-	index := make(map[PartID]int, len(parts))
-	for i, part := range parts {
-		if part.id.value == "" || !validPartKind(part.kind) {
-			return Message{}, fmt.Errorf("message part: %w", ErrInvalid)
-		}
-		if _, exists := index[part.id]; exists {
-			return Message{}, fmt.Errorf("duplicate part: %w", ErrInvalid)
-		}
-		index[part.id] = i
-	}
-	rootSet := make(map[PartID]struct{}, len(roots))
-	for _, root := range roots {
-		if _, exists := index[root]; !exists {
-			return Message{}, fmt.Errorf("missing root: %w", ErrInvalid)
-		}
-		if _, duplicate := rootSet[root]; duplicate {
-			return Message{}, fmt.Errorf("duplicate root: %w", ErrInvalid)
-		}
-		rootSet[root] = struct{}{}
-	}
-	for _, part := range parts {
-		for _, child := range part.children {
-			if _, exists := index[child]; !exists {
-				return Message{}, fmt.Errorf("missing child: %w", ErrInvalid)
-			}
-		}
-	}
-	reachable := make(map[PartID]struct{}, len(parts))
-	var markReachable func(PartID)
-	markReachable = func(id PartID) {
-		if _, seen := reachable[id]; seen {
-			return
-		}
-		reachable[id] = struct{}{}
-		for _, child := range parts[index[id]].children {
-			markReachable(child)
-		}
-	}
-	for _, root := range roots {
-		markReachable(root)
-	}
-	if len(reachable) != len(parts) {
-		return Message{}, fmt.Errorf("message disconnected part: %w", ErrInvalid)
-	}
-	if err := validateDAG(parts, index); err != nil {
-		return Message{}, err
-	}
-	ownedParts := make([]Part, len(parts))
-	copy(ownedParts, parts)
-	ownedRelations := make([]Relation, len(relations))
-	copy(ownedRelations, relations)
-	ownedIndex := make(map[PartID]int, len(index))
-	for id, i := range index {
-		ownedIndex[id] = i
-	}
-	return Message{roots: clonePartIDs(roots), parts: ownedParts, index: ownedIndex, relations: ownedRelations, extensions: cloneExtensions(extensions)}, nil
+// TextMessage returns a message with a single text part.
+func TextMessage(text string) Message {
+	return Message{Roots: []PartID{"text"}, Parts: []Part{{ID: "text", Kind: PartText, Text: text}}}
 }
 
-// Roots returns ordered root identifiers.
-func (v Message) Roots() []PartID { return clonePartIDs(v.roots) }
-
-// Parts returns parts in their original order.
-func (v Message) Parts() []Part { out := make([]Part, len(v.parts)); copy(out, v.parts); return out }
-
-// Part looks up a part by message-local identifier.
-func (v Message) Part(id PartID) (Part, bool) {
-	i, ok := v.index[id]
-	if !ok {
-		return Part{}, false
+// PlainText concatenates the text of all text parts in part order.
+func (m Message) PlainText() string {
+	var b strings.Builder
+	for _, part := range m.Parts {
+		if part.Kind == PartText {
+			b.WriteString(part.Text)
+		}
 	}
-	return v.parts[i], true
+	return b.String()
 }
 
-// Relations returns ordered message-owned relations.
-func (v Message) Relations() []Relation {
-	out := make([]Relation, len(v.relations))
-	copy(out, v.relations)
-	return out
-}
-
-// Extensions returns ordered message-owned extensions.
-func (v Message) Extensions() []Extension { return cloneExtensions(v.extensions) }
-
-func validateDAG(parts []Part, index map[PartID]int) error {
-	state := make([]uint8, len(parts))
-	heights := make([]int, len(parts))
-	var height func(int) (int, error)
-	height = func(i int) (int, error) {
-		if state[i] == 1 {
-			return 0, fmt.Errorf("message cycle: %w", ErrInvalid)
+// Validate reports an error wrapping ErrInvalid when the part graph is
+// malformed or a part lacks the payload its Kind requires.
+func (m Message) Validate() error {
+	if len(m.Parts) == 0 {
+		if len(m.Roots) != 0 {
+			return fmt.Errorf("message: roots without parts: %w", ErrInvalid)
 		}
-		if state[i] == 2 {
-			return heights[i], nil
-		}
-		state[i] = 1
-		maxChild := 0
-		for _, child := range parts[i].children {
-			childHeight, err := height(index[child])
-			if err != nil {
-				return 0, err
-			}
-			if childHeight > maxChild {
-				maxChild = childHeight
-			}
-		}
-		heights[i] = maxChild + 1
-		if heights[i] > maxMessageDepth {
-			return 0, fmt.Errorf("message depth: %w", ErrCapacity)
-		}
-		state[i] = 2
-		return heights[i], nil
+		return nil
 	}
-	for i := range parts {
-		if _, err := height(i); err != nil {
+	index := make(map[PartID]int, len(m.Parts))
+	for i, part := range m.Parts {
+		if _, dup := index[part.ID]; dup || part.ID == "" {
+			return fmt.Errorf("message: empty or duplicate part ID %q: %w", part.ID, ErrInvalid)
+		}
+		index[part.ID] = i
+		if err := part.validate(); err != nil {
 			return err
 		}
 	}
-	return nil
-}
-
-func validateAggregates(roots []PartID, parts []Part, relations []Relation, messageExtensions []Extension) error {
-	return validateAggregateInputs(roots, parts, relations, messageExtensions, nil, ProviderLocator{})
-}
-
-func validateEventAggregates(message Message, envelope []Extension, locator ProviderLocator) error {
-	return validateAggregateInputs(message.roots, message.parts, message.relations, message.extensions, envelope, locator)
-}
-
-func validateAggregateInputs(roots []PartID, parts []Part, relations []Relation, messageExtensions, envelope []Extension, locator ProviderLocator) error {
-	annotations, hashes, extensionCount := 0, 0, 0
-	var extensionBytes, metadata, inlineBytes uint64
-	add := func(dst *uint64, n uint64) bool {
-		if ^uint64(0)-*dst < n {
-			return false
-		}
-		*dst += n
-		return true
+	if len(m.Roots) == 0 {
+		return fmt.Errorf("message: parts without roots: %w", ErrInvalid)
 	}
-	chargeString := func(s string) bool { return add(&metadata, uint64(len(s))) }
-	chargeExtensions := func(values []Extension) bool {
-		extensionCount += len(values)
-		if extensionCount > maxEventExtensions {
-			return false
+	const (
+		unvisited = iota
+		visiting
+		done
+	)
+	state := make([]int, len(m.Parts))
+	var visit func(PartID) error
+	visit = func(id PartID) error {
+		i, ok := index[id]
+		if !ok {
+			return fmt.Errorf("message: reference to missing part %q: %w", id, ErrInvalid)
 		}
-		for _, ext := range values {
-			if len(ext.data) > maxExtensionBytes || !add(&extensionBytes, uint64(len(ext.data))) || !add(&metadata, uint64(len(ext.data))) || !chargeString(ext.namespaceURI) || !chargeString(ext.localName) || !chargeString(ext.mediaType) {
-				return false
+		switch state[i] {
+		case visiting:
+			return fmt.Errorf("message: cycle at part %q: %w", id, ErrInvalid)
+		case done:
+			return nil
+		}
+		state[i] = visiting
+		for _, child := range m.Parts[i].Children {
+			if err := visit(child); err != nil {
+				return err
 			}
 		}
-		return add(&metadata, uint64(len(values))*16)
+		state[i] = done
+		return nil
 	}
-	if len(relations) > 256 || !chargeExtensions(messageExtensions) || !chargeExtensions(envelope) || !add(&metadata, uint64(len(roots)+len(parts)+len(relations)+len(envelope))*16) || !add(&metadata, uint64(len(locator.data))) || !chargeString(locator.namespaceURI) {
-		return fmt.Errorf("message aggregate: %w", ErrCapacity)
-	}
-	for _, part := range parts {
-		if !chargeString(part.id.value) || !chargeString(string(part.kind)) || !chargeString(part.text) || !add(&metadata, uint64(len(part.children)+len(part.annotations))*16) || !chargeExtensions(part.extensions) {
-			return fmt.Errorf("message aggregate: %w", ErrCapacity)
+	seenRoot := make(map[PartID]bool, len(m.Roots))
+	for _, root := range m.Roots {
+		if seenRoot[root] {
+			return fmt.Errorf("message: duplicate root %q: %w", root, ErrInvalid)
 		}
-		annotations += len(part.annotations)
-		if annotations > maxMessageAnnotations {
-			return fmt.Errorf("message annotations: %w", ErrCapacity)
-		}
-		for _, annotation := range part.annotations {
-			if !chargeString(annotation.id) || !chargeString(string(annotation.kind)) || !chargeString(annotation.target) || !chargeExtensions(annotation.extensions) {
-				return fmt.Errorf("message aggregate: %w", ErrCapacity)
-			}
-		}
-		if part.kind == PartMedia || part.kind == PartFile {
-			hashes += len(part.media.hashes)
-			if hashes > maxHashEntries {
-				return fmt.Errorf("message hashes: %w", ErrCapacity)
-			}
-			if !chargeString(string(part.media.role)) || !chargeString(part.media.mediaType) || !chargeString(part.media.filename) || !add(&metadata, uint64(len(part.media.hashes))*16) || !chargeExtensions(part.media.extensions) || !chargeExtensions(part.media.source.extensions) {
-				return fmt.Errorf("message aggregate: %w", ErrCapacity)
-			}
-			for _, hash := range part.media.hashes {
-				if !chargeString(hash.algorithm) || !add(&metadata, uint64(len(hash.value))) {
-					return fmt.Errorf("message hash metadata: %w", ErrCapacity)
-				}
-			}
-			if part.media.source.kind == MediaSourceExternal && !chargeString(part.media.source.external) {
-				return fmt.Errorf("message source metadata: %w", ErrCapacity)
-			}
-			if part.media.source.kind == MediaSourceInline && !add(&inlineBytes, uint64(len(part.media.source.inline))) {
-				return fmt.Errorf("message inline media: %w", ErrCapacity)
-			}
-			if part.media.source.kind == MediaSourceOpaque && (!add(&metadata, uint64(len(part.media.source.locator.data))) || !chargeString(part.media.source.locator.namespaceURI)) {
-				return fmt.Errorf("message metadata: %w", ErrCapacity)
-			}
-		}
-		switch part.kind {
-		case PartLocation:
-			if !chargeString(part.location.label) {
-				return fmt.Errorf("location metadata: %w", ErrCapacity)
-			}
-		case PartContact:
-			if !chargeString(part.contact.displayName) || !chargeString(part.contact.address) {
-				return fmt.Errorf("contact metadata: %w", ErrCapacity)
-			}
-		case PartPoll:
-			if !chargeString(part.poll.question) || !add(&metadata, uint64(len(part.poll.options))*16) {
-				return fmt.Errorf("poll metadata: %w", ErrCapacity)
-			}
-			for _, option := range part.poll.options {
-				if !chargeString(option) {
-					return fmt.Errorf("poll metadata: %w", ErrCapacity)
-				}
-			}
-		case PartInteractive:
-			if !chargeString(part.interactive.layout) || !chargeString(part.interactive.actionID) || !chargeString(part.interactive.label) {
-				return fmt.Errorf("interactive metadata: %w", ErrCapacity)
-			}
-		case PartEmbeddedMessage:
-			if !chargeString(part.embeddedMessage.summary) || !chargeString(part.embeddedMessage.reference) {
-				return fmt.Errorf("embedded message metadata: %w", ErrCapacity)
-			}
-		case PartOpaque:
-			if !chargeExtensions([]Extension{part.value}) {
-				return fmt.Errorf("message value: %w", ErrCapacity)
-			}
+		seenRoot[root] = true
+		if err := visit(root); err != nil {
+			return err
 		}
 	}
-	for _, relation := range relations {
-		if !chargeString(string(relation.kind)) || !chargeString(relation.key) || !chargeExtensions(relation.extensions) || !chargeString(relation.target.platform.value) || !chargeString(relation.target.account.value) || !chargeString(relation.target.conversation.value) || !chargeString(relation.target.sourceEvent.value) || !chargeString(relation.target.locator.namespaceURI) || !add(&metadata, uint64(len(relation.target.locator.data))) {
-			return fmt.Errorf("message relation aggregate: %w", ErrCapacity)
-		}
-	}
-	if extensionBytes > maxTotalExtensionBytes || metadata > maxNormalizedMetadata || inlineBytes > maxInlineMediaBytes {
-		return fmt.Errorf("message aggregate: %w", ErrCapacity)
-	}
-	return nil
-}
-func validateOwnedValues(parts []Part, relations []Relation, messageExtensions []Extension) error {
-	for _, extension := range messageExtensions {
-		if !validExtension(extension) {
-			return fmt.Errorf("message extension: %w", ErrInvalid)
-		}
-	}
-	for _, relation := range relations {
-		if !validRelationKind(relation.kind) || relation.target.platform.value == "" || relation.target.account.value == "" || relation.target.conversation.value == "" || relation.target.sourceEvent.value == "" || !utf8.ValidString(relation.key) {
-			return fmt.Errorf("message relation: %w", ErrInvalid)
-		}
-		for _, extension := range relation.extensions {
-			if !validExtension(extension) {
-				return fmt.Errorf("relation extension: %w", ErrInvalid)
-			}
-		}
-	}
-	for _, part := range parts {
-		for _, extension := range part.extensions {
-			if !validExtension(extension) {
-				return fmt.Errorf("part extension: %w", ErrInvalid)
-			}
-		}
-		for _, annotation := range part.annotations {
-			for _, extension := range annotation.extensions {
-				if !validExtension(extension) {
-					return fmt.Errorf("annotation extension: %w", ErrInvalid)
-				}
-			}
-		}
-		if part.kind == PartMedia || part.kind == PartFile {
-			for _, extension := range part.media.extensions {
-				if !validExtension(extension) {
-					return fmt.Errorf("media extension: %w", ErrInvalid)
-				}
-			}
-			for _, extension := range part.media.source.extensions {
-				if !validExtension(extension) {
-					return fmt.Errorf("media source extension: %w", ErrInvalid)
-				}
-			}
-		}
-		if part.kind == PartOpaque && !validExtension(part.value) {
-			return fmt.Errorf("opaque value: %w", ErrInvalid)
+	for i, s := range state {
+		if s != done {
+			return fmt.Errorf("message: part %q unreachable from roots: %w", m.Parts[i].ID, ErrInvalid)
 		}
 	}
 	return nil
 }
 
-func validPartKind(kind PartKind) bool {
-	return kind == PartText || kind == PartMedia || kind == PartFile || typedPartKind(kind) || kind == PartOpaque
+func (p Part) validate() error {
+	var ok bool
+	switch p.Kind {
+	case PartText:
+		ok = p.Text != "" || len(p.Annotations) > 0
+		for _, a := range p.Annotations {
+			end := a.Offset + a.Length
+			if a.Offset < 0 || a.Length < 0 || end > len(p.Text) || !utf8Boundary(p.Text, a.Offset) || !utf8Boundary(p.Text, end) {
+				return fmt.Errorf("part %q: annotation [%d,+%d) outside text or not on a UTF-8 boundary: %w", p.ID, a.Offset, a.Length, ErrInvalid)
+			}
+		}
+	case PartMedia, PartFile:
+		ok = p.Media != nil
+	case PartLocation:
+		ok = p.Location != nil
+	case PartContact:
+		ok = p.Contact != nil
+	case PartPoll:
+		ok = p.Poll != nil
+	case PartInteractive:
+		ok = p.Interactive != nil
+	case PartEmbeddedMessage:
+		ok = p.Embedded != nil
+	case PartOpaque:
+		ok = p.Opaque != nil
+	default:
+		return fmt.Errorf("part %q: unknown kind %q: %w", p.ID, p.Kind, ErrInvalid)
+	}
+	if !ok {
+		return fmt.Errorf("part %q: missing %s payload: %w", p.ID, p.Kind, ErrInvalid)
+	}
+	return nil
 }
+
+func utf8Boundary(s string, i int) bool { return i == len(s) || utf8.RuneStart(s[i]) }

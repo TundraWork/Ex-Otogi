@@ -11,10 +11,7 @@ import (
 
 func testConfig(t *testing.T) Config {
 	t.Helper()
-	platform, _ := otogi.NewPlatformID("telegram")
-	account, _ := otogi.NewAccountID("deployment:42")
-	tenant, _ := otogi.NewTenantID("tenant")
-	return Config{Platform: platform, Account: account, Tenant: tenant, AuthorizedUserID: 42, IngestedAt: func() time.Time { return time.Unix(200, 0).UTC() }}
+	return Config{Platform: "telegram", Account: "deployment:42", AuthorizedUserID: 42, IngestedAt: func() time.Time { return time.Unix(200, 0).UTC() }}
 }
 
 func TestMapNewAndEditMessages(t *testing.T) {
@@ -25,16 +22,17 @@ func TestMapNewAndEditMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Event.Action() != otogi.ActionMessageCreated || result.Event.Conversation().String() != "user:9" || result.Event.Direction() != otogi.DirectionIncoming {
-		t.Fatalf("event action=%s conversation=%s direction=%s", result.Event.Action(), result.Event.Conversation(), result.Event.Direction())
+	if result.Event.Action != otogi.ActionMessageCreated || result.Event.Conversation.ID != "user:9" || result.Event.Direction != otogi.DirectionIncoming {
+		t.Fatalf("event action=%s conversation=%s direction=%s", result.Event.Action, result.Event.Conversation, result.Event.Direction)
 	}
-	if actor, ok := result.Event.Actor(); !ok || actor.String() != "user:9" {
-		t.Fatalf("actor=%v,%v", actor, ok)
+	if result.Event.Actor.ID != "user:9" || result.Event.Conversation.Kind != otogi.ConversationDirect {
+		t.Fatalf("actor=%v conversation=%v", result.Event.Actor, result.Event.Conversation)
 	}
-	parts := result.Event.Message().Parts()
-	text, annotations, ok := parts[0].Text()
-	if !ok || text != "hello" || len(annotations) != 1 {
-		t.Fatalf("text=%q annotations=%d", text, len(annotations))
+	if part := result.Event.Message.Parts[0]; part.Text != "hello" || len(part.Annotations) != 1 {
+		t.Fatalf("text=%q annotations=%d", part.Text, len(part.Annotations))
+	}
+	if err := result.Event.Validate(); err != nil {
+		t.Fatal(err)
 	}
 	if result.SourceKey == "" || result.Box != "common" || result.Position != 5 || len(result.Locators) != 1 {
 		t.Fatalf("result=%+v", result)
@@ -45,21 +43,21 @@ func TestMapNewAndEditMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if edited.Event.Action() != otogi.ActionMessageEdited {
-		t.Fatalf("action=%s", edited.Event.Action())
+	if edited.Event.Action != otogi.ActionMessageEdited {
+		t.Fatalf("action=%s", edited.Event.Action)
 	}
-	if got, ok := edited.Event.EditedAt(); !ok || !got.Equal(time.Unix(150, 0)) {
-		t.Fatalf("edited=%v,%v", got, ok)
+	if got := edited.Event.EditedAt; !got.Equal(time.Unix(150, 0)) {
+		t.Fatalf("edited=%v", got)
 	}
 	if edited.SourceKey == result.SourceKey {
 		t.Fatal("edit source key did not include action/fingerprint")
 	}
-	createdID, ok := result.Event.SourceEventID()
-	if !ok || createdID.String() != "telegram:common:user:9:11" {
-		t.Fatalf("created source ID=%s,%v", createdID, ok)
+	createdID := result.Event.SourceID
+	if createdID != "telegram:common:user:9:11" {
+		t.Fatalf("created source ID=%s", createdID)
 	}
-	editedID, ok := edited.Event.SourceEventID()
-	if !ok || editedID != createdID {
+	editedID := edited.Event.SourceID
+	if editedID != createdID {
 		t.Fatalf("edited source ID=%s created=%s", editedID, createdID)
 	}
 }
@@ -71,7 +69,7 @@ func TestMapChannelAndDeleteUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Box != "channel:77" || created.Event.Conversation().String() != "channel:77" || created.Event.Direction() != otogi.DirectionOutgoing {
+	if created.Box != "channel:77" || created.Event.Conversation.ID != "channel:77" || created.Event.Direction != otogi.DirectionOutgoing {
 		t.Fatalf("created=%+v", created)
 	}
 
@@ -98,7 +96,7 @@ func TestMapServiceEmptyAndUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mapped.Event.Action() != otogi.ActionMessageService || len(mapped.Event.Message().Parts()) != 1 || mapped.Event.Message().Parts()[0].Kind() != otogi.PartOpaque {
+	if mapped.Event.Action != otogi.ActionMessageService || len(mapped.Event.Message.Parts) != 1 || mapped.Event.Message.Parts[0].Kind != otogi.PartOpaque {
 		t.Fatalf("service event=%+v", mapped.Event)
 	}
 
@@ -108,8 +106,8 @@ func TestMapServiceEmptyAndUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mapped.Event.Completeness() != otogi.CompletenessUnavailable {
-		t.Fatalf("completeness=%s", mapped.Event.Completeness())
+	if mapped.Event.Completeness != otogi.CompletenessUnavailable {
+		t.Fatalf("completeness=%s", mapped.Event.Completeness)
 	}
 
 	mapped, err = New(testConfig(t)).Map(&tg.UpdateUserTyping{UserID: 8, Action: &tg.SendMessageTypingAction{}})
@@ -149,24 +147,24 @@ func TestServicePreservesCompleteMessageAndRelations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	part := mapped.Event.Message().Parts()[0]
-	value, ok := part.Value()
-	if !ok {
+	part := mapped.Event.Message.Parts[0]
+	value := part.Opaque
+	if value == nil {
 		t.Fatal("service part not opaque")
 	}
-	if value.LocalName() != "message-service" {
-		t.Fatalf("extension=%s", value.LocalName())
+	if value.Name != "message-service" {
+		t.Fatalf("extension=%s", value.Name)
 	}
 	var decoded tg.MessageService
-	buffer := bin.Buffer{Buf: value.Data()}
+	buffer := bin.Buffer{Buf: value.Data}
 	if err := decoded.Decode(&buffer); err != nil {
 		t.Fatal(err)
 	}
 	if !decoded.Silent || decoded.TTLPeriod != 60 || decoded.SavedPeerID == nil || decoded.Reactions.Results == nil || decoded.ReplyTo == nil {
 		t.Fatalf("decoded service=%+v", decoded)
 	}
-	relations := mapped.Event.Message().Relations()
-	if len(relations) != 2 || relations[0].Kind() != otogi.RelationReply || relations[1].Kind() != otogi.RelationThread {
+	relations := mapped.Event.Message.Relations
+	if len(relations) != 2 || relations[0].Kind != otogi.RelationReply || relations[1].Kind != otogi.RelationThread {
 		t.Fatalf("relations=%+v", relations)
 	}
 }

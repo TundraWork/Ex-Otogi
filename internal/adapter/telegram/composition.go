@@ -23,10 +23,8 @@ import (
 type ProductionCompositionConfig struct {
 	// Driver contains credentials, paths, authorization, and the client factory.
 	Driver Config
-	// Tenant is the protocol-neutral isolation scope assigned to captured events.
-	Tenant otogi.TenantID
-	// Admitter is the protocol-neutral kernel boundary receiving durable inbox work.
-	Admitter TrustedAdmitter
+	// Admitter is the kernel boundary receiving durable inbox work.
+	Admitter EventSubmitter
 	// Dispatcher bounds durable delivery, retries, and shutdown cleanup.
 	Dispatcher InboxDispatcherConfig
 	// Recovery bounds Telegram reconciliation and mapper-upgrade replay.
@@ -109,7 +107,7 @@ type Composition struct {
 // installs forwarding update hooks before client construction and binds them to
 // the concrete account graph only after authorization and store opening.
 func NewComposition(config ProductionCompositionConfig) (*Composition, error) {
-	if config.Admitter == nil || config.Now == nil || config.Tenant.String() == "" {
+	if config.Admitter == nil || config.Now == nil {
 		return nil, ErrInvalidConfig
 	}
 	c := &Composition{config: config, handler: &updateProxy{}, middlewares: [2]*middlewareProxy{{}, {}}}
@@ -153,17 +151,9 @@ func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore,
 	if authorizedUserID <= 0 {
 		return CompositionRuntime{}, fmt.Errorf("%w: authorized Telegram user", ErrInvalidConfig)
 	}
-	platform, err := otogi.NewPlatformID("telegram")
-	if err != nil {
-		return CompositionRuntime{}, err
-	}
-	account, err := otogi.NewAccountID(c.config.Driver.AccountKey)
-	if err != nil {
-		return CompositionRuntime{}, err
-	}
-	valueMapper := mapper.New(mapper.Config{Platform: platform, Account: account, Tenant: c.config.Tenant, AuthorizedUserID: authorizedUserID, IngestedAt: c.config.Now})
+	valueMapper := mapper.New(mapper.Config{Platform: "telegram", Account: otogi.AccountID(c.config.Driver.AccountKey), AuthorizedUserID: authorizedUserID, IngestedAt: c.config.Now})
 	health := telegramupdates.NewHealth()
-	downstream := telegramupdates.NewDownstream(store, valueMapper, EncodeEventInput, health)
+	downstream := telegramupdates.NewDownstream(store, valueMapper, EncodeEvent, health)
 	manager, gate, _, _ := telegramupdates.NewManager(telegramupdates.ManagerConfig{APIStorage: store, AccessHasher: store, UserAccessHasher: store, Journal: store, Downstream: downstream, GapStore: store, Health: health})
 	middlewares := telegramupdates.Middlewares(gate, manager)
 	c.handler.bind(gate)
@@ -206,7 +196,7 @@ func (c *Composition) bindRuntime(client ClientSession, driverStore DriverStore,
 		Raw: raw,
 	}
 	resynchronizer := NewResynchronizer(api, StoreRecovery{Store: store, UserID: authorizedUserID}, replay, c.config.Recovery)
-	dispatcher := NewInboxDispatcher(store, c.config.Admitter, DecodeEventInput, c.config.Dispatcher)
+	dispatcher := NewInboxDispatcher(store, c.config.Admitter, DecodeEvent, c.config.Dispatcher)
 	sender := NewSender(api, store, gate, c.config.Now)
 	refetcher := NewRefetcher(api, store)
 	var dispatchMu sync.Mutex

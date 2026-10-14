@@ -1,1 +1,15 @@
-{"completeness":"redacted","component":"button","opaque":"unsupported-control"}
+{
+  "platform": "discord",
+  "account": "bot",
+  "conversation": {"id": "channel-1", "kind": "group"},
+  "action": "message.created",
+  "completeness": "partial",
+  "message": {
+    "roots": ["row"],
+    "parts": [
+      {"id": "row", "kind": "interactive", "children": ["button"], "interactive": {"layout": "row"}},
+      {"id": "button", "kind": "interactive", "interactive": {"layout": "button", "action_id": "click", "label": "Go"},
+       "extensions": [{"namespace": "https://discord.com/components", "name": "button", "data": "dW5zdXBwb3J0ZWQtY29udHJvbA=="}]}
+    ]
+  }
+}

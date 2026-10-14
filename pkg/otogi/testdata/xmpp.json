@@ -1,1 +1,10 @@
-{"namespace":"urn:example:unknown","element":"<x xmlns='urn:example:unknown'>raw</x>"}
+{
+  "platform": "xmpp",
+  "account": "bot@example.org",
+  "conversation": {"id": "room@conference.example.org", "kind": "group"},
+  "action": "message.created",
+  "message": {
+    "roots": ["unknown"],
+    "parts": [{"id": "unknown", "kind": "opaque", "opaque": {"namespace": "urn:example:unknown", "name": "x", "media_type": "application/xml", "data": "PHggeG1sbnM9J3VybjpleGFtcGxlOnVua25vd24nPnJhdzwveD4="}}]
+  }
+}

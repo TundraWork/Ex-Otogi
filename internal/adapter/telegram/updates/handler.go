@@ -25,7 +25,7 @@ type downstreamStore interface {
 // EventEncoder serializes the repository's immutable rich input for durable
 // inbox delivery. Encoding policy is injected so this integration does not
 // create a second event wire format.
-type EventEncoder func(otogi.EventInput) ([]byte, error)
+type EventEncoder func(otogi.Event) ([]byte, error)
 
 // Downstream maps manager-ordered batches and atomically captures peers,
 // locators, inbox/quarantine rows, and consistency positions.
@@ -137,7 +137,7 @@ func (h *Downstream) Handle(ctx context.Context, update tg.UpdatesClass) error {
 			if err != nil {
 				return h.fail(ctx, capture.Box, capture.Position, "encode event", err)
 			}
-			capture.Inbox = &telegramstore.InboxInput{ID: result.SourceKey, SourceKey: result.SourceKey, Conversation: result.Event.Conversation().String(), Sequence: int64(result.Position), Payload: payload, AvailableAt: result.Event.IngestedAt()}
+			capture.Inbox = &telegramstore.InboxInput{ID: result.SourceKey, SourceKey: result.SourceKey, Conversation: string(result.Event.Conversation.ID), Sequence: int64(result.Position), Payload: payload, AvailableAt: result.Event.ReceivedAt}
 		}
 		if result.Quarantine != nil {
 			capture.Quarantine = &telegramstore.QuarantineInput{SourceKey: result.Quarantine.SourceKey, Kind: result.Quarantine.Kind, Payload: result.Quarantine.Payload}
@@ -226,13 +226,13 @@ func (h *Downstream) mapDeletions(ctx context.Context, journalID int64, keepPend
 			if len(conversations) > 1 {
 				sourceKey += ":" + conversation
 			}
-			captures = append(captures, telegramstore.Capture{JournalID: journalID, KeepJournalPending: keepPending, Box: box, Position: position, Inbox: &telegramstore.InboxInput{ID: sourceKey, SourceKey: sourceKey, Conversation: conversation, Sequence: position, Payload: payload, AvailableAt: event.IngestedAt()}})
+			captures = append(captures, telegramstore.Capture{JournalID: journalID, KeepJournalPending: keepPending, Box: box, Position: position, Inbox: &telegramstore.InboxInput{ID: sourceKey, SourceKey: sourceKey, Conversation: conversation, Sequence: position, Payload: payload, AvailableAt: event.ReceivedAt}})
 		}
 	}
 	return captures, nil
 }
 
-func (h *Downstream) deletionEvent(deletion mapper.DeleteRecord, conversation string) (otogi.EventInput, error) {
+func (h *Downstream) deletionEvent(deletion mapper.DeleteRecord, conversation string) (otogi.Event, error) {
 	return h.mapper.MapDeletion(deletion, conversation)
 }
 func (h *Downstream) fail(ctx context.Context, box string, position int64, reason string, cause error) error {
