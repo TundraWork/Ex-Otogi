@@ -46,6 +46,7 @@ type dispatcher struct {
 	poll   time.Duration
 	log    *slog.Logger
 	now    func() time.Time
+	record func(kind, outcome string, payload any)
 
 	mu      sync.Mutex
 	pending map[int64]*rowProgress
@@ -100,6 +101,7 @@ func (d *dispatcher) dispatch(ctx context.Context, row telegramstore.InboxRow) (
 	}
 	if err != nil {
 		d.log.Error("telegram: cannot map inbox row; marking failed", "row", row.ID, "error", err)
+		d.record("inbox.failed", "error", map[string]any{"row": row.ID, "error": err.Error()})
 		return true, d.store.MarkInboxFailed(ctx, row.ID, err.Error(), d.now())
 	}
 	if len(events) == 0 {

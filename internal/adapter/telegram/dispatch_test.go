@@ -34,7 +34,7 @@ func (h *dispatchHarness) insert(t *testing.T, key string, u tg.UpdateClass) {
 func (h *dispatchHarness) run(t *testing.T) func() {
 	t.Helper()
 	d := &dispatcher{
-		store: h.store, kernel: h.kernel, wake: h.wake, poll: 10 * time.Millisecond, log: quiet, now: time.Now,
+		store: h.store, kernel: h.kernel, wake: h.wake, poll: 10 * time.Millisecond, log: quiet, now: time.Now, record: func(string, string, any) {},
 		mapper:  mapper.New(mapper.Config{Platform: Platform, Account: "main"}),
 		pending: map[int64]*rowProgress{},
 	}
@@ -138,7 +138,7 @@ func TestDispatcherStopsQuietlyWhenKernelRefuses(t *testing.T) {
 	h := newDispatchHarness(t)
 	h.kernel.err = fmt.Errorf("draining: %w", otogi.ErrUnavailable)
 	h.insert(t, "a", &tg.UpdateNewMessage{Message: newMessage(1, &tg.PeerUser{UserID: 2}, "a"), Pts: 1, PtsCount: 1})
-	d := &dispatcher{store: h.store, kernel: h.kernel, wake: h.wake, poll: time.Hour, log: quiet, now: time.Now,
+	d := &dispatcher{store: h.store, kernel: h.kernel, wake: h.wake, poll: time.Hour, log: quiet, now: time.Now, record: func(string, string, any) {},
 		mapper: mapper.New(mapper.Config{Platform: Platform, Account: "main"}), pending: map[int64]*rowProgress{}}
 	if err := d.run(context.Background()); err != nil {
 		t.Fatalf("run = %v, want nil", err)

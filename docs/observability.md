@@ -11,8 +11,8 @@ The event log is the primary observability tool. It is an append-only SQLite tab
 Each record has:
 
 - a monotonically increasing ID and a timestamp;
-- a kind, for example `event.received`, `module.completed`, `module.failed`, `module.panicked`, `message.sent`, `message.send_failed`, `driver.state`, `driver.gap`, `process.state`;
-- the component (`kernel`, `driver:<name>`, `module:<id>`, `process`);
+- a kind: `event.received`, `event.dropped`, `module.completed`, `module.failed`, `module.panicked`, `message.sent`, `message.send_failed`, `driver.state`, `driver.gap`, `inbox.failed`, or `process.state`;
+- the component (`kernel`, `module:<id>`, `middleware:<id>`, `driver:telegram/<account>`, `process`);
 - the correlated event ID when there is one, plus platform, account, and conversation;
 - an outcome and a duration where applicable;
 - the full payload as JSON: message content, error chain, panic stack, and so on.
@@ -27,7 +27,7 @@ What gets recorded:
 
 Records are written synchronously by the component that produces them. Bot traffic is low enough that a SQLite append per record is cheap, and this avoids a background queue that could drop records. If a write fails, the failure is printed to stdout and shown in status; event processing continues.
 
-Retention is configured by age and/or database size. Pruning deletes only the oldest records, and the management plane reports the oldest record still available.
+The log is `<data_dir>/eventlog.sqlite`. Retention is `eventlog.retention` (default 7 days); an hourly prune deletes older records, and the management plane reports the oldest record still available. Writers use the `otogi.Recorder` contract; exposing it to modules through `Invocation` is part of the module SDK milestone.
 
 ## Process logs
 

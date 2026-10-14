@@ -14,6 +14,13 @@ kernel:
   max_in_flight: 1024     # events admitted but not finished; intake waits beyond this
   handler_timeout: 10m    # per delivery, unless a module sets its own
 
+management:
+  addr: 127.0.0.1:8090    # HTTP API for status and the event log; "" disables it
+  # token: ${OTOGI_MANAGEMENT_TOKEN}   # required if addr is not loopback
+
+eventlog:
+  retention: 168h         # how long event log records are kept
+
 telegram:
   - account: main         # becomes the event account ID; log in with: otogi login main
     app_id: ${OTOGI_TELEGRAM_APP_ID}

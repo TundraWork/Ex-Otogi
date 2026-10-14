@@ -21,6 +21,8 @@ type Config struct {
 	ShutdownTimeout time.Duration        `yaml:"shutdown_timeout"`
 	Log             LogConfig            `yaml:"log"`
 	Kernel          KernelConfig         `yaml:"kernel"`
+	Management      ManagementConfig     `yaml:"management"`
+	EventLog        EventLogConfig       `yaml:"eventlog"`
 	Telegram        []TelegramAccount    `yaml:"telegram"`
 	Modules         map[string]yaml.Node `yaml:"modules"`
 }
@@ -36,6 +38,20 @@ type KernelConfig struct {
 	Workers        int           `yaml:"workers"`
 	MaxInFlight    int           `yaml:"max_in_flight"`
 	HandlerTimeout time.Duration `yaml:"handler_timeout"`
+}
+
+// ManagementConfig configures the management HTTP API.
+type ManagementConfig struct {
+	// Addr is the listen address; nil means 127.0.0.1:8090, "" disables the API.
+	Addr *string `yaml:"addr"`
+	// Token is the bearer token; required when Addr is not loopback.
+	Token string `yaml:"token"`
+}
+
+// EventLogConfig configures the structured event log.
+type EventLogConfig struct {
+	// Retention is how long records are kept; default 7 days.
+	Retention time.Duration `yaml:"retention"`
 }
 
 // TelegramAccount configures one Telegram user account.
@@ -89,6 +105,13 @@ func (c *Config) applyDefaults() {
 	if c.Log.Format == "" {
 		c.Log.Format = "json"
 	}
+	if c.Management.Addr == nil {
+		addr := "127.0.0.1:8090"
+		c.Management.Addr = &addr
+	}
+	if c.EventLog.Retention == 0 {
+		c.EventLog.Retention = 7 * 24 * time.Hour
+	}
 	for i := range c.Telegram {
 		a := &c.Telegram[i]
 		if a.Session == "" {
@@ -110,6 +133,9 @@ func (c Config) validate() error {
 	}
 	if c.Log.Format != "json" && c.Log.Format != "text" {
 		errs = append(errs, fmt.Errorf("log.format %q: want json or text", c.Log.Format))
+	}
+	if c.EventLog.Retention < 0 {
+		errs = append(errs, errors.New("eventlog.retention must not be negative"))
 	}
 	if c.Kernel.Workers < 0 || c.Kernel.MaxInFlight < 0 {
 		errs = append(errs, errors.New("kernel.workers and kernel.max_in_flight must not be negative"))

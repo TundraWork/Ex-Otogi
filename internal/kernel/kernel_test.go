@@ -415,3 +415,72 @@ func TestStopCompletesQueuedEventsWithError(t *testing.T) {
 		}
 	}
 }
+
+type recorder struct {
+	mu      sync.Mutex
+	records []otogi.Record
+}
+
+func (r *recorder) Record(_ context.Context, rec otogi.Record) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, rec)
+}
+
+func (r *recorder) kinds(event otogi.EventID) map[string]otogi.Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]otogi.Record{}
+	for _, rec := range r.records {
+		if rec.Event == event {
+			out[rec.Kind+" "+rec.Component] = rec
+		}
+	}
+	return out
+}
+
+func TestKernelRecordsEventLog(t *testing.T) {
+	rec := &recorder{}
+	modules := []otogi.Module{
+		module("ok", func(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
+			_, err := inv.Send(ctx, "reply", otogi.TextMessage("pong"))
+			return err
+		}),
+		module("bad", func(context.Context, otogi.Event, otogi.Invocation) error { return errors.New("boom") }),
+		module("crash", func(context.Context, otogi.Event, otogi.Invocation) error { panic("oops") }),
+	}
+	drop := middlewareFunc(func(_ context.Context, e *otogi.Event) (otogi.Verdict, error) {
+		if e.Message.PlainText() == "drop" {
+			return otogi.Drop, nil
+		}
+		return otogi.Continue, nil
+	})
+	k := start(t, Config{Recorder: rec}, modules, []otogi.Middleware{drop}, nil)
+
+	o := await(t, submit(t, k, event("c", "ping")))
+	got := rec.kinds(o.EventID)
+	for _, want := range []string{"event.received kernel", "module.completed module:ok", "message.sent module:ok", "module.failed module:bad", "module.panicked module:crash"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("missing record %q; have %v", want, keys(got))
+		}
+	}
+	if received := got["event.received kernel"]; received.Conversation != "c" || received.Payload.(otogi.Event).Message.PlainText() != "ping" {
+		t.Errorf("event.received = %+v", received)
+	}
+	if panicked := got["module.panicked module:crash"]; !strings.Contains(panicked.Payload.(map[string]any)["stack"].(string), "kernel_test.go") {
+		t.Errorf("panic record lacks the stack: %+v", panicked.Payload)
+	}
+
+	dropped := await(t, submit(t, k, event("c", "drop")))
+	if _, ok := rec.kinds(dropped.EventID)["event.dropped middleware:mw"]; !ok {
+		t.Errorf("missing event.dropped; have %v", keys(rec.kinds(dropped.EventID)))
+	}
+}
+
+func keys(m map[string]otogi.Record) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}

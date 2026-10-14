@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
@@ -36,7 +37,8 @@ func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) (
 	}
 	i.slots[slot] = true
 	i.mu.Unlock()
-	return i.kernel.messenger.Send(ctx, otogi.OutboundMessage{
+	started := time.Now()
+	ref, err := i.kernel.messenger.Send(ctx, otogi.OutboundMessage{
 		Platform:     i.event.Platform,
 		Account:      i.event.Account,
 		Conversation: i.event.Conversation.ID,
@@ -45,4 +47,11 @@ func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) (
 		Key:          otogi.IdempotencyKeyFor(i.event.ID, i.module, slot),
 		Message:      msg,
 	})
+	component := "module:" + string(i.module)
+	if err != nil {
+		i.kernel.record(i.event, "message.send_failed", component, "error", time.Since(started), map[string]any{"slot": slot, "message": msg, "error": err.Error()})
+	} else {
+		i.kernel.record(i.event, "message.sent", component, "ok", time.Since(started), map[string]any{"slot": slot, "message": msg, "ref": ref})
+	}
+	return ref, err
 }

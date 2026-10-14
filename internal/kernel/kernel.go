@@ -4,6 +4,7 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -27,6 +28,9 @@ type Config struct {
 	// HandlerTimeout bounds one delivery unless the module sets its own.
 	// Default 10 minutes; negative disables the timeout.
 	HandlerTimeout time.Duration
+	// Recorder receives the event log records the kernel writes (see
+	// docs/observability.md). Default: discard.
+	Recorder otogi.Recorder
 }
 
 func (c Config) withDefaults() Config {
@@ -38,6 +42,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.HandlerTimeout == 0 {
 		c.HandlerTimeout = 10 * time.Minute
+	}
+	if c.Recorder == nil {
+		c.Recorder = otogi.NopRecorder{}
 	}
 	return c
 }
@@ -158,11 +165,13 @@ func (k *Kernel) Submit(ctx context.Context, event otogi.Event, done func(otogi.
 	if err := k.admit(ctx); err != nil {
 		return err
 	}
+	k.record(event, "event.received", "kernel", "", 0, event)
 	tracked := &tracked{kernel: k, event: event, done: done}
 	for _, mw := range k.middleware {
 		verdict, err := k.intercept(ctx, mw, &tracked.event)
 		if err != nil || verdict == otogi.Drop {
 			k.log.Info("event dropped by middleware", "event", tracked.event.ID, "middleware", mw.ID(), "error", err)
+			k.record(tracked.event, "event.dropped", "middleware:"+string(mw.ID()), "dropped", 0, map[string]any{"middleware": mw.ID(), "error": errorText(err)})
 			tracked.dropped(mw.ID(), err)
 			return nil
 		}
@@ -311,10 +320,17 @@ func (k *Kernel) run(d *delivery) {
 	started := time.Now()
 	err := k.invoke(d)
 	outcome := otogi.ModuleOutcome{Module: d.module.descriptor.ID, Err: err, Duration: time.Since(started)}
-	if err != nil {
+	component := "module:" + string(outcome.Module)
+	var panicked *panicError
+	switch {
+	case errors.As(err, &panicked):
+		k.record(d.event.event, "module.panicked", component, "error", outcome.Duration, map[string]any{"error": err.Error(), "stack": panicked.stack})
+	case err != nil:
 		k.log.Error("module failed", "event", d.event.event.ID, "module", outcome.Module, "duration", outcome.Duration, "error", err)
-	} else {
+		k.record(d.event.event, "module.failed", component, "error", outcome.Duration, map[string]any{"error": err.Error()})
+	default:
 		k.log.Debug("module completed", "event", d.event.event.ID, "module", outcome.Module, "duration", outcome.Duration)
+		k.record(d.event.event, "module.completed", component, "ok", outcome.Duration, nil)
 	}
 	d.event.record(outcome)
 }
@@ -330,9 +346,55 @@ func (k *Kernel) invoke(d *delivery) (err error) {
 	defer cancel()
 	defer func() {
 		if r := recover(); r != nil {
-			k.log.Error("module panicked", "event", d.event.event.ID, "module", d.module.descriptor.ID, "panic", r, "stack", string(debug.Stack()))
-			err = fmt.Errorf("module %q panicked: %v", d.module.descriptor.ID, r)
+			p := &panicError{module: d.module.descriptor.ID, value: r, stack: string(debug.Stack())}
+			k.log.Error("module panicked", "event", d.event.event.ID, "module", p.module, "panic", r, "stack", p.stack)
+			err = p
 		}
 	}()
 	return d.module.module.Handle(ctx, d.event.event, &invocation{kernel: k, event: d.event.event, module: d.module.descriptor.ID})
+}
+
+// panicError is a recovered module panic, with its stack.
+type panicError struct {
+	module otogi.ModuleID
+	value  any
+	stack  string
+}
+
+func (p *panicError) Error() string { return fmt.Sprintf("module %q panicked: %v", p.module, p.value) }
+
+// record writes an event log record scoped to event. Records are written
+// with a background context: they must not be lost to a delivery's timeout.
+func (k *Kernel) record(event otogi.Event, kind, component, outcome string, d time.Duration, payload any) {
+	k.cfg.Recorder.Record(context.Background(), otogi.Record{
+		At: time.Now(), Kind: kind, Component: component, Event: event.ID,
+		Platform: event.Platform, Account: event.Account, Conversation: event.Conversation.ID,
+		Outcome: outcome, Duration: d, Payload: payload,
+	})
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// Stats is a snapshot of the kernel for status reporting.
+type Stats struct {
+	State       string `json:"state"`
+	InFlight    int    `json:"in_flight"`
+	MaxInFlight int    `json:"max_in_flight"`
+	Workers     int    `json:"workers"`
+}
+
+// Stats returns the kernel's current state and load.
+func (k *Kernel) Stats() Stats {
+	k.mu.Lock()
+	state := k.state
+	k.mu.Unlock()
+	return Stats{
+		State:    [...]string{stateNew: "new", stateReady: "ready", stateDraining: "draining", stateStopped: "stopped"}[state],
+		InFlight: len(k.slots), MaxInFlight: k.cfg.MaxInFlight, Workers: k.cfg.Workers,
+	}
 }

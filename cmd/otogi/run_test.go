@@ -17,7 +17,7 @@ import (
 func TestMain(m *testing.M) { goleak.VerifyTestMain(m) }
 
 func TestRunStopsCleanlyOnCancel(t *testing.T) {
-	cfg, err := loadConfig(writeConfig(t, "modules:\n  echo: {}\n"))
+	cfg, err := loadConfig(writeConfig(t, "data_dir: "+t.TempDir()+"\nmanagement: {addr: \"127.0.0.1:0\"}\nmodules:\n  echo: {}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

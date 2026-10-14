@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,9 @@ type Config struct {
 	Kernel Submitter
 	// Logger receives driver logs; nil means slog.Default().
 	Logger *slog.Logger
+	// Recorder receives event log records (driver state, gaps, failed inbox
+	// rows); nil discards them.
+	Recorder otogi.Recorder
 }
 
 // client is the part of gotd's *telegram.Client the driver uses.
@@ -64,6 +68,7 @@ type Driver struct {
 	newClient func(gotdtelegram.Options) client
 
 	mu        sync.Mutex
+	store     *telegramstore.Store
 	started   bool
 	ready     bool
 	sender    *sender
@@ -80,6 +85,9 @@ type Driver struct {
 func New(cfg Config) *Driver {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.Recorder == nil {
+		cfg.Recorder = otogi.NopRecorder{}
 	}
 	d := &Driver{cfg: cfg, log: cfg.Logger.With("driver", "telegram", "account", cfg.AccountKey), readyCh: make(chan struct{}), done: make(chan struct{}), drained: make(chan struct{})}
 	d.newClient = func(opts gotdtelegram.Options) client { return gotdtelegram.NewClient(cfg.AppID, cfg.AppHash, opts) }
@@ -101,6 +109,9 @@ func (d *Driver) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.mu.Lock()
+	d.store = store
+	d.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(d.cfg.SessionPath), 0o700); err != nil {
 		_ = store.Close()
 		return fmt.Errorf("telegram: create session directory: %w", err)
@@ -184,7 +195,7 @@ func (d *Driver) connected(ctx context.Context, c client, store *telegramstore.S
 	}))
 	g.Go(guarded("dispatcher", func() error {
 		defer close(d.drained)
-		dispatcher := &dispatcher{store: store, mapper: m, kernel: d.cfg.Kernel, wake: wake, poll: time.Second, log: d.log, now: time.Now, pending: map[int64]*rowProgress{}}
+		dispatcher := &dispatcher{store: store, mapper: m, kernel: d.cfg.Kernel, wake: wake, poll: time.Second, log: d.log, now: time.Now, record: d.record, pending: map[int64]*rowProgress{}}
 		return dispatcher.run(dispatchCtx)
 	}))
 	g.Go(guarded("pruner", func() error { return prune(ctx, store, d.log) }))
@@ -216,6 +227,7 @@ func (d *Driver) markReady() {
 		d.ready = true
 		d.mu.Unlock()
 		d.log.Info("telegram: ready")
+		d.record("driver.state", "ready", map[string]string{"state": "ready"})
 		close(d.readyCh)
 	})
 }
@@ -234,17 +246,60 @@ func (d *Driver) finish(runCtx context.Context, store *telegramstore.Store, err 
 	d.mu.Unlock()
 	if err != nil {
 		d.log.Error("telegram: driver failed", "error", err)
+		d.record("driver.state", "error", map[string]string{"state": "failed", "error": err.Error()})
+	} else {
+		d.record("driver.state", "ok", map[string]string{"state": "stopped"})
 	}
 	close(d.done)
 }
 
 func (d *Driver) recordGap(store *telegramstore.Store, kind string, channelID int64) {
 	d.log.Warn("telegram: updates could not be recovered", "gap", kind, "channel", channelID)
+	d.record("driver.gap", "", map[string]any{"gap": kind, "channel": channelID})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := store.RecordGap(ctx, kind, channelID, time.Now()); err != nil {
 		d.log.Error("telegram: record gap", "gap", kind, "error", err)
 	}
+}
+
+func (d *Driver) record(kind, outcome string, payload any) {
+	d.cfg.Recorder.Record(context.Background(), otogi.Record{
+		At: time.Now(), Kind: kind, Component: "driver:telegram/" + d.cfg.AccountKey,
+		Platform: Platform, Account: otogi.AccountID(d.cfg.AccountKey), Outcome: outcome, Payload: payload,
+	})
+}
+
+// Status describes the driver for the management API.
+type Status struct {
+	Platform otogi.PlatformID `json:"platform"`
+	Account  string           `json:"account"`
+	Ready    bool             `json:"ready"`
+	Error    string           `json:"error,omitempty"`
+	telegramstore.Counts
+}
+
+// Status returns the driver's state and inbox counts.
+func (d *Driver) Status(ctx context.Context) Status {
+	d.mu.Lock()
+	s := Status{Platform: Platform, Account: d.cfg.AccountKey, Ready: d.ready}
+	if d.err != nil {
+		s.Error = d.err.Error()
+	}
+	store := d.store
+	d.mu.Unlock()
+	select {
+	case <-d.done: // the database is closed
+	default:
+		if store != nil {
+			if counts, err := store.Counts(ctx); err != nil {
+				s.Error = strings.TrimPrefix(s.Error+"; "+err.Error(), "; ")
+			} else {
+				s.Counts = counts
+			}
+		}
+	}
+	return s
 }
 
 // Ready reports whether the driver is receiving updates.

@@ -79,3 +79,24 @@ func (s *Store) Prune(ctx context.Context, now time.Time) error {
 		s.exec(ctx, "prune sends", "DELETE FROM sends WHERE sent_at < ?", now.Add(-SentRetention).UnixMilli()),
 	)
 }
+
+// Counts summarizes the database for status: pending and failed inbox rows,
+// and recorded gaps.
+type Counts struct {
+	PendingInbox int `json:"pending_inbox"`
+	FailedInbox  int `json:"failed_inbox"`
+	Gaps         int `json:"gaps"`
+}
+
+// Counts returns the current counts.
+func (s *Store) Counts(ctx context.Context) (Counts, error) {
+	var c Counts
+	err := s.db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM inbox WHERE state = 'pending'),
+		(SELECT COUNT(*) FROM inbox WHERE state = 'failed'),
+		(SELECT COUNT(*) FROM gaps)`).Scan(&c.PendingInbox, &c.FailedInbox, &c.Gaps)
+	if err != nil {
+		return Counts{}, fmt.Errorf("count records: %w", err)
+	}
+	return c, nil
+}

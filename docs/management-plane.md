@@ -8,7 +8,18 @@ It is an adapter: it reads the event log and component status through their APIs
 
 ## Access
 
-The server binds to `127.0.0.1` by default. On any other address it requires a bearer token (see `security.md`).
+`management.addr` defaults to `127.0.0.1:8090`; an empty value disables the API. On a non-loopback address, `management.token` is required and sent as `Authorization: Bearer <token>` on `/api/` routes; `/healthz` and `/readyz` stay open for supervisors.
+
+## Routes
+
+| Route | Purpose |
+| --- | --- |
+| `GET /healthz` | Liveness |
+| `GET /readyz` | 200 when every driver is ready, else 503 |
+| `GET /api/status` | Version, uptime, kernel stats, driver states with pending/failed inbox rows and gaps, event log health |
+| `GET /api/events` | Records, newest first. Filters: `kind`, `component`, `event`, `platform`, `account`, `conversation`, `outcome`, `q` (text in payload), `since`, `until` (RFC 3339). `before=<id>` pages older; `after=<id>` polls newer. `limit` is at most 500 (default 100). The response has `records`, `more`, and `oldest_retained`. |
+| `GET /api/events/{id}/trace` | All records of one event, in order |
+| `POST /api/shutdown` | Graceful shutdown |
 
 ## Capabilities
 
@@ -16,7 +27,7 @@ The server binds to `127.0.0.1` by default. On any other address it requires a b
 - liveness: the process is running;
 - readiness: required components are ready.
 
-Both are cheap, need no auth on loopback, and are meant for supervisors.
+Both are cheap, need no auth, and are meant for supervisors.
 
 **Status**
 - version, build, config file path, uptime;

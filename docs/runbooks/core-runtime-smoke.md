@@ -29,6 +29,19 @@ export OTOGI_TELEGRAM_APP_ID=... OTOGI_TELEGRAM_APP_HASH=...
 
 Run it under a supervisor that restarts it on non-zero exit. Logs go to stdout (`log.format: json` or `text`).
 
+## Inspect a running bot
+
+```sh
+curl -s localhost:8090/api/status
+curl -s 'localhost:8090/api/events?limit=20'                  # newest records
+curl -s 'localhost:8090/api/events?kind=module.failed'        # failures only
+curl -s 'localhost:8090/api/events?q=hello'                   # text in payloads
+curl -s localhost:8090/api/events/<event-id>/trace            # one event end to end
+curl -s -X POST localhost:8090/api/shutdown                   # graceful stop
+```
+
+The event log is also a plain SQLite file: `sqlite3 data/eventlog.sqlite "SELECT id, kind, payload FROM records ORDER BY id DESC LIMIT 20"`.
+
 ## Quality gates
 
 ```sh
