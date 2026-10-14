@@ -70,7 +70,7 @@ type moduleEntry struct {
 type Kernel struct {
 	cfg        Config
 	log        *slog.Logger
-	messenger  otogi.Messenger
+	effector   otogi.Effector
 	middleware []otogi.Middleware
 	modules    []*moduleEntry
 	slots      chan struct{}
@@ -86,9 +86,9 @@ type Kernel struct {
 
 // New validates the module set and returns a kernel that is not yet started.
 // Modules are run in module-ID order where order is observable (outcomes).
-func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, messenger otogi.Messenger, log *slog.Logger) (*Kernel, error) {
-	if messenger == nil {
-		return nil, fmt.Errorf("new kernel: nil messenger: %w", otogi.ErrInvalid)
+func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, effector otogi.Effector, log *slog.Logger) (*Kernel, error) {
+	if effector == nil {
+		return nil, fmt.Errorf("new kernel: nil effector: %w", otogi.ErrInvalid)
 	}
 	if log == nil {
 		log = slog.Default()
@@ -116,7 +116,7 @@ func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, mess
 	}
 	slices.SortFunc(entries, func(a, b *moduleEntry) int { return strings.Compare(string(a.descriptor.ID), string(b.descriptor.ID)) })
 	k := &Kernel{
-		cfg: cfg, log: log, messenger: messenger, modules: entries,
+		cfg: cfg, log: log, effector: effector, modules: entries,
 		middleware: slices.Clone(middleware),
 		slots:      make(chan struct{}, cfg.MaxInFlight),
 	}
@@ -351,7 +351,7 @@ func (k *Kernel) invoke(d *delivery) (err error) {
 			err = p
 		}
 	}()
-	return d.module.module.Handle(ctx, d.event.event, &invocation{kernel: k, event: d.event.event, module: d.module.descriptor.ID})
+	return d.module.module.Handle(ctx, d.event.event, &invocation{kernel: k, event: d.event.event, origin: string(d.event.event.ID), module: d.module.descriptor.ID})
 }
 
 // panicError is a recovered module panic, with its stack.

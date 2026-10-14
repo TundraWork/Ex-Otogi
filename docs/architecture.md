@@ -51,7 +51,7 @@ SQLite on local disk is the store. Each component that persists data owns its ow
 1. A driver receives a platform update, durably records it, and converts it to a rich event.
 2. The driver submits the event to the kernel and marks it done when the kernel reports completion.
 3. The kernel routes the event to subscribed modules.
-4. Modules act through capabilities such as `Invocation.Send`, which the kernel routes back to the right driver.
+4. Modules act through `Invocation` capabilities; the kernel turns each into an `otogi.Effect` (with an idempotency key) and routes it to the right driver's `Apply`.
 5. Each step is recorded in the event log.
 
 Adapters translate SDK errors into `pkg/otogi` errors once. Kernel and modules never inspect SDK error types.

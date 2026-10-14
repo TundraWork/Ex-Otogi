@@ -53,22 +53,36 @@ func (h *signalHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.Handler.Handle(ctx, r)
 }
 
-type messengerFunc func(context.Context, otogi.OutboundMessage) (otogi.EventRef, error)
+type fakeDriver struct{ applied, fetched int }
 
-func (f messengerFunc) Send(ctx context.Context, msg otogi.OutboundMessage) (otogi.EventRef, error) {
-	return f(ctx, msg)
+func (d *fakeDriver) Apply(context.Context, otogi.Effect) (otogi.EventRef, error) {
+	d.applied++
+	return otogi.EventRef{}, nil
+}
+
+func (d *fakeDriver) FetchMedia(context.Context, otogi.Destination, otogi.MediaSource) ([]byte, error) {
+	d.fetched++
+	return nil, nil
 }
 
 func TestRouterRoutesByPlatformAndAccount(t *testing.T) {
-	var got otogi.AccountID
-	r := router{{"telegram", "main"}: messengerFunc(func(_ context.Context, m otogi.OutboundMessage) (otogi.EventRef, error) {
-		got = m.Account
-		return otogi.EventRef{}, nil
-	})}
-	if _, err := r.Send(context.Background(), otogi.OutboundMessage{Platform: "telegram", Account: "main"}); err != nil || got != "main" {
-		t.Fatalf("Send = %v, routed to %q", err, got)
+	main, other := &fakeDriver{}, &fakeDriver{}
+	r := router{{"telegram", "main"}: main, {"telegram", "other"}: other}
+	ctx := context.Background()
+	if _, err := r.Apply(ctx, otogi.Effect{Kind: otogi.EffectSend, To: otogi.Destination{Platform: "telegram", Account: "main"}}); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := r.Send(context.Background(), otogi.OutboundMessage{Platform: "telegram", Account: "other"}); !errors.Is(err, otogi.ErrUnavailable) {
+	// Non-send effects route by the message they apply to.
+	if _, err := r.Apply(ctx, otogi.Effect{Kind: otogi.EffectDelete, Ref: otogi.EventRef{Platform: "telegram", Account: "other"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.FetchMedia(ctx, otogi.Destination{Platform: "telegram", Account: "main"}, otogi.MediaSource{}); err != nil {
+		t.Fatal(err)
+	}
+	if main.applied != 1 || other.applied != 1 || main.fetched != 1 {
+		t.Fatalf("main = %+v, other = %+v", main, other)
+	}
+	if _, err := r.Apply(ctx, otogi.Effect{Kind: otogi.EffectSend, To: otogi.Destination{Platform: "discord", Account: "main"}}); !errors.Is(err, otogi.ErrUnavailable) {
 		t.Fatalf("unknown destination = %v", err)
 	}
 }

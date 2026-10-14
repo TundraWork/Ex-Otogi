@@ -41,11 +41,12 @@ type PartID string
 type IdempotencyKey string
 
 // IdempotencyKeyFor derives the key for the effect named slot that module
-// performs while handling event. The same inputs always give the same key.
-func IdempotencyKeyFor(event EventID, module ModuleID, slot string) IdempotencyKey {
+// performs while working on origin (an event ID, or a job or timer run ID).
+// The same inputs always give the same key.
+func IdempotencyKeyFor(origin string, module ModuleID, slot string) IdempotencyKey {
 	h := sha256.New()
 	var size [8]byte
-	for _, part := range []string{string(event), string(module), slot} {
+	for _, part := range []string{origin, string(module), slot} {
 		binary.BigEndian.PutUint64(size[:], uint64(len(part)))
 		_, _ = h.Write(size[:])
 		_, _ = h.Write([]byte(part))

@@ -7,7 +7,11 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-type invocation struct{ sent []otogi.Message }
+// invocation implements only Send; the embedded interface stands in for the rest.
+type invocation struct {
+	otogi.Invocation
+	sent []otogi.Message
+}
 
 func (i *invocation) Send(_ context.Context, _ string, msg otogi.Message) (otogi.EventRef, error) {
 	i.sent = append(i.sent, msg)

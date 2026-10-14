@@ -10,22 +10,19 @@ A module implements bot behavior. It:
 
 - declares its identity, subscribed actions, ordering, and timeout in a `ModuleDescriptor`;
 - handles each event through `Handle(ctx, event, invocation)` and returns an error or nil;
-- acts only through capabilities handed to it (today: `Invocation.Send`);
+- acts only through capabilities on its `Invocation` (send, send elsewhere, edit, delete, react, fetch media);
 - never imports platform SDKs, kernel internals, or another module's package.
 
-### SDK direction
+### SDK
 
-Today's SDK covers one need: send a rich message in response to an event. It grows by adding capabilities that real modules need, designed in one place rather than as one-off hooks:
+The module SDK is designed in [`2026-10-14-module-sdk-design.md`](superpowers/specs/2026-10-14-module-sdk-design.md) and delivered in steps:
 
-- messaging: send, reply, edit, delete, react, and fetch media;
-- richer subscriptions: by action, platform, conversation, command, or content type;
-- per-module typed configuration from the main config file;
-- per-module persistent storage, owned by the module and backed by SQLite;
-- timers and scheduled work owned by the kernel;
-- typed services that one module provides and others consume, declared up front and wired at startup;
-- structured log and event-log annotations from module code.
+- messaging: send, send to other conversations, reply and quote (relations), edit, delete, react, send and fetch media (implemented);
+- commands and filters declared in the descriptor;
+- per-module key/value store, private SQLite database, and typed config;
+- cron jobs, persistent timers, and typed services shared between modules.
 
-Each capability gets a small interface in `pkg/otogi`, implemented by the kernel or an adapter, and documented behavior (errors, cancellation, idempotency). The concrete SDK is designed as its own milestone.
+Every effect names a slot; the kernel derives its idempotency key from the unit of work (event, job run, or timer run), the module, and the slot, so replays never repeat effects. Drivers receive effects through `otogi.Effector` and return `ErrUnsupported` for kinds they do not implement.
 
 ## Drivers
 

@@ -47,17 +47,29 @@ type Module interface {
 	Handle(ctx context.Context, event Event, inv Invocation) error
 }
 
-// Invocation gives a module the capabilities it may use while handling one
-// event. The kernel implements it; new capabilities are added as new methods.
+// Invocation gives a module the capabilities it may use for one unit of work.
+// The kernel implements it; new capabilities are added as new methods.
+//
+// Every effect names a slot, unique within the unit of work, for example
+// "reply" or "edit-2". The slot makes the effect's idempotency key stable, so
+// a replayed event repeats no effect. Platforms that cannot perform an effect
+// return ErrUnsupported.
 type Invocation interface {
 	// Send sends msg to the event's conversation and returns a reference to
-	// the sent message, which later capabilities accept for edits, replies, and
-	// deletes. slot names this effect within the module's handling of the
-	// event, for example "reply", so a replayed event derives the same
-	// idempotency key and is not sent twice; a replay returns the original
-	// reference. The reference's SourceEvent may be empty when the platform
-	// confirms a duplicate without identifying the message.
+	// the sent message. A replay returns the original reference. Its
+	// SourceEvent may be empty when the platform confirms a duplicate without
+	// identifying the message.
 	Send(ctx context.Context, slot string, msg Message) (EventRef, error)
+	// SendTo sends msg to another conversation.
+	SendTo(ctx context.Context, slot string, to Destination, msg Message) (EventRef, error)
+	// Edit replaces the content of the message at ref.
+	Edit(ctx context.Context, slot string, ref EventRef, msg Message) error
+	// Delete deletes the message at ref.
+	Delete(ctx context.Context, slot string, ref EventRef) error
+	// React sets the account's reaction to the message at ref; "" removes it.
+	React(ctx context.Context, slot string, ref EventRef, reaction string) error
+	// FetchMedia downloads media from a message seen at from.
+	FetchMedia(ctx context.Context, from Destination, src MediaSource) ([]byte, error)
 }
 
 // Verdict is a middleware decision.

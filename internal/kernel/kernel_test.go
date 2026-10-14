@@ -42,14 +42,14 @@ func (f middlewareFunc) Intercept(ctx context.Context, e *otogi.Event) (otogi.Ve
 
 type messenger struct {
 	mu   sync.Mutex
-	sent []otogi.OutboundMessage
+	sent []otogi.Effect
 }
 
-func (m *messenger) Send(_ context.Context, msg otogi.OutboundMessage) (otogi.EventRef, error) {
+func (m *messenger) Apply(_ context.Context, e otogi.Effect) (otogi.EventRef, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sent = append(m.sent, msg)
-	return otogi.EventRef{Platform: msg.Platform, Account: msg.Account, Conversation: msg.Conversation, SourceEvent: "sent"}, nil
+	m.sent = append(m.sent, e)
+	return otogi.EventRef{Platform: e.To.Platform, Account: e.To.Account, Conversation: e.To.Conversation, SourceEvent: "sent"}, nil
 }
 
 func event(conversation string, text string) otogi.Event {
@@ -58,7 +58,7 @@ func event(conversation string, text string) otogi.Event {
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-func start(t *testing.T, cfg Config, modules []otogi.Module, middleware []otogi.Middleware, m otogi.Messenger) *Kernel {
+func start(t *testing.T, cfg Config, modules []otogi.Module, middleware []otogi.Middleware, m otogi.Effector) *Kernel {
 	t.Helper()
 	if m == nil {
 		m = &messenger{}
@@ -337,8 +337,8 @@ func TestSendAddressesTheEventAndRejectsReusedSlots(t *testing.T) {
 		t.Fatalf("sent %d messages", len(m.sent))
 	}
 	sent := m.sent[0]
-	if sent.Conversation != "c" || sent.Event != "stable" || sent.Module != "echo" || sent.Key != otogi.IdempotencyKeyFor("stable", "echo", "reply") {
-		t.Fatalf("outbound = %+v", sent)
+	if sent.Kind != otogi.EffectSend || sent.To.Conversation != "c" || sent.Origin != "stable" || sent.Module != "echo" || sent.Key != otogi.IdempotencyKeyFor("stable", "echo", "reply") {
+		t.Fatalf("effect = %+v", sent)
 	}
 	if !errors.Is(reuse, otogi.ErrInvalid) {
 		t.Fatalf("reused slot = %v, want ErrInvalid", reuse)
@@ -459,7 +459,7 @@ func TestKernelRecordsEventLog(t *testing.T) {
 
 	o := await(t, submit(t, k, event("c", "ping")))
 	got := rec.kinds(o.EventID)
-	for _, want := range []string{"event.received kernel", "module.completed module:ok", "message.sent module:ok", "module.failed module:bad", "module.panicked module:crash"} {
+	for _, want := range []string{"event.received kernel", "module.completed module:ok", "effect.applied module:ok", "module.failed module:bad", "module.panicked module:crash"} {
 		if _, ok := got[want]; !ok {
 			t.Errorf("missing record %q; have %v", want, keys(got))
 		}
@@ -483,4 +483,41 @@ func keys(m map[string]otogi.Record) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func TestEffectsAreAddressedAndValidated(t *testing.T) {
+	m := &messenger{}
+	ref := otogi.EventRef{Platform: "test", Account: "bot", Conversation: "c", SourceEvent: "m1"}
+	var errs []error
+	mod := module("fx", func(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
+		_, err := inv.SendTo(ctx, "elsewhere", otogi.Destination{Platform: "test", Account: "bot", Conversation: "other"}, otogi.TextMessage("hi"))
+		errs = append(errs, err,
+			inv.Edit(ctx, "edit", ref, otogi.TextMessage("edited")),
+			inv.React(ctx, "react", ref, "👍"),
+			inv.Delete(ctx, "delete", ref),
+			inv.Delete(ctx, "bad-ref", otogi.EventRef{Platform: "test", Account: "bot"}), // no message ID
+			inv.Edit(ctx, "edit", ref, otogi.TextMessage("again")),                       // slot reused
+		)
+		_, fetchErr := inv.FetchMedia(ctx, e.Destination(), otogi.MediaSource{})
+		errs = append(errs, fetchErr)
+		return nil
+	})
+	k := start(t, Config{}, []otogi.Module{mod}, nil, m)
+	await(t, submit(t, k, event("c", "go")))
+
+	for i, err := range errs[:4] {
+		if err != nil {
+			t.Errorf("effect %d: %v", i, err)
+		}
+	}
+	if !errors.Is(errs[4], otogi.ErrInvalid) || !errors.Is(errs[5], otogi.ErrInvalid) || !errors.Is(errs[6], otogi.ErrUnsupported) {
+		t.Fatalf("invalid ref / reused slot / fetch = %v / %v / %v", errs[4], errs[5], errs[6])
+	}
+	kinds := []otogi.EffectKind{}
+	for _, e := range m.sent {
+		kinds = append(kinds, e.Kind)
+	}
+	if len(kinds) != 4 || kinds[0] != otogi.EffectSend || m.sent[0].To.Conversation != "other" || kinds[1] != otogi.EffectEdit || m.sent[2].Reaction != "👍" || m.sent[3].Ref.SourceEvent != ref.SourceEvent {
+		t.Fatalf("effects = %+v", m.sent)
+	}
 }

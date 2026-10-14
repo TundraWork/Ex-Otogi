@@ -39,6 +39,8 @@ type MediaLocator struct {
 	FileReference []byte `json:"file_reference"`
 	// DCID is the data center holding the media.
 	DCID int `json:"dc_id"`
+	// ThumbSize selects the photo size to download: the largest one.
+	ThumbSize string `json:"thumb_size,omitempty"`
 }
 
 // EncodeMessageLocator encodes a message locator.

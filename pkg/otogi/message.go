@@ -80,6 +80,13 @@ func TextMessage(text string) Message {
 	return Message{Roots: []PartID{"text"}, Parts: []Part{{ID: "text", Kind: PartText, Text: text}}}
 }
 
+// Reply returns a text message replying to to.
+func Reply(text string, to EventRef) Message {
+	m := TextMessage(text)
+	m.Relations = []Relation{{Kind: RelationReply, Target: to}}
+	return m
+}
+
 // PlainText concatenates the text of all text parts in part order.
 func (m Message) PlainText() string {
 	var b strings.Builder

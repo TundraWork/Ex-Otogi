@@ -21,6 +21,7 @@ import (
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/telegram/peers"
 	"github.com/gotd/td/telegram/updates"
+	"github.com/gotd/td/telegram/updates/hook"
 	"github.com/gotd/td/tg"
 	"golang.org/x/sync/errgroup"
 
@@ -71,7 +72,7 @@ type Driver struct {
 	store     *telegramstore.Store
 	started   bool
 	ready     bool
-	sender    *sender
+	effects   *effects
 	cancel    context.CancelFunc
 	drain     context.CancelFunc
 	drained   chan struct{}
@@ -140,7 +141,13 @@ func (d *Driver) Start(ctx context.Context) error {
 		OnLoadUserStateFailed:    func() { d.recordGap(store, "no_saved_state", 0) },
 		OnLoadChannelStateFailed: func(id int64) { d.recordGap(store, "no_saved_channel_state", id) },
 	})
-	c := d.newClient(gotdtelegram.Options{UpdateHandler: manager, SessionStorage: &session.FileStorage{Path: d.cfg.SessionPath}})
+	c := d.newClient(gotdtelegram.Options{
+		UpdateHandler:  manager,
+		SessionStorage: &session.FileStorage{Path: d.cfg.SessionPath},
+		// Feed RPC results that carry updates (sends, edits, deletes) to the
+		// update manager, so our own changes do not look like gaps.
+		Middlewares: []gotdtelegram.Middleware{hook.UpdateHook(manager.Handle), hook.AffectedHook(manager)},
+	})
 	handler.peers = peers.Options{Storage: store}.Build(c.API())
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -182,7 +189,7 @@ func (d *Driver) connected(ctx context.Context, c client, store *telegramstore.S
 	}
 	m := mapper.New(mapper.Config{Platform: Platform, Account: otogi.AccountID(d.cfg.AccountKey)})
 	d.mu.Lock()
-	d.sender = &sender{api: c.API(), store: store, resolve: peerResolver(handler.peers), updates: manager, ref: m.MessageRef, log: d.log, now: time.Now}
+	d.effects = &effects{api: c.API(), store: store, peers: peerResolver(handler.peers), channel: channelResolver(handler.peers), ref: m.MessageRef, log: d.log, now: time.Now}
 	d.mu.Unlock()
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -357,15 +364,31 @@ func (d *Driver) Stop(ctx context.Context) error {
 	}
 }
 
-// Send delivers an outbound message; see otogi.Messenger.
-func (d *Driver) Send(ctx context.Context, msg otogi.OutboundMessage) (otogi.EventRef, error) {
-	d.mu.Lock()
-	s := d.sender
-	d.mu.Unlock()
-	if s == nil {
-		return otogi.EventRef{}, fmt.Errorf("telegram: not logged in yet: %w", otogi.ErrUnavailable)
+// Apply performs an effect; see otogi.Effector.
+func (d *Driver) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {
+	x, err := d.connectedEffects()
+	if err != nil {
+		return otogi.EventRef{}, err
 	}
-	return s.Send(ctx, msg)
+	return x.Apply(ctx, e)
+}
+
+// FetchMedia downloads media; see otogi.MediaFetcher.
+func (d *Driver) FetchMedia(ctx context.Context, _ otogi.Destination, src otogi.MediaSource) ([]byte, error) {
+	x, err := d.connectedEffects()
+	if err != nil {
+		return nil, err
+	}
+	return x.FetchMedia(ctx, src)
+}
+
+func (d *Driver) connectedEffects() (*effects, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.effects == nil {
+		return nil, fmt.Errorf("telegram: not logged in yet: %w", otogi.ErrUnavailable)
+	}
+	return d.effects, nil
 }
 
 func peerResolver(m *peers.Manager) func(context.Context, string) (tg.InputPeerClass, error) {
@@ -387,6 +410,16 @@ func peerResolver(m *peers.Manager) func(context.Context, string) (tg.InputPeerC
 			return nil, err
 		}
 		return peer.InputPeer(), nil
+	}
+}
+
+func channelResolver(m *peers.Manager) func(context.Context, int64) (tg.InputChannelClass, error) {
+	return func(ctx context.Context, id int64) (tg.InputChannelClass, error) {
+		channel, err := m.ResolveChannelID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		return channel.InputChannel(), nil
 	}
 }
 

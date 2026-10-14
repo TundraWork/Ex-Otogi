@@ -1,5 +1,5 @@
-// Package capture provides an in-memory messenger that records outbound
-// messages instead of delivering them, for the offline smoke and tests.
+// Package capture provides an in-memory effector that records effects
+// instead of performing them, for the offline smoke and tests.
 package capture
 
 import (
@@ -11,26 +11,29 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// Messenger records every message sent through it.
-type Messenger struct {
-	mu       sync.Mutex
-	messages []otogi.OutboundMessage
+// Effector records every effect applied through it.
+type Effector struct {
+	mu      sync.Mutex
+	effects []otogi.Effect
 }
 
-// New returns an empty messenger.
-func New() *Messenger { return &Messenger{} }
+// New returns an empty effector.
+func New() *Effector { return &Effector{} }
 
-// Send records msg and returns a reference numbered by send order.
-func (m *Messenger) Send(_ context.Context, msg otogi.OutboundMessage) (otogi.EventRef, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.messages = append(m.messages, msg)
-	return otogi.EventRef{Platform: msg.Platform, Account: msg.Account, Conversation: msg.Conversation, SourceEvent: otogi.SourceEventID(strconv.Itoa(len(m.messages)))}, nil
+// Apply records e. A send returns a reference numbered by order.
+func (c *Effector) Apply(_ context.Context, e otogi.Effect) (otogi.EventRef, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.effects = append(c.effects, e)
+	if e.Kind != otogi.EffectSend {
+		return e.Ref, nil
+	}
+	return otogi.EventRef{Platform: e.To.Platform, Account: e.To.Account, Conversation: e.To.Conversation, SourceEvent: otogi.SourceEventID(strconv.Itoa(len(c.effects)))}, nil
 }
 
-// Messages returns the recorded messages in send order.
-func (m *Messenger) Messages() []otogi.OutboundMessage {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return slices.Clone(m.messages)
+// Effects returns the recorded effects in order.
+func (c *Effector) Effects() []otogi.Effect {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.effects)
 }

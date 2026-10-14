@@ -12,13 +12,39 @@ type destination struct {
 	account  otogi.AccountID
 }
 
-// router delivers outbound messages to the driver of their (platform, account).
-type router map[destination]otogi.Messenger
+// driverHandle is what the router needs from a driver.
+type driverHandle interface {
+	otogi.Effector
+	otogi.MediaFetcher
+}
 
-func (r router) Send(ctx context.Context, msg otogi.OutboundMessage) (otogi.EventRef, error) {
-	m, ok := r[destination{msg.Platform, msg.Account}]
-	if !ok {
-		return otogi.EventRef{}, fmt.Errorf("no driver for platform %q account %q: %w", msg.Platform, msg.Account, otogi.ErrUnavailable)
+// router sends effects and media fetches to the driver of their (platform, account).
+type router map[destination]driverHandle
+
+func (r router) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {
+	to := destination{e.Ref.Platform, e.Ref.Account}
+	if e.Kind == otogi.EffectSend {
+		to = destination{e.To.Platform, e.To.Account}
 	}
-	return m.Send(ctx, msg)
+	d, err := r.driver(to)
+	if err != nil {
+		return otogi.EventRef{}, err
+	}
+	return d.Apply(ctx, e)
+}
+
+func (r router) FetchMedia(ctx context.Context, from otogi.Destination, src otogi.MediaSource) ([]byte, error) {
+	d, err := r.driver(destination{from.Platform, from.Account})
+	if err != nil {
+		return nil, err
+	}
+	return d.FetchMedia(ctx, from, src)
+}
+
+func (r router) driver(to destination) (driverHandle, error) {
+	d, ok := r[to]
+	if !ok {
+		return nil, fmt.Errorf("no driver for platform %q account %q: %w", to.platform, to.account, otogi.ErrUnavailable)
+	}
+	return d, nil
 }

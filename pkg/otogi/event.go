@@ -137,6 +137,17 @@ type Event struct {
 	Extensions []Extension `json:"extensions,omitempty"`
 }
 
+// Destination returns the conversation the event happened in.
+func (e Event) Destination() Destination {
+	return Destination{Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID}
+}
+
+// Ref returns a reference to the event's message, for replies, edits,
+// deletes, and reactions.
+func (e Event) Ref() EventRef {
+	return EventRef{Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID, SourceEvent: e.SourceID, Locator: e.Locator}
+}
+
 // Validate reports an error wrapping ErrInvalid when e lacks its scope or
 // action, or its message is structurally invalid.
 func (e Event) Validate() error {

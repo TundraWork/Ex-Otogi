@@ -298,7 +298,8 @@ func mapMedia(media tg.MessageMediaClass) (otogi.Part, error) {
 		}
 	case *tg.MessageMediaPhoto:
 		if photo, ok := value.Photo.(*tg.Photo); ok {
-			return mediaPart(part, otogi.MediaImage, "image/*", 0, MediaLocator{Kind: "photo", ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference, DCID: photo.DCID}, raw)
+			size, bytes := largestPhotoSize(photo.Sizes)
+			return mediaPart(part, otogi.MediaImage, "image/jpeg", bytes, MediaLocator{Kind: "photo", ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference, DCID: photo.DCID, ThumbSize: size}, raw)
 		}
 	}
 	part.Kind, part.Opaque = otogi.PartOpaque, &raw
@@ -379,4 +380,30 @@ func (m *Mapper) MessageRef(conversation string, messageID int) otogi.EventRef {
 	ref.SourceEvent = sourceID(namespace, conversation, messageID)
 	ref.Locator = messageLocator(data)
 	return ref
+}
+
+// largestPhotoSize returns the type and byte size of the largest downloadable
+// photo size.
+func largestPhotoSize(sizes []tg.PhotoSizeClass) (string, int64) {
+	var best string
+	var bestArea, bestBytes int
+	for _, size := range sizes {
+		var kind string
+		var w, h, bytes int
+		switch s := size.(type) {
+		case *tg.PhotoSize:
+			kind, w, h, bytes = s.Type, s.W, s.H, s.Size
+		case *tg.PhotoSizeProgressive:
+			kind, w, h = s.Type, s.W, s.H
+			if len(s.Sizes) > 0 {
+				bytes = s.Sizes[len(s.Sizes)-1]
+			}
+		default:
+			continue // cached, stripped, and path sizes are inline previews
+		}
+		if w*h > bestArea {
+			best, bestArea, bestBytes = kind, w*h, bytes
+		}
+	}
+	return best, int64(bestBytes)
 }

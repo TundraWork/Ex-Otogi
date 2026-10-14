@@ -45,10 +45,10 @@ func smoke(ctx context.Context, output io.Writer) error {
 	if outcome.Err != nil || len(outcome.Modules) != 1 || outcome.Modules[0].Err != nil {
 		return fmt.Errorf("smoke event failed: %+v", outcome)
 	}
-	messages := captured.Messages()
-	if len(messages) != 1 {
-		return fmt.Errorf("smoke: captured %d messages, want 1", len(messages))
+	effects := captured.Effects()
+	if len(effects) != 1 {
+		return fmt.Errorf("smoke: captured %d effects, want 1", len(effects))
 	}
-	_, err = fmt.Fprintln(output, messages[0].Message.PlainText())
+	_, err = fmt.Fprintln(output, effects[0].Message.PlainText())
 	return err
 }

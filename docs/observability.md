@@ -11,7 +11,7 @@ The event log is the primary observability tool. It is an append-only SQLite tab
 Each record has:
 
 - a monotonically increasing ID and a timestamp;
-- a kind: `event.received`, `event.dropped`, `module.completed`, `module.failed`, `module.panicked`, `message.sent`, `message.send_failed`, `driver.state`, `driver.gap`, `inbox.failed`, or `process.state`;
+- a kind: `event.received`, `event.dropped`, `module.completed`, `module.failed`, `module.panicked`, `effect.applied`, `effect.failed`, `driver.state`, `driver.gap`, `inbox.failed`, or `process.state`;
 - the component (`kernel`, `module:<id>`, `middleware:<id>`, `driver:telegram/<account>`, `process`);
 - the correlated event ID when there is one, plus platform, account, and conversation;
 - an outcome and a duration where applicable;
