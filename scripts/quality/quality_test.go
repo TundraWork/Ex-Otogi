@@ -53,24 +53,6 @@ func TestExperimentalMilestoneTargetsArePresent(t *testing.T) {
 	}
 }
 
-func TestTelegramRunbookRequiresVettedRestoreProcedure(t *testing.T) {
-	data, err := os.ReadFile("../../docs/runbooks/telegram-mtproto.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runbook := string(data)
-	for _, unsafe := range []string{"age -d /secure/backups/telegram-account.tar.age | tar", "tar -C \"$RESTORE_DIR\" -xf -"} {
-		if strings.Contains(runbook, unsafe) {
-			t.Errorf("runbook contains unsafe restore instruction %q", unsafe)
-		}
-	}
-	for _, requirement := range []string{"authenticated external checksum or signature", "new `0700` temporary directory", "unique flat regular-file allowlist", "symbolic links, hard links, devices, duplicate names, and path traversal", "no-follow", "atomic publish", "does not validate SQLite, account binding, or recovery readiness"} {
-		if !strings.Contains(runbook, requirement) {
-			t.Errorf("runbook is missing restore/smoke requirement %q", requirement)
-		}
-	}
-}
-
 func TestDocumentationFixturesFailForTheirNamedReason(t *testing.T) {
 	for _, fixture := range []string{"undocumented_package", "undocumented_declaration", "undocumented_method", "undocumented_field", "undocumented_embedded"} {
 		t.Run(fixture, func(t *testing.T) {

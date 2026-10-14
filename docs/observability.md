@@ -1,95 +1,42 @@
 # Observability
 
-## Purpose
+## Principle
 
-Telemetry explains externally visible behavior, capacity, and failure without becoming part of correctness. Ex-Otogi uses OpenTelemetry concepts and W3C trace context while keeping exporter choice replaceable.
+An operator must be able to answer "what did the bot receive, what did each module do, what did it send, and what went wrong?" without reading source code or attaching a debugger. Everything needed for that is recorded in full and is queryable. Nothing is redacted, sampled away, or silently dropped.
 
-Telemetry libraries MUST NOT leak into domain contracts. Instrumentation depends on narrow internal ports or is applied at boundaries.
+## Structured event log
 
-## Correlation
+The event log is the primary observability tool. It is an append-only SQLite table owned by one event log component and queried through the management plane.
 
-Every accepted event has a runtime event ID and local trace. Valid remote trace context MAY be linked or continued according to boundary policy, but it is untrusted: unsupported fields, excess baggage, and invalid identifiers are discarded.
+Each record has:
 
-Logs emitted during an invocation include trace and span IDs when sampled, plus bounded component, extension, outcome, and failure-class fields. User IDs, conversation IDs, event IDs, request paths containing identifiers, and error text are not metric labels.
+- a monotonically increasing ID and a timestamp;
+- a kind, for example `event.received`, `module.completed`, `module.failed`, `module.panicked`, `message.sent`, `message.send_failed`, `driver.state`, `driver.gap`, `process.state`;
+- the component (`kernel`, `driver:<name>`, `module:<id>`, `process`);
+- the correlated event ID when there is one, plus platform, account, and conversation;
+- an outcome and a duration where applicable;
+- the full payload as JSON: message content, error chain, panic stack, and so on.
 
-## Traces
+What gets recorded:
 
-Spans represent meaningful boundaries:
+- every inbound event with its full rich content;
+- every module invocation outcome with duration, including errors and panics with stacks;
+- every outbound action with its content and result;
+- driver connection state changes, catch-up runs, and gaps;
+- process start, ready, drain, stop, and component failures.
 
-- external receive and validation;
-- admission and queue wait;
-- kernel routing;
-- module invocation;
-- durable transaction;
-- external side effect;
-- management operation;
-- startup, recovery, drain, and shutdown.
+Records are written synchronously by the component that produces them. Bot traffic is low enough that a SQLite append per record is cheap, and this avoids a background queue that could drop records. If a write fails, the failure is printed to stdout and shown in status; event processing continues.
 
-Span status reflects the operation contract, not merely whether an error object exists. Cancellation, timeout, rejection, and capacity outcomes are distinguished. Payloads and secret values MUST NOT be span attributes or events.
+Retention is configured by age and/or database size. Pruning deletes only the oldest records, and the management plane reports the oldest record still available.
 
-Sampling policy is explicit. Error and latency diagnostics SHOULD retain enough parent context to explain causality without forcing full sampling of all participant traffic.
+## Process logs
+
+The process also writes structured logs (`log/slog`, JSON) to stdout. They are for developer diagnostics and for failures that happen before the event log is available, such as startup. The log level is configurable. Logs are not an API.
+
+## Status
+
+The management plane exposes current status: version, uptime, readiness, the state and last error of every component, kernel queue depth, durable inbox backlog per driver, recorded gaps, and event log health. Liveness and readiness checks are available for supervisors.
 
 ## Metrics
 
-The runtime exposes cumulative counters, current-state gauges, and duration/size histograms for:
-
-- ingress, acceptance, rejection, shedding, deferment, and completion;
-- queue depth, oldest age, wait duration, and saturation;
-- active and limited concurrency;
-- invocation and external-call duration by bounded outcome;
-- retries, breaker state, and ambiguous effects;
-- database transaction, busy, checkpoint, WAL, backup, and restore state;
-- lifecycle state and shutdown progress;
-- telemetry drops and exporter failures.
-
-Metric names, units, descriptions, and label sets are reviewed contracts. Labels use bounded enumerations or configured extension identities. A new label requires a cardinality estimate and load evidence.
-
-## Logs
-
-Logs are structured records with timestamp, severity, stable message identifier, component, action, outcome, and correlation fields. Free-form prose supplements these fields but does not replace them.
-
-Expected validation and authorization failures are not logged repeatedly at error severity; aggregate metrics and rate-limited diagnostic records prevent attacker-controlled log amplification. An error is logged at the boundary that makes the final handling decision.
-
-Sensitive fields are excluded at construction. Redaction is defense in depth, not the primary control. Panic reports and stack traces follow the same policy.
-
-## Health endpoints
-
-- **Liveness** answers whether the process can make progress. It does not depend on optional remote services and does not trigger expensive work.
-- **Readiness** answers whether the instance should accept new work. It is false during startup, invariant failure, unavailable required dependencies, drain, and shutdown.
-- **Diagnostics** provide authenticated component and capacity detail; they are not exposed by the unauthenticated health endpoint.
-
-Health responses are bounded, fast, cache-controlled, and free of secrets and participant data.
-
-## Telemetry pipeline behavior
-
-Instrumentation on a core path is non-blocking or bounded to a negligible configured budget. Export uses bounded memory and honors process shutdown deadlines. When capacity is exhausted, telemetry drops according to explicit priority and increments a self-observability counter.
-
-Exporter failure MUST NOT crash, deadlock, or indefinitely delay event processing. It may mark observability degraded for operators. Audit durability is separate from best-effort telemetry and uses the kernel-owned storage contract in `architecture.md`; exporters consume audit records only as derived output.
-
-## Stable vocabulary
-
-The resource describes service name, release version, instance ID, deployment environment, and host attributes approved for disclosure. Telemetry uses these exact bounded values:
-
-| Field | Allowed values |
-| --- | --- |
-| `component` | `composition`, `kernel`, `module`, `driver`, `storage`, `management`, `telemetry` |
-| `outcome` | `accepted`, `succeeded`, `rejected`, `shed`, `deferred`, `retrying`, `failed`, `ambiguous`, `canceled`, `timed_out`, `forced`, `lost` |
-| `failure.class` | `invalid`, `unauthorized`, `conflict`, `capacity`, `transient_dependency`, `permanent_dependency`, `canceled`, `deadline`, `ambiguous_effect`, `invariant`, `other` |
-| `lifecycle.state` | `new`, `starting`, `ready`, `draining`, `stopped`, `failed` |
-
-`failure.class` maps one-for-one to the taxonomy in `reliability.md`; an unrecognized adapter error maps to `other` and retains detail only in a bounded diagnostic record. `lifecycle.state` maps one-for-one to `runtime.md`. Platform type and configured extension identity come from startup-validated descriptors; their combined count is bounded by the published workload envelope. Raw platform names or remote identifiers never create new label values.
-
-Semantic convention upgrades are reviewed for renamed attributes, changed units, and cardinality. Experimental convention changes are not silently adopted through dependency upgrades.
-
-## Diagnostic acceptance
-
-For every required failure scenario in `reliability.md`, tests or smoke scenarios MUST show that an operator can determine:
-
-1. what operation failed;
-2. which bounded component owned it;
-3. whether work was rejected, retrying, ambiguous, or lost;
-4. the causal error class;
-5. current readiness and capacity impact;
-6. the correlation path without access to secret or raw message content.
-
-Telemetry tests inspect emitted fields for semantic correctness and forbidden sensitive categories. Load tests measure telemetry overhead and cardinality growth.
+There are no metrics exporters for now; status and the event log cover operator needs. Prometheus or OpenTelemetry can be added at the management boundary later without changing contracts.

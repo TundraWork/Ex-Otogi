@@ -1,123 +1,77 @@
-# Runtime Semantics
+# Runtime
 
-## Event model
+## Events
 
-An accepted event is immutable and contains:
+An event is an immutable `pkg/otogi` value with:
 
-- a runtime-wide event ID;
-- platform, account, tenant, and conversation scope;
-- source event ID when supplied by the platform;
-- kind and schema version;
-- occurrence and ingestion timestamps;
-- actor and subject references where applicable;
-- trace and causal-parent references;
-- a bounded payload expressed as a domain value.
+- a kernel-assigned event ID;
+- platform, account, and conversation scope;
+- the platform's own event ID when it has one;
+- an action (created, edited, deleted, reaction, membership, and so on);
+- timestamps, actor, and relations (reply, thread, edit target, and so on);
+- a rich content graph of ordered typed parts (text with annotations, media, files, embeds, and unknown platform data kept as extensions).
 
-The runtime event ID is created once at admission and remains stable through retries. A source event ID is used for deduplication only within its declared platform/account scope. Missing external IDs MUST NOT be fabricated from mutable content.
+The model is designed against Telegram, Matrix, XMPP, Discord, and QQ, so one module sees the same shapes whichever platform the event came from. Details are in the Telegram design spec under `docs/superpowers/specs/`.
 
-## Delivery, ordering, and idempotency
+## Delivery
 
-External platforms and process recovery may cause duplicate delivery. The runtime therefore provides at-least-once processing for accepted durable work unless a capability explicitly documents weaker best-effort behavior.
+Delivery is at-least-once from the platform to modules:
 
-- A handler that performs an externally visible effect MUST use an idempotency key or an atomic state/effect intent.
-- Deduplication records MUST have a documented scope, retention period, and durable or volatile class.
-- The runtime MUST NOT acknowledge durable acceptance before the event or equivalent recovery intent is committed.
-- Failure after an external effect but before local acknowledgement is treated as an ambiguous outcome and retried only when the effect interface is idempotent.
+1. The driver writes each inbound update to its durable inbox before processing.
+2. It submits the converted event to the kernel and waits for the kernel's completion acknowledgement.
+3. Only then does it mark the inbox row done. After a crash, unfinished rows are replayed.
 
-Ordering is guaranteed only for one module delivery key `(module identity, module-declared ordering key)`, normally derived from platform account and conversation. Work for different module delivery keys MAY execute concurrently. For one delivery key, event $N+1$ MUST NOT begin until event $N$ reaches that module's terminal outcome or exhausts that module's retry budget; retries never overtake later deliveries on the same key. A blocked module/key MUST NOT prevent another module or unrelated key from progressing. Queue age makes retry-induced head-of-line blocking observable.
+Because events can be replayed, outbound effects carry an idempotency key derived from (event ID, module, effect slot). A driver that records sends by key does not repeat a send on replay; Telegram does this. Modules with their own side effects use the same key.
 
-## Admission and queues
+Missed platform history is the driver's job. Telegram, for example, fetches updates it missed while offline. If history cannot be recovered, the driver records a gap in the event log and keeps running; it does not block the bot.
 
-Every queue has one owner, a finite capacity, a documented unit, and an overload action. Allowed actions are:
+## Ordering and concurrency
 
-- **reject:** caller receives a stable capacity error;
-- **shed:** explicitly classified expendable work is discarded and counted;
-- **backpressure:** producer blocks only under a cancellable context and bounded deadline;
-- **durable defer:** work is transactionally persisted for later execution.
+Events from one conversation reach a module in order. Different conversations may be processed concurrently. Today the kernel runs one worker, so everything is serial. Per-conversation concurrency is added when throughput needs it.
 
-Silent drop and unbounded queues are prohibited. Queue depth, oldest-item age, admission outcome, and saturation are observable without high-cardinality labels.
+## Queues
 
-Concurrency limits exist per process and at narrower contention boundaries such as driver account, module, destination, or database writer. Limits MUST be configuration-validated against the tested workload envelope.
+Every queue has a fixed capacity and one owner. When a queue is full, the producer either gets an explicit capacity error or blocks under its context. A driver with a durable inbox simply leaves the work in the inbox and retries later. Nothing is dropped silently.
 
-## Context and deadlines
+## Context
 
-Every request-scoped, blocking, or long-lived operation accepts `context.Context` first. The caller owns cancellation. Callees MUST return promptly after cancellation and MUST NOT retain the context after the operation.
-
-- An inbound deadline is preserved unless policy imposes a shorter one.
-- A boundary without an inbound deadline MUST apply its configured maximum duration when blocking on an external dependency.
-- Background lifecycle work uses a component lifecycle context, never `context.Background()` as an escape from ownership.
-- Cleanup that must outlive a canceled request uses a new bounded lifecycle context owned by the cleanup coordinator.
-- Context values carry request metadata only; dependencies and optional parameters use explicit arguments.
+Blocking and long-lived operations take `context.Context` first and return promptly when it is cancelled. Background work runs under its component's lifecycle context. Cleanup that must outlive a cancelled request gets its own bounded context.
 
 ## Component lifecycle
 
-Every long-lived component follows:
+Long-lived components (kernel, drivers, management plane) follow:
 
 ```text
 new -> starting -> ready -> draining -> stopped
-          |         |          |
-          v         v          v
-        failed <----+----------+
-          |
-          v
-        stopped
+          \          \         \
+           +-------> failed ----+-> stopped
 ```
 
-- `Start(ctx)` is called once, performs bounded initialization, and reports success only when the component can serve its contract. Failure transitions `starting` to `failed`.
-- A required component failure transitions `ready` to `failed` and prevents process readiness.
-- `Drain(ctx)` transitions `ready` to `draining`, stops admission, and allows accepted work to complete within the drain budget. Drain failure transitions to `failed`.
-- `Stop(ctx)` is valid from `starting`, `ready`, `draining`, or `failed`; it releases every resource acquired so far, is idempotent, and transitions to `stopped` even when cleanup returns an aggregated error.
-- `failed` preserves the cause and whether restart is safe. The core process does not loop-restart components unless an approved component contract defines state-safe restart.
+- `Start(ctx)` runs once and returns when the component can serve or has failed.
+- A required component failing after start is recorded with its cause and triggers graceful process shutdown with a non-zero exit.
+- `Drain(ctx)` stops taking new work and lets accepted work finish.
+- `Stop(ctx)` releases everything, is safe to call more than once, and works from any state.
 
-Lifecycle transitions are serialized and observable. Calls in an invalid state return stable errors rather than panic.
+Components are not restarted in-process. The process supervisor (systemd, a container runtime) restarts the process.
 
-### Telegram lifecycle specialization
+## Goroutines
 
-The Telegram driver is a governed one-shot component. Its gotd client owns MTProto transport cleanup; the update manager, durable resynchronizer, and inbox dispatcher are child lifecycles under the driver context. Readiness requires completed authorization, an open update-manager startup gate, and update state that is either reconciled or durably marked degraded and explicitly acknowledged by an operator. A gap, unrecoverable difference, storage failure, or fatal child error clears readiness and preserves a bounded cause. Acknowledgement permits operation with known missing history; it MUST NOT erase the gap marker, claim recovery, or fabricate events.
+Every goroutine has an owner that can cancel it and waits for it on stop. Blocking channel operations also select on cancellation. Only the producer closes a channel. No detached goroutines.
 
-The opt-in `telegram-smoke` command exercises only existing-session authorization and account lookup over MTProto. Its connectivity success is not this lifecycle readiness signal and does not inspect SQLite binding or durable recovery state.
+## Panics and errors
 
-During drain, the dispatcher stops taking new durable inbox claims and waits for claimed work, while MTProto update capture continues until stop. Stop cancels transport and children, observes their completion within the caller deadline, and closes SQLite after them. Once the gotd client's run method returns, the same client instance MUST NOT be run again.
+The kernel recovers module panics per invocation, records the panic and stack in the event log, and continues with other modules and events. Drivers recover panics in their goroutines and fail their lifecycle with the panic as cause.
 
-## Goroutine and resource ownership
+An error is handled once: returned, translated at a boundary, or recorded as a failed outcome. Logging alone does not handle an error.
 
-A goroutine may start only when its owner can name:
+## Shutdown
 
-- the cancellation signal;
-- the completion observation path;
-- the panic boundary;
-- all channels, timers, and resources it owns;
-- the maximum time shutdown waits for it.
+On SIGINT or SIGTERM:
 
-Owners use structured concurrency, such as an error group tied to a lifecycle context, when sibling failure should cancel the group. Detached goroutines are prohibited.
+1. mark the process not ready;
+2. stop drivers from taking new platform input;
+3. drain the kernel within the drain timeout;
+4. stop components in reverse start order;
+5. exit 0 on a clean stop and non-zero otherwise.
 
-Only a producer closes a channel. Receivers never infer global completion from a channel they do not own. Timer and ticker owners stop them. Blocking sends and receives select on cancellation.
-
-## Panic and error boundaries
-
-Panic is reserved for impossible programmer invariants before serving traffic. Goroutine, task, module, and driver entrypoints MUST recover panics, capture stack evidence, classify the owning unit as failed, and propagate an error to its supervisor. Recovery MUST NOT continue using potentially corrupted invocation state.
-
-An error is handled once by returning it, translating it at a boundary, compensating, or terminating the owning lifecycle. Logs describe the final handling decision. Wrapped errors preserve identity with `%w` when callers need `errors.Is` or `errors.As`.
-
-## Time and randomness
-
-Kernel policy uses injected clocks and randomness sources when behavior depends on time, jitter, IDs, or sampling. Tests use deterministic implementations. Wall-clock time is not used to measure duration; monotonic time is retained where Go provides it.
-
-## Graceful shutdown
-
-On termination:
-
-1. mark readiness false;
-2. stop external admission;
-3. drain accepted work until completion or the drain deadline;
-4. cancel remaining invocation contexts;
-5. flush durable state and bounded telemetry;
-6. stop components in reverse dependency order;
-7. close storage and process resources;
-8. report clean or forced termination.
-
-Each step consumes a portion of one overall shutdown budget. A forced shutdown records unfinished work by class and exits non-zero when durability guarantees may have been violated.
-
-## Verification
-
-Tests MUST cover queue saturation, cancellation while blocked, duplicate delivery, ambiguous external effects, ordering-key isolation, lifecycle transition rejection, panic containment, timer/goroutine termination, and graceful plus forced shutdown. Concurrency tests run under the race detector; long-lived tests include leak detection.
+A second signal forces immediate exit. With a durable inbox, unfinished events are replayed on the next start.

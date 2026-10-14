@@ -1,82 +1,75 @@
 # Ex-Otogi Engineering Rules
 
-This file is the executable index for work on Ex-Otogi. Detailed requirements live in `docs/`; do not duplicate or weaken them here.
+This file is the working index for Ex-Otogi on the `next` branch. Domain detail lives in `docs/` (start at `docs/README.md`). Direct user instructions override both.
 
-## Authority and conformance
+## Priorities
 
-1. Direct user instructions control task intent.
-2. This file controls repository workflow and non-negotiable engineering rules.
-3. `docs/README.md` defines specification precedence; linked specifications control their domains.
-4. An accepted design or plan may add constraints, but may not violate higher-authority rules.
+In order:
 
-The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are normative as defined in BCP 14. A deviation from a MUST requires an approved specification change, not a local exception.
+1. **Operability (运维便捷性).** An operator can install, configure, run, inspect, back up, restore, and upgrade the bot without reading source. Every event, module outcome, outbound action, and failure is visible and queryable.
+2. **Maintainability (可维护性).** Our own code stays lean, direct, and easy to change, leaving room for complex features later. Less code beats clever code.
+3. **Design over implementation.** Spend the thinking on architecture and contracts. Then implement the simplest efficient approach that meets the goal.
+4. **Flexibility.** The protocol-neutral rich event model and a rich compiled-in module SDK let new platforms and modules be added without touching the kernel.
 
-## Required workflow
+## What not to do
 
-For every non-trivial change:
+- No hand-rolled infrastructure: when a modern, mature, well-maintained library solves the problem (serialization, HTTP, SQL, migrations, config, logging, lint rules), use it instead of writing our own. Heavy dependencies are fine if they are high quality.
+- No over-engineering: no speculative abstractions, extension points, configuration knobs, or layers without a current use.
+- No over-defensive programming: no validation, permission checks, retries, fallbacks, or tests that guard against failures that cannot realistically happen. Every safeguard names the real failure it prevents.
+- No data hiding: telemetry, event logs, and diagnostics are never redacted or silently trimmed. Message content is recorded in full. Credentials are kept out simply by not logging them.
+- No ceremony: no compliance-style process, release attestations, or documentation that restates code. Do not test documentation wording.
+- No compatibility shims to the pre-`next` (`master`) implementation.
 
-1. **Research:** read the governing documents and affected code paths; inspect callers before changing a contract.
-2. **Plan:** state milestones, dependencies, observable success criteria, and rollback implications before implementation.
-3. **Implement sequentially:** keep one milestone active; finish and verify it before starting the next.
-4. **Verify behavior:** exercise the changed path at its real boundary. Tests supplement this evidence; they do not replace it.
-5. **Review the whole change:** remove obsolete paths, update callers and operator material, and check architecture, security, reliability, and observability impacts.
-6. **Record evidence:** report exact commands or scenarios run and their outcomes. Never claim unobserved success.
+## Workflow
 
-Do not ask a human for facts available from the repository, toolchain, or referenced primary sources. Stop only for a material product decision or an external prerequisite that cannot be obtained safely.
+For non-trivial changes:
 
-## Non-negotiable system invariants
+1. **Research** the relevant docs and code paths, including callers of any contract you change.
+2. **Design** first. Write or update the design when the change affects architecture or contracts, and get it approved.
+3. **Implement** one milestone at a time, simplest approach first.
+4. **Verify** the changed behavior at its real boundary, then run `make quality`.
+5. **Clean up**: remove obsolete code and docs in the same change.
+6. **Report** the exact commands run and their results. Never claim unobserved success.
 
-- Ex-Otogi is a single-node, statically composed Go modular monolith unless an approved specification demonstrates a need to distribute it.
-- Dependencies flow from contracts to kernel policy to adapters. Kernel packages MUST NOT import adapter implementations. See `docs/architecture.md`.
-- Every goroutine, queue, timer, subscription, and external resource has one explicit owner and a bounded termination path. See `docs/runtime.md`.
-- Work queues and concurrency are bounded. Overload produces an explicit admission, shedding, or backpressure decision; it never grows memory without limit.
-- Cancellation and deadlines propagate across every blocking boundary. Retry loops are bounded, cancellable, observable, and restricted to idempotent operations.
-- Panics are contained and reported at goroutine, task, and extension boundaries; panic is never expected control flow.
-- External input is untrusted. Authentication, authorization, resource limits, and sensitive-data handling follow `docs/security.md`.
-- Errors are handled exactly once: return, translate, compensate, or terminate the owning lifecycle. Logging alone is not handling.
-- Telemetry MUST NOT contain secrets or raw message content by default, and telemetry failure MUST NOT block core processing. See `docs/observability.md`.
-- Durable state follows `docs/operations.md`; code MUST NOT copy a live SQLite database file or assume WAL works across a network filesystem.
-- There is no compatibility promise to the pre-`next` implementation. Do not add shims, dual writes, legacy aliases, or migrations unless a future approved specification requires them.
+Do not ask the user for facts available from the repository or toolchain. Stop for product decisions.
 
-## Go engineering rules
+## System invariants
 
-- Use a stable Go release covered by upstream security fixes, as defined in `docs/quality.md`.
-- Accept `context.Context` first for request-scoped, blocking, or long-lived operations. Do not store request contexts in structs.
-- Prefer clear ownership and synchronous code. Start concurrency only when it improves required behavior and its lifecycle can be proven.
-- Preserve error identity with `%w` when adding operation context. Use typed or sentinel errors only when callers need stable branching semantics.
-- Avoid hidden mutable global state. Construct dependencies explicitly at the composition root.
-- Public contracts use domain types rather than adapter payloads. Exported API has behavioral Godoc.
-- Avoid avoidable allocation, copying, reflection, and serialization on hot paths; require benchmark or profile evidence before complexity motivated solely by performance.
-- Generated code is reproducible and never edited by hand.
+- Single-node Go modular monolith with SQLite on local disk. Modules and drivers are compiled in and registered explicitly at the composition root.
+- Dependencies flow `pkg/otogi` (contracts) ← `internal/kernel` ← `internal/adapter/*`. The kernel never imports adapters or modules. Platform SDK types (gotd, etc.) stay inside their adapter. Enforced by `make arch-check`.
+- Every goroutine, queue, timer, and external resource has one owner and stops on shutdown.
+- Queues are bounded. When full, the caller gets an explicit error or blocks under its context; nothing is dropped silently.
+- `context.Context` flows through every blocking call.
+- Module and driver panics are recovered at their boundary and reported; one bad module must not crash the process.
+- Errors are wrapped with `%w` and handled once: returned, translated at a boundary, or turned into a visible failure.
+- Never copy a live SQLite file; use SQLite's backup mechanisms.
 
-## Verification gates
+## Go rules
 
-Run the smallest relevant checks during development and the authoritative gates before completion. The implemented repository MUST provide stable commands for:
+- Toolchain is pinned by `scripts/quality/go.sh`; use it (or `make`) rather than a bare `go`.
+- `ctx context.Context` is the first parameter of blocking or long-lived operations; never stored in structs.
+- Prefer synchronous code. Add concurrency only when it is needed and its lifecycle is obvious.
+- Construct dependencies explicitly; no mutable package globals or service locators.
+- Public contracts in `pkg/otogi` use domain types and have behavioral Godoc.
+- Generated code is never edited by hand.
 
-- formatting and generated-file consistency;
-- static analysis and architecture-boundary enforcement;
-- unit and integration tests;
-- race tests for concurrent code;
-- fuzz tests for parsers and trust-boundary decoders;
-- leak and shutdown tests for long-lived components;
-- vulnerability scanning and release-artifact verification.
+## Quality gates
 
-The exact gate contract is in `docs/quality.md`. A failing required gate blocks completion. Do not suppress, skip, or weaken a gate to make a change pass; fix the cause or amend the governing specification.
+`make quality` must pass before work is complete. Do not weaken a gate to make a change pass; fix the cause or change the gate deliberately. Details: `docs/quality.md`.
 
-## Specification map
+## Docs map
 
-Start at `docs/README.md`.
+- `docs/product.md`: goals, scope, non-goals
+- `docs/architecture.md`: layers, dependencies, composition, persistence ownership
+- `docs/runtime.md`: events, delivery, queues, lifecycle, shutdown
+- `docs/extensions.md`: module and driver SDK
+- `docs/reliability.md`: failures, retries, recovery
+- `docs/security.md`: credentials, management access, input limits
+- `docs/observability.md`: structured event log and diagnostics
+- `docs/management-plane.md`: operator API
+- `docs/operations.md`: config, SQLite, backup, upgrade, shutdown
+- `docs/quality.md`: tests and gates
+- `docs/standards.md`: external references
+- `docs/runbooks/`: concrete operator procedures
 
-- Product boundary: `docs/product.md`
-- Architecture: `docs/architecture.md`
-- Runtime semantics: `docs/runtime.md`
-- Extensions: `docs/extensions.md`
-- Reliability: `docs/reliability.md`
-- Security: `docs/security.md`
-- Observability: `docs/observability.md`
-- Quality and release: `docs/quality.md`
-- Configuration, persistence, and operations: `docs/operations.md`
-- Operator capabilities: `docs/management-plane.md`
-- External standards: `docs/standards.md`
-
-Long-term memory internals and control-panel UX are intentionally unspecified. Changes in those areas require their own approved specifications while respecting these core-runtime contracts.
+Long-term memory and control-panel UX need their own approved designs.
