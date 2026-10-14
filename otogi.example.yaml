@@ -18,6 +18,9 @@ management:
   addr: 127.0.0.1:8090    # HTTP API for status and the event log; "" disables it
   # token: ${OTOGI_MANAGEMENT_TOKEN}   # required if addr is not loopback
 
+commands:
+  prefixes: ["/"]         # "/name args" in a message invokes a module's command
+
 eventlog:
   retention: 168h         # how long event log records are kept
 

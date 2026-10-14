@@ -18,7 +18,7 @@ A module implements bot behavior. It:
 The module SDK is designed in [`2026-10-14-module-sdk-design.md`](superpowers/specs/2026-10-14-module-sdk-design.md) and delivered in steps:
 
 - messaging: send, send to other conversations, reply and quote (relations), edit, delete, react, send and fetch media (implemented);
-- commands and filters declared in the descriptor;
+- commands and filters declared in the descriptor (implemented): a declared command goes only to its module, and modules receive incoming events only unless their filter opts in to outgoing or system events;
 - per-module key/value store, private SQLite database, and typed config;
 - cron jobs, persistent timers, and typed services shared between modules.
 

@@ -10,7 +10,6 @@ import (
 type delivery struct {
 	event  *tracked
 	module *moduleEntry
-	index  int
 }
 
 // laneKey groups deliveries that must run one at a time, in order.

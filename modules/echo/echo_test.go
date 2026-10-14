@@ -27,7 +27,6 @@ func TestHandle(t *testing.T) {
 	}{
 		{"text", otogi.TextMessage("hello"), otogi.DirectionIncoming, []string{"echo: hello"}},
 		{"no text", otogi.Message{Roots: []otogi.PartID{"m"}, Parts: []otogi.Part{{ID: "m", Kind: otogi.PartMedia, Media: &otogi.Media{}}}}, otogi.DirectionIncoming, nil},
-		{"own message", otogi.TextMessage("echo: hello"), otogi.DirectionOutgoing, nil},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

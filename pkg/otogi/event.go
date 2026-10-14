@@ -73,6 +73,16 @@ const (
 	ConversationChannel ConversationKind = "channel"
 )
 
+// Command is a parsed bot command, such as "/remind 10m tea".
+type Command struct {
+	// Name is the command without prefix or bot mention, lowercased.
+	Name string `json:"name"`
+	// Args is the text after the command, trimmed.
+	Args string `json:"args,omitempty"`
+	// Argv is Args split on whitespace.
+	Argv []string `json:"argv,omitempty"`
+}
+
 // Conversation describes where an event happened.
 type Conversation struct {
 	// ID identifies the conversation on its platform.
@@ -133,6 +143,9 @@ type Event struct {
 	Locator ProviderLocator `json:"locator,omitzero"`
 	// Message is the event's rich content and relations.
 	Message Message `json:"message,omitzero"`
+	// Command is set when the message invokes a bot command, by the command
+	// parser middleware or by a driver with native commands.
+	Command *Command `json:"command,omitempty"`
 	// Extensions carry platform data that has no portable meaning yet.
 	Extensions []Extension `json:"extensions,omitempty"`
 }

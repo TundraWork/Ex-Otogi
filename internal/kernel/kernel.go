@@ -73,6 +73,7 @@ type Kernel struct {
 	effector   otogi.Effector
 	middleware []otogi.Middleware
 	modules    []*moduleEntry
+	commands   map[string][]*moduleEntry // command name -> declaring module
 	slots      chan struct{}
 
 	mu       sync.Mutex
@@ -115,8 +116,20 @@ func New(cfg Config, modules []otogi.Module, middleware []otogi.Middleware, effe
 		entries = append(entries, entry)
 	}
 	slices.SortFunc(entries, func(a, b *moduleEntry) int { return strings.Compare(string(a.descriptor.ID), string(b.descriptor.ID)) })
+	commands := map[string][]*moduleEntry{}
+	for _, entry := range entries {
+		for _, c := range entry.descriptor.Commands {
+			if !commandName.MatchString(c.Name) {
+				return nil, fmt.Errorf("new kernel: module %q command %q: want lowercase letters, digits, or _: %w", entry.descriptor.ID, c.Name, otogi.ErrInvalid)
+			}
+			if owner := commands[c.Name]; owner != nil {
+				return nil, fmt.Errorf("new kernel: command %q declared by both %q and %q: %w", c.Name, owner[0].descriptor.ID, entry.descriptor.ID, otogi.ErrInvalid)
+			}
+			commands[c.Name] = []*moduleEntry{entry}
+		}
+	}
 	k := &Kernel{
-		cfg: cfg, log: log, effector: effector, modules: entries,
+		cfg: cfg, log: log, effector: effector, modules: entries, commands: commands,
 		middleware: slices.Clone(middleware),
 		slots:      make(chan struct{}, cfg.MaxInFlight),
 	}
@@ -177,10 +190,8 @@ func (k *Kernel) Submit(ctx context.Context, event otogi.Event, done func(otogi.
 		}
 	}
 	var deliveries []*delivery
-	for i, entry := range k.modules {
-		if entry.subscribes[tracked.event.Action] {
-			deliveries = append(deliveries, &delivery{event: tracked, module: entry, index: i})
-		}
+	for _, entry := range k.recipients(tracked.event) {
+		deliveries = append(deliveries, &delivery{event: tracked, module: entry})
 	}
 	tracked.begin(len(deliveries))
 	k.mu.Lock()
@@ -397,4 +408,27 @@ func (k *Kernel) Stats() Stats {
 		State:    [...]string{stateNew: "new", stateReady: "ready", stateDraining: "draining", stateStopped: "stopped"}[state],
 		InFlight: len(k.slots), MaxInFlight: k.cfg.MaxInFlight, Workers: k.cfg.Workers,
 	}
+}
+
+// recipients returns the modules an event goes to. A command declared by a
+// module goes only to that module, whatever it subscribes to; otherwise the
+// event goes to every module subscribed to its action. Filters apply in both
+// cases.
+func (k *Kernel) recipients(e otogi.Event) []*moduleEntry {
+	if e.Command != nil {
+		if owners, ok := k.commands[e.Command.Name]; ok {
+			return filtered(owners, e, func(*moduleEntry) bool { return true })
+		}
+	}
+	return filtered(k.modules, e, func(entry *moduleEntry) bool { return entry.subscribes[e.Action] })
+}
+
+func filtered(entries []*moduleEntry, e otogi.Event, eligible func(*moduleEntry) bool) []*moduleEntry {
+	var out []*moduleEntry
+	for _, entry := range entries {
+		if eligible(entry) && entry.descriptor.Filter.Matches(e) {
+			out = append(out, entry)
+		}
+	}
+	return out
 }

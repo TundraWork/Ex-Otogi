@@ -19,12 +19,12 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{ID: "echo", Subscribes: []otogi.EventAction{otogi.ActionMessageCreated}}
 }
 
-// Handle replies with the message's text. Messages without text, and the
-// account's own messages (a user account sees those too, so echoing them
-// would loop forever), are ignored.
+// Handle replies with the message's text; messages without text are ignored.
+// The default filter keeps the account's own messages away, so echo never
+// answers itself.
 func (*Module) Handle(ctx context.Context, event otogi.Event, inv otogi.Invocation) error {
 	text := event.Message.PlainText()
-	if text == "" || event.Direction == otogi.DirectionOutgoing {
+	if text == "" {
 		return nil
 	}
 	_, err := inv.Send(ctx, "echo", otogi.TextMessage("echo: "+text))

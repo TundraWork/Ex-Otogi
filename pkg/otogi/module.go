@@ -2,6 +2,7 @@ package otogi
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -29,6 +30,46 @@ type ModuleDescriptor struct {
 	Ordering Ordering
 	// Timeout bounds one delivery; zero means the kernel default.
 	Timeout time.Duration
+	// Commands are the commands the module handles. An event carrying one of
+	// them goes only to the modules that declare it. Names are unique across
+	// modules.
+	Commands []CommandSpec
+	// Filter narrows which events the module receives.
+	Filter Filter
+}
+
+// CommandSpec declares a command a module handles.
+type CommandSpec struct {
+	// Name is the command without prefix, for example "sleep".
+	Name string
+	// Usage shows the arguments, for example "<duration>".
+	Usage string
+	// Description says what the command does.
+	Description string
+}
+
+// Filter narrows the events a module receives. Each empty field means "no
+// restriction", except Directions: empty means incoming events only, so a
+// module that replies never sees (and answers) the account's own messages.
+// Events with no direction set pass.
+type Filter struct {
+	// Platforms limits events to these platforms.
+	Platforms []PlatformID
+	// ConversationKinds limits events to these conversation kinds.
+	ConversationKinds []ConversationKind
+	// Directions lists the directions the module receives.
+	Directions []Direction
+}
+
+// Matches reports whether f admits e.
+func (f Filter) Matches(e Event) bool {
+	directions := f.Directions
+	if len(directions) == 0 {
+		directions = []Direction{DirectionIncoming}
+	}
+	return (len(f.Platforms) == 0 || slices.Contains(f.Platforms, e.Platform)) &&
+		(len(f.ConversationKinds) == 0 || slices.Contains(f.ConversationKinds, e.Conversation.Kind)) &&
+		(e.Direction == "" || slices.Contains(directions, e.Direction))
 }
 
 // Module is bot behavior. The kernel calls Handle once per subscribed event,

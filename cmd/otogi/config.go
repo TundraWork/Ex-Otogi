@@ -23,6 +23,7 @@ type Config struct {
 	Kernel          KernelConfig         `yaml:"kernel"`
 	Management      ManagementConfig     `yaml:"management"`
 	EventLog        EventLogConfig       `yaml:"eventlog"`
+	Commands        CommandsConfig       `yaml:"commands"`
 	Telegram        []TelegramAccount    `yaml:"telegram"`
 	Modules         map[string]yaml.Node `yaml:"modules"`
 }
@@ -46,6 +47,12 @@ type ManagementConfig struct {
 	Addr *string `yaml:"addr"`
 	// Token is the bearer token; required when Addr is not loopback.
 	Token string `yaml:"token"`
+}
+
+// CommandsConfig configures the command parser.
+type CommandsConfig struct {
+	// Prefixes start a command; nil means ["/"], an empty list disables parsing.
+	Prefixes []string `yaml:"prefixes"`
 }
 
 // EventLogConfig configures the structured event log.
@@ -108,6 +115,9 @@ func (c *Config) applyDefaults() {
 	if c.Management.Addr == nil {
 		addr := "127.0.0.1:8090"
 		c.Management.Addr = &addr
+	}
+	if c.Commands.Prefixes == nil {
+		c.Commands.Prefixes = []string{"/"}
 	}
 	if c.EventLog.Retention == 0 {
 		c.EventLog.Retention = 7 * 24 * time.Hour

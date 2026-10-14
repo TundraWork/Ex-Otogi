@@ -67,7 +67,11 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 	routes := router{}
 	kernelConfig := cfg.Kernel.kernel()
 	kernelConfig.Recorder = events
-	k, err := kernel.New(kernelConfig, modules, nil, routes, log)
+	var middleware []otogi.Middleware
+	if len(cfg.Commands.Prefixes) > 0 {
+		middleware = append(middleware, kernel.CommandParser(cfg.Commands.Prefixes))
+	}
+	k, err := kernel.New(kernelConfig, modules, middleware, routes, log)
 	if err != nil {
 		return err
 	}
