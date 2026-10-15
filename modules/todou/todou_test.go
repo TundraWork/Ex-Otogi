@@ -25,7 +25,7 @@ func (f *fakeCLI) run(_ context.Context, args ...string) ([]byte, error) {
 	case "watch": // --poll --print-cursor
 		return []byte("c0\n"), nil
 	case "issue":
-		return []byte(fmt.Sprintf(`{"title":"Title of %s","body":"Body of %s"}`, args[2], args[2])), nil
+		return []byte(fmt.Sprintf(`{"issue":{"title":"Title of %s","body":"Body of %s"},"timeline":[]}`, args[2], args[2])), nil
 	case "project":
 		var ps []map[string]string
 		for _, p := range f.projects {

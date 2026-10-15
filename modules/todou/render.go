@@ -82,18 +82,26 @@ func (r renderer) digest(entries []entry, issues map[string]issue) []otogi.Messa
 
 func add(dst, src *otogi.RichText) { dst.Append(src.String(), src.Annotations()) }
 
-// issueLine is the linked reference and the bold title of an entry's issue.
+// titleChars is how much of an issue's title its issue line shows.
+const titleChars = 40
+
+// issueLine links an entry's issue: its bold reference and the start of its
+// title.
 func (r renderer) issueLine(e entry, info issue) *otogi.RichText {
 	t := &otogi.RichText{}
 	ref := e.IssueRef
 	if ref == "" {
 		ref = e.Project + "#" + strconv.FormatInt(e.IssueNumber, 10)
 	}
-	t.Mark(otogi.AnnotationLink, fmt.Sprintf("%s/projects/%s/issues/%d", r.linkBase, e.Project, e.IssueNumber), func() { t.Write(ref) })
-	if info.Title != "" {
-		t.Write(" ")
-		t.Mark(otogi.AnnotationBold, "", func() { t.Write(info.Title) })
-	}
+	t.Mark(otogi.AnnotationLink, fmt.Sprintf("%s/projects/%s/issues/%d", r.linkBase, e.Project, e.IssueNumber), func() {
+		t.Mark(otogi.AnnotationBold, "", func() { t.Write(ref) })
+		if title := strings.TrimSpace(info.Title); title != "" {
+			if runes := []rune(title); len(runes) > titleChars {
+				title = strings.TrimSpace(string(runes[:titleChars])) + "…"
+			}
+			t.Write(" " + title)
+		}
+	})
 	return t
 }
 
@@ -104,8 +112,15 @@ func (r renderer) entry(e entry, info issue) *otogi.RichText {
 		who = e.Actor
 	}
 	name := who.name()
-	if e.AgentContext != nil && e.AgentContext.Agent != "" {
-		name += " (" + e.AgentContext.Agent + ")"
+	if a := e.AgentContext; a != nil || (who != nil && who.Kind == "machine") {
+		name = "🤖 " + name
+		switch {
+		case a == nil:
+		case a.Model != "":
+			name += " (" + a.Model + ")"
+		case a.Agent != "":
+			name += " (" + a.Agent + ")"
+		}
 	}
 	icon, action, body := describe(e, info)
 	t := &otogi.RichText{}
@@ -203,6 +218,9 @@ func (r renderer) quote(body string) *otogi.RichText {
 			continue
 		}
 		a.Length = min(a.Length, end-a.Offset)
+		if a.Kind == otogi.AnnotationLink && strings.HasPrefix(a.Target, "/") {
+			a.Target = r.linkBase + a.Target // todou links its own pages by path
+		}
 		kept = append(kept, a)
 	}
 	out := &otogi.RichText{}

@@ -62,6 +62,7 @@ func tail(s string, n int) string {
 type user struct {
 	Login       string `json:"login"`
 	DisplayName string `json:"display_name"`
+	Kind        string `json:"kind"` // "human" or "machine"
 }
 
 func (u *user) name() string {
@@ -91,9 +92,7 @@ type entry struct {
 	EventType    string         `json:"event_type"`
 	Payload      map[string]any `json:"payload"`
 	CreatedAt    time.Time      `json:"created_at"`
-	AgentContext *struct {
-		Agent string `json:"agent"`
-	} `json:"agent_context"`
+	AgentContext *agentContext  `json:"agent_context"`
 
 	raw string // the record as received
 }
@@ -161,6 +160,12 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
+}
+
+// agentContext is set on entries an agent wrote.
+type agentContext struct {
+	Agent string `json:"agent"` // the harness, e.g. claude-code
+	Model string `json:"model"`
 }
 
 // client wraps the CLI calls the module makes.
@@ -232,11 +237,16 @@ func (c client) issue(ctx context.Context, project string, number int64) (issue,
 	if err != nil {
 		return issue{}, err
 	}
-	var i issue
-	if err := json.Unmarshal(out, &i); err != nil {
+	var view struct {
+		Issue issue `json:"issue"`
+	}
+	if err := json.Unmarshal(out, &view); err != nil {
 		return issue{}, fmt.Errorf("todou issue view: %w", err)
 	}
-	return i, nil
+	if view.Issue.Title == "" {
+		return issue{}, fmt.Errorf("todou issue view %s/%d: no title in the output", project, number)
+	}
+	return view.Issue, nil
 }
 
 func (c client) projects(ctx context.Context) ([]string, error) {
