@@ -42,3 +42,14 @@ modules:
     max_notes: 50
   reminders:              # /remind 10m tea  (survives restarts)
     max_delay: 720h
+  # todou:                # todou issue tracker notifications; link with /todou link <project>
+  #   cli: /usr/local/bin/todou          # todou CLI v0.6+ (github.com/orzFly/todou/releases)
+  #   server: https://todou.example.com
+  #   token: ${OTOGI_TODOU_TOKEN}        # the agent account's todou_pat_… token; the
+  #                                      # account needs reader access to linked projects
+  #   link_base: ""                      # web URL for issue links; default: server
+  #   poll_interval: 30s
+  #   cli_timeout: 60s
+  #   events: [comment, opened, closed, reopened, status_changed, assigned, spec_pushed, spec_review, question_answered]
+  #   max_body_chars: 300
+  #   max_attempts: 10                   # polls a notification is retried before it is given up

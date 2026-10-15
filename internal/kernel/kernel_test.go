@@ -596,3 +596,17 @@ func TestFailedModuleStartStopsStartedModules(t *testing.T) {
 		t.Fatalf("Submit after failed start = %v", err)
 	}
 }
+
+func TestWithOriginKeysEffectsAcrossRuns(t *testing.T) {
+	m := &messenger{}
+	send := module("outbox", func(ctx context.Context, _ otogi.Event, inv otogi.Invocation) error {
+		_, err := inv.WithOrigin("row:7").SendTo(ctx, "send", otogi.Destination{Platform: "test", Account: "bot", Conversation: "c"}, otogi.TextMessage("hi"))
+		return err
+	})
+	k := start(t, Config{}, []otogi.Module{send}, nil, m)
+	await(t, submit(t, k, event("c", "1")))
+	await(t, submit(t, k, event("c", "2"))) // a different unit of work
+	if len(m.sent) != 2 || m.sent[0].Key != m.sent[1].Key || m.sent[0].Key != otogi.IdempotencyKeyFor("module:row:7", "outbox", "send") {
+		t.Fatalf("keys = %v / %v", m.sent[0].Key, m.sent[1].Key)
+	}
+}

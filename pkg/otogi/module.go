@@ -121,6 +121,12 @@ type Invocation interface {
 	React(ctx context.Context, slot string, ref EventRef, reaction string) error
 	// FetchMedia downloads media from a message seen at from.
 	FetchMedia(ctx context.Context, from Destination, src MediaSource) ([]byte, error)
+	// WithOrigin returns an Invocation whose effects are keyed under id
+	// instead of this unit of work. A module that delivers one logical effect
+	// across several runs, such as an outbox row retried until it is sent,
+	// uses it so that a retry in a later run repeats nothing. Slots are
+	// claimed per returned Invocation; ids are the module's own.
+	WithOrigin(id string) Invocation
 }
 
 // Verdict is a middleware decision.

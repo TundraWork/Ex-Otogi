@@ -155,6 +155,16 @@ func (e Event) Destination() Destination {
 	return Destination{Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID}
 }
 
+// ActorKey is the platform-qualified actor ID, "<platform>:<actor id>"
+// (for example "telegram:user:123"), as operator and allow lists in the
+// config spell it. It is empty when the event has no actor.
+func (e Event) ActorKey() string {
+	if e.Actor.ID == "" {
+		return ""
+	}
+	return string(e.Platform) + ":" + string(e.Actor.ID)
+}
+
 // Ref returns a reference to the event's message, for replies, edits,
 // deletes, and reactions.
 func (e Event) Ref() EventRef {

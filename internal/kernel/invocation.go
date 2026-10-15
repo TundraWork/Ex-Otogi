@@ -25,6 +25,10 @@ func (i *invocation) Host() otogi.Host { return i.host }
 
 func (i *invocation) Origin() otogi.Origin { return i.origin }
 
+func (i *invocation) WithOrigin(id string) otogi.Invocation {
+	return &invocation{kernel: i.kernel, event: i.event, origin: i.origin, originID: "module:" + id, module: i.module, host: i.host}
+}
+
 func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) (otogi.EventRef, error) {
 	if i.event.Conversation.ID == "" {
 		return otogi.EventRef{}, fmt.Errorf("send: no event conversation to reply in; use SendTo: %w", otogi.ErrInvalid)

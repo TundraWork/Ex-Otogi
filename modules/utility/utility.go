@@ -110,24 +110,20 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 	return err
 }
 
-// ActorKey is the platform-qualified form of the event's actor, as used in
-// operator and allow lists: "<platform>:<actor id>".
-func ActorKey(e otogi.Event) string { return string(e.Platform) + ":" + string(e.Actor.ID) }
-
 // IsOperator reports whether e comes from the account itself or from an
 // actor listed in operators.
 func IsOperator(e otogi.Event, operators []string) bool {
-	return e.Direction == otogi.DirectionOutgoing || (e.Actor.ID != "" && slices.Contains(operators, ActorKey(e)))
+	return e.Direction == otogi.DirectionOutgoing || (e.Actor.ID != "" && slices.Contains(operators, e.ActorKey()))
 }
 
 func denied(e otogi.Event) string {
-	return fmt.Sprintf("Only operators can do that. Your ID is %s; an operator can add it to `operators` in the config.", ActorKey(e))
+	return fmt.Sprintf("Only operators can do that. Your ID is %s; an operator can add it to `operators` in the config.", e.ActorKey())
 }
 
 func whoami(e otogi.Event) string {
 	var b strings.Builder
 	if e.Actor.ID != "" {
-		fmt.Fprintf(&b, "You: %s", ActorKey(e))
+		fmt.Fprintf(&b, "You: %s", e.ActorKey())
 		if e.Actor.Name != "" {
 			fmt.Fprintf(&b, " (%s)", e.Actor.Name)
 		}
