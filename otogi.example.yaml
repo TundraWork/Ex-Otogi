@@ -18,6 +18,10 @@ management:
   addr: 127.0.0.1:8090    # HTTP API for status and the event log; "" disables it
   # token: ${OTOGI_MANAGEMENT_TOKEN}   # required if addr is not loopback
 
+# Platform-qualified actor IDs (as /whoami prints them) allowed to use operator
+# commands such as /status. The bot account's own messages always are.
+operators: []             # e.g. ["telegram:user:123456789"]
+
 commands:
   prefixes: ["/"]         # "/name args" in a message invokes a module's command
 
@@ -32,6 +36,7 @@ telegram:
     # database: data/telegram/main/state.sqlite
 
 modules:
+  utility: {}             # /whoami, /ping, /status, /help
   echo: {}                # replies "echo: <text>" to every text message
   notes:                  # /note <text>, /note, /note clear
     max_notes: 50

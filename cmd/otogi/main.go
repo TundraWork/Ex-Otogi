@@ -62,7 +62,7 @@ func withConfig(ctx context.Context, path, command string, args []string) error 
 	}
 	switch command {
 	case "validate":
-		if _, err := buildModules(cfg.Modules); err != nil {
+		if _, err := buildModules(cfg.Modules, moduleEnv{operators: cfg.Operators}); err != nil {
 			return err
 		}
 		fmt.Printf("%s: OK (%d Telegram account(s), %d module(s))\n", path, len(cfg.Telegram), len(cfg.Modules))

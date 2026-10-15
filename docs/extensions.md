@@ -42,6 +42,12 @@ Each module and driver has its own typed section in the main config file. Unknow
 
 The module convention: a `Config` struct with `yaml` tags and a `New(Config)` constructor in `modules/<id>`, plus one entry in `cmd/otogi/modules.go` that decodes the section. A module is enabled by listing its ID under `modules:`.
 
+## Operators and the account's owner
+
+`operators` in the config lists platform-qualified actor IDs (`telegram:user:123`, exactly as `/whoami` prints them). The composition root hands the list to modules that gate commands; a denied user is told their ID. Messages sent from the bot's own account are the owner's and always count as an operator.
+
+Command-driven modules admit outgoing messages in their filter so the owner can command the bot from the account itself. Their replies must never start with a command prefix, so a reply cannot invoke a command. Modules that react to every message (echo) stay incoming-only.
+
 ## Failure isolation
 
 A module panic, error, or timeout affects only that delivery. It is recorded with the module identity, and other modules still receive the event.

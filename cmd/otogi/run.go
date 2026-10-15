@@ -14,6 +14,7 @@ import (
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/modulestore"
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram"
 	"github.com/TundraWork/Ex-Otogi/internal/kernel"
+	"github.com/TundraWork/Ex-Otogi/modules/utility"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -61,7 +62,15 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 		background.Wait()
 	}()
 
-	modules, err := buildModules(cfg.Modules)
+	// Module factories get views of the runtime built below; status is only
+	// called once the process runs.
+	var status func(context.Context) utility.Status
+	var modules []otogi.Module
+	modules, err = buildModules(cfg.Modules, moduleEnv{
+		operators: cfg.Operators,
+		status:    func(ctx context.Context) utility.Status { return status(ctx) },
+		commands:  func() []utility.CommandInfo { return commandsOf(modules) },
+	})
 	if err != nil {
 		return err
 	}
@@ -87,6 +96,7 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 	}
 	var drivers []driver
 	var statuses []func(context.Context) any
+	var telegramDrivers []*telegram.Driver
 	for _, a := range cfg.Telegram {
 		d := telegram.New(telegram.Config{
 			AppID: a.AppID, AppHash: a.AppHash, AccountKey: a.Account,
@@ -96,6 +106,23 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 		routes[destination{telegram.Platform, otogi.AccountID(a.Account)}] = d
 		drivers = append(drivers, d)
 		statuses = append(statuses, func(ctx context.Context) any { return d.Status(ctx) })
+		telegramDrivers = append(telegramDrivers, d)
+	}
+	status = func(ctx context.Context) utility.Status {
+		stats, health := k.Stats(), events.Health(ctx)
+		s := utility.Status{
+			Version: version(), Uptime: time.Since(started), Ready: allReady(drivers),
+			Kernel:   utility.KernelStatus{State: stats.State, InFlight: stats.InFlight, MaxInFlight: stats.MaxInFlight, Workers: stats.Workers},
+			EventLog: utility.EventLogStatus{OK: health.OK, LastError: health.LastError},
+		}
+		for _, d := range telegramDrivers {
+			ds := d.Status(ctx)
+			s.Drivers = append(s.Drivers, utility.DriverStatus{
+				Name: "telegram/" + ds.Account, Ready: ds.Ready, Error: ds.Error,
+				Detail: fmt.Sprintf("%d pending, %d failed inbox rows, %d gaps", ds.PendingInbox, ds.FailedInbox, ds.Gaps),
+			})
+		}
+		return s
 	}
 
 	if addr := *cfg.Management.Addr; addr != "" {

@@ -10,6 +10,7 @@ One `otogi` process plus its data directory on one host, run under a supervisor 
 - `${VAR}` in any value is read from the environment, which is how secrets such as the app hash stay out of the file. An unset variable is an error. Use block style for such values; in flow style (`{...}`) quote them.
 - `-config PATH` selects the file (default `otogi.yaml`); the first argument selects the command: `run` (default), `validate`, `login ACCOUNT`, or `smoke`.
 - The whole config is validated at startup before anything starts. Errors name the field or the line. Unknown fields are errors, so typos surface.
+- `operators` lists the platform-qualified actor IDs (`telegram:user:123`, as `/whoami` prints them) allowed to use operator commands; the bot account's own messages always are.
 - `otogi validate` checks a config file without starting drivers or touching data.
 - Changing configuration means restarting. Live reload is added only if a concrete need appears.
 

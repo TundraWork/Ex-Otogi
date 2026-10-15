@@ -38,7 +38,7 @@ modules:
 	if cfg.ShutdownTimeout != 30*time.Second || cfg.Log.Level != "info" || cfg.Log.Format != "json" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
-	if _, err := buildModules(cfg.Modules); err != nil {
+	if _, err := buildModules(cfg.Modules, moduleEnv{}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -70,6 +70,7 @@ func TestLoadConfigRejections(t *testing.T) {
 		"unknown module":   {"modules:\n  ehco: {}\n", "unknown module"},
 		"bad level":        {"log: {level: loud}\n", "log.level"},
 		"bad duration":     {"shutdown_timeout: soon\n", "line 1"},
+		"bad operator":     {"operators: [\"123\"]\n", "<platform>:<actor id>"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -86,7 +87,7 @@ func TestModuleSectionsAreStrict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := buildModules(cfg.Modules); err == nil || !strings.Contains(err.Error(), "prefix") {
+	if _, err := buildModules(cfg.Modules, moduleEnv{}); err == nil || !strings.Contains(err.Error(), "prefix") {
 		t.Fatalf("buildModules error = %v, want unknown field prefix", err)
 	}
 }

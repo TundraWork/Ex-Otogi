@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -24,6 +25,7 @@ type Config struct {
 	Management      ManagementConfig     `yaml:"management"`
 	EventLog        EventLogConfig       `yaml:"eventlog"`
 	Commands        CommandsConfig       `yaml:"commands"`
+	Operators       []string             `yaml:"operators"`
 	Telegram        []TelegramAccount    `yaml:"telegram"`
 	Modules         map[string]yaml.Node `yaml:"modules"`
 }
@@ -162,6 +164,11 @@ func (c Config) validate() error {
 		seen[a.Account] = true
 		if a.AppID <= 0 || a.AppHash == "" {
 			errs = append(errs, fmt.Errorf("%s: app_id and app_hash are required", field))
+		}
+	}
+	for _, op := range c.Operators {
+		if platform, actor, ok := strings.Cut(op, ":"); !ok || platform == "" || actor == "" {
+			errs = append(errs, fmt.Errorf("operators: %q: want <platform>:<actor id>, as /whoami prints it", op))
 		}
 	}
 	for id := range c.Modules {
