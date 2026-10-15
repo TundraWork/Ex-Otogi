@@ -1,17 +1,21 @@
 // Package todou forwards activity from a todou issue tracker to chats.
-// Projects are linked to chats with /todou commands; a scheduled poll reads
-// new activity through the todou CLI and delivers it through a transactional
-// outbox, in order and exactly once per chat. See
+// Projects are linked to chats with /todou commands. A resident `todou
+// watch` process streams new activity into a queue per chat, and each chat
+// gets the queue as one digest at most once per min_interval, through a
+// transactional outbox: in order and exactly once per chat. See
 // docs/superpowers/specs/2026-10-16-todou-notifier-design.md.
 package todou
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
@@ -27,24 +31,34 @@ type Config struct {
 	Token string `yaml:"token"`
 	// LinkBase is the web URL issue links point to; default Server.
 	LinkBase string `yaml:"link_base"`
-	// PollInterval is how often new activity is read; default 30s.
-	PollInterval time.Duration `yaml:"poll_interval"`
-	// CLITimeout bounds each CLI call; default 60s.
+	// MinInterval is the least time between two digests to one chat;
+	// activity meanwhile waits and goes out together. Default 5m.
+	MinInterval time.Duration `yaml:"min_interval"`
+	// Debounce holds a burst of activity together for this long after its
+	// first entry before the watcher hands it over; default 10s.
+	Debounce time.Duration `yaml:"debounce"`
+	// CLITimeout bounds each one-shot CLI call; default 60s.
 	CLITimeout time.Duration `yaml:"cli_timeout"`
 	// Events lists the activity types to notify; nil means DefaultEvents, an
 	// empty list means every type.
 	Events []string `yaml:"events"`
 	// MaxBodyChars cuts quoted bodies; default 300, at most 3000.
 	MaxBodyChars int `yaml:"max_body_chars"`
-	// MaxAttempts is how many polls a notification is retried before it is
-	// marked failed; default 10.
+	// MaxAttempts is how many times a digest message is tried, a minute
+	// apart, before it is marked failed; default 60.
 	MaxAttempts int `yaml:"max_attempts"`
 }
 
 // DefaultEvents are the activity types notified when Config.Events is unset.
 var DefaultEvents = []string{"comment", "opened", "closed", "reopened", "status_changed", "assigned", "spec_pushed", "spec_review", "question_answered"}
 
-const outboxRetention = 30 * 24 * time.Hour
+const (
+	outboxRetention = 30 * 24 * time.Hour
+	// A failed watcher restarts after restartMin, doubling up to restartMax;
+	// one that ran for restartMax starts over at restartMin.
+	restartMin = 5 * time.Second
+	restartMax = 5 * time.Minute
+)
 
 // Module is the todou notifier.
 type Module struct {
@@ -52,11 +66,23 @@ type Module struct {
 	operators []string
 	cli       client
 	render    renderer
+	now       func() time.Time
 
-	host   otogi.Host
-	log    *slog.Logger
-	store  *store
-	titles map[string]issue // project#number -> issue; owned by the poll job
+	host  otogi.Host
+	log   *slog.Logger
+	store *store
+	stop  context.CancelFunc
+	done  chan struct{} // closed when the watcher has exited
+
+	mu      sync.Mutex // guards watcher
+	watcher watcherState
+}
+
+// watcherState is what /todou status shows about the watcher.
+type watcherState struct {
+	since    time.Time // the running CLI started
+	err      string    // why the last one stopped, if it did
+	failedAt time.Time
 }
 
 // New validates cfg and returns the module. operators are the
@@ -70,8 +96,8 @@ func New(cfg Config, operators []string) (*Module, error) {
 	if cfg.MaxBodyChars < 0 || cfg.MaxBodyChars > 3000 {
 		errs = append(errs, errors.New("max_body_chars must be between 1 and 3000"))
 	}
-	if cfg.PollInterval < 0 || cfg.CLITimeout < 0 || cfg.MaxAttempts < 0 {
-		errs = append(errs, errors.New("poll_interval, cli_timeout, and max_attempts must not be negative"))
+	if cfg.MinInterval < 0 || cfg.Debounce < 0 || cfg.CLITimeout < 0 || cfg.MaxAttempts < 0 {
+		errs = append(errs, errors.New("min_interval, debounce, cli_timeout, and max_attempts must not be negative"))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
@@ -80,8 +106,11 @@ func New(cfg Config, operators []string) (*Module, error) {
 		cfg.LinkBase = cfg.Server
 	}
 	cfg.LinkBase = strings.TrimSuffix(cfg.LinkBase, "/")
-	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 30 * time.Second
+	if cfg.MinInterval == 0 {
+		cfg.MinInterval = 5 * time.Minute
+	}
+	if cfg.Debounce == 0 {
+		cfg.Debounce = 10 * time.Second
 	}
 	if cfg.CLITimeout == 0 {
 		cfg.CLITimeout = 60 * time.Second
@@ -93,11 +122,14 @@ func New(cfg Config, operators []string) (*Module, error) {
 		cfg.MaxBodyChars = 300
 	}
 	if cfg.MaxAttempts == 0 {
-		cfg.MaxAttempts = 10
+		cfg.MaxAttempts = 60
 	}
-	m := &Module{cfg: cfg, operators: operators, cli: client{run: execRunner(cfg.CLI, cfg.Server, cfg.Token, cfg.CLITimeout)}, titles: map[string]issue{}}
-	m.render = renderer{linkBase: cfg.LinkBase, maxBody: cfg.MaxBodyChars, title: m.issueInfo}
-	return m, nil
+	return &Module{
+		cfg: cfg, operators: operators,
+		cli:    client{run: execRunner(cfg.CLI, cfg.Server, cfg.Token, cfg.CLITimeout), stream: execStreamer(cfg.CLI, cfg.Server, cfg.Token)},
+		render: renderer{linkBase: cfg.LinkBase, maxBody: cfg.MaxBodyChars},
+		now:    time.Now,
+	}, nil
 }
 
 // Descriptor declares /todou. The account's owner may use it too; no reply
@@ -113,7 +145,7 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 	}
 }
 
-// Start opens the module's database and schedules the poll.
+// Start opens the module's database and starts the watcher.
 func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 	db, err := host.Database(ctx)
 	if err != nil {
@@ -123,141 +155,225 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 		return err
 	}
 	m.host, m.log = host, host.Logger()
-	return host.Schedule("poll", "@every "+m.cfg.PollInterval.String(), m.poll)
+	ctx, m.stop = context.WithCancel(context.WithoutCancel(ctx))
+	m.done = make(chan struct{})
+	go m.watch(ctx)
+	return nil
 }
 
-// poll delivers what is pending, reads new activity, commits its
-// notifications with the new cursor, and delivers them.
-func (m *Module) poll(ctx context.Context, inv otogi.Invocation) error {
-	if err := m.deliver(ctx, inv); err != nil {
+// Stop stops the watcher; activity it has not handed over yet is read again
+// on the next start.
+func (m *Module) Stop(ctx context.Context) error {
+	if m.stop == nil {
+		return nil
+	}
+	m.stop()
+	select {
+	case <-m.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("todou: stop watcher: %w", ctx.Err())
+	}
+}
+
+// watch runs the watcher until ctx ends, restarting it with backoff when it
+// fails.
+func (m *Module) watch(ctx context.Context) {
+	defer close(m.done)
+	delay := restartMin
+	for {
+		started := time.Now()
+		err := m.runWatcher(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(started) >= restartMax {
+			delay = restartMin
+		}
+		m.watcherFailed(ctx, err, delay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, restartMax)
+	}
+}
+
+// runWatcher arms the digest timer of every chat with a backlog (a crash or
+// a failed SetTimer may have left one unarmed), then follows activity from
+// the stored cursor, or from now on a first start.
+func (m *Module) runWatcher(ctx context.Context) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("todou watcher panicked: %v\n%s", p, debug.Stack())
+		}
+	}()
+	backlog, err := m.store.backlog(ctx)
+	if err != nil {
 		return err
+	}
+	for _, to := range backlog {
+		if err := m.arm(ctx, to, m.now()); err != nil {
+			return err
+		}
 	}
 	cursor, err := m.store.cursor(ctx)
 	if err != nil {
 		return err
 	}
-	now := time.Now()
-	if cursor == "" { // first start: begin at the current position, no backlog
+	if cursor == "" {
 		if cursor, err = m.cli.now(ctx); err != nil {
-			return m.pollFailed(ctx, err)
+			return err
 		}
-		return m.store.commit(ctx, cursor, nil, now)
+		if err := m.store.ingest(ctx, cursor, nil, m.now()); err != nil {
+			return err
+		}
 	}
-	entries, next, err := m.cli.watch(ctx, cursor, m.cfg.Events)
-	if err != nil {
-		return m.pollFailed(ctx, err)
-	}
+	m.mu.Lock()
+	m.watcher.since = m.now()
+	m.mu.Unlock()
+	return m.cli.follow(ctx, cursor, m.cfg.Events, m.cfg.Debounce,
+		func(line string) { m.log.Info("todou watch: " + line) },
+		func(entries []entry, cursor string) error { return m.ingest(ctx, entries, cursor) })
+}
+
+func (m *Module) watcherFailed(ctx context.Context, err error, retry time.Duration) {
+	m.mu.Lock()
+	m.watcher = watcherState{err: err.Error(), failedAt: m.now()}
+	m.mu.Unlock()
+	m.log.Error("todou: watcher failed", "error", err, "retry_in", retry)
+	m.host.Record(ctx, otogi.Record{Kind: "todou.watch_failed", Outcome: "error", Payload: map[string]any{"error": err.Error(), "retry_in": retry.String()}})
+}
+
+// ingest queues a batch for the chats linked to its projects, with the
+// cursor after it, and arms those chats' digest timers.
+func (m *Module) ingest(ctx context.Context, entries []entry, cursor string) error {
 	links, err := m.store.links(ctx, nil)
 	if err != nil {
 		return err
 	}
-	rows := m.notifications(ctx, entries, links)
-	if err := m.store.commit(ctx, next, rows, now); err != nil {
+	byProject := map[string][]otogi.Destination{}
+	for _, l := range links {
+		byProject[l.Project] = append(byProject[l.Project], l.To)
+	}
+	var rows []queued
+	var chats []otogi.Destination
+	for _, e := range entries {
+		for _, to := range byProject[e.Project] {
+			rows = append(rows, queued{To: to, Entry: e})
+			if !slices.Contains(chats, to) {
+				chats = append(chats, to)
+			}
+		}
+	}
+	now := m.now()
+	if err := m.store.ingest(ctx, cursor, rows, now); err != nil {
+		return err
+	}
+	for _, to := range chats {
+		if err := m.arm(ctx, to, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// arm sets a chat's digest timer to at. The timer carries the chat.
+func (m *Module) arm(ctx context.Context, to otogi.Destination, at time.Time) error {
+	payload, err := json.Marshal(to)
+	if err != nil {
+		return fmt.Errorf("todou: encode timer: %w", err)
+	}
+	return m.host.SetTimer(ctx, "digest:"+string(payload), at, payload)
+}
+
+// HandleTimer runs a chat's digest timer: it finishes delivering the last
+// digest, then, if entries are queued and min_interval has passed since the
+// last digest, turns them into the next one and delivers it; if it has not
+// passed, it re-arms the timer for when it will. The watcher arms the timer
+// whenever entries arrive.
+func (m *Module) HandleTimer(ctx context.Context, t otogi.Timer, inv otogi.Invocation) error {
+	var to otogi.Destination
+	if err := json.Unmarshal(t.Payload, &to); err != nil {
+		return fmt.Errorf("todou: timer %q: %w", t.Key, err)
+	}
+	if err := m.deliver(ctx, inv, to); err != nil {
+		return err
+	}
+	queue, err := m.store.queue(ctx, to)
+	if err != nil || len(queue) == 0 {
+		return err
+	}
+	last, err := m.store.lastSent(ctx, to)
+	if err != nil {
+		return err
+	}
+	if due := last.Add(m.cfg.MinInterval); m.now().Before(due) {
+		return m.arm(ctx, to, due)
+	}
+	entries := make([]entry, len(queue))
+	for i, q := range queue {
+		entries[i] = q.Entry
+	}
+	now := m.now()
+	if err := m.store.digest(ctx, to, queue[len(queue)-1].ID, m.render.digest(entries, m.issues(ctx, entries)), now); err != nil {
 		return err
 	}
 	if err := m.store.prune(ctx, now.Add(-outboxRetention)); err != nil {
 		m.log.Warn("todou: prune outbox", "error", err)
 	}
-	return m.deliver(ctx, inv)
-}
-
-func (m *Module) pollFailed(ctx context.Context, cause error) error {
-	if err := m.store.pollFailed(ctx, cause); err != nil {
-		m.log.Error("todou: record poll failure", "error", err)
-	}
-	return fmt.Errorf("todou poll: %w", cause)
-}
-
-// notifications renders, per linked conversation in link order, the entries
-// of its projects.
-func (m *Module) notifications(ctx context.Context, entries []entry, links []link) []outboxRow {
-	byProject := map[string][]otogi.Destination{}
-	for _, l := range links {
-		byProject[l.Project] = append(byProject[l.Project], l.To)
-	}
-	var order []otogi.Destination
-	perChat := map[otogi.Destination][]entry{}
-	for _, e := range entries {
-		if e.EventType == "title_changed" {
-			m.forget(e)
-		}
-		for _, to := range byProject[e.Project] {
-			if _, seen := perChat[to]; !seen {
-				order = append(order, to)
-			}
-			perChat[to] = append(perChat[to], e)
-		}
-	}
-	m.prefetch(ctx, entries, byProject)
-	var rows []outboxRow
-	for _, to := range order {
-		for _, msg := range m.render.messages(perChat[to]) {
-			rows = append(rows, outboxRow{To: to, Message: msg})
-		}
-	}
-	return rows
+	return m.deliver(ctx, inv, to)
 }
 
 func titleKey(project string, number int64) string { return fmt.Sprintf("%s#%d", project, number) }
 
-func (m *Module) forget(e entry) { delete(m.titles, titleKey(e.Project, e.IssueNumber)) }
-
-// prefetch loads the title (and, for opened issues, the body) of every
-// issue a linked entry mentions. A failed lookup leaves the title out.
-func (m *Module) prefetch(ctx context.Context, entries []entry, byProject map[string][]otogi.Destination) {
+// issues looks up the title (and, for opened issues, the body) of every
+// issue the entries mention. A failed lookup leaves the title out.
+func (m *Module) issues(ctx context.Context, entries []entry) map[string]issue {
+	out := map[string]issue{}
 	for _, e := range entries {
 		key := titleKey(e.Project, e.IssueNumber)
-		if _, linked := byProject[e.Project]; !linked {
-			continue
-		}
-		if _, cached := m.titles[key]; cached {
+		if _, done := out[key]; done {
 			continue
 		}
 		i, err := m.cli.issue(ctx, e.Project, e.IssueNumber)
 		if err != nil {
 			m.log.Warn("todou: issue lookup failed; notifying without the title", "issue", key, "error", err)
 		}
-		m.titles[key] = i
+		out[key] = i
 	}
+	return out
 }
 
-func (m *Module) issueInfo(project string, number int64) issue {
-	return m.titles[titleKey(project, number)]
-}
-
-// deliver sends pending outbox rows in order. A failure stops delivery to
-// that conversation until the next poll, so its notifications stay in order;
-// a row that has failed MaxAttempts times is marked failed and recorded, and
-// delivery moves on. Each row's effect is keyed by the row, so a row resent
-// after a crash is not delivered twice.
-func (m *Module) deliver(ctx context.Context, inv otogi.Invocation) error {
-	rows, err := m.store.pending(ctx)
+// deliver sends a chat's undelivered digest messages in order. A failure
+// stops there and fails the timer run, which the kernel retries a minute
+// later, so the chat's messages stay in order; a message that has failed
+// MaxAttempts times is marked failed and recorded, and delivery moves on.
+// Each message's effect is keyed by its row, so a message resent after a
+// crash is not delivered twice.
+func (m *Module) deliver(ctx context.Context, inv otogi.Invocation, to otogi.Destination) error {
+	rows, err := m.store.pending(ctx, to)
 	if err != nil {
 		return err
 	}
-	blocked := map[otogi.Destination]bool{}
 	for _, r := range rows {
-		if blocked[r.To] {
-			continue
-		}
 		_, err := inv.WithOrigin(fmt.Sprintf("outbox:%d", r.ID)).SendTo(ctx, "notify", r.To, r.Message)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if err == nil {
-			if err := m.store.markSent(ctx, r.ID, time.Now()); err != nil {
+			if err := m.store.markSent(ctx, r.ID, m.now()); err != nil {
 				return err
 			}
 			continue
 		}
-		failed, recordErr := m.store.attemptFailed(ctx, r.ID, err, m.cfg.MaxAttempts, time.Now())
+		failed, recordErr := m.store.attemptFailed(ctx, r.ID, err, m.cfg.MaxAttempts, m.now())
 		if recordErr != nil {
 			return recordErr
 		}
 		if !failed {
-			blocked[r.To] = true
-			m.log.Warn("todou: delivery failed; retrying next poll", "row", r.ID, "conversation", r.To.Conversation, "attempt", r.Attempts+1, "error", err)
-			continue
+			return fmt.Errorf("todou: deliver row %d (attempt %d of %d): %w", r.ID, r.Attempts+1, m.cfg.MaxAttempts, err)
 		}
 		m.log.Error("todou: giving up on a notification", "row", r.ID, "conversation", r.To.Conversation, "error", err)
 		m.host.Record(ctx, otogi.Record{Kind: "todou.delivery_failed", Outcome: "error", Platform: r.To.Platform, Account: r.To.Account, Conversation: r.To.Conversation,
@@ -310,7 +426,7 @@ func (m *Module) link(ctx context.Context, e otogi.Event, project string) (strin
 	if !slices.Contains(projects, project) {
 		return fmt.Sprintf("The agent account cannot read a project named %q. Add it to the project as a reader, then link again.", project), nil
 	}
-	added, err := m.store.addLink(ctx, link{To: e.Destination(), Project: project}, e.ActorKey(), time.Now())
+	added, err := m.store.addLink(ctx, link{To: e.Destination(), Project: project}, e.ActorKey(), m.now())
 	if err != nil {
 		return "", err
 	}
@@ -348,11 +464,11 @@ func (m *Module) list(ctx context.Context, e otogi.Event) (string, error) {
 }
 
 func (m *Module) status(ctx context.Context, e otogi.Event) (string, error) {
-	sum, err := m.store.summary(ctx)
+	to := e.Destination()
+	sum, err := m.store.summary(ctx, to)
 	if err != nil {
 		return "", err
 	}
-	to := e.Destination()
 	links, err := m.store.links(ctx, &to)
 	if err != nil {
 		return "", err
@@ -363,19 +479,29 @@ func (m *Module) status(ctx context.Context, e otogi.Event) (string, error) {
 	if whoErr != nil {
 		identity = "unknown: " + whoErr.Error()
 	}
+	m.mu.Lock()
+	w := m.watcher
+	m.mu.Unlock()
+	ago := func(t time.Time) string { return m.now().Sub(t).Round(time.Second).String() + " ago" }
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "Server: %s\nAgent: %s\nPolling every %s", m.cfg.Server, identity, m.cfg.PollInterval)
+	fmt.Fprintf(&b, "Server: %s\nAgent: %s\n", m.cfg.Server, identity)
 	switch {
-	case !sum.HasCursor:
-		b.WriteString(", first poll pending")
-	case sum.PolledAt.IsZero():
+	case w.err != "":
+		fmt.Fprintf(&b, "Watcher: failed %s, restarting: %s", ago(w.failedAt), w.err)
+	case w.since.IsZero():
+		b.WriteString("Watcher: starting")
 	default:
-		fmt.Fprintf(&b, ", last success %s ago", time.Since(sum.PolledAt).Round(time.Second))
+		fmt.Fprintf(&b, "Watcher: running since %s", ago(w.since))
 	}
-	if sum.PollError != "" {
-		fmt.Fprintf(&b, "\nLast poll failed: %s", sum.PollError)
+	if sum.HasCursor {
+		fmt.Fprintf(&b, ", last batch %s", ago(sum.BatchAt))
 	}
-	fmt.Fprintf(&b, "\nOutbox: %d pending, %d failed", sum.Pending, sum.Failed)
+	fmt.Fprintf(&b, "\nDigests here: at most one per %s", m.cfg.MinInterval)
+	if !sum.LastSent.IsZero() {
+		fmt.Fprintf(&b, ", last sent %s", ago(sum.LastSent))
+	}
+	fmt.Fprintf(&b, "\nQueued here: %d entries, %d messages pending, %d failed", sum.Queued, sum.Pending, sum.Failed)
 	if sum.LastFailureError != "" {
 		fmt.Fprintf(&b, " (latest: %s)", sum.LastFailureError)
 	}

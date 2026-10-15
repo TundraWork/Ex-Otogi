@@ -48,8 +48,9 @@ modules:
   #   token: ${OTOGI_TODOU_TOKEN}        # the agent account's todou_pat_… token; the
   #                                      # account needs reader access to linked projects
   #   link_base: ""                      # web URL for issue links; default: server
-  #   poll_interval: 30s
-  #   cli_timeout: 60s
+  #   min_interval: 5m                   # at most one digest per chat this often; activity meanwhile is aggregated
+  #   debounce: 10s                      # hold a burst together this long after its first entry
+  #   cli_timeout: 60s                   # per one-shot CLI call (the watcher itself is resident)
   #   events: [comment, opened, closed, reopened, status_changed, assigned, spec_pushed, spec_review, question_answered]
-  #   max_body_chars: 300
-  #   max_attempts: 10                   # polls a notification is retried before it is given up
+  #   max_body_chars: 300                # quoted Markdown body, cut after rendering
+  #   max_attempts: 60                   # tries, a minute apart, before a digest message is given up

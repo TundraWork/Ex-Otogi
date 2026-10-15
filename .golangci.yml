@@ -29,11 +29,11 @@ linters:
             - "!$test"
           deny: &repository-internals
             - pkg: github.com/TundraWork/Ex-Otogi/internal
-              desc: kernel, modules, and adapters import only pkg/otogi from this repository
+              desc: kernel, modules, and adapters import only pkg/... from this repository
             - pkg: github.com/TundraWork/Ex-Otogi/modules
-              desc: kernel, modules, and adapters import only pkg/otogi from this repository
+              desc: kernel, modules, and adapters import only pkg/... from this repository
             - pkg: github.com/TundraWork/Ex-Otogi/cmd
-              desc: kernel, modules, and adapters import only pkg/otogi from this repository
+              desc: kernel, modules, and adapters import only pkg/... from this repository
         # Sub-packages of one adapter may import each other.
         telegram-adapter:
           list-mode: lax

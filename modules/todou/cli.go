@@ -1,7 +1,6 @@
 package todou
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -94,49 +94,119 @@ type entry struct {
 	AgentContext *struct {
 		Agent string `json:"agent"`
 	} `json:"agent_context"`
+
+	raw string // the record as received
 }
 
-// client wraps the CLI calls the module makes.
-type client struct{ run runner }
+// streamer runs the todou CLI with args until it exits or ctx ends, passing
+// each stdout line to stdout and each stderr line to stderr. Tests replace it.
+type streamer func(ctx context.Context, args []string, stdout func(line []byte) error, stderr func(line string)) error
 
-// watch drains entries after cursor (all readable projects, every actor) and
-// returns them with the cursor to resume from. Entries after the last cursor
-// record are not returned: the CLI replays them next time.
-func (c client) watch(ctx context.Context, cursor string, types []string) ([]entry, string, error) {
-	args := []string{"watch", "--all-projects", "--poll", "--json", "--any-actor", "--since", cursor}
-	if len(types) > 0 {
-		args = append(args, "--type", strings.Join(types, ","))
+// execStreamer runs the real CLI like execRunner, without a timeout. When ctx
+// ends the CLI gets SIGTERM, so it can exit cleanly, and is killed if it is
+// still running 10 seconds later.
+func execStreamer(path, server, token string) streamer {
+	return func(ctx context.Context, args []string, stdout func([]byte) error, stderr func(string)) error {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, path, args...)
+		cmd.Env = append(os.Environ(), "TODOU_SERVER="+server, "TODOU_TOKEN="+token)
+		cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+		cmd.WaitDelay = 10 * time.Second
+		var lineErr error // set by the stdout copier; read after Run waits for it
+		cmd.Stdout = &lineWriter{fn: func(line []byte) error {
+			if lineErr = stdout(line); lineErr != nil {
+				cancel()
+			}
+			return lineErr
+		}}
+		errLines := &lineWriter{fn: func(line []byte) error { stderr(string(line)); return nil }}
+		cmd.Stderr = errLines
+		err := cmd.Run()
+		var exit *exec.ExitError
+		switch {
+		case lineErr != nil:
+			return lineErr
+		case errors.As(err, &exit) && ctx.Err() == nil:
+			return &cliError{args: args, code: exit.ExitCode(), stderr: errLines.last}
+		case err != nil:
+			return fmt.Errorf("run todou %s: %w", strings.Join(args, " "), err)
+		}
+		return nil
 	}
-	out, err := c.run(ctx, args...)
-	if err != nil {
-		return nil, "", err
-	}
-	var entries, pending []entry
-	next := ""
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	scanner.Buffer(make([]byte, 0, 64<<10), 16<<20) // a comment body can be long
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
+}
+
+// lineWriter passes each non-blank line written to it to fn and remembers
+// the last one. The line is only valid during the call.
+type lineWriter struct {
+	fn   func(line []byte) error
+	buf  []byte
+	last string
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		line := bytes.TrimSpace(w.buf[:i])
+		w.buf = w.buf[i+1:]
 		if len(line) == 0 {
 			continue
 		}
+		w.last = string(line)
+		if err := w.fn(line); err != nil {
+			return 0, err
+		}
+	}
+}
+
+// client wraps the CLI calls the module makes.
+type client struct {
+	run    runner
+	stream streamer
+}
+
+// follow streams entries after cursor (all readable projects, every actor)
+// until the CLI exits or ctx ends, calling batch for every batch with the
+// cursor after it. debounce holds a batch open for that long after its first
+// entry, so a burst arrives together.
+func (c client) follow(ctx context.Context, cursor string, types []string, debounce time.Duration, stderr func(string), batch func([]entry, string) error) error {
+	args := []string{"watch", "--all-projects", "--follow", "--json", "--any-actor", "--since", cursor, "--debounce", strconv.Itoa(int(debounce.Seconds()))}
+	if len(types) > 0 {
+		args = append(args, "--type", strings.Join(types, ","))
+	}
+	var pending []entry
+	err := c.stream(ctx, args, func(line []byte) error {
 		var e entry
 		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, "", fmt.Errorf("todou watch: bad record %q: %w", tail(string(line), 200), err)
+			return fmt.Errorf("todou watch: bad record %q: %w", tail(string(line), 200), err)
 		}
 		if e.Type == "cursor" {
-			entries, pending, next = append(entries, pending...), nil, e.NextCursor
-			continue
+			entries := pending
+			pending = nil
+			return batch(entries, e.NextCursor)
 		}
+		e.raw = string(line)
 		pending = append(pending, e)
+		return nil
+	}, stderr)
+	if err == nil && ctx.Err() == nil {
+		err = errors.New("todou watch --follow exited")
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, "", fmt.Errorf("todou watch: read output: %w", err)
+	return err
+}
+
+// decodeEntry reads an entry stored as its watch record.
+func decodeEntry(raw string) (entry, error) {
+	var e entry
+	if err := json.Unmarshal([]byte(raw), &e); err != nil {
+		return entry{}, fmt.Errorf("todou: decode queued entry: %w", err)
 	}
-	if next == "" {
-		return nil, "", errors.New("todou watch: output ended without a cursor record")
-	}
-	return entries, next, nil
+	e.raw = raw
+	return e, nil
 }
 
 // now returns a cursor at the current position, for a first start.

@@ -20,7 +20,7 @@ pkg/otogi            ──> standard library only
 - **`internal/adapter/*`:** platform drivers and infrastructure (storage, management HTTP, and so on). Adapters translate I/O. They do not make routing or module decisions.
 - **`cmd/otogi`:** loads configuration, constructs everything, and runs the process lifecycle.
 
-Kernel, modules, and adapters import only `pkg/...` from this repository: `pkg/otogi`, plus service contract packages such as a future `pkg/llm` that modules share through services. Third-party libraries are welcome anywhere except `pkg/otogi`, which stays standard-library-only so the module SDK carries no dependency baggage; platform SDKs stay inside their adapter. Sub-packages of one adapter may import each other. depguard rules in `.golangci.yml` enforce this as part of `make lint`. Tests may import collaborators, such as the real kernel, for integration tests.
+Kernel, modules, and adapters import only `pkg/...` from this repository: `pkg/otogi`, helper libraries for modules such as `pkg/markdown` (Markdown to rich text), and service contract packages such as a future `pkg/llm` that modules share through services. Third-party libraries are welcome anywhere except `pkg/otogi`, which stays standard-library-only so the module SDK carries no dependency baggage; platform SDKs stay inside their adapter. Sub-packages of one adapter may import each other. depguard rules in `.golangci.yml` enforce this as part of `make lint`. Tests may import collaborators, such as the real kernel, for integration tests.
 
 ## Platform types stay in their adapter
 
