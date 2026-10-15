@@ -50,3 +50,15 @@ make quality   # lint, test-race, test-fuzz-smoke, smoke
 ```
 
 `make smoke` fails unless the binary exits 0 and prints exactly `echo: hello`. Individual gates are listed in [`../quality.md`](../quality.md).
+
+## Deploy to the test host
+
+The test host runs the `next` branch as `ex-otogi-next.service` from `/srv/ex-otogi-next` (`otogi`, `otogi.yaml`, `0600` `otogi.env` with the Telegram app credentials, and `data/`). The management API is on the host's `127.0.0.1:8383`.
+
+```sh
+make deploy            # build linux/amd64, upload, validate the host's config with the new binary,
+                       # keep otogi.prev, swap, restart, and wait for /readyz
+make deploy-rollback   # restore otogi.prev and restart
+```
+
+`DEPLOY_HOST`, `DEPLOY_DIR`, `DEPLOY_SERVICE`, and `DEPLOY_READY_URL` override the defaults. A deploy that does not become ready within 60 seconds prints the service's recent logs and fails. Inspect the running bot with `ssh <host> 'curl -s localhost:8383/api/status'` and `journalctl -u ex-otogi-next -f`.

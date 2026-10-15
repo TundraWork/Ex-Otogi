@@ -3,7 +3,14 @@ GO ?= go
 LINT := $(GO) tool -modfile=tools/go.mod golangci-lint
 TELEGRAM_FUZZTIME ?= 1x
 
-.PHONY: format lint test test-race test-fuzz-smoke smoke telegram-smoke quality
+# Test deployment (scripts/deploy.sh); override on the command line.
+DEPLOY_HOST ?= misaka-lax01
+DEPLOY_DIR ?= /srv/ex-otogi-next
+DEPLOY_SERVICE ?= ex-otogi-next
+DEPLOY_READY_URL ?= http://127.0.0.1:8383/readyz
+DEPLOY_ENV := DEPLOY_HOST=$(DEPLOY_HOST) DEPLOY_DIR=$(DEPLOY_DIR) DEPLOY_SERVICE=$(DEPLOY_SERVICE) DEPLOY_READY_URL=$(DEPLOY_READY_URL)
+
+.PHONY: format lint test test-race test-fuzz-smoke smoke telegram-smoke quality deploy deploy-rollback
 
 format:
 	$(LINT) fmt
@@ -29,3 +36,10 @@ telegram-smoke:
 	$(GO) run ./cmd/telegram-smoke
 
 quality: lint test-race test-fuzz-smoke smoke
+
+# Deploy the current checkout to the test host, or restore its previous binary.
+deploy:
+	$(DEPLOY_ENV) ./scripts/deploy.sh
+
+deploy-rollback:
+	$(DEPLOY_ENV) ./scripts/deploy.sh rollback
