@@ -38,7 +38,7 @@ func TestDigestRendering(t *testing.T) {
 	for _, a := range part.Annotations {
 		marks = append(marks, fmt.Sprintf("%s:%s", a.Kind, part.Text[a.Offset:a.Offset+a.Length]))
 	}
-	for _, m := range []string{"bold:🔔 5 todou updates", "link:web#1", "bold:web#1 T1", "bold:Alice", "bold:bob", "link:web#2", "bold:web#2 A title much longer than forty character…", "bold:bold", "code:code", "block_quote:bold code…", "code:Todo", "code:Doing", "block_quote:long opene…"} {
+	for _, m := range []string{"bold:🔔 5 todou updates", "link:web#1", "bold:web#1 T1", "bold:Alice", "bold:bob", "link:web#2", "bold:web#2 A title much longer than forty character…", "bold:bold", "code:code", "expandable_block_quote:bold code…", "code:Todo", "code:Doing", "expandable_block_quote:long opene…"} {
 		if !slices.Contains(marks, m) {
 			t.Errorf("annotations lack %s: %v", m, marks)
 		}
@@ -110,5 +110,30 @@ func TestQuestionsAndAnswers(t *testing.T) {
 		"🙋 John answered\nSplit: How to split the card?\n→ Three cards\n→ start with the first\n\nShip: How to ship?\n→ (declined)\n\nq9\n→ unknown question"
 	if text != want {
 		t.Fatalf("text:\n%s\nwant:\n%s", text, want)
+	}
+}
+
+func TestAnEntrysQuotesShareTheBodyBudget(t *testing.T) {
+	t.Parallel()
+	r := renderer{linkBase: "https://todou.test", maxBody: 3000}
+	long := strings.Repeat("长", 3000)
+	asking := entry{Type: "comment", Project: "web", IssueNumber: 1, Author: &user{Login: "a"}, Body: long,
+		Component: &component{Questions: []question{{Key: "q1", Header: "H", Question: long}}}}
+	msgs := r.digest([]entry{asking}, nil)
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %d", len(msgs))
+	}
+	part := msgs[0].Parts[0]
+	if n := utf16Len(part.Text); n > messageLimit {
+		t.Fatalf("an entry of %d UTF-16 units exceeds one message", n)
+	}
+	quotes := 0
+	for _, a := range part.Annotations {
+		if a.Kind == otogi.AnnotationExpandableBlockQuote {
+			quotes++
+		}
+	}
+	if quotes != 2 {
+		t.Fatalf("quotes = %d, want the body and the questions", quotes)
 	}
 }

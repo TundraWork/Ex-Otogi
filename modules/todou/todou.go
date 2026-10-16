@@ -42,7 +42,8 @@ type Config struct {
 	// Events lists the activity types to notify; nil means DefaultEvents, an
 	// empty list means every type.
 	Events []string `yaml:"events"`
-	// MaxBodyChars cuts quoted bodies; default 300, at most 3000.
+	// MaxBodyChars cuts an entry's quoted bodies, which share it; default
+	// 2000, at most 3000. Quotes are collapsed, so long ones cost little room.
 	MaxBodyChars int `yaml:"max_body_chars"`
 	// MaxAttempts is how many times a digest message is tried, a minute
 	// apart, before it is marked failed; default 60.
@@ -119,7 +120,7 @@ func New(cfg Config, operators []string) (*Module, error) {
 		cfg.Events = DefaultEvents
 	}
 	if cfg.MaxBodyChars == 0 {
-		cfg.MaxBodyChars = 300
+		cfg.MaxBodyChars = 2000
 	}
 	if cfg.MaxAttempts == 0 {
 		cfg.MaxAttempts = 60

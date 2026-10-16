@@ -50,6 +50,19 @@ func TestConvertEntitiesPreservesUnknownInOrder(t *testing.T) {
 	}
 }
 
+func TestConvertEntitiesKeepsCollapsedQuotes(t *testing.T) {
+	annotations, _, err := ConvertEntities("ab", []tg.MessageEntityClass{
+		&tg.MessageEntityBlockquote{Offset: 0, Length: 1},
+		&tg.MessageEntityBlockquote{Offset: 1, Length: 1, Collapsed: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if annotations[0].Kind != otogi.AnnotationBlockQuote || annotations[1].Kind != otogi.AnnotationExpandableBlockQuote {
+		t.Fatalf("annotations = %+v", annotations)
+	}
+}
+
 func FuzzConvertEntitiesUTF16(f *testing.F) {
 	f.Add("A😀B", int32(1), int32(2))
 	f.Add("café", int32(0), int32(4))

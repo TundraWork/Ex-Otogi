@@ -130,11 +130,11 @@ func (r renderer) entry(e entry, info issue) *otogi.RichText {
 	}
 	t.Write(" ")
 	add(t, action)
+	bodies = slices.DeleteFunc(bodies, func(b string) bool { return strings.TrimSpace(b) == "" })
 	for _, body := range bodies {
-		if strings.TrimSpace(body) != "" {
-			t.Write("\n")
-			t.Mark(otogi.AnnotationBlockQuote, "", func() { add(t, r.quote(body)) })
-		}
+		// The quotes share maxBody, so an entry always fits in one message.
+		t.Write("\n")
+		t.Mark(otogi.AnnotationExpandableBlockQuote, "", func() { add(t, r.quote(body, r.maxBody/len(bodies))) })
 	}
 	return t
 }
@@ -266,21 +266,22 @@ func answersMarkdown(p map[string]any, questions map[int64][]question) string {
 	return b.String()
 }
 
-// quote renders a Markdown body for the quote under an entry, cut to maxBody
-// UTF-16 units and without block quotes of its own: chats do not nest quotes.
-func (r renderer) quote(body string) *otogi.RichText {
+// quote renders a Markdown body for a collapsed quote under an entry, cut to
+// limit UTF-16 units and without block quotes of its own: chats do not nest
+// quotes.
+func (r renderer) quote(body string, limit int) *otogi.RichText {
 	md := markdown.Render(strings.TrimSpace(body))
 	text := md.String()
 	end, units := len(text), 0
 	for i, c := range text {
-		if units += utf16.RuneLen(c); units > r.maxBody {
+		if units += utf16.RuneLen(c); units > limit {
 			end = len(strings.TrimRight(text[:i], " \t\n"))
 			break
 		}
 	}
 	var kept []otogi.Annotation
 	for _, a := range md.Annotations() {
-		if a.Kind == otogi.AnnotationBlockQuote || a.Offset >= end {
+		if a.Kind == otogi.AnnotationBlockQuote || a.Kind == otogi.AnnotationExpandableBlockQuote || a.Offset >= end {
 			continue
 		}
 		a.Length = min(a.Length, end-a.Offset)

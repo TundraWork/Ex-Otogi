@@ -71,6 +71,9 @@ func entityProjection(entity tg.MessageEntityClass) (otogi.AnnotationKind, strin
 	case *tg.MessageEntityCustomEmoji:
 		return otogi.AnnotationEmoji, fmt.Sprintf("telegram:document:%d", v.DocumentID), true
 	case *tg.MessageEntityBlockquote:
+		if v.Collapsed {
+			return otogi.AnnotationExpandableBlockQuote, "", true
+		}
 		return otogi.AnnotationBlockQuote, "", true
 	case *tg.MessageEntityFormattedDate:
 		return otogi.AnnotationTimestamp, "", true

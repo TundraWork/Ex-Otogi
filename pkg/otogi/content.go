@@ -22,6 +22,9 @@ const (
 	AnnotationPreformatted AnnotationKind = "preformatted"
 	// AnnotationBlockQuote marks a quotation.
 	AnnotationBlockQuote AnnotationKind = "block_quote"
+	// AnnotationExpandableBlockQuote marks a quotation shown collapsed until
+	// the reader expands it. Platforms without one show a block quote.
+	AnnotationExpandableBlockQuote AnnotationKind = "expandable_block_quote"
 	// AnnotationLink marks a link; Target holds the URL.
 	AnnotationLink AnnotationKind = "link"
 	// AnnotationMention marks a mention; Target holds the actor ID when known.

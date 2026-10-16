@@ -341,6 +341,8 @@ func encodeEntity(text string, a otogi.Annotation) (tg.MessageEntityClass, error
 		return &tg.MessageEntityPre{Offset: off, Length: length, Language: a.Target}, nil
 	case otogi.AnnotationBlockQuote:
 		return &tg.MessageEntityBlockquote{Offset: off, Length: length}, nil
+	case otogi.AnnotationExpandableBlockQuote:
+		return &tg.MessageEntityBlockquote{Offset: off, Length: length, Collapsed: true}, nil
 	case otogi.AnnotationLink:
 		if a.Target == "" {
 			return &tg.MessageEntityURL{Offset: off, Length: length}, nil

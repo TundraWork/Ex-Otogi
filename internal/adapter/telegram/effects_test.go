@@ -241,3 +241,16 @@ func TestEncodeContentEntitiesAndReply(t *testing.T) {
 		t.Fatalf("reply to another conversation = %v", err)
 	}
 }
+
+func TestEncodeQuotes(t *testing.T) {
+	msg := otogi.TextMessage("quoted folded")
+	msg.Parts[0].Annotations = []otogi.Annotation{{Offset: 0, Length: 6, Kind: otogi.AnnotationBlockQuote}, {Offset: 7, Length: 6, Kind: otogi.AnnotationExpandableBlockQuote}}
+	c, err := encodeContent(msg, "user:7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, folded := c.entities[0].(*tg.MessageEntityBlockquote), c.entities[1].(*tg.MessageEntityBlockquote)
+	if plain.Collapsed || !folded.Collapsed || folded.Offset != 7 || folded.Length != 6 {
+		t.Fatalf("entities = %#v, %#v", plain, folded)
+	}
+}
