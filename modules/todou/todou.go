@@ -42,10 +42,10 @@ type Config struct {
 	// Events lists the activity types to notify; nil means DefaultEvents, an
 	// empty list means every type.
 	Events []string `yaml:"events"`
-	// MaxBodyChars cuts an entry's quoted bodies, which share it; default
-	// 800, at most 3000. Quotes are collapsed, so they cost little room on
-	// screen, but they count toward Telegram's 4096 per message: 800 keeps
-	// about four entries in one message.
+	// MaxBodyChars cuts each quoted body; default 800, at most 3000. Quotes
+	// are collapsed, so they cost little room on screen, but they count
+	// toward Telegram's 4096 per message: 800 keeps about four entries in
+	// one message.
 	MaxBodyChars int `yaml:"max_body_chars"`
 	// MaxAttempts is how many times a digest message is tried, a minute
 	// apart, before it is marked failed; default 60.

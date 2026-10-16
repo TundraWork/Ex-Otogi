@@ -113,49 +113,42 @@ func TestQuestionsAndAnswers(t *testing.T) {
 	}
 }
 
-func TestAnEntrysQuotesShareTheBodyBudget(t *testing.T) {
+func TestOversizedEntriesContinueWithAllFormatting(t *testing.T) {
 	t.Parallel()
 	r := renderer{linkBase: "https://todou.test", maxBody: 3000}
-	long := strings.Repeat("长", 3000)
-	asking := entry{Type: "comment", Project: "web", IssueNumber: 1, Author: &user{Login: "a"}, Body: long,
-		Component: &component{Questions: []question{{Key: "q1", Header: "H", Question: long}}}}
-	msgs := r.digest([]entry{asking}, nil)
-	if len(msgs) != 1 {
-		t.Fatalf("messages = %d", len(msgs))
-	}
-	part := msgs[0].Parts[0]
-	if n := utf16Len(part.Text); n > messageLimit {
-		t.Fatalf("an entry of %d UTF-16 units exceeds one message", n)
-	}
-	quotes := 0
-	for _, a := range part.Annotations {
-		if a.Kind == otogi.AnnotationExpandableBlockQuote {
-			quotes++
-		}
-	}
-	if quotes != 2 {
-		t.Fatalf("quotes = %d, want the body and the questions", quotes)
-	}
-}
-
-func TestDigestsStayUnderTheEntityLimit(t *testing.T) {
-	t.Parallel()
-	r := renderer{linkBase: "https://todou.test", maxBody: 3000}
-	codeHeavy := strings.Repeat("`a.go` ", 200) // 200 code spans in 1400 characters
-	entries := []entry{{Type: "comment", Project: "web", IssueNumber: 1, Author: &user{Login: "a"}, Body: codeHeavy}}
-	for i := range 5 {
-		entries = append(entries, entry{Type: "comment", Project: "web", IssueNumber: int64(i + 2), Author: &user{Login: "a"}, Body: strings.Repeat("`b` ", 30)})
+	codeHeavy := strings.Repeat("`a.go` ", 300) // 300 code spans on one line
+	long := strings.Repeat("**长**\n", 1400)     // 2800 units over many lines
+	entries := []entry{
+		{Type: "comment", Project: "web", IssueNumber: 1, IssueRef: "web#1", Author: &user{Login: "a"}, Body: codeHeavy},
+		{Type: "comment", Project: "web", IssueNumber: 2, IssueRef: "web#2", Author: &user{Login: "b"}, Body: long,
+			Component: &component{Questions: []question{{Key: "q1", Header: "H", Question: long}}}},
 	}
 	msgs := r.digest(entries, nil)
-	for _, m := range msgs {
-		if n := len(m.Parts[0].Annotations); n > entityLimit {
-			t.Fatalf("a message has %d annotations", n)
+	code, boldLong := 0, 0
+	for i, m := range msgs {
+		part := m.Parts[0]
+		if n := len(part.Annotations); n > entityLimit {
+			t.Fatalf("message %d has %d annotations", i, n)
+		}
+		if n := utf16Len(part.Text); n > messageLimit {
+			t.Fatalf("message %d has %d UTF-16 units", i, n)
 		}
 		if err := m.Validate(); err != nil {
 			t.Fatal(err)
 		}
+		if i > 0 && !strings.HasPrefix(part.Text, "web#") {
+			t.Errorf("message %d does not name its issue: %q", i, part.Text[:20])
+		}
+		for _, a := range part.Annotations {
+			switch s := part.Text[a.Offset : a.Offset+a.Length]; {
+			case a.Kind == otogi.AnnotationCode && s == "a.go":
+				code++
+			case a.Kind == otogi.AnnotationBold && s == "长":
+				boldLong++
+			}
+		}
 	}
-	if len(msgs) < 2 || !strings.Contains(msgs[0].PlainText(), strings.Repeat("a.go ", 199)+"a.go") {
-		t.Fatalf("messages = %d; the code-heavy text must be kept whole", len(msgs))
+	if code != 300 || boldLong != 2800 {
+		t.Fatalf("formatting kept: %d of 300 code spans, %d of 2800 bold runs, over %d messages", code, boldLong, len(msgs))
 	}
 }
