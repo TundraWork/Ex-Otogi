@@ -137,3 +137,25 @@ func TestAnEntrysQuotesShareTheBodyBudget(t *testing.T) {
 		t.Fatalf("quotes = %d, want the body and the questions", quotes)
 	}
 }
+
+func TestDigestsStayUnderTheEntityLimit(t *testing.T) {
+	t.Parallel()
+	r := renderer{linkBase: "https://todou.test", maxBody: 3000}
+	codeHeavy := strings.Repeat("`a.go` ", 200) // 200 code spans in 1400 characters
+	entries := []entry{{Type: "comment", Project: "web", IssueNumber: 1, Author: &user{Login: "a"}, Body: codeHeavy}}
+	for i := range 5 {
+		entries = append(entries, entry{Type: "comment", Project: "web", IssueNumber: int64(i + 2), Author: &user{Login: "a"}, Body: strings.Repeat("`b` ", 30)})
+	}
+	msgs := r.digest(entries, nil)
+	for _, m := range msgs {
+		if n := len(m.Parts[0].Annotations); n > entityLimit {
+			t.Fatalf("a message has %d annotations", n)
+		}
+		if err := m.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(msgs) < 2 || !strings.Contains(msgs[0].PlainText(), strings.Repeat("a.go ", 199)+"a.go") {
+		t.Fatalf("messages = %d; the code-heavy text must be kept whole", len(msgs))
+	}
+}

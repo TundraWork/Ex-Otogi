@@ -12,9 +12,18 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// messageLimit keeps a message under Telegram's 4096 UTF-16 units, with room
-// for a little platform overhead.
-const messageLimit = 4000
+const (
+	// messageLimit keeps a message under Telegram's 4096 UTF-16 units, which
+	// count collapsed quotes in full, with room for a little overhead.
+	messageLimit = 4000
+	// entityLimit is Telegram's cap of about 100 formatting entities per
+	// message (reported by users, not documented).
+	entityLimit = 100
+	// entryEntities is how many annotations of its own (names, the issue
+	// line, the quotes themselves) an entry may need besides its quotes'
+	// formatting.
+	entryEntities = 10
+)
 
 // renderer turns queued entries into digest messages.
 type renderer struct {
@@ -59,7 +68,8 @@ func (r renderer) digest(entries []entry, issues map[string]issue) []otogi.Messa
 			if i == 0 {
 				sep = "\n\n"
 			}
-			if msg.Len() > 0 && utf16Len(msg.String()+sep+chunk.String()) > messageLimit {
+			full := utf16Len(msg.String()+sep+chunk.String()) > messageLimit || len(msg.Annotations())+len(chunk.Annotations()) > entityLimit
+			if msg.Len() > 0 && full {
 				out = append(out, msg.Message())
 				msg = &otogi.RichText{}
 				if i > 0 {
@@ -132,9 +142,12 @@ func (r renderer) entry(e entry, info issue) *otogi.RichText {
 	add(t, action)
 	bodies = slices.DeleteFunc(bodies, func(b string) bool { return strings.TrimSpace(b) == "" })
 	for _, body := range bodies {
-		// The quotes share maxBody, so an entry always fits in one message.
+		// The quotes share maxBody and the entity budget, so an entry always
+		// fits in one message.
 		t.Write("\n")
-		t.Mark(otogi.AnnotationExpandableBlockQuote, "", func() { add(t, r.quote(body, r.maxBody/len(bodies))) })
+		t.Mark(otogi.AnnotationExpandableBlockQuote, "", func() {
+			add(t, r.quote(body, r.maxBody/len(bodies), (entityLimit-entryEntities)/len(bodies)))
+		})
 	}
 	return t
 }
@@ -268,8 +281,9 @@ func answersMarkdown(p map[string]any, questions map[int64][]question) string {
 
 // quote renders a Markdown body for a collapsed quote under an entry, cut to
 // limit UTF-16 units and without block quotes of its own: chats do not nest
-// quotes.
-func (r renderer) quote(body string, limit int) *otogi.RichText {
+// quotes. Formatting past the first maxAnnotations annotations is dropped;
+// the text is kept.
+func (r renderer) quote(body string, limit, maxAnnotations int) *otogi.RichText {
 	md := markdown.Render(strings.TrimSpace(body))
 	text := md.String()
 	end, units := len(text), 0
@@ -281,7 +295,7 @@ func (r renderer) quote(body string, limit int) *otogi.RichText {
 	}
 	var kept []otogi.Annotation
 	for _, a := range md.Annotations() {
-		if a.Kind == otogi.AnnotationBlockQuote || a.Kind == otogi.AnnotationExpandableBlockQuote || a.Offset >= end {
+		if a.Kind == otogi.AnnotationBlockQuote || a.Kind == otogi.AnnotationExpandableBlockQuote || a.Offset >= end || len(kept) == maxAnnotations {
 			continue
 		}
 		a.Length = min(a.Length, end-a.Offset)
