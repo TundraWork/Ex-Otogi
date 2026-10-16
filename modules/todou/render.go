@@ -1,7 +1,9 @@
 package todou
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -85,16 +87,16 @@ func add(dst, src *otogi.RichText) { dst.Append(src.String(), src.Annotations())
 // titleChars is how much of an issue's title its issue line shows.
 const titleChars = 40
 
-// issueLine links an entry's issue: its bold reference and the start of its
-// title.
+// issueLine names an entry's issue in bold: its reference, linked, and the
+// start of its title.
 func (r renderer) issueLine(e entry, info issue) *otogi.RichText {
 	t := &otogi.RichText{}
 	ref := e.IssueRef
 	if ref == "" {
 		ref = e.Project + "#" + strconv.FormatInt(e.IssueNumber, 10)
 	}
-	t.Mark(otogi.AnnotationLink, fmt.Sprintf("%s/projects/%s/issues/%d", r.linkBase, e.Project, e.IssueNumber), func() {
-		t.Mark(otogi.AnnotationBold, "", func() { t.Write(ref) })
+	t.Mark(otogi.AnnotationBold, "", func() {
+		t.Mark(otogi.AnnotationLink, fmt.Sprintf("%s/projects/%s/issues/%d", r.linkBase, e.Project, e.IssueNumber), func() { t.Write(ref) })
 		if title := strings.TrimSpace(info.Title); title != "" {
 			if runes := []rune(title); len(runes) > titleChars {
 				title = strings.TrimSpace(string(runes[:titleChars])) + "…"
@@ -105,30 +107,34 @@ func (r renderer) issueLine(e entry, info issue) *otogi.RichText {
 	return t
 }
 
-// entry is one entry's line, with its body quoted underneath.
+// entry is one entry's line, with its bodies quoted underneath.
 func (r renderer) entry(e entry, info issue) *otogi.RichText {
 	who := e.Author
 	if e.Type != "comment" {
 		who = e.Actor
 	}
-	name := who.name()
-	if a := e.AgentContext; a != nil || (who != nil && who.Kind == "machine") {
-		name = "🤖 " + name
-		switch {
-		case a == nil:
-		case a.Model != "":
-			name += " (" + a.Model + ")"
-		case a.Agent != "":
-			name += " (" + a.Agent + ")"
-		}
-	}
-	icon, action, body := describe(e, info)
+	icon, action, bodies := describe(e, info)
 	t := &otogi.RichText{}
-	t.Write(icon + " " + name + " ")
+	t.Write(icon + " ")
+	a := e.AgentContext
+	if a != nil || (who != nil && who.Kind == "machine") {
+		t.Write("👾 ")
+	}
+	t.Mark(otogi.AnnotationBold, "", func() { t.Write(who.name()) })
+	switch {
+	case a == nil:
+	case a.Model != "":
+		t.Write(" (" + a.Model + ")")
+	case a.Agent != "":
+		t.Write(" (" + a.Agent + ")")
+	}
+	t.Write(" ")
 	add(t, action)
-	if strings.TrimSpace(body) != "" {
-		t.Write("\n")
-		t.Mark(otogi.AnnotationBlockQuote, "", func() { add(t, r.quote(body)) })
+	for _, body := range bodies {
+		if strings.TrimSpace(body) != "" {
+			t.Write("\n")
+			t.Mark(otogi.AnnotationBlockQuote, "", func() { add(t, r.quote(body)) })
+		}
 	}
 	return t
 }
@@ -154,50 +160,110 @@ func phrase(parts ...any) *otogi.RichText {
 	return t
 }
 
-// describe returns the icon, the action phrase, and an optional Markdown
-// body to quote.
-func describe(e entry, info issue) (icon string, action *otogi.RichText, body string) {
+// describe returns the icon, the action phrase, and Markdown bodies to
+// quote, each in its own quote.
+func describe(e entry, info issue) (icon string, action *otogi.RichText, bodies []string) {
 	if e.Type == "comment" {
 		if e.HiddenAt != nil {
-			return "💬", phrase("commented (hidden)"), ""
+			return "💬", phrase("commented (hidden)"), nil
 		}
-		return "💬", phrase("commented"), e.Body
+		if e.Component != nil && len(e.Component.Questions) > 0 {
+			return "❓", phrase("asked"), []string{e.Body, questionsMarkdown(e.Component.Questions)}
+		}
+		return "💬", phrase("commented"), []string{e.Body}
 	}
 	p := e.Payload
 	switch e.EventType {
 	case "opened":
-		return "🆕", phrase("opened it"), info.Body
+		return "🆕", phrase("opened it"), []string{info.Body}
 	case "closed":
-		return "✅", phrase("closed it"), ""
+		return "✅", phrase("closed it"), nil
 	case "reopened":
-		return "🔁", phrase("reopened it"), ""
+		return "🔁", phrase("reopened it"), nil
 	case "status_changed":
-		return "🔀", phrase("moved it ", code(field(p, "from", "name")), " → ", code(field(p, "to", "name"))), ""
+		return "🔀", phrase("moved it ", code(field(p, "from", "name")), " → ", code(field(p, "to", "name"))), nil
 	case "title_changed":
-		return "✏️", phrase("renamed it from “", str(p["from"]), "”"), ""
+		return "✏️", phrase("renamed it from “", str(p["from"]), "”"), nil
 	case "assigned":
-		return "👤", phrase("assigned ", field(p, "user", "login")), ""
+		return "👤", phrase("assigned ", bold(field(p, "user", "login"))), nil
 	case "unassigned":
-		return "👤", phrase("unassigned ", field(p, "user", "login")), ""
+		return "👤", phrase("unassigned ", bold(field(p, "user", "login"))), nil
 	case "label_added":
-		return "🏷", phrase("added label ", code(field(p, "label", "name"))), ""
+		return "🏷", phrase("added label ", code(field(p, "label", "name"))), nil
 	case "label_removed":
-		return "🏷", phrase("removed label ", code(field(p, "label", "name"))), ""
+		return "🏷", phrase("removed label ", code(field(p, "label", "name"))), nil
 	case "spec_pushed":
-		return "📄", phrase("pushed spec ", code("v"+str(p["version"]))), str(p["message"])
+		return "📄", phrase("pushed spec ", code("v"+str(p["version"]))), []string{str(p["message"])}
 	case "spec_review":
-		return "📝", phrase("reviewed spec ", code("v"+str(p["version"])), ": ", bold(strings.ReplaceAll(str(p["verdict"]), "_", " "))), ""
+		return "📝", phrase("reviewed spec ", code("v"+str(p["version"])), ": ", bold(strings.ReplaceAll(str(p["verdict"]), "_", " "))), nil
 	case "spec_withdrawn":
-		return "📄", phrase("withdrew spec ", code("v"+str(p["version"]))), ""
+		return "📄", phrase("withdrew spec ", code("v"+str(p["version"]))), nil
 	case "question_answered":
-		return "❓", phrase("answered a question"), ""
+		return "🙋", phrase("answered"), []string{answersMarkdown(p, info.Questions)}
 	case "deleted":
-		return "🗑", phrase("deleted it"), ""
+		return "🗑", phrase("deleted it"), nil
 	case "restored":
-		return "♻️", phrase("restored it"), ""
+		return "♻️", phrase("restored it"), nil
 	default:
-		return "•", phrase(strings.ReplaceAll(e.EventType, "_", " ")), ""
+		return "•", phrase(strings.ReplaceAll(e.EventType, "_", " ")), nil
 	}
+}
+
+// questionsMarkdown lists questions with their options.
+func questionsMarkdown(questions []question) string {
+	var b strings.Builder
+	for i, q := range questions {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("**" + q.Header + "**: " + q.Question)
+		for _, o := range q.Options {
+			b.WriteString("\n• " + o.Label)
+		}
+	}
+	return b.String()
+}
+
+// answersMarkdown lists the answers of a question_answered payload under
+// their questions, which questions holds by asking comment.
+func answersMarkdown(p map[string]any, questions map[int64][]question) string {
+	var payload struct {
+		CommentID int64 `json:"comment_id"`
+		Answers   []struct {
+			Key      string  `json:"key"`
+			Other    *string `json:"other"`
+			Declined bool    `json:"declined"`
+			Selected []struct {
+				Label string `json:"label"`
+			} `json:"selected"`
+		} `json:"answers"`
+	}
+	raw, _ := json.Marshal(p) // p was decoded from JSON, so it encodes
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for i, a := range payload.Answers {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		head := "**" + a.Key + "**"
+		if j := slices.IndexFunc(questions[payload.CommentID], func(q question) bool { return q.Key == a.Key }); j >= 0 {
+			q := questions[payload.CommentID][j]
+			head = "**" + q.Header + "**: " + q.Question
+		}
+		b.WriteString(head)
+		for _, s := range a.Selected {
+			b.WriteString("\n→ " + s.Label)
+		}
+		if a.Other != nil && strings.TrimSpace(*a.Other) != "" {
+			b.WriteString("\n→ " + *a.Other)
+		}
+		if a.Declined {
+			b.WriteString("\n→ (declined)")
+		}
+	}
+	return b.String()
 }
 
 // quote renders a Markdown body for the quote under an entry, cut to maxBody

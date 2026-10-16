@@ -93,6 +93,7 @@ type entry struct {
 	Payload      map[string]any `json:"payload"`
 	CreatedAt    time.Time      `json:"created_at"`
 	AgentContext *agentContext  `json:"agent_context"`
+	Component    *component     `json:"component"` // comments
 
 	raw string // the record as received
 }
@@ -230,6 +231,24 @@ func (c client) now(ctx context.Context) (string, error) {
 type issue struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
+	// Questions holds the questions asked in the issue, by comment ID, for
+	// rendering answers to them.
+	Questions map[int64][]question `json:"-"`
+}
+
+// component is what a comment carries besides its body: questions, for one.
+type component struct {
+	Questions []question `json:"questions"`
+}
+
+// question is one question a comment asks.
+type question struct {
+	Key      string `json:"key"`
+	Header   string `json:"header"`
+	Question string `json:"question"`
+	Options  []struct {
+		Label string `json:"label"`
+	} `json:"options"`
 }
 
 func (c client) issue(ctx context.Context, project string, number int64) (issue, error) {
@@ -238,13 +257,24 @@ func (c client) issue(ctx context.Context, project string, number int64) (issue,
 		return issue{}, err
 	}
 	var view struct {
-		Issue issue `json:"issue"`
+		Issue    issue `json:"issue"`
+		Timeline []struct {
+			Type      string     `json:"type"`
+			ID        int64      `json:"id"`
+			Component *component `json:"component"`
+		} `json:"timeline"`
 	}
 	if err := json.Unmarshal(out, &view); err != nil {
 		return issue{}, fmt.Errorf("todou issue view: %w", err)
 	}
 	if view.Issue.Title == "" {
 		return issue{}, fmt.Errorf("todou issue view %s/%d: no title in the output", project, number)
+	}
+	view.Issue.Questions = map[int64][]question{}
+	for _, t := range view.Timeline {
+		if t.Type == "comment" && t.Component != nil && len(t.Component.Questions) > 0 {
+			view.Issue.Questions[t.ID] = t.Component.Questions
+		}
 	}
 	return view.Issue, nil
 }
