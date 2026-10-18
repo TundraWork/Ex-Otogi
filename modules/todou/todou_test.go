@@ -483,12 +483,13 @@ func TestCooldownCommand(t *testing.T) {
 		args      string
 		want      string
 	}{
-		{"user:9", otogi.DirectionIncoming, "cooldown", "Cooldown here: 5m0s (the default)"},
+		{"user:9", otogi.DirectionIncoming, "cooldown", "Cooldown: 5m (default)."},
 		{"user:9", otogi.DirectionIncoming, "cooldown 1m", "Your ID is telegram:user:9"},
 		{"user:1", otogi.DirectionIncoming, "cooldown soon", `"soon" is not a duration`},
 		{"user:1", otogi.DirectionIncoming, "cooldown -1m", `"-1m" is not a duration`},
-		{"user:1", otogi.DirectionIncoming, "cooldown 0", "Cooldown here set to 0"},
-		{"user:9", otogi.DirectionIncoming, "cooldown", "Cooldown here: 0s."},
+		{"user:1", otogi.DirectionIncoming, "cooldown 90m", "Cooldown set to 1h30m."},
+		{"user:1", otogi.DirectionIncoming, "cooldown 0", "Cooldown off."},
+		{"user:9", otogi.DirectionIncoming, "cooldown", "Cooldown: off."},
 	}
 	for _, s := range steps {
 		if got := h.command(t, "chat:a", s.actor, s.direction, s.args); !strings.Contains(got, s.want) {
@@ -517,13 +518,25 @@ func TestCooldownCommand(t *testing.T) {
 	if timer, ok := h.timer("chat:a"); !ok || !timer.At.Equal(h.clock.now().Add(time.Hour)) {
 		t.Fatalf("timer = %+v, want an hour after the last digest", timer)
 	}
-	if got := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "cooldown default"); !strings.Contains(got, "reset to the default, 5m0s") {
+	if got := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "cooldown default"); got != "Cooldown reset to the default, 5m." {
 		t.Fatalf("reset = %q", got)
 	}
 	if timer, ok := h.timer("chat:a"); !ok || !timer.At.Equal(h.clock.now()) {
 		t.Fatalf("timer = %+v, want re-armed now", timer)
 	}
-	if status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status"); !strings.Contains(status, "at most one per 5m0s") {
+	if status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status"); !strings.Contains(status, "\nCooldown: 5m, last digest 0s ago\n") {
 		t.Fatalf("status = %q", status)
+	}
+}
+
+func TestDurationsReadNaturally(t *testing.T) {
+	t.Parallel()
+	for d, want := range map[time.Duration]string{
+		0: "0s", 30 * time.Second: "30s", 10 * time.Minute: "10m", 90 * time.Second: "1m30s",
+		time.Hour: "1h", 90 * time.Minute: "1h30m", time.Hour + 5*time.Second: "1h0m5s",
+	} {
+		if got := duration(d); got != want {
+			t.Errorf("duration(%v) = %q, want %q", d, got, want)
+		}
 	}
 }

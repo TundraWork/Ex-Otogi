@@ -445,9 +445,9 @@ func (m *Module) setCooldown(ctx context.Context, e otogi.Event, arg string) (st
 			return "", err
 		}
 		if !set {
-			return fmt.Sprintf("Cooldown here: %s (the default). Operators can change it with /todou cooldown <duration>, e.g. 10m, or 0 for none.", d), nil
+			return "Cooldown: " + cooldownText(d) + " (default).", nil
 		}
-		return fmt.Sprintf("Cooldown here: %s. Operators can change it with /todou cooldown <duration>, or reset it with /todou cooldown default.", d), nil
+		return "Cooldown: " + cooldownText(d) + ".", nil
 	}
 	if !m.operator(e) {
 		return fmt.Sprintf("Only operators can change the cooldown. Your ID is %s.", e.ActorKey()), nil
@@ -457,21 +457,41 @@ func (m *Module) setCooldown(ctx context.Context, e otogi.Event, arg string) (st
 		if err := m.store.clearCooldown(ctx, to); err != nil {
 			return "", err
 		}
-		reply = fmt.Sprintf("Cooldown here reset to the default, %s.", m.cfg.MinInterval)
+		reply = "Cooldown reset to the default, " + cooldownText(m.cfg.MinInterval) + "."
 	} else {
 		d, err := time.ParseDuration(arg)
 		if err != nil || d < 0 {
-			return fmt.Sprintf("%q is not a duration. Use e.g. 30s, 10m, 1h, or 0 for none.", arg), nil
+			return fmt.Sprintf("%q is not a duration; try 30s, 10m, 1h, or 0.", arg), nil
 		}
 		if err := m.store.setCooldown(ctx, to, d, e.ActorKey(), m.now()); err != nil {
 			return "", err
 		}
-		reply = fmt.Sprintf("Cooldown here set to %s: at most one digest per %s.", d, d)
+		reply = "Cooldown set to " + cooldownText(d) + "."
 		if d == 0 {
-			reply = "Cooldown here set to 0: every batch of activity is posted as it arrives."
+			reply = "Cooldown off."
 		}
 	}
 	return reply, m.arm(ctx, to, m.now())
+}
+
+// duration writes d the way people do: 10m rather than 10m0s.
+func duration(d time.Duration) string {
+	s := d.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = s[:len(s)-2]
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = s[:len(s)-2]
+	}
+	return s
+}
+
+// cooldownText is a cooldown for replies; 0 is "off".
+func cooldownText(d time.Duration) string {
+	if d == 0 {
+		return "off"
+	}
+	return duration(d)
 }
 
 func (m *Module) operator(e otogi.Event) bool {
@@ -542,7 +562,7 @@ func (m *Module) status(ctx context.Context, e otogi.Event) (string, error) {
 	m.mu.Lock()
 	w := m.watcher
 	m.mu.Unlock()
-	ago := func(t time.Time) string { return m.now().Sub(t).Round(time.Second).String() + " ago" }
+	ago := func(t time.Time) string { return duration(m.now().Sub(t).Round(time.Second)) + " ago" }
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Server: %s\nAgent: %s\n", m.cfg.Server, identity)
@@ -561,9 +581,9 @@ func (m *Module) status(ctx context.Context, e otogi.Event) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(&b, "\nDigests here: at most one per %s", cooldown)
+	fmt.Fprintf(&b, "\nCooldown: %s", cooldownText(cooldown))
 	if !sum.LastSent.IsZero() {
-		fmt.Fprintf(&b, ", last sent %s", ago(sum.LastSent))
+		fmt.Fprintf(&b, ", last digest %s", ago(sum.LastSent))
 	}
 	fmt.Fprintf(&b, "\nQueued here: %d entries, %d messages pending, %d failed", sum.Queued, sum.Pending, sum.Failed)
 	if sum.LastFailureError != "" {

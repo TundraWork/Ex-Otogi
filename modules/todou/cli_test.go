@@ -23,11 +23,12 @@ func fakeTodou(t *testing.T, body string) string {
 }
 
 // The real subprocess path: credentials in the environment, batches on
-// stdout, exit codes and stderr surfaced, SIGTERM on cancel.
+// stdout, exit codes and stderr surfaced, SIGTERM on cancel. The subtests
+// run one at a time: a fork while another subtest is still writing its
+// script fails with "text file busy".
 func TestExecCLI(t *testing.T) {
 	t.Parallel()
 	t.Run("follow", func(t *testing.T) {
-		t.Parallel()
 		script := fakeTodou(t, `echo '{"type":"comment","id":1,"project":"web","issue_number":1,"body":"hi"}'
 echo '{"type":"cursor","next_cursor":"c9"}'
 echo '{"type":"comment","id":2,"project":"web","issue_number":1,"body":"no cursor yet"}'
@@ -51,7 +52,6 @@ exit 1
 		}
 	})
 	t.Run("cancel", func(t *testing.T) {
-		t.Parallel()
 		script := fakeTodou(t, `echo '{"type":"cursor","next_cursor":"c1"}'
 exec sleep 30
 `)
@@ -64,7 +64,6 @@ exec sleep 30
 		}
 	})
 	t.Run("one-shot", func(t *testing.T) {
-		t.Parallel()
 		script := fakeTodou(t, `if [ "$1" = fail ]; then echo "gave up on a network outage" >&2; exit 4; fi
 echo "c5"
 `)
