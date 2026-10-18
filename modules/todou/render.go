@@ -28,9 +28,9 @@ type renderer struct {
 	maxBody  int    // UTF-16 units of a body to quote
 }
 
-// digest renders entries, oldest first, as one digest: a count line when
-// there are several, then the entries grouped by issue in order of first
-// appearance, each issue under a line with its linked reference and title.
+// digest renders entries, oldest first, as one digest: the entries grouped
+// by issue in order of first appearance, each issue under a line with its
+// linked reference and title.
 // A digest too long for one message continues in the next, repeating the
 // issue line. issues holds what is known about each issue by titleKey.
 func (r renderer) digest(entries []entry, issues map[string]issue) []otogi.Message {
@@ -48,9 +48,6 @@ func (r renderer) digest(entries []entry, issues map[string]issue) []otogi.Messa
 
 	var out []otogi.Message
 	msg := &otogi.RichText{}
-	if len(entries) > 1 {
-		msg.Mark(otogi.AnnotationBold, "", func() { msg.Write(fmt.Sprintf("🔔 %d todou updates", len(entries))) })
-	}
 	flush := func() {
 		out = append(out, msg.Message())
 		msg = &otogi.RichText{}

@@ -32,7 +32,8 @@ type Config struct {
 	// LinkBase is the web URL issue links point to; default Server.
 	LinkBase string `yaml:"link_base"`
 	// MinInterval is the least time between two digests to one chat;
-	// activity meanwhile waits and goes out together. Default 5m.
+	// activity meanwhile waits and goes out together. Default 5m. A chat can
+	// set its own with /todou cooldown.
 	MinInterval time.Duration `yaml:"min_interval"`
 	// Debounce holds a burst of activity together for this long after its
 	// first entry before the watcher hands it over; default 10s.
@@ -141,7 +142,7 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{
 		ID: "todou",
 		Commands: []otogi.CommandSpec{{
-			Name: "todou", Usage: "link <project> | unlink <project> | list | status",
+			Name: "todou", Usage: "link <project> | unlink <project> | list | cooldown [<duration> | default] | status",
 			Description: "post a todou project's activity to this chat",
 		}},
 		Filter: otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
@@ -312,7 +313,11 @@ func (m *Module) HandleTimer(ctx context.Context, t otogi.Timer, inv otogi.Invoc
 	if err != nil {
 		return err
 	}
-	if due := last.Add(m.cfg.MinInterval); m.now().Before(due) {
+	cooldown, _, err := m.cooldown(ctx, to)
+	if err != nil {
+		return err
+	}
+	if due := last.Add(cooldown); m.now().Before(due) {
 		return m.arm(ctx, to, due)
 	}
 	entries := make([]entry, len(queue))
@@ -387,8 +392,8 @@ func (m *Module) deliver(ctx context.Context, inv otogi.Invocation, to otogi.Des
 
 // Handle answers /todou commands.
 func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
-	verb, project, _ := strings.Cut(e.Command.Args, " ")
-	project = strings.TrimSpace(project)
+	verb, arg, _ := strings.Cut(e.Command.Args, " ")
+	arg = strings.TrimSpace(arg)
 	var reply string
 	var err error
 	switch verb {
@@ -396,25 +401,77 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 		switch {
 		case !m.operator(e):
 			reply = fmt.Sprintf("Only operators can change links. Your ID is %s.", e.ActorKey())
-		case project == "":
+		case arg == "":
 			reply = fmt.Sprintf("Usage: /todou %s <project>", verb)
 		case verb == "link":
-			reply, err = m.link(ctx, e, project)
+			reply, err = m.link(ctx, e, arg)
 		default:
-			reply, err = m.unlink(ctx, e, project)
+			reply, err = m.unlink(ctx, e, arg)
 		}
 	case "list":
 		reply, err = m.list(ctx, e)
+	case "cooldown":
+		reply, err = m.setCooldown(ctx, e, arg)
 	case "status":
 		reply, err = m.status(ctx, e)
 	default:
-		reply = "Usage: /todou link <project> | unlink <project> | list | status"
+		reply = "Usage: /todou link <project> | unlink <project> | list | cooldown [<duration> | default] | status"
 	}
 	if err != nil {
 		return err
 	}
 	_, err = inv.Send(ctx, "reply", otogi.Reply(reply, e.Ref()))
 	return err
+}
+
+// cooldown is a chat's cooldown between digests and whether the chat set it
+// rather than using min_interval.
+func (m *Module) cooldown(ctx context.Context, to otogi.Destination) (time.Duration, bool, error) {
+	d, set, err := m.store.cooldown(ctx, to)
+	if err != nil || !set {
+		return m.cfg.MinInterval, false, err
+	}
+	return d, true, nil
+}
+
+// setCooldown shows the chat's cooldown, or, for operators, sets it (a
+// duration such as 10m, or 0 for none) or returns it to the default. The
+// chat's timer is re-armed so a shorter cooldown applies at once.
+func (m *Module) setCooldown(ctx context.Context, e otogi.Event, arg string) (string, error) {
+	to := e.Destination()
+	if arg == "" {
+		d, set, err := m.cooldown(ctx, to)
+		if err != nil {
+			return "", err
+		}
+		if !set {
+			return fmt.Sprintf("Cooldown here: %s (the default). Operators can change it with /todou cooldown <duration>, e.g. 10m, or 0 for none.", d), nil
+		}
+		return fmt.Sprintf("Cooldown here: %s. Operators can change it with /todou cooldown <duration>, or reset it with /todou cooldown default.", d), nil
+	}
+	if !m.operator(e) {
+		return fmt.Sprintf("Only operators can change the cooldown. Your ID is %s.", e.ActorKey()), nil
+	}
+	var reply string
+	if arg == "default" {
+		if err := m.store.clearCooldown(ctx, to); err != nil {
+			return "", err
+		}
+		reply = fmt.Sprintf("Cooldown here reset to the default, %s.", m.cfg.MinInterval)
+	} else {
+		d, err := time.ParseDuration(arg)
+		if err != nil || d < 0 {
+			return fmt.Sprintf("%q is not a duration. Use e.g. 30s, 10m, 1h, or 0 for none.", arg), nil
+		}
+		if err := m.store.setCooldown(ctx, to, d, e.ActorKey(), m.now()); err != nil {
+			return "", err
+		}
+		reply = fmt.Sprintf("Cooldown here set to %s: at most one digest per %s.", d, d)
+		if d == 0 {
+			reply = "Cooldown here set to 0: every batch of activity is posted as it arrives."
+		}
+	}
+	return reply, m.arm(ctx, to, m.now())
 }
 
 func (m *Module) operator(e otogi.Event) bool {
@@ -500,7 +557,11 @@ func (m *Module) status(ctx context.Context, e otogi.Event) (string, error) {
 	if sum.HasCursor {
 		fmt.Fprintf(&b, ", last batch %s", ago(sum.BatchAt))
 	}
-	fmt.Fprintf(&b, "\nDigests here: at most one per %s", m.cfg.MinInterval)
+	cooldown, _, err := m.cooldown(ctx, to)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(&b, "\nDigests here: at most one per %s", cooldown)
 	if !sum.LastSent.IsZero() {
 		fmt.Fprintf(&b, ", last sent %s", ago(sum.LastSent))
 	}

@@ -28,8 +28,7 @@ func TestDigestRendering(t *testing.T) {
 		t.Fatalf("messages = %d", len(msgs))
 	}
 	part := msgs[0].Parts[0]
-	want := "🔔 5 todou updates\n\n" +
-		"web#1 T1\n💬 👾 Alice (claude-opus-5-5) commented\nbold code…\n💬 bob commented (hidden)\n🔀 bob moved it Todo → Doing\n\n" +
+	want := "web#1 T1\n💬 👾 Alice (claude-opus-5-5) commented\nbold code…\n💬 bob commented (hidden)\n🔀 bob moved it Todo → Doing\n\n" +
 		"web#2 A title much longer than forty character…\n🆕 👾 c opened it\nlong opene…\n• 👾 c brand new kind"
 	if part.Text != want {
 		t.Fatalf("text:\n%s\nwant:\n%s", part.Text, want)
@@ -38,7 +37,7 @@ func TestDigestRendering(t *testing.T) {
 	for _, a := range part.Annotations {
 		marks = append(marks, fmt.Sprintf("%s:%s", a.Kind, part.Text[a.Offset:a.Offset+a.Length]))
 	}
-	for _, m := range []string{"bold:🔔 5 todou updates", "link:web#1", "bold:web#1 T1", "bold:Alice", "bold:bob", "link:web#2", "bold:web#2 A title much longer than forty character…", "bold:bold", "code:code", "expandable_block_quote:bold code…", "code:Todo", "code:Doing", "expandable_block_quote:long opene…"} {
+	for _, m := range []string{"link:web#1", "bold:web#1 T1", "bold:Alice", "bold:bob", "link:web#2", "bold:web#2 A title much longer than forty character…", "bold:bold", "code:code", "expandable_block_quote:bold code…", "code:Todo", "code:Doing", "expandable_block_quote:long opene…"} {
 		if !slices.Contains(marks, m) {
 			t.Errorf("annotations lack %s: %v", m, marks)
 		}
@@ -53,10 +52,6 @@ func TestDigestRendering(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	single := r.digest(entries[:1], issues)
-	if text := single[0].PlainText(); !strings.HasPrefix(text, "web#1 T1\n💬") {
-		t.Errorf("a single entry has a header: %q", text)
-	}
 }
 
 func TestLongDigestsSplitAndRepeatTheIssueLine(t *testing.T) {
@@ -105,7 +100,7 @@ func TestQuestionsAndAnswers(t *testing.T) {
 	}
 	info := issue{Title: "T", Questions: map[int64][]question{939: asking.Component.Questions}}
 	text := r.digest([]entry{asking, answered}, map[string]issue{"web#1": info})[0].PlainText()
-	want := "🔔 2 todou updates\n\nweb#1 T\n" +
+	want := "web#1 T\n" +
 		"❓ 👾 agent (claude-opus-5) asked\nTwo choices.\nSplit: How to split the card?\n• Three cards\n• One card\n\nShip: How to ship?\n• Push\n• Local\n" +
 		"🙋 John answered\nSplit: How to split the card?\n→ Three cards\n→ start with the first\n\nShip: How to ship?\n→ (declined)\n\nq9\n→ unknown question"
 	if text != want {

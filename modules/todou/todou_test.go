@@ -316,7 +316,7 @@ func TestDigestsAreThrottledAndAggregated(t *testing.T) {
 	if err := h.fire(t, "chat:a"); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.sends) != 1 || strings.Contains(h.sends[0].msg.PlainText(), "updates") || !strings.Contains(h.sends[0].msg.PlainText(), "first") {
+	if len(h.sends) != 1 || !strings.Contains(h.sends[0].msg.PlainText(), "first") {
 		t.Fatalf("first digest = %+v", h.sends)
 	}
 
@@ -338,7 +338,7 @@ func TestDigestsAreThrottledAndAggregated(t *testing.T) {
 		t.Fatalf("sends = %d, want one aggregated digest", len(h.sends))
 	}
 	text := h.sends[1].msg.PlainText()
-	if !strings.HasPrefix(text, "🔔 2 todou updates\n\nweb#7 Title of web/7\n💬 Alice commented\nsecond\n\nweb#42 Title of web/42\n💬 Alice commented\nthird") {
+	if !strings.HasPrefix(text, "web#7 Title of web/7\n💬 Alice commented\nsecond\n\nweb#42 Title of web/42\n💬 Alice commented\nthird") {
 		t.Fatalf("digest = %q", text)
 	}
 	if h.sends[0].origin == h.sends[1].origin || !strings.HasPrefix(h.sends[1].origin, "outbox:") || h.sends[1].slot != "notify" {
@@ -471,5 +471,59 @@ func TestCommands(t *testing.T) {
 		if got := h.command(t, "chat:a", s.actor, s.direction, s.args); !strings.Contains(got, s.want) {
 			t.Errorf("/todou %s by %q = %q, want %q", s.args, s.actor, got, s.want)
 		}
+	}
+}
+
+func TestCooldownCommand(t *testing.T) {
+	h := newHarness(t, Config{}, idle)
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
+	steps := []struct {
+		actor     otogi.ActorID
+		direction otogi.Direction
+		args      string
+		want      string
+	}{
+		{"user:9", otogi.DirectionIncoming, "cooldown", "Cooldown here: 5m0s (the default)"},
+		{"user:9", otogi.DirectionIncoming, "cooldown 1m", "Your ID is telegram:user:9"},
+		{"user:1", otogi.DirectionIncoming, "cooldown soon", `"soon" is not a duration`},
+		{"user:1", otogi.DirectionIncoming, "cooldown -1m", `"-1m" is not a duration`},
+		{"user:1", otogi.DirectionIncoming, "cooldown 0", "Cooldown here set to 0"},
+		{"user:9", otogi.DirectionIncoming, "cooldown", "Cooldown here: 0s."},
+	}
+	for _, s := range steps {
+		if got := h.command(t, "chat:a", s.actor, s.direction, s.args); !strings.Contains(got, s.want) {
+			t.Errorf("/todou %s by %q = %q, want %q", s.args, s.actor, got, s.want)
+		}
+	}
+
+	h.sends = nil
+	h.batch(t, "c1", comment(1, "web", 1, "one"))
+	if err := h.fire(t, "chat:a"); err != nil {
+		t.Fatal(err)
+	}
+	h.batch(t, "c2", comment(2, "web", 1, "two"))
+	if err := h.fire(t, "chat:a"); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.sends) != 2 {
+		t.Fatalf("with no cooldown, sends = %d, want each batch at once", len(h.sends))
+	}
+
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "cooldown 1h")
+	h.batch(t, "c3", comment(3, "web", 1, "three"))
+	if err := h.fire(t, "chat:a"); err != nil {
+		t.Fatal(err)
+	}
+	if timer, ok := h.timer("chat:a"); !ok || !timer.At.Equal(h.clock.now().Add(time.Hour)) {
+		t.Fatalf("timer = %+v, want an hour after the last digest", timer)
+	}
+	if got := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "cooldown default"); !strings.Contains(got, "reset to the default, 5m0s") {
+		t.Fatalf("reset = %q", got)
+	}
+	if timer, ok := h.timer("chat:a"); !ok || !timer.At.Equal(h.clock.now()) {
+		t.Fatalf("timer = %+v, want re-armed now", timer)
+	}
+	if status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status"); !strings.Contains(status, "at most one per 5m0s") {
+		t.Fatalf("status = %q", status)
 	}
 }

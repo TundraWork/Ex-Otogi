@@ -48,7 +48,7 @@ modules:
   #   token: ${OTOGI_TODOU_TOKEN}        # the agent account's todou_pat_… token; the
   #                                      # account needs reader access to linked projects
   #   link_base: ""                      # web URL for issue links; default: server
-  #   min_interval: 5m                   # at most one digest per chat this often; activity meanwhile is aggregated
+  #   min_interval: 5m                   # default cooldown between digests per chat (/todou cooldown overrides); activity meanwhile is aggregated
   #   debounce: 10s                      # hold a burst together this long after its first entry
   #   cli_timeout: 60s                   # per one-shot CLI call (the watcher itself is resident)
   #   events: [comment, opened, closed, reopened, status_changed, assigned, spec_pushed, spec_review, question_answered]

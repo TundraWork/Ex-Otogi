@@ -232,6 +232,40 @@ func (s *store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return nil
 }
 
+// cooldown returns a conversation's cooldown between digests, if one is set.
+func (s *store) cooldown(ctx context.Context, to otogi.Destination) (time.Duration, bool, error) {
+	var ms int64
+	err := s.db.QueryRowContext(ctx, "SELECT cooldown_ms FROM cooldowns WHERE platform = ? AND account = ? AND conversation = ?",
+		to.Platform, to.Account, to.Conversation).Scan(&ms)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("todou store: cooldown: %w", err)
+	}
+	return time.Duration(ms) * time.Millisecond, true, nil
+}
+
+// setCooldown sets a conversation's cooldown.
+func (s *store) setCooldown(ctx context.Context, to otogi.Destination, d time.Duration, by string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO cooldowns (platform, account, conversation, cooldown_ms, set_by, set_at) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (platform, account, conversation) DO UPDATE SET cooldown_ms = excluded.cooldown_ms, set_by = excluded.set_by, set_at = excluded.set_at`,
+		to.Platform, to.Account, to.Conversation, d.Milliseconds(), by, now.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("todou store: set cooldown: %w", err)
+	}
+	return nil
+}
+
+// clearCooldown returns a conversation to the configured cooldown.
+func (s *store) clearCooldown(ctx context.Context, to otogi.Destination) error {
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM cooldowns WHERE platform = ? AND account = ? AND conversation = ?",
+		to.Platform, to.Account, to.Conversation); err != nil {
+		return fmt.Errorf("todou store: clear cooldown: %w", err)
+	}
+	return nil
+}
+
 // link is a project linked to a conversation.
 type link struct {
 	To      otogi.Destination
