@@ -12,6 +12,7 @@ import (
 	"github.com/TundraWork/Ex-Otogi/modules/reminders"
 	"github.com/TundraWork/Ex-Otogi/modules/todou"
 	"github.com/TundraWork/Ex-Otogi/modules/utility"
+	"github.com/TundraWork/Ex-Otogi/pkg/llm"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -19,6 +20,7 @@ import (
 // their own config section. Status is only valid once the process runs.
 type moduleEnv struct {
 	operators []string
+	llm       func(name string) (llm.Provider, error)
 	status    func(context.Context) utility.Status
 	commands  func() []utility.CommandInfo
 }

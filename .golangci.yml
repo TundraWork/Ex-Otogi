@@ -45,6 +45,11 @@ linters:
           deny:
             - pkg: github.com/gotd/td
               desc: gotd is confined to internal/adapter/telegram
+        llm-sdks:
+          files: ["$all", "!**/internal/adapter/gemini/**"]
+          deny:
+            - pkg: google.golang.org/genai
+              desc: the Gemini SDK is confined to internal/adapter/gemini
     revive:
       rules:
         - name: exported

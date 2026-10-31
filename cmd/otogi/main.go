@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram"
+	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
 func main() { os.Exit(mainExit()) }
@@ -62,10 +63,14 @@ func withConfig(ctx context.Context, path, command string, args []string) error 
 	}
 	switch command {
 	case "validate":
-		if _, err := buildModules(cfg.Modules, moduleEnv{operators: cfg.Operators}); err != nil {
+		providers, err := buildProviders(cfg.LLM, otogi.NopRecorder{}, slog.New(slog.DiscardHandler))
+		if err != nil {
 			return err
 		}
-		fmt.Printf("%s: OK (%d Telegram account(s), %d module(s))\n", path, len(cfg.Telegram), len(cfg.Modules))
+		if _, err := buildModules(cfg.Modules, moduleEnv{operators: cfg.Operators, llm: providerLookup(providers)}); err != nil {
+			return err
+		}
+		fmt.Printf("%s: OK (%d Telegram account(s), %d LLM provider(s), %d module(s))\n", path, len(cfg.Telegram), len(providers), len(cfg.Modules))
 		return nil
 	case "login":
 		if len(args) != 1 {

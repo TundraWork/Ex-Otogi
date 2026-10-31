@@ -610,3 +610,17 @@ func TestWithOriginKeysEffectsAcrossRuns(t *testing.T) {
 		t.Fatalf("keys = %v / %v", m.sent[0].Key, m.sent[1].Key)
 	}
 }
+
+func TestWorkIsInTheContext(t *testing.T) {
+	got := make(chan otogi.Work, 1)
+	k := start(t, Config{}, []otogi.Module{module("m", func(ctx context.Context, _ otogi.Event, _ otogi.Invocation) error {
+		w, _ := otogi.WorkFrom(ctx)
+		got <- w
+		return nil
+	})}, nil, nil)
+	o := await(t, submit(t, k, event("c", "hi")))
+	want := otogi.Work{Module: "m", Origin: string(o.EventID), Event: o.EventID, Destination: otogi.Destination{Platform: "test", Account: "bot", Conversation: "c"}}
+	if w := <-got; w != want {
+		t.Fatalf("work %+v, want %+v", w, want)
+	}
+}

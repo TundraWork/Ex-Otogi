@@ -444,6 +444,11 @@ func (k *Kernel) invoke(d *delivery) (err error) {
 		ctx, cancel = context.WithTimeout(k.runCtx, d.module.timeout)
 	}
 	defer cancel()
+	work := otogi.Work{Module: d.module.descriptor.ID, Origin: d.originID, Event: d.scope.ID}
+	if d.scope.ID != "" {
+		work.Destination = d.scope.Destination()
+	}
+	ctx = otogi.ContextWithWork(ctx, work)
 	inv := &invocation{kernel: k, event: d.scope, origin: d.origin, originID: d.originID, module: d.module.descriptor.ID, host: d.module.host, streams: &streams{}}
 	defer inv.closeAbandoned()
 	defer func() {

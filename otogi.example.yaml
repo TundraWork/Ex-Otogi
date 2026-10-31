@@ -35,6 +35,12 @@ telegram:
     # session: data/telegram/main/session.json
     # database: data/telegram/main/state.sqlite
 
+# Language model providers that modules can use; each is optional.
+# llm:
+#   gemini:
+#     api_key: ${OTOGI_GEMINI_API_KEY}
+#     # base_url: https://generativelanguage.googleapis.com   # or a proxy/gateway speaking the Gemini API
+
 modules:
   utility: {}             # /whoami, /ping, /status, /help
   echo: {}                # replies "echo: <text>" to every text message

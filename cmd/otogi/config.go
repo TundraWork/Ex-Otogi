@@ -27,6 +27,7 @@ type Config struct {
 	Commands        CommandsConfig       `yaml:"commands"`
 	Operators       []string             `yaml:"operators"`
 	Telegram        []TelegramAccount    `yaml:"telegram"`
+	LLM             LLMConfig            `yaml:"llm"`
 	Modules         map[string]yaml.Node `yaml:"modules"`
 }
 
@@ -166,6 +167,7 @@ func (c Config) validate() error {
 			errs = append(errs, fmt.Errorf("%s: app_id and app_hash are required", field))
 		}
 	}
+	errs = append(errs, c.LLM.validate()...)
 	for _, op := range c.Operators {
 		if platform, actor, ok := strings.Cut(op, ":"); !ok || platform == "" || actor == "" {
 			errs = append(errs, fmt.Errorf("operators: %q: want <platform>:<actor id>, as /whoami prints it", op))

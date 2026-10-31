@@ -62,12 +62,17 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 		background.Wait()
 	}()
 
+	providers, err := buildProviders(cfg.LLM, events, log)
+	if err != nil {
+		return err
+	}
 	// Module factories get views of the runtime built below; status is only
 	// called once the process runs.
 	var status func(context.Context) utility.Status
 	var modules []otogi.Module
 	modules, err = buildModules(cfg.Modules, moduleEnv{
 		operators: cfg.Operators,
+		llm:       providerLookup(providers),
 		status:    func(ctx context.Context) utility.Status { return status(ctx) },
 		commands:  func() []utility.CommandInfo { return commandsOf(modules) },
 	})

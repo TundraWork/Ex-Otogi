@@ -1,11 +1,15 @@
 package main
 
 import (
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -63,14 +67,16 @@ func TestTypeErrorsReportTheOriginalLine(t *testing.T) {
 
 func TestLoadConfigRejections(t *testing.T) {
 	tests := map[string]struct{ body, want string }{
-		"unknown key":      {"telegrma: []\n", "field telegrma not found"},
-		"unset variable":   {"telegram:\n  - account: a\n    app_id: 1\n    app_hash: ${OTOGI_TEST_UNSET}\n", "OTOGI_TEST_UNSET"},
-		"duplicate":        {"telegram:\n  - {account: a, app_id: 1, app_hash: h}\n  - {account: a, app_id: 1, app_hash: h}\n", "used twice"},
-		"missing app hash": {"telegram:\n  - {account: a, app_id: 1}\n", "app_hash"},
-		"unknown module":   {"modules:\n  ehco: {}\n", "unknown module"},
-		"bad level":        {"log: {level: loud}\n", "log.level"},
-		"bad duration":     {"shutdown_timeout: soon\n", "line 1"},
-		"bad operator":     {"operators: [\"123\"]\n", "<platform>:<actor id>"},
+		"unknown key":        {"telegrma: []\n", "field telegrma not found"},
+		"unset variable":     {"telegram:\n  - account: a\n    app_id: 1\n    app_hash: ${OTOGI_TEST_UNSET}\n", "OTOGI_TEST_UNSET"},
+		"duplicate":          {"telegram:\n  - {account: a, app_id: 1, app_hash: h}\n  - {account: a, app_id: 1, app_hash: h}\n", "used twice"},
+		"missing app hash":   {"telegram:\n  - {account: a, app_id: 1}\n", "app_hash"},
+		"unknown module":     {"modules:\n  ehco: {}\n", "unknown module"},
+		"bad level":          {"log: {level: loud}\n", "log.level"},
+		"bad duration":       {"shutdown_timeout: soon\n", "line 1"},
+		"bad operator":       {"operators: [\"123\"]\n", "<platform>:<actor id>"},
+		"gemini without key": {"llm:\n  gemini: {base_url: https://g.example}\n", "llm.gemini.api_key"},
+		"gemini bad url":     {"llm:\n  gemini: {api_key: k, base_url: g.example/v1}\n", "llm.gemini.base_url"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -89,5 +95,24 @@ func TestModuleSectionsAreStrict(t *testing.T) {
 	}
 	if _, err := buildModules(cfg.Modules, moduleEnv{}); err == nil || !strings.Contains(err.Error(), "prefix") {
 		t.Fatalf("buildModules error = %v, want unknown field prefix", err)
+	}
+}
+
+func TestLLMProviders(t *testing.T) {
+	t.Setenv("TEST_GEMINI_KEY", "k")
+	cfg, err := loadConfig(writeConfig(t, "llm:\n  gemini:\n    api_key: ${TEST_GEMINI_KEY}\n    base_url: https://gateway.example/gemini\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers, err := buildProviders(cfg.LLM, otogi.NopRecorder{}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookup := providerLookup(providers)
+	if p, err := lookup("gemini"); p == nil || err != nil {
+		t.Fatalf("gemini: %v, %v", p, err)
+	}
+	if _, err := lookup("openai"); !errors.Is(err, otogi.ErrInvalid) {
+		t.Fatalf("openai: %v, want ErrInvalid", err)
 	}
 }

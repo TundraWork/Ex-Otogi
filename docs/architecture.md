@@ -20,7 +20,11 @@ pkg/otogi            ──> standard library only
 - **`internal/adapter/*`:** platform drivers and infrastructure (storage, management HTTP, and so on). Adapters translate I/O. They do not make routing or module decisions.
 - **`cmd/otogi`:** loads configuration, constructs everything, and runs the process lifecycle.
 
-Kernel, modules, and adapters import only `pkg/...` from this repository: `pkg/otogi`, helper libraries for modules such as `pkg/markdown` (Markdown to rich text), and service contract packages such as a future `pkg/llm` that modules share through services. Third-party libraries are welcome anywhere except `pkg/otogi`, which stays standard-library-only so the module SDK carries no dependency baggage; platform SDKs stay inside their adapter. Sub-packages of one adapter may import each other. depguard rules in `.golangci.yml` enforce this as part of `make lint`. Tests may import collaborators, such as the real kernel, for integration tests.
+Kernel, modules, and adapters import only `pkg/...` from this repository: `pkg/otogi`, helper libraries for modules such as `pkg/markdown` (Markdown to and from rich text), and contract packages such as `pkg/llm` (language model providers). Third-party libraries are welcome anywhere except `pkg/otogi`, which stays standard-library-only so the module SDK carries no dependency baggage; platform and provider SDKs stay inside their adapter (gotd in `internal/adapter/telegram`, the Gemini SDK in `internal/adapter/gemini`). Sub-packages of one adapter may import each other. depguard rules in `.golangci.yml` enforce this as part of `make lint`. Tests may import collaborators, such as the real kernel, for integration tests.
+
+## Language model providers
+
+Modules that use language models depend only on `pkg/llm`: `Provider.Generate` takes a conversation of `otogi.Message` turns and streams back the reply as `otogi.Message` (rich text and any generated images). The composition root builds the providers configured under `llm:` (today `internal/adapter/gemini`) and hands module factories a lookup by name, so several modules share one provider. A provider records every call itself, attributed to the module and event through `otogi.WorkFrom(ctx)`; it keeps no state, and conversations live in the calling module's own storage. Design: [`2026-10-31-llm-provider-design.md`](superpowers/specs/2026-10-31-llm-provider-design.md).
 
 ## Platform types stay in their adapter
 
