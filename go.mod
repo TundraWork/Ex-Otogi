@@ -12,6 +12,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/sync v0.24.0
 	golang.org/x/term v0.47.0
+	golang.org/x/text v0.43.0
 	modernc.org/sqlite v1.60.1
 )
 
@@ -53,7 +54,6 @@ require (
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	modernc.org/libc v1.78.0 // indirect

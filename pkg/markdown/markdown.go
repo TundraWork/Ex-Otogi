@@ -1,9 +1,12 @@
-// Package markdown converts Markdown (CommonMark with GitHub's
-// strikethrough and bare-URL links) into otogi rich text, so a module can
-// post Markdown written elsewhere as formatted chat text.
+// Package markdown converts between Markdown (CommonMark with GitHub's
+// strikethrough, tables, and bare-URL links) and otogi rich text, so a module
+// can post Markdown written elsewhere, such as a language model's reply, as
+// formatted chat text, and hand formatted chat text to a model.
 package markdown
 
 import (
+	"cmp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,18 +16,21 @@ import (
 	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/text"
 	"github.com/yuin/goldmark/util"
+	"golang.org/x/text/width"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-var parser = goldmark.New(goldmark.WithExtensions(extension.Strikethrough, extension.Linkify)).Parser()
+var parser = goldmark.New(goldmark.WithExtensions(extension.Strikethrough, extension.Table, extension.Linkify)).Parser()
 
 // Render converts source to rich text:
 //   - emphasis to italic and bold, ~~text~~ to strike;
 //   - code spans to code, code blocks to preformatted (with their language);
 //   - links, autolinks, and bare URLs to links, images to links on their alt text;
 //   - block quotes to block quotes, headings to bold lines;
-//   - list items to "• " or "1. " lines, indented by nesting depth.
+//   - list items to "• " or "1. " lines, indented by nesting depth;
+//   - tables to preformatted blocks with aligned columns, keeping the URL of
+//     each link after its text, since chat platforms have no tables.
 //
 // Blocks are separated by a blank line; soft line breaks are kept, because
 // chat text is laid out by line. Raw HTML is kept as text.
@@ -64,6 +70,8 @@ func (r *renderer) block(n ast.Node, depth int) {
 		r.out.Mark(otogi.AnnotationPreformatted, "", func() { r.lines(n) })
 	case *ast.HTMLBlock:
 		r.lines(n)
+	case *east.Table:
+		r.out.Mark(otogi.AnnotationPreformatted, "", func() { r.out.Write(r.table(n)) })
 	case *ast.ThematicBreak:
 		r.out.Write("———")
 	case *ast.List:
@@ -151,4 +159,93 @@ func (r *renderer) inline(n ast.Node) {
 	default:
 		r.inlines(n)
 	}
+}
+
+// table lays out a table as text in aligned columns.
+func (r *renderer) table(n *east.Table) string {
+	var rows [][]string
+	var widths []int
+	for row := n.FirstChild(); row != nil; row = row.NextSibling() {
+		var cells []string
+		for c := row.FirstChild(); c != nil; c = c.NextSibling() {
+			text := r.cell(c)
+			if len(cells) == len(widths) {
+				widths = append(widths, 0)
+			}
+			widths[len(cells)] = max(widths[len(cells)], displayWidth(text))
+			cells = append(cells, text)
+		}
+		rows = append(rows, cells)
+	}
+	var b strings.Builder
+	line := func(cells []string) {
+		var l strings.Builder
+		for i, text := range cells {
+			if i > 0 {
+				l.WriteString(" | ")
+			}
+			pad := widths[i] - displayWidth(text)
+			left := 0
+			if i < len(n.Alignments) {
+				switch n.Alignments[i] {
+				case east.AlignRight:
+					left = pad
+				case east.AlignCenter:
+					left = pad / 2
+				}
+			}
+			l.WriteString(strings.Repeat(" ", left) + text + strings.Repeat(" ", pad-left))
+		}
+		b.WriteString(strings.TrimRight(l.String(), " "))
+	}
+	for i, cells := range rows {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		line(cells)
+		if i == 0 {
+			rule := make([]string, len(widths))
+			for j, w := range widths {
+				rule[j] = strings.Repeat("-", w)
+			}
+			b.WriteString("\n" + strings.Join(rule, "-+-"))
+		}
+	}
+	return b.String()
+}
+
+// cell is a table cell's text, with each link's URL after its text.
+func (r *renderer) cell(n ast.Node) string {
+	sub := &renderer{src: r.src, out: &otogi.RichText{}}
+	sub.inlines(n)
+	text := sub.out.String()
+	links := slices.DeleteFunc(slices.Clone(sub.out.Annotations()), func(a otogi.Annotation) bool {
+		label := text[a.Offset : a.Offset+a.Length]
+		return a.Kind != otogi.AnnotationLink || a.Target == label || a.Target == "mailto:"+label
+	})
+	slices.SortFunc(links, func(a, b otogi.Annotation) int { return cmp.Compare(a.Offset, b.Offset) })
+	var b strings.Builder
+	last := 0
+	for _, a := range links {
+		end := a.Offset + a.Length
+		b.WriteString(text[last:end] + " (" + a.Target + ")")
+		last = end
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// displayWidth counts the columns text takes in a monospace font, where
+// East Asian wide characters take two.
+func displayWidth(text string) int {
+	n := 0
+	for _, c := range text {
+		switch width.LookupRune(c).Kind() {
+		case width.EastAsianWide, width.EastAsianFullwidth:
+			n += 2
+		default:
+			n++
+		}
+	}
+	return n
 }

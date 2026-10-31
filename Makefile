@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 GO ?= go
 LINT := $(GO) tool -modfile=tools/go.mod golangci-lint
-TELEGRAM_FUZZTIME ?= 1x
+FUZZTIME ?= 1x
 
 # Test deployment (scripts/deploy.sh); override on the command line.
 DEPLOY_HOST ?= misaka-lax01
@@ -26,7 +26,8 @@ test-race:
 	$(GO) test -race ./...
 
 test-fuzz-smoke:
-	$(GO) test -run '^$$' -fuzz '^FuzzConvertEntitiesUTF16$$' -fuzztime=$(TELEGRAM_FUZZTIME) ./internal/adapter/telegram/mapper
+	$(GO) test -run '^$$' -fuzz '^FuzzConvertEntitiesUTF16$$' -fuzztime=$(FUZZTIME) ./internal/adapter/telegram/mapper
+	$(GO) test -run '^$$' -fuzz '^FuzzFormat$$' -fuzztime=$(FUZZTIME) ./pkg/markdown
 
 smoke:
 	@output="$$($(GO) run ./cmd/otogi smoke)" && [ "$$output" = "echo: hello" ] || { printf 'smoke: got %s\n' "$$output"; exit 1; }

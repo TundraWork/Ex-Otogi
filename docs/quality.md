@@ -24,7 +24,7 @@ The `go` directive in `go.mod` pins the Go toolchain (currently 1.27.0); an olde
 - Test behavior at real boundaries: kernel routing, driver mapping, SQLite stores with a real database, lifecycle start and stop.
 - Use fakes with real state rather than call-sequence mocks.
 - Use the race detector for code that owns goroutines or shared state, and `goleak` for long-lived components.
-- Keep fuzz targets for parsers and decoders with real input space, such as Telegram entity conversion.
+- Keep fuzz targets for parsers and decoders with real input space, such as Telegram entity conversion and Markdown formatting.
 - Do not test impossible cases, private structure, or documentation wording. A test must catch a plausible regression.
 - Wait on observable signals, never on sleeps.
 - A flaky test is a bug: fix it, don't retry it.

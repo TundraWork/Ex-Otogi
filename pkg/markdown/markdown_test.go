@@ -37,6 +37,9 @@ func TestRender(t *testing.T) {
 				`link=https://x.example/p:"https://x.example/p"` + "\n" + `link=mailto:mail@x.example:"mail@x.example"` + "\n" + `link=https://x.example/l.png:"logo"`},
 		{"raw html", "a <b>b</b>\n\n<div>\nblock\n</div>", "a <b>b</b>\n\n<div>\nblock\n</div>\n--\n"},
 		{"unicode offsets", "日本 **語**", "日本 語\n--\n" + `bold:"語"`},
+		{"table", "Before\n\n| Name | Score | Note |\n| :-- | --: | :-: |\n| **Alice** | 3 | [docs](https://d.example) |\n| 日本 | 12 | x |\n\nAfter",
+			"Before\n\nName  | Score |           Note\n------+-------+-------------------------\nAlice |     3 | docs (https://d.example)\n日本  |    12 |            x\n\nAfter\n--\n" +
+				`preformatted:"Name  | Score |           Note\n------+-------+-------------------------\nAlice |     3 | docs (https://d.example)\n日本  |    12 |            x"`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
