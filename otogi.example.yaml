@@ -60,3 +60,18 @@ modules:
   #   events: [comment, opened, closed, reopened, status_changed, assigned, spec_pushed, spec_review, question_answered]
   #   max_body_chars: 800                # per collapsed quote; ~4 entries per 4096-unit message
   #   max_attempts: 60                   # tries, a minute apart, before a digest message is given up
+  # chat:                 # language model agents; needs a provider under llm
+  #   retention: 720h      # threads and chat transcript kept this long
+  #   timeout: 5m          # one reply, tool calls included
+  #   profiles:
+  #     - name: otogi
+  #       label: "🤖 Otogi"            # optional, bold at the start of replies
+  #       keywords: [otogi]            # a message starting with one triggers it; so does replying to it
+  #       chats: [telegram:chat:123]   # where it answers anyone, as /whoami prints them
+  #       provider: gemini
+  #       model: gemini-3.8-flash
+  #       thinking: low                # minimal | low | medium | high
+  #       system: |
+  #         You are Otogi, a helpful member of this chat.
+  #       context: 30                  # recent chat messages it sees
+  #       tools: [google_search, url_context]

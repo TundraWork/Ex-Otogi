@@ -7,6 +7,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/TundraWork/Ex-Otogi/modules/chat"
 	"github.com/TundraWork/Ex-Otogi/modules/echo"
 	"github.com/TundraWork/Ex-Otogi/modules/notes"
 	"github.com/TundraWork/Ex-Otogi/modules/reminders"
@@ -43,6 +44,13 @@ func configured[C any, M otogi.Module](build func(C) M) moduleFactory {
 // moduleRegistry lists every module compiled into the binary, by the ID used
 // under `modules:` in the config file.
 var moduleRegistry = map[string]moduleFactory{
+	"chat": func(config *yaml.Node, env moduleEnv) (otogi.Module, error) {
+		var cfg chat.Config
+		if err := decodeSection(config, &cfg); err != nil {
+			return nil, err
+		}
+		return chat.New(cfg, env.llm)
+	},
 	"echo":      configured(func(struct{}) *echo.Module { return echo.New() }),
 	"notes":     configured(notes.New),
 	"reminders": configured(reminders.New),
