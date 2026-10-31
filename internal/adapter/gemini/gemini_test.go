@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -435,5 +436,19 @@ func TestGenerateRejectsUnknownBuiltins(t *testing.T) {
 	_, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}, Tools: []llm.ToolSpec{{Builtin: "maps"}}}, nil)
 	if !errors.Is(err, otogi.ErrUnsupported) || len(s.requests()) != 0 {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestGenerateSniffsImageTypes(t *testing.T) {
+	encoded := base64.StdEncoding.EncodeToString(pngBytes)
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){stream(output,
+		`{"event_type":"step.delta","index":1,"delta":{"type":"image","data":"`+encoded+`"}}`, completed)}}
+	p, _ := newProvider(t, s)
+	resp, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "draw"})}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parts := resp.Turn.Content.Parts; len(parts) != 1 || parts[0].Media.MediaType != "image/png" {
+		t.Fatalf("parts %+v", parts)
 	}
 }

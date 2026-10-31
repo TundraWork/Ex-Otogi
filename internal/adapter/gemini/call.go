@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -245,6 +246,9 @@ func (c *call) image(key string, block map[string]any) *otogi.Media {
 		c.media[key] = data
 	}
 	mime, _ := block["mime_type"].(string)
+	if mime == "" { // image deltas may leave it out
+		mime, _, _ = strings.Cut(http.DetectContentType(data), ";")
+	}
 	return &otogi.Media{Role: otogi.MediaImage, MediaType: mime, ByteSize: int64(len(data)), Hashes: []otogi.MediaHash{sha256Hash(data)}, Source: otogi.MediaSource{Kind: otogi.MediaSourceInline, Inline: data}}
 }
 

@@ -315,3 +315,19 @@ func TestStreamKeepsTypingWhileEditing(t *testing.T) {
 	eventually(t, "typing renewed after content", func() bool { return strings.Count(log.calls(), "typing") >= 2 })
 	closeStream(t, s, otogi.TextMessage("done"))
 }
+
+func TestPhotoUploadsAreNamedForTheirType(t *testing.T) {
+	x, log, _ := newEffects(t, streamAnswer(nil))
+	s := openTestStream(t, x, "chat:5")
+	png := []byte("\x89PNG\r\n\x1a\n0000")
+	msg := otogi.Message{Roots: []otogi.PartID{"i"}, Parts: []otogi.Part{{ID: "i", Kind: otogi.PartMedia, Media: &otogi.Media{Role: otogi.MediaImage, Source: otogi.MediaSource{Kind: otogi.MediaSourceInline, Inline: png}}}}}
+	closeStream(t, s, msg)
+	sent := log.find(t, func(r bin.Encoder) bool { _, ok := r.(*tg.MessagesSendMediaRequest); return ok }).(*tg.MessagesSendMediaRequest)
+	photo, ok := sent.Media.(*tg.InputMediaUploadedPhoto)
+	if !ok {
+		t.Fatalf("media %T", sent.Media)
+	}
+	if file, ok := photo.File.(*tg.InputFile); !ok || file.Name != "file.png" {
+		t.Fatalf("file %+v", photo.File)
+	}
+}

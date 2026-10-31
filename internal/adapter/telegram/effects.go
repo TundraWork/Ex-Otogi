@@ -7,6 +7,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	gomime "mime"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -226,9 +228,15 @@ func (x *effects) inputMedia(ctx context.Context, m *otogi.Media) (tg.InputMedia
 	photo := m.Role == otogi.MediaImage
 	switch m.Source.Kind {
 	case otogi.MediaSourceInline:
+		mime := m.MediaType
+		if mime == "" {
+			mime, _, _ = strings.Cut(http.DetectContentType(m.Source.Inline), ";")
+		}
 		name := m.Filename
 		if name == "" {
-			name = "file"
+			// Telegram refuses a photo upload whose name has no image
+			// extension (PHOTO_EXT_INVALID).
+			name = "file" + extension(mime)
 		}
 		file, err := uploader.NewUploader(x.api).FromBytes(ctx, name, m.Source.Inline)
 		if err != nil {
@@ -236,10 +244,6 @@ func (x *effects) inputMedia(ctx context.Context, m *otogi.Media) (tg.InputMedia
 		}
 		if photo {
 			return &tg.InputMediaUploadedPhoto{File: file}, nil
-		}
-		mime := m.MediaType
-		if mime == "" {
-			mime = "application/octet-stream"
 		}
 		return &tg.InputMediaUploadedDocument{File: file, MimeType: mime, Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: name}}}, nil
 	case otogi.MediaSourceExternal:
@@ -259,6 +263,24 @@ func (x *effects) inputMedia(ctx context.Context, m *otogi.Media) (tg.InputMedia
 	default:
 		return nil, fmt.Errorf("telegram media source %q: %w", m.Source.Kind, otogi.ErrUnsupported)
 	}
+}
+
+// extension is the usual file extension of a MIME type, or none.
+func extension(mime string) string {
+	switch mime {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	}
+	if exts, err := gomime.ExtensionsByType(mime); err == nil && len(exts) > 0 {
+		return exts[0]
+	}
+	return ""
 }
 
 // content is a message encoded for Telegram: text (or a media caption) with
