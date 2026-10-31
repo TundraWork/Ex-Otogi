@@ -80,6 +80,7 @@ func (u *user) name() string {
 // the closing cursor record.
 type entry struct {
 	Type         string         `json:"type"` // "comment", "event", or "cursor"
+	Kind         string         `json:"kind"` // of a comment: "comment", or "me" for an action line
 	NextCursor   string         `json:"next_cursor"`
 	ID           int64          `json:"id"`
 	Project      string         `json:"project"`
@@ -95,7 +96,8 @@ type entry struct {
 	AgentContext *agentContext  `json:"agent_context"`
 	Component    *component     `json:"component"` // comments
 
-	raw string // the record as received
+	raw   string // the record as received
+	agent string // whose watcher saw it, set from the queue
 }
 
 // streamer runs the todou CLI with args until it exits or ctx ends, passing
@@ -178,9 +180,10 @@ type client struct {
 // follow streams entries after cursor (all readable projects, every actor)
 // until the CLI exits or ctx ends, calling batch for every batch with the
 // cursor after it. debounce holds a batch open for that long after its first
-// entry, so a burst arrives together.
+// entry, so a burst arrives together. The watch is invisible: the notifier
+// is not an agent waiting for work, which the web shows watches as.
 func (c client) follow(ctx context.Context, cursor string, types []string, debounce time.Duration, stderr func(string), batch func([]entry, string) error) error {
-	args := []string{"watch", "--all-projects", "--follow", "--json", "--any-actor", "--since", cursor, "--debounce", strconv.Itoa(int(debounce.Seconds()))}
+	args := []string{"watch", "--all-projects", "--follow", "--invisible", "--json", "--any-actor", "--since", cursor, "--debounce", strconv.Itoa(int(debounce.Seconds()))}
 	if len(types) > 0 {
 		args = append(args, "--type", strings.Join(types, ","))
 	}
@@ -231,9 +234,6 @@ func (c client) now(ctx context.Context) (string, error) {
 type issue struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
-	// Questions holds the questions asked in the issue, by comment ID, for
-	// rendering answers to them.
-	Questions map[int64][]question `json:"-"`
 }
 
 // component is what a comment carries besides its body: questions, for one.
@@ -251,18 +251,16 @@ type question struct {
 	} `json:"options"`
 }
 
+// issue reads a card's title and body. --brief reads no timeline and leaves
+// no read mark: the agent account only reports the card, it does not work
+// it.
 func (c client) issue(ctx context.Context, project string, number int64) (issue, error) {
-	out, err := c.run(ctx, "issue", "view", project+"/"+strconv.FormatInt(number, 10), "--json")
+	out, err := c.run(ctx, "issue", "view", project+"/"+strconv.FormatInt(number, 10), "--brief", "--json")
 	if err != nil {
 		return issue{}, err
 	}
 	var view struct {
-		Issue    issue `json:"issue"`
-		Timeline []struct {
-			Type      string     `json:"type"`
-			ID        int64      `json:"id"`
-			Component *component `json:"component"`
-		} `json:"timeline"`
+		Issue issue `json:"issue"`
 	}
 	if err := json.Unmarshal(out, &view); err != nil {
 		return issue{}, fmt.Errorf("todou issue view: %w", err)
@@ -270,31 +268,44 @@ func (c client) issue(ctx context.Context, project string, number int64) (issue,
 	if view.Issue.Title == "" {
 		return issue{}, fmt.Errorf("todou issue view %s/%d: no title in the output", project, number)
 	}
-	view.Issue.Questions = map[int64][]question{}
-	for _, t := range view.Timeline {
-		if t.Type == "comment" && t.Component != nil && len(t.Component.Questions) > 0 {
-			view.Issue.Questions[t.ID] = t.Component.Questions
-		}
-	}
 	return view.Issue, nil
 }
 
-func (c client) projects(ctx context.Context) ([]string, error) {
+// questions reads the questions a comment asks; reading a comment leaves no
+// read mark.
+func (c client) questions(ctx context.Context, project string, number, commentID int64) ([]question, error) {
+	out, err := c.run(ctx, "comment", "view", project+"/"+strconv.FormatInt(number, 10), strconv.FormatInt(commentID, 10), "--json")
+	if err != nil {
+		return nil, err
+	}
+	var view struct {
+		Component *component `json:"component"`
+	}
+	if err := json.Unmarshal(out, &view); err != nil {
+		return nil, fmt.Errorf("todou comment view: %w", err)
+	}
+	if view.Component == nil {
+		return nil, nil
+	}
+	return view.Component.Questions, nil
+}
+
+// project is a project the agent account can read.
+type project struct {
+	ID   int64  `json:"id"`
+	Slug string `json:"slug"`
+}
+
+func (c client) projects(ctx context.Context) ([]project, error) {
 	out, err := c.run(ctx, "project", "list", "--json")
 	if err != nil {
 		return nil, err
 	}
-	var projects []struct {
-		Slug string `json:"slug"`
-	}
+	var projects []project
 	if err := json.Unmarshal(out, &projects); err != nil {
 		return nil, fmt.Errorf("todou project list: %w", err)
 	}
-	slugs := make([]string, len(projects))
-	for i, p := range projects {
-		slugs[i] = p.Slug
-	}
-	return slugs, nil
+	return projects, nil
 }
 
 // whoami describes the agent account the token belongs to.

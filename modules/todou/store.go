@@ -18,7 +18,8 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-// store is the module's private database: cursor, links, queue, and outbox.
+// store is the module's private database: each agent's cursor, links,
+// queue, and outbox.
 type store struct{ db *sql.DB }
 
 func openStore(ctx context.Context, db *sql.DB) (*store, error) {
@@ -48,12 +49,12 @@ type outboxRow struct {
 type queued struct {
 	ID    int64
 	To    otogi.Destination
-	Entry entry
+	Entry entry // with its agent
 }
 
-func (s *store) cursor(ctx context.Context) (string, error) {
+func (s *store) cursor(ctx context.Context, agent string) (string, error) {
 	var cursor string
-	err := s.db.QueryRowContext(ctx, "SELECT cursor FROM state").Scan(&cursor)
+	err := s.db.QueryRowContext(ctx, "SELECT cursor FROM cursors WHERE agent = ?", agent).Scan(&cursor)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -63,21 +64,46 @@ func (s *store) cursor(ctx context.Context) (string, error) {
 	return cursor, nil
 }
 
-// ingest records a watch batch: its entries, queued for each linked
-// conversation, and the cursor after them, in one transaction, so a crash
-// either replays the batch or keeps it, never neither and never twice.
-func (s *store) ingest(ctx context.Context, cursor string, entries []queued, now time.Time) error {
+// ingest records a watch batch of an agent: its entries, queued for each
+// linked conversation, and the cursor after them, in one transaction, so a
+// crash either replays the batch or keeps it, never neither and never twice.
+func (s *store) ingest(ctx context.Context, agent, cursor string, entries []queued, now time.Time) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		for _, q := range entries {
-			if _, err := tx.ExecContext(ctx, "INSERT INTO queue (platform, account, conversation, project, entry, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-				q.To.Platform, q.To.Account, q.To.Conversation, q.Entry.Project, q.Entry.raw, now.UnixMilli()); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO queue (platform, account, conversation, project, agent, entry, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				q.To.Platform, q.To.Account, q.To.Conversation, q.Entry.Project, agent, q.Entry.raw, now.UnixMilli()); err != nil {
 				return fmt.Errorf("todou store: queue entry: %w", err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO state (singleton, cursor, batch_at) VALUES (1, ?, ?)
-			ON CONFLICT (singleton) DO UPDATE SET cursor = excluded.cursor, batch_at = excluded.batch_at`,
-			cursor, now.UnixMilli()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO cursors (agent, cursor, batch_at) VALUES (?, ?, ?)
+			ON CONFLICT (agent) DO UPDATE SET cursor = excluded.cursor, batch_at = excluded.batch_at`,
+			agent, cursor, now.UnixMilli()); err != nil {
 			return fmt.Errorf("todou store: save cursor: %w", err)
+		}
+		return nil
+	})
+}
+
+// unassigned counts the links, queued entries, and cursors from before
+// agents, which name none.
+func (s *store) unassigned(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM links WHERE agent = '') + (SELECT COUNT(*) FROM queue WHERE agent = '') +
+		(SELECT COUNT(*) FROM cursors WHERE agent = '')`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("todou store: count rows without an agent: %w", err)
+	}
+	return n, nil
+}
+
+// adopt gives the rows from before agents to agent.
+func (s *store) adopt(ctx context.Context, agent string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		for _, q := range []string{"UPDATE links SET agent = ? WHERE agent = ''", "UPDATE queue SET agent = ? WHERE agent = ''",
+			"UPDATE OR IGNORE cursors SET agent = ? WHERE agent = ''", "DELETE FROM cursors WHERE agent = '' AND ? <> ''"} {
+			if _, err := tx.ExecContext(ctx, q, agent); err != nil {
+				return fmt.Errorf("todou store: assign rows to %s: %w", agent, err)
+			}
 		}
 		return nil
 	})
@@ -107,7 +133,7 @@ func (s *store) backlog(ctx context.Context) ([]otogi.Destination, error) {
 
 // queue returns the entries queued for a conversation, oldest first.
 func (s *store) queue(ctx context.Context, to otogi.Destination) ([]queued, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, entry FROM queue WHERE platform = ? AND account = ? AND conversation = ? ORDER BY id",
+	rows, err := s.db.QueryContext(ctx, "SELECT id, agent, entry FROM queue WHERE platform = ? AND account = ? AND conversation = ? ORDER BY id",
 		to.Platform, to.Account, to.Conversation)
 	if err != nil {
 		return nil, fmt.Errorf("todou store: queue: %w", err)
@@ -116,13 +142,14 @@ func (s *store) queue(ctx context.Context, to otogi.Destination) ([]queued, erro
 	var out []queued
 	for rows.Next() {
 		q := queued{To: to}
-		var raw string
-		if err := rows.Scan(&q.ID, &raw); err != nil {
+		var agent, raw string
+		if err := rows.Scan(&q.ID, &agent, &raw); err != nil {
 			return nil, fmt.Errorf("todou store: queue: %w", err)
 		}
 		if q.Entry, err = decodeEntry(raw); err != nil {
 			return nil, err
 		}
+		q.Entry.agent = agent
 		out = append(out, q)
 	}
 	if err := rows.Err(); err != nil {
@@ -266,35 +293,54 @@ func (s *store) clearCooldown(ctx context.Context, to otogi.Destination) error {
 	return nil
 }
 
-// link is a project linked to a conversation.
+// link is a project linked to a conversation through an agent. A silent
+// link grants the chat access to the project without its activity.
 type link struct {
 	To      otogi.Destination
 	Project string
+	Agent   string
+	Silent  bool
 }
 
-func (s *store) addLink(ctx context.Context, l link, by string, now time.Time) (bool, error) {
-	result, err := s.db.ExecContext(ctx, "INSERT INTO links (platform, account, conversation, project, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-		l.To.Platform, l.To.Account, l.To.Conversation, l.Project, by, now.UnixMilli())
-	if err != nil {
-		return false, fmt.Errorf("todou store: add link: %w", err)
-	}
-	n, _ := result.RowsAffected()
-	return n == 1, nil
+// setLink links a project to a conversation, replacing any link of the
+// project there, and returns the link it replaced, if any.
+func (s *store) setLink(ctx context.Context, l link, by string, now time.Time) (old *link, err error) {
+	err = s.tx(ctx, func(tx *sql.Tx) error {
+		prev := l
+		err := tx.QueryRowContext(ctx, "SELECT agent, silent FROM links WHERE platform = ? AND account = ? AND conversation = ? AND project = ?",
+			l.To.Platform, l.To.Account, l.To.Conversation, l.Project).Scan(&prev.Agent, &prev.Silent)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("todou store: read link: %w", err)
+		default:
+			old = &prev
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO links (platform, account, conversation, project, agent, silent, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (platform, account, conversation, project) DO UPDATE SET agent = excluded.agent, silent = excluded.silent,
+			created_by = excluded.created_by, created_at = excluded.created_at`,
+			l.To.Platform, l.To.Account, l.To.Conversation, l.Project, l.Agent, l.Silent, by, now.UnixMilli())
+		if err != nil {
+			return fmt.Errorf("todou store: set link: %w", err)
+		}
+		return nil
+	})
+	return old, err
 }
 
 // removeLink removes a link and the entries of its project still queued for
 // the conversation.
-func (s *store) removeLink(ctx context.Context, l link) (removed bool, err error) {
+func (s *store) removeLink(ctx context.Context, to otogi.Destination, project string) (removed bool, err error) {
 	err = s.tx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, "DELETE FROM links WHERE platform = ? AND account = ? AND conversation = ? AND project = ?",
-			l.To.Platform, l.To.Account, l.To.Conversation, l.Project)
+			to.Platform, to.Account, to.Conversation, project)
 		if err != nil {
 			return fmt.Errorf("todou store: remove link: %w", err)
 		}
 		n, _ := result.RowsAffected()
 		removed = n == 1
 		if _, err := tx.ExecContext(ctx, "DELETE FROM queue WHERE platform = ? AND account = ? AND conversation = ? AND project = ?",
-			l.To.Platform, l.To.Account, l.To.Conversation, l.Project); err != nil {
+			to.Platform, to.Account, to.Conversation, project); err != nil {
 			return fmt.Errorf("todou store: remove link: %w", err)
 		}
 		return nil
@@ -304,9 +350,9 @@ func (s *store) removeLink(ctx context.Context, l link) (removed bool, err error
 
 // links returns every link, or those of one conversation when to is set.
 func (s *store) links(ctx context.Context, to *otogi.Destination) ([]link, error) {
-	query, args := "SELECT platform, account, conversation, project FROM links ORDER BY project, created_at", []any{}
+	query, args := "SELECT platform, account, conversation, project, agent, silent FROM links ORDER BY project, created_at", []any{}
 	if to != nil {
-		query = "SELECT platform, account, conversation, project FROM links WHERE platform = ? AND account = ? AND conversation = ? ORDER BY project"
+		query = "SELECT platform, account, conversation, project, agent, silent FROM links WHERE platform = ? AND account = ? AND conversation = ? ORDER BY project"
 		args = []any{to.Platform, to.Account, to.Conversation}
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -317,7 +363,7 @@ func (s *store) links(ctx context.Context, to *otogi.Destination) ([]link, error
 	var out []link
 	for rows.Next() {
 		var l link
-		if err := rows.Scan(&l.To.Platform, &l.To.Account, &l.To.Conversation, &l.Project); err != nil {
+		if err := rows.Scan(&l.To.Platform, &l.To.Account, &l.To.Conversation, &l.Project, &l.Agent, &l.Silent); err != nil {
 			return nil, fmt.Errorf("todou store: links: %w", err)
 		}
 		out = append(out, l)
@@ -328,11 +374,8 @@ func (s *store) links(ctx context.Context, to *otogi.Destination) ([]link, error
 	return out, nil
 }
 
-// summary is what /todou status shows: the watcher's position and one
-// conversation's delivery.
+// summary is what /todou status shows of one conversation's delivery.
 type summary struct {
-	HasCursor        bool
-	BatchAt          time.Time
 	Queued, Pending  int
 	Failed           int
 	LastSent         time.Time
@@ -341,18 +384,9 @@ type summary struct {
 
 func (s *store) summary(ctx context.Context, to otogi.Destination) (summary, error) {
 	var sum summary
-	var batch int64
-	err := s.db.QueryRowContext(ctx, "SELECT batch_at FROM state").Scan(&batch)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return summary{}, fmt.Errorf("todou store: summary: %w", err)
-	default:
-		sum.HasCursor, sum.BatchAt = true, time.UnixMilli(batch)
-	}
 	var sent sql.NullInt64
 	chat := []any{to.Platform, to.Account, to.Conversation}
-	err = s.db.QueryRowContext(ctx, `SELECT
+	err := s.db.QueryRowContext(ctx, `SELECT
 		(SELECT COUNT(*) FROM queue WHERE platform = ?1 AND account = ?2 AND conversation = ?3),
 		(SELECT COUNT(*) FROM outbox WHERE platform = ?1 AND account = ?2 AND conversation = ?3 AND sent_at IS NULL AND failed_at IS NULL),
 		(SELECT COUNT(*) FROM outbox WHERE platform = ?1 AND account = ?2 AND conversation = ?3 AND failed_at IS NOT NULL),
@@ -366,6 +400,19 @@ func (s *store) summary(ctx context.Context, to otogi.Destination) (summary, err
 		sum.LastSent = time.UnixMilli(sent.Int64)
 	}
 	return sum, nil
+}
+
+// batchAt is when an agent's watcher last handed over a batch, or zero.
+func (s *store) batchAt(ctx context.Context, agent string) (time.Time, error) {
+	var at int64
+	err := s.db.QueryRowContext(ctx, "SELECT batch_at FROM cursors WHERE agent = ?", agent).Scan(&at)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return time.Time{}, nil
+	case err != nil:
+		return time.Time{}, fmt.Errorf("todou store: last batch: %w", err)
+	}
+	return time.UnixMilli(at), nil
 }
 
 // prune deletes delivered outbox rows older than retention.

@@ -12,9 +12,9 @@ import (
 
 func TestDigestRendering(t *testing.T) {
 	t.Parallel()
-	r := renderer{linkBase: "https://todou.test", maxBody: 10}
+	r := renderer{links: map[string]string{"": "https://todou.test"}, maxBody: 10}
 	hidden := "2026-10-16T00:00:00Z"
-	issues := map[string]issue{"web#1": {Title: "T1"}, "web#2": {Title: "A title much longer than forty characters in all", Body: "[long](/projects/3/issues/9) opened body"}}
+	issues := facts{issues: map[string]issue{titleKey("", "web", 1): {Title: "T1"}, titleKey("", "web", 2): {Title: "A title much longer than forty characters in all", Body: "[long](/projects/3/issues/9) opened body"}}}
 	entries := []entry{
 		{Type: "comment", Project: "web", IssueNumber: 1, IssueRef: "web#1", Author: &user{DisplayName: "Alice"}, Body: "**bold** `code` more", AgentContext: &agentContext{Agent: "claude-code", Model: "claude-opus-5-5"}},
 		{Type: "event", EventType: "opened", Project: "web", IssueNumber: 2, Actor: &user{Login: "c", Kind: "machine"}},
@@ -56,12 +56,12 @@ func TestDigestRendering(t *testing.T) {
 
 func TestLongDigestsSplitAndRepeatTheIssueLine(t *testing.T) {
 	t.Parallel()
-	r := renderer{linkBase: "https://todou.test", maxBody: 300}
+	r := renderer{links: map[string]string{"": "https://todou.test"}, maxBody: 300}
 	many := make([]entry, 60)
 	for i := range many {
 		many[i] = entry{Type: "comment", Project: "web", IssueNumber: 1, IssueRef: "web#1", Author: &user{Login: "a"}, Body: strings.Repeat("汉字", 150)}
 	}
-	split := r.digest(many, nil)
+	split := r.digest(many, facts{})
 	if len(split) < 2 {
 		t.Fatalf("split into %d messages", len(split))
 	}
@@ -80,7 +80,7 @@ func TestLongDigestsSplitAndRepeatTheIssueLine(t *testing.T) {
 
 func TestQuestionsAndAnswers(t *testing.T) {
 	t.Parallel()
-	r := renderer{linkBase: "https://todou.test", maxBody: 1000}
+	r := renderer{links: map[string]string{"": "https://todou.test"}, maxBody: 1000}
 	var asking entry
 	if err := json.Unmarshal([]byte(`{"type":"comment","id":939,"project":"web","issue_number":1,"issue_ref":"web#1","body":"Two choices.",
 		"author":{"login":"agent","kind":"machine"},"agent_context":{"agent":"claude-code","model":"claude-opus-5"},
@@ -98,8 +98,8 @@ func TestQuestionsAndAnswers(t *testing.T) {
 			{"key":"q9","other":"unknown question","declined":false,"selected":[]}]}}`), &answered); err != nil {
 		t.Fatal(err)
 	}
-	info := issue{Title: "T", Questions: map[int64][]question{939: asking.Component.Questions}}
-	text := r.digest([]entry{asking, answered}, map[string]issue{"web#1": info})[0].PlainText()
+	known := facts{issues: map[string]issue{titleKey("", "web", 1): {Title: "T"}}, questions: map[string][]question{questionKey("", 939): asking.Component.Questions}}
+	text := r.digest([]entry{asking, answered}, known)[0].PlainText()
 	want := "web#1 T\n" +
 		"❓ 👾 agent (claude-opus-5) asked\nTwo choices.\nSplit: How to split the card?\n• Three cards\n• One card\n\nShip: How to ship?\n• Push\n• Local\n" +
 		"🙋 John answered\nSplit: How to split the card?\n→ Three cards\n→ start with the first\n\nShip: How to ship?\n→ (declined)\n\nq9\n→ unknown question"
@@ -110,7 +110,7 @@ func TestQuestionsAndAnswers(t *testing.T) {
 
 func TestOversizedEntriesContinueWithAllFormatting(t *testing.T) {
 	t.Parallel()
-	r := renderer{linkBase: "https://todou.test", maxBody: 3000}
+	r := renderer{links: map[string]string{"": "https://todou.test"}, maxBody: 3000}
 	codeHeavy := strings.Repeat("`a.go` ", 300) // 300 code spans on one line
 	long := strings.Repeat("**长**\n", 1400)     // 2800 units over many lines
 	entries := []entry{
@@ -118,7 +118,7 @@ func TestOversizedEntriesContinueWithAllFormatting(t *testing.T) {
 		{Type: "comment", Project: "web", IssueNumber: 2, IssueRef: "web#2", Author: &user{Login: "b"}, Body: long,
 			Component: &component{Questions: []question{{Key: "q1", Header: "H", Question: long}}}},
 	}
-	msgs := r.digest(entries, nil)
+	msgs := r.digest(entries, facts{})
 	code, boldLong := 0, 0
 	for i, m := range msgs {
 		part := m.Parts[0]
@@ -145,5 +145,37 @@ func TestOversizedEntriesContinueWithAllFormatting(t *testing.T) {
 	}
 	if code != 300 || boldLong != 2800 {
 		t.Fatalf("formatting kept: %d of 300 code spans, %d of 2800 bold runs, over %d messages", code, boldLong, len(msgs))
+	}
+}
+
+func TestNewEventTypes(t *testing.T) {
+	t.Parallel()
+	r := renderer{links: map[string]string{"neptune": "https://todou.test"}, maxBody: 100}
+	ev := func(kind string, payload map[string]any) entry {
+		return entry{Type: "event", EventType: kind, Project: "web", IssueNumber: 5, IssueRef: "WEB-5", Actor: &user{Login: "bob"}, Payload: payload, agent: "neptune"}
+	}
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(`{"role":"blocked","edge_id":1,"other_number":77,"other_project_id":17,"other_project":"web"}`), &payload)
+	var blocks map[string]any
+	_ = json.Unmarshal([]byte(`{"role":"blocker","edge_id":2,"other_number":9,"other_project_id":23,"other_project":"api"}`), &blocks)
+	var cleared map[string]any
+	_ = json.Unmarshal([]byte(`{"edge_id":1,"blocker_number":77,"blocker_project_id":17,"blocker_project":"web"}`), &cleared)
+	var ref map[string]any
+	_ = json.Unmarshal([]byte(`{"by_issue":31,"by_project_id":23}`), &ref)
+	var attached map[string]any
+	_ = json.Unmarshal([]byte(`{"attachment":{"id":12,"filename":"shot.png"}}`), &attached)
+	var resolved map[string]any
+	_ = json.Unmarshal([]byte(`{"paths":["design.md"],"comment_ids":[482,483]}`), &resolved)
+	entries := []entry{
+		ev("block_added", payload), ev("block_added", blocks), ev("block_removed", payload), ev("block_cleared", cleared), ev("block_reblocked", cleared),
+		ev("referenced", ref), ev("attachment_added", attached), ev("spec_comments_resolved", resolved),
+		{Type: "comment", Kind: "me", Project: "web", IssueNumber: 5, IssueRef: "WEB-5", Author: &user{Login: "alice"}, Body: "is reviewing", agent: "neptune"},
+	}
+	known := facts{slugs: map[string]map[int64]string{"neptune": {23: "api"}}}
+	text := r.digest(entries, known)[0].PlainText()
+	want := "WEB-5\n⛔ bob marked it blocked by #77\n⛔ bob marked it blocking api#9\n⛔ bob removed its block by #77\n🟢 bob cleared its blocker #77\n" +
+		"⛔ bob made its blocker #77 active again\n🔗 bob mentioned it in api#31\n📎 bob attached shot.png\n📝 bob resolved 2 spec comments\n💭 alice is reviewing"
+	if text != want {
+		t.Fatalf("text:\n%s\nwant:\n%s", text, want)
 	}
 }

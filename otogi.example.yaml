@@ -48,16 +48,19 @@ modules:
     max_notes: 50
   reminders:              # /remind 10m tea  (survives restarts)
     max_delay: 720h
-  # todou:                # todou issue tracker notifications; link with /todou link <project>
-  #   cli: /usr/local/bin/todou          # todou CLI v0.6+ (github.com/orzFly/todou/releases)
-  #   server: https://todou.example.com
-  #   token: ${OTOGI_TODOU_TOKEN}        # the agent account's todou_pat_… token; the
-  #                                      # account needs reader access to linked projects
-  #   link_base: ""                      # web URL for issue links; default: server
+  # todou:                # todou trackers, through your todou agent accounts. Link with
+  #                       # /todou link <agent> <project> [silent]; silent links get no digests
+  #   cli: /usr/local/bin/todou          # todou CLI v0.6.7+ (github.com/orzFly/todou/releases)
+  #   agents:                            # the accounts chats can link projects through
+  #     neptune:
+  #       server: https://todou.example.com
+  #       token: ${OTOGI_TODOU_TOKEN}    # the agent account's todou_pat_… token; it needs
+  #                                      # reader access to linked projects (writer to work them)
+  #       link_base: ""                  # web URL for issue links; default: server
   #   min_interval: 5m                   # default cooldown between digests per chat (/todou cooldown overrides); activity meanwhile is aggregated
   #   debounce: 10s                      # hold a burst together this long after its first entry
-  #   cli_timeout: 60s                   # per one-shot CLI call (the watcher itself is resident)
-  #   events: [comment, opened, closed, reopened, status_changed, assigned, spec_pushed, spec_review, question_answered]
+  #   cli_timeout: 60s                   # per one-shot CLI call (the watchers themselves are resident)
+  #   events: [comment, opened, closed, reopened, status_changed, assigned, spec_pushed, spec_review, question_answered, block_added, block_removed, block_cleared]
   #   max_body_chars: 800                # per collapsed quote; ~4 entries per 4096-unit message
   #   max_attempts: 60                   # tries, a minute apart, before a digest message is given up
   # chat:                 # language model agents; needs a provider under llm

@@ -1,9 +1,11 @@
-// Package todou forwards activity from a todou issue tracker to chats.
-// Projects are linked to chats with /todou commands. A resident `todou
-// watch` process streams new activity into a queue per chat, and each chat
+// Package todou connects chats to todou issue trackers through the
+// operator's todou agent accounts. A chat links a project through one agent,
+// with /todou commands. For each agent a resident `todou watch` process
+// streams new activity into a queue per chat it is linked to, and each chat
 // gets the queue as one digest at most once per min_interval, through a
-// transactional outbox: in order and exactly once per chat. See
-// docs/superpowers/specs/2026-10-16-todou-notifier-design.md.
+// transactional outbox: in order and exactly once per chat. Silent links
+// only grant access. See docs/superpowers/specs/2026-10-16-todou-notifier-design.md
+// and docs/superpowers/specs/2026-11-01-todou-agents-and-writes-design.md.
 package todou
 
 import (
@@ -12,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -25,12 +28,9 @@ import (
 type Config struct {
 	// CLI is the path of the todou CLI binary.
 	CLI string `yaml:"cli"`
-	// Server is the todou server URL.
-	Server string `yaml:"server"`
-	// Token is the agent account's personal access token (todou_pat_…).
-	Token string `yaml:"token"`
-	// LinkBase is the web URL issue links point to; default Server.
-	LinkBase string `yaml:"link_base"`
+	// Agents are the todou accounts chats can link projects through, by
+	// name.
+	Agents map[string]AgentConfig `yaml:"agents"`
 	// MinInterval is the least time between two digests to one chat;
 	// activity meanwhile waits and goes out together. Default 5m. A chat can
 	// set its own with /todou cooldown.
@@ -53,8 +53,22 @@ type Config struct {
 	MaxAttempts int `yaml:"max_attempts"`
 }
 
+// AgentConfig is one todou account.
+type AgentConfig struct {
+	// Server is the todou server URL.
+	Server string `yaml:"server"`
+	// Token is the account's personal access token (todou_pat_…).
+	Token string `yaml:"token"`
+	// LinkBase is the web URL issue links point to; default Server.
+	LinkBase string `yaml:"link_base"`
+}
+
 // DefaultEvents are the activity types notified when Config.Events is unset.
-var DefaultEvents = []string{"comment", "opened", "closed", "reopened", "status_changed", "assigned", "spec_pushed", "spec_review", "question_answered"}
+var DefaultEvents = []string{"comment", "opened", "closed", "reopened", "status_changed", "assigned", "spec_pushed", "spec_review", "question_answered",
+	"block_added", "block_removed", "block_cleared"}
+
+// agentName is what an agent may be called in config and commands.
+var agentName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 const (
 	outboxRetention = 30 * 24 * time.Hour
@@ -64,19 +78,28 @@ const (
 	restartMax = 5 * time.Minute
 )
 
-// Module is the todou notifier.
+// Module is the todou module.
 type Module struct {
 	cfg       Config
 	operators []string
-	cli       client
+	agents    map[string]*agent
+	names     []string // agent names, sorted
 	render    renderer
 	now       func() time.Time
 
-	host  otogi.Host
-	log   *slog.Logger
-	store *store
-	stop  context.CancelFunc
-	done  chan struct{} // closed when the watcher has exited
+	host     otogi.Host
+	log      *slog.Logger
+	store    *store
+	stop     context.CancelFunc
+	watchers sync.WaitGroup // one per agent
+}
+
+// agent is one todou account at run time.
+type agent struct {
+	name     string
+	cfg      AgentConfig
+	cli      client
+	linkBase string
 
 	mu      sync.Mutex // guards watcher
 	watcher watcherState
@@ -94,8 +117,19 @@ type watcherState struct {
 // account's own messages always are.
 func New(cfg Config, operators []string) (*Module, error) {
 	var errs []error
-	if cfg.CLI == "" || cfg.Server == "" || cfg.Token == "" {
-		errs = append(errs, errors.New("cli, server, and token are required"))
+	if cfg.CLI == "" {
+		errs = append(errs, errors.New("cli is required"))
+	}
+	if len(cfg.Agents) == 0 {
+		errs = append(errs, errors.New("agents: at least one is required"))
+	}
+	for name, a := range cfg.Agents {
+		switch {
+		case !agentName.MatchString(name):
+			errs = append(errs, fmt.Errorf("agents.%s: names are lowercase letters, digits, - and _", name))
+		case a.Server == "" || a.Token == "":
+			errs = append(errs, fmt.Errorf("agents.%s: server and token are required", name))
+		}
 	}
 	if cfg.MaxBodyChars < 0 || cfg.MaxBodyChars > 3000 {
 		errs = append(errs, errors.New("max_body_chars must be between 1 and 3000"))
@@ -106,10 +140,6 @@ func New(cfg Config, operators []string) (*Module, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	if cfg.LinkBase == "" {
-		cfg.LinkBase = cfg.Server
-	}
-	cfg.LinkBase = strings.TrimSuffix(cfg.LinkBase, "/")
 	if cfg.MinInterval == 0 {
 		cfg.MinInterval = 5 * time.Minute
 	}
@@ -128,12 +158,19 @@ func New(cfg Config, operators []string) (*Module, error) {
 	if cfg.MaxAttempts == 0 {
 		cfg.MaxAttempts = 60
 	}
-	return &Module{
-		cfg: cfg, operators: operators,
-		cli:    client{run: execRunner(cfg.CLI, cfg.Server, cfg.Token, cfg.CLITimeout), stream: execStreamer(cfg.CLI, cfg.Server, cfg.Token)},
-		render: renderer{linkBase: cfg.LinkBase, maxBody: cfg.MaxBodyChars},
-		now:    time.Now,
-	}, nil
+	m := &Module{cfg: cfg, operators: operators, agents: map[string]*agent{}, render: renderer{links: map[string]string{}, maxBody: cfg.MaxBodyChars}, now: time.Now}
+	for name, a := range cfg.Agents {
+		base := strings.TrimSuffix(a.LinkBase, "/")
+		if base == "" {
+			base = strings.TrimSuffix(a.Server, "/")
+		}
+		m.agents[name] = &agent{name: name, cfg: a, linkBase: base,
+			cli: client{run: execRunner(cfg.CLI, a.Server, a.Token, cfg.CLITimeout), stream: execStreamer(cfg.CLI, a.Server, a.Token)}}
+		m.render.links[name] = base
+		m.names = append(m.names, name)
+	}
+	slices.Sort(m.names)
+	return m, nil
 }
 
 // Descriptor declares /todou. The account's owner may use it too; no reply
@@ -142,14 +179,15 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{
 		ID: "todou",
 		Commands: []otogi.CommandSpec{{
-			Name: "todou", Usage: "link <project> | unlink <project> | list | cooldown [<duration> | default] | status",
-			Description: "post a todou project's activity to this chat",
+			Name: "todou", Usage: "link <agent> <project> [silent] | unlink <project> | list | cooldown [<duration> | default] | status",
+			Description: "work with todou projects linked to this chat, and post their activity",
 		}},
 		Filter: otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
 	}
 }
 
-// Start opens the module's database and starts the watcher.
+// Start opens the module's database, gives links from before agents to the
+// only agent, and starts each agent's watcher.
 func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 	db, err := host.Database(ctx)
 	if err != nil {
@@ -158,43 +196,58 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 	if m.store, err = openStore(ctx, db); err != nil {
 		return err
 	}
+	if len(m.names) == 1 {
+		if err := m.store.adopt(ctx, m.names[0]); err != nil {
+			return err
+		}
+	} else if n, err := m.store.unassigned(ctx); err != nil {
+		return err
+	} else if n > 0 {
+		return fmt.Errorf("todou: %d links, queued entries, or cursors name no agent; they belong to the account the module used before agents: start once with only that agent configured", n)
+	}
 	m.host, m.log = host, host.Logger()
 	ctx, m.stop = context.WithCancel(context.WithoutCancel(ctx))
-	m.done = make(chan struct{})
-	go m.watch(ctx)
+	for _, name := range m.names {
+		a := m.agents[name]
+		m.watchers.Go(func() { m.watch(ctx, a) })
+	}
 	return nil
 }
 
-// Stop stops the watcher; activity it has not handed over yet is read again
-// on the next start.
+// Stop stops the watchers; activity they have not handed over yet is read
+// again on the next start.
 func (m *Module) Stop(ctx context.Context) error {
 	if m.stop == nil {
 		return nil
 	}
 	m.stop()
+	done := make(chan struct{})
+	go func() {
+		m.watchers.Wait()
+		close(done)
+	}()
 	select {
-	case <-m.done:
+	case <-done:
 		return nil
 	case <-ctx.Done():
-		return fmt.Errorf("todou: stop watcher: %w", ctx.Err())
+		return fmt.Errorf("todou: stop watchers: %w", ctx.Err())
 	}
 }
 
-// watch runs the watcher until ctx ends, restarting it with backoff when it
-// fails.
-func (m *Module) watch(ctx context.Context) {
-	defer close(m.done)
+// watch runs an agent's watcher until ctx ends, restarting it with backoff
+// when it fails.
+func (m *Module) watch(ctx context.Context, a *agent) {
 	delay := restartMin
 	for {
 		started := time.Now()
-		err := m.runWatcher(ctx)
+		err := m.runWatcher(ctx, a)
 		if ctx.Err() != nil {
 			return
 		}
 		if time.Since(started) >= restartMax {
 			delay = restartMin
 		}
-		m.watcherFailed(ctx, err, delay)
+		m.watcherFailed(ctx, a, err, delay)
 		select {
 		case <-ctx.Done():
 			return
@@ -205,9 +258,9 @@ func (m *Module) watch(ctx context.Context) {
 }
 
 // runWatcher arms the digest timer of every chat with a backlog (a crash or
-// a failed SetTimer may have left one unarmed), then follows activity from
-// the stored cursor, or from now on a first start.
-func (m *Module) runWatcher(ctx context.Context) (err error) {
+// a failed SetTimer may have left one unarmed), then follows the agent's
+// activity from its stored cursor, or from now on a first start.
+func (m *Module) runWatcher(ctx context.Context, a *agent) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("todou watcher panicked: %v\n%s", p, debug.Stack())
@@ -222,44 +275,47 @@ func (m *Module) runWatcher(ctx context.Context) (err error) {
 			return err
 		}
 	}
-	cursor, err := m.store.cursor(ctx)
+	cursor, err := m.store.cursor(ctx, a.name)
 	if err != nil {
 		return err
 	}
 	if cursor == "" {
-		if cursor, err = m.cli.now(ctx); err != nil {
+		if cursor, err = a.cli.now(ctx); err != nil {
 			return err
 		}
-		if err := m.store.ingest(ctx, cursor, nil, m.now()); err != nil {
+		if err := m.store.ingest(ctx, a.name, cursor, nil, m.now()); err != nil {
 			return err
 		}
 	}
-	m.mu.Lock()
-	m.watcher.since = m.now()
-	m.mu.Unlock()
-	return m.cli.follow(ctx, cursor, m.cfg.Events, m.cfg.Debounce,
-		func(line string) { m.log.Info("todou watch: " + line) },
-		func(entries []entry, cursor string) error { return m.ingest(ctx, entries, cursor) })
+	a.mu.Lock()
+	a.watcher.since = m.now()
+	a.mu.Unlock()
+	return a.cli.follow(ctx, cursor, m.cfg.Events, m.cfg.Debounce,
+		func(line string) { m.log.Info("todou watch: "+line, "agent", a.name) },
+		func(entries []entry, cursor string) error { return m.ingest(ctx, a, entries, cursor) })
 }
 
-func (m *Module) watcherFailed(ctx context.Context, err error, retry time.Duration) {
-	m.mu.Lock()
-	m.watcher = watcherState{err: err.Error(), failedAt: m.now()}
-	m.mu.Unlock()
-	m.log.Error("todou: watcher failed", "error", err, "retry_in", retry)
-	m.host.Record(ctx, otogi.Record{Kind: "todou.watch_failed", Outcome: "error", Payload: map[string]any{"error": err.Error(), "retry_in": retry.String()}})
+func (m *Module) watcherFailed(ctx context.Context, a *agent, err error, retry time.Duration) {
+	a.mu.Lock()
+	a.watcher = watcherState{err: err.Error(), failedAt: m.now()}
+	a.mu.Unlock()
+	m.log.Error("todou: watcher failed", "agent", a.name, "error", err, "retry_in", retry)
+	m.host.Record(ctx, otogi.Record{Kind: "todou.watch_failed", Outcome: "error", Payload: map[string]any{"agent": a.name, "error": err.Error(), "retry_in": retry.String()}})
 }
 
-// ingest queues a batch for the chats linked to its projects, with the
-// cursor after it, and arms those chats' digest timers.
-func (m *Module) ingest(ctx context.Context, entries []entry, cursor string) error {
+// ingest queues an agent's batch for the chats that hear its projects
+// through that agent, with the cursor after it, and arms those chats' digest
+// timers.
+func (m *Module) ingest(ctx context.Context, a *agent, entries []entry, cursor string) error {
 	links, err := m.store.links(ctx, nil)
 	if err != nil {
 		return err
 	}
 	byProject := map[string][]otogi.Destination{}
 	for _, l := range links {
-		byProject[l.Project] = append(byProject[l.Project], l.To)
+		if l.Agent == a.name && !l.Silent {
+			byProject[l.Project] = append(byProject[l.Project], l.To)
+		}
 	}
 	var rows []queued
 	var chats []otogi.Destination
@@ -272,7 +328,7 @@ func (m *Module) ingest(ctx context.Context, entries []entry, cursor string) err
 		}
 	}
 	now := m.now()
-	if err := m.store.ingest(ctx, cursor, rows, now); err != nil {
+	if err := m.store.ingest(ctx, a.name, cursor, rows, now); err != nil {
 		return err
 	}
 	for _, to := range chats {
@@ -325,7 +381,7 @@ func (m *Module) HandleTimer(ctx context.Context, t otogi.Timer, inv otogi.Invoc
 		entries[i] = q.Entry
 	}
 	now := m.now()
-	if err := m.store.digest(ctx, to, queue[len(queue)-1].ID, m.render.digest(entries, m.issues(ctx, entries)), now); err != nil {
+	if err := m.store.digest(ctx, to, queue[len(queue)-1].ID, m.render.digest(entries, m.facts(ctx, entries)), now); err != nil {
 		return err
 	}
 	if err := m.store.prune(ctx, now.Add(-outboxRetention)); err != nil {
@@ -334,24 +390,53 @@ func (m *Module) HandleTimer(ctx context.Context, t otogi.Timer, inv otogi.Invoc
 	return m.deliver(ctx, inv, to)
 }
 
-func titleKey(project string, number int64) string { return fmt.Sprintf("%s#%d", project, number) }
-
-// issues looks up the title (and, for opened issues, the body) of every
-// issue the entries mention. A failed lookup leaves the title out.
-func (m *Module) issues(ctx context.Context, entries []entry) map[string]issue {
-	out := map[string]issue{}
+// facts looks up, through each entry's agent, the title (and, for opened
+// issues, the body) of every issue the entries mention, the questions behind
+// answers, and project slugs for references. A failed lookup leaves that
+// fact out; an entry of an agent no longer configured gets none.
+func (m *Module) facts(ctx context.Context, entries []entry) facts {
+	known := facts{issues: map[string]issue{}, questions: map[string][]question{}, slugs: map[string]map[int64]string{}}
 	for _, e := range entries {
-		key := titleKey(e.Project, e.IssueNumber)
-		if _, done := out[key]; done {
+		a := m.agents[e.agent]
+		if a == nil {
 			continue
 		}
-		i, err := m.cli.issue(ctx, e.Project, e.IssueNumber)
-		if err != nil {
-			m.log.Warn("todou: issue lookup failed; notifying without the title", "issue", key, "error", err)
+		if key := titleKey(e.agent, e.Project, e.IssueNumber); !hasKey(known.issues, key) {
+			i, err := a.cli.issue(ctx, e.Project, e.IssueNumber)
+			if err != nil {
+				m.log.Warn("todou: issue lookup failed; notifying without the title", "agent", e.agent, "issue", key, "error", err)
+			}
+			known.issues[key] = i
 		}
-		out[key] = i
+		switch e.EventType {
+		case "question_answered":
+			comment := int64(num(e.Payload["comment_id"]))
+			if key := questionKey(e.agent, comment); comment != 0 && !hasKey(known.questions, key) {
+				qs, err := a.cli.questions(ctx, e.Project, e.IssueNumber, comment)
+				if err != nil {
+					m.log.Warn("todou: question lookup failed; answers show their keys", "agent", e.agent, "comment", comment, "error", err)
+				}
+				known.questions[key] = qs
+			}
+		case "referenced", "cross_referenced":
+			if !hasKey(known.slugs, e.agent) {
+				known.slugs[e.agent] = map[int64]string{}
+				projects, err := a.cli.projects(ctx)
+				if err != nil {
+					m.log.Warn("todou: project lookup failed; references show bare numbers", "agent", e.agent, "error", err)
+				}
+				for _, p := range projects {
+					known.slugs[e.agent][p.ID] = p.Slug
+				}
+			}
+		}
 	}
-	return out
+	return known
+}
+
+func hasKey[V any](m map[string]V, key string) bool {
+	_, ok := m[key]
+	return ok
 }
 
 // deliver sends a chat's undelivered digest messages in order. A failure
@@ -398,15 +483,18 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 	var err error
 	switch verb {
 	case "link", "unlink":
+		fields := strings.Fields(arg)
 		switch {
 		case !m.operator(e):
 			reply = fmt.Sprintf("Only operators can change links. Your ID is %s.", e.ActorKey())
-		case arg == "":
-			reply = fmt.Sprintf("Usage: /todou %s <project>", verb)
+		case verb == "unlink" && len(fields) == 1:
+			reply, err = m.unlink(ctx, e, fields[0])
+		case verb == "link" && (len(fields) == 2 || len(fields) == 3 && fields[2] == "silent"):
+			reply, err = m.link(ctx, e, fields[0], fields[1], len(fields) == 3)
 		case verb == "link":
-			reply, err = m.link(ctx, e, arg)
+			reply = "Usage: /todou link <agent> <project> [silent]. Agents: " + strings.Join(m.names, ", ")
 		default:
-			reply, err = m.unlink(ctx, e, arg)
+			reply = "Usage: /todou unlink <project>"
 		}
 	case "list":
 		reply, err = m.list(ctx, e)
@@ -415,7 +503,7 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 	case "status":
 		reply, err = m.status(ctx, e)
 	default:
-		reply = "Usage: /todou link <project> | unlink <project> | list | cooldown [<duration> | default] | status"
+		reply = "Usage: /todou link <agent> <project> [silent] | unlink <project> | list | cooldown [<duration> | default] | status"
 	}
 	if err != nil {
 		return err
@@ -498,26 +586,44 @@ func (m *Module) operator(e otogi.Event) bool {
 	return e.Direction == otogi.DirectionOutgoing || (e.ActorKey() != "" && slices.Contains(m.operators, e.ActorKey()))
 }
 
-func (m *Module) link(ctx context.Context, e otogi.Event, project string) (string, error) {
-	projects, err := m.cli.projects(ctx)
+// link links a project to the chat through an agent, after checking that
+// the agent's account can read it.
+func (m *Module) link(ctx context.Context, e otogi.Event, name, slug string, silent bool) (string, error) {
+	a := m.agents[name]
+	if a == nil {
+		return fmt.Sprintf("There is no agent called %q. Agents: %s.", name, strings.Join(m.names, ", ")), nil
+	}
+	projects, err := a.cli.projects(ctx)
 	if err != nil {
 		return fmt.Sprintf("Could not check the project with todou: %v", err), nil
 	}
-	if !slices.Contains(projects, project) {
-		return fmt.Sprintf("The agent account cannot read a project named %q. Add it to the project as a reader, then link again.", project), nil
+	if !slices.ContainsFunc(projects, func(p project) bool { return p.Slug == slug }) {
+		return fmt.Sprintf("%s cannot read a project named %q. Add the account to the project, then link again.", name, slug), nil
 	}
-	added, err := m.store.addLink(ctx, link{To: e.Destination(), Project: project}, e.ActorKey(), m.now())
+	l := link{To: e.Destination(), Project: slug, Agent: name, Silent: silent}
+	old, err := m.store.setLink(ctx, l, e.ActorKey(), m.now())
 	if err != nil {
 		return "", err
 	}
-	if !added {
-		return fmt.Sprintf("%s is already linked to this chat.", project), nil
+	if old != nil && *old == l {
+		return fmt.Sprintf("%s is already linked here, %s.", slug, linkText(l)), nil
 	}
-	return fmt.Sprintf("Linked %s. New activity will be posted here.", project), nil
+	if silent {
+		return fmt.Sprintf("Linked %s through %s, silently: this chat can work with its cards, and gets no activity.", slug, name), nil
+	}
+	return fmt.Sprintf("Linked %s through %s. New activity will be posted here.", slug, name), nil
+}
+
+// linkText says how a project is linked.
+func linkText(l link) string {
+	if l.Silent {
+		return "through " + l.Agent + ", silently"
+	}
+	return "through " + l.Agent
 }
 
 func (m *Module) unlink(ctx context.Context, e otogi.Event, project string) (string, error) {
-	removed, err := m.store.removeLink(ctx, link{To: e.Destination(), Project: project})
+	removed, err := m.store.removeLink(ctx, e.Destination(), project)
 	if err != nil {
 		return "", err
 	}
@@ -534,15 +640,17 @@ func (m *Module) list(ctx context.Context, e otogi.Event) (string, error) {
 		return "", err
 	}
 	if len(links) == 0 {
-		return "No todou projects are linked to this chat. An operator can add one with /todou link <project>.", nil
+		return "No todou projects are linked to this chat. An operator can add one with /todou link <agent> <project>.", nil
 	}
-	names := make([]string, len(links))
+	lines := make([]string, len(links))
 	for i, l := range links {
-		names[i] = l.Project
+		lines[i] = "• " + l.Project + ", " + linkText(l)
 	}
-	return "Linked todou projects: " + strings.Join(names, ", "), nil
+	return "Linked todou projects:\n" + strings.Join(lines, "\n"), nil
 }
 
+// status shows each agent's account and watcher, and this chat's links and
+// delivery.
 func (m *Module) status(ctx context.Context, e otogi.Event) (string, error) {
 	to := e.Destination()
 	sum, err := m.store.summary(ctx, to)
@@ -553,35 +661,42 @@ func (m *Module) status(ctx context.Context, e otogi.Event) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	whoCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	identity, whoErr := m.cli.whoami(whoCtx)
-	if whoErr != nil {
-		identity = "unknown: " + whoErr.Error()
-	}
-	m.mu.Lock()
-	w := m.watcher
-	m.mu.Unlock()
 	ago := func(t time.Time) string { return duration(m.now().Sub(t).Round(time.Second)) + " ago" }
-
 	var b strings.Builder
-	fmt.Fprintf(&b, "Server: %s\nAgent: %s\n", m.cfg.Server, identity)
-	switch {
-	case w.err != "":
-		fmt.Fprintf(&b, "Watcher: failed %s, restarting: %s", ago(w.failedAt), w.err)
-	case w.since.IsZero():
-		b.WriteString("Watcher: starting")
-	default:
-		fmt.Fprintf(&b, "Watcher: running since %s", ago(w.since))
-	}
-	if sum.HasCursor {
-		fmt.Fprintf(&b, ", last batch %s", ago(sum.BatchAt))
+	for _, name := range m.names {
+		a := m.agents[name]
+		whoCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		identity, whoErr := a.cli.whoami(whoCtx)
+		cancel()
+		if whoErr != nil {
+			identity = "unknown: " + whoErr.Error()
+		}
+		a.mu.Lock()
+		w := a.watcher
+		a.mu.Unlock()
+		fmt.Fprintf(&b, "Agent %s: %s on %s\n  Watcher: ", name, identity, a.cfg.Server)
+		switch {
+		case w.err != "":
+			fmt.Fprintf(&b, "failed %s, restarting: %s", ago(w.failedAt), w.err)
+		case w.since.IsZero():
+			b.WriteString("starting")
+		default:
+			fmt.Fprintf(&b, "running since %s", ago(w.since))
+		}
+		batch, err := m.store.batchAt(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		if !batch.IsZero() {
+			fmt.Fprintf(&b, ", last batch %s", ago(batch))
+		}
+		b.WriteString("\n")
 	}
 	cooldown, _, err := m.cooldown(ctx, to)
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(&b, "\nCooldown: %s", cooldownText(cooldown))
+	fmt.Fprintf(&b, "Cooldown: %s", cooldownText(cooldown))
 	if !sum.LastSent.IsZero() {
 		fmt.Fprintf(&b, ", last digest %s", ago(sum.LastSent))
 	}

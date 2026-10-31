@@ -23,20 +23,35 @@ const (
 
 // renderer turns queued entries into digest messages.
 type renderer struct {
-	linkBase string // web base URL for issue links
-	maxBody  int    // UTF-16 units of a body to quote
+	links   map[string]string // web base URL for issue links, by agent
+	maxBody int               // UTF-16 units of a body to quote
 }
+
+// facts is what a digest knows beyond its entries, looked up through each
+// entry's agent: issue titles and bodies by titleKey, the questions asked by
+// comment (questionKey), and project slugs by ID.
+type facts struct {
+	issues    map[string]issue
+	questions map[string][]question
+	slugs     map[string]map[int64]string
+}
+
+func titleKey(agent, project string, number int64) string {
+	return fmt.Sprintf("%s:%s#%d", agent, project, number)
+}
+
+func questionKey(agent string, comment int64) string { return fmt.Sprintf("%s:%d", agent, comment) }
 
 // digest renders entries, oldest first, as one digest: the entries grouped
 // by issue in order of first appearance, each issue under a line with its
 // linked reference and title.
 // A digest too long for one message continues in the next, repeating the
-// issue line. issues holds what is known about each issue by titleKey.
-func (r renderer) digest(entries []entry, issues map[string]issue) []otogi.Message {
+// issue line.
+func (r renderer) digest(entries []entry, known facts) []otogi.Message {
 	var groups [][]entry
 	index := map[string]int{}
 	for _, e := range entries {
-		key := titleKey(e.Project, e.IssueNumber)
+		key := titleKey(e.agent, e.Project, e.IssueNumber)
 		i, ok := index[key]
 		if !ok {
 			i, index[key] = len(groups), len(groups)
@@ -52,10 +67,10 @@ func (r renderer) digest(entries []entry, issues map[string]issue) []otogi.Messa
 		msg = &otogi.RichText{}
 	}
 	for _, g := range groups {
-		info := issues[titleKey(g[0].Project, g[0].IssueNumber)]
+		info := known.issues[titleKey(g[0].agent, g[0].Project, g[0].IssueNumber)]
 		head := r.issueLine(g[0], info)
 		for i, e := range g {
-			chunk, headed := r.entry(e, info), false
+			chunk, headed := r.entry(e, info, known), false
 			sep := "\n"
 			if i == 0 {
 				chunk, headed, sep = joined(head, chunk), true, "\n\n"
@@ -131,7 +146,7 @@ func (r renderer) issueLine(e entry, info issue) *otogi.RichText {
 		ref = e.Project + "#" + strconv.FormatInt(e.IssueNumber, 10)
 	}
 	t.Mark(otogi.AnnotationBold, "", func() {
-		t.Mark(otogi.AnnotationLink, fmt.Sprintf("%s/projects/%s/issues/%d", r.linkBase, e.Project, e.IssueNumber), func() { t.Write(ref) })
+		t.Mark(otogi.AnnotationLink, fmt.Sprintf("%s/projects/%s/issues/%d", r.links[e.agent], e.Project, e.IssueNumber), func() { t.Write(ref) })
 		if title := strings.TrimSpace(info.Title); title != "" {
 			if runes := []rune(title); len(runes) > titleChars {
 				title = strings.TrimSpace(string(runes[:titleChars])) + "…"
@@ -143,12 +158,12 @@ func (r renderer) issueLine(e entry, info issue) *otogi.RichText {
 }
 
 // entry is one entry's line, with its bodies quoted underneath.
-func (r renderer) entry(e entry, info issue) *otogi.RichText {
+func (r renderer) entry(e entry, info issue, known facts) *otogi.RichText {
 	who := e.Author
 	if e.Type != "comment" {
 		who = e.Actor
 	}
-	icon, action, bodies := describe(e, info)
+	icon, action, bodies := describe(e, info, known)
 	t := &otogi.RichText{}
 	t.Write(icon + " ")
 	a := e.AgentContext
@@ -168,7 +183,7 @@ func (r renderer) entry(e entry, info issue) *otogi.RichText {
 	bodies = slices.DeleteFunc(bodies, func(b string) bool { return strings.TrimSpace(b) == "" })
 	for _, body := range bodies {
 		t.Write("\n")
-		t.Mark(otogi.AnnotationExpandableBlockQuote, "", func() { add(t, r.quote(body)) })
+		t.Mark(otogi.AnnotationExpandableBlockQuote, "", func() { add(t, r.quote(body, r.links[e.agent])) })
 	}
 	return t
 }
@@ -196,10 +211,13 @@ func phrase(parts ...any) *otogi.RichText {
 
 // describe returns the icon, the action phrase, and Markdown bodies to
 // quote, each in its own quote.
-func describe(e entry, info issue) (icon string, action *otogi.RichText, bodies []string) {
+func describe(e entry, info issue, known facts) (icon string, action *otogi.RichText, bodies []string) {
 	if e.Type == "comment" {
 		if e.HiddenAt != nil {
 			return "💬", phrase("commented (hidden)"), nil
+		}
+		if e.Kind == "me" { // a /me action reads after the name
+			return "💭", phrase(strings.TrimSpace(e.Body)), nil
 		}
 		if e.Component != nil && len(e.Component.Questions) > 0 {
 			return "❓", phrase("asked"), []string{e.Body, questionsMarkdown(e.Component.Questions)}
@@ -233,7 +251,36 @@ func describe(e entry, info issue) (icon string, action *otogi.RichText, bodies 
 	case "spec_withdrawn":
 		return "📄", phrase("withdrew spec ", code("v"+str(p["version"]))), nil
 	case "question_answered":
-		return "🙋", phrase("answered"), []string{answersMarkdown(p, info.Questions)}
+		return "🙋", phrase("answered"), []string{answersMarkdown(p, known.questions[questionKey(e.agent, int64(num(p["comment_id"])))])}
+	case "spec_comments_resolved":
+		n := 0
+		if ids, ok := p["comment_ids"].([]any); ok {
+			n = len(ids)
+		}
+		return "📝", phrase(fmt.Sprintf("resolved %d spec comment%s", n, plural(n))), nil
+	case "block_added", "block_removed":
+		other := cardRef(e.Project, str(p["other_project"]), num(p["other_number"]))
+		switch {
+		case e.EventType == "block_added" && p["role"] == "blocked":
+			return "⛔", phrase("marked it blocked by ", bold(other)), nil
+		case e.EventType == "block_added":
+			return "⛔", phrase("marked it blocking ", bold(other)), nil
+		case p["role"] == "blocked":
+			return "⛔", phrase("removed its block by ", bold(other)), nil
+		default:
+			return "⛔", phrase("removed its block on ", bold(other)), nil
+		}
+	case "block_cleared":
+		return "🟢", phrase("cleared its blocker ", bold(cardRef(e.Project, str(p["blocker_project"]), num(p["blocker_number"])))), nil
+	case "block_reblocked":
+		return "⛔", phrase("made its blocker ", bold(cardRef(e.Project, str(p["blocker_project"]), num(p["blocker_number"]))), " active again"), nil
+	case "referenced", "cross_referenced":
+		slug := known.slugs[e.agent][int64(num(p["by_project_id"]))]
+		return "🔗", phrase("mentioned it in ", bold(cardRef(e.Project, slug, num(p["by_issue"])))), nil
+	case "attachment_added":
+		return "📎", phrase("attached ", code(field(p, "attachment", "filename"))), nil
+	case "attachment_deleted":
+		return "📎", phrase("deleted attachment ", code(field(p, "attachment", "filename"))), nil
 	case "deleted":
 		return "🗑", phrase("deleted it"), nil
 	case "restored":
@@ -241,6 +288,28 @@ func describe(e entry, info issue) (icon string, action *otogi.RichText, bodies 
 	default:
 		return "•", phrase(strings.ReplaceAll(e.EventType, "_", " ")), nil
 	}
+}
+
+// cardRef names another card: "#12" in the same project, "web#12" in
+// another, or "#12" when its project is unknown.
+func cardRef(project, other string, number float64) string {
+	n := strconv.FormatFloat(number, 'f', -1, 64)
+	if other == "" || other == "?" || other == project {
+		return "#" + n
+	}
+	return other + "#" + n
+}
+
+func num(v any) float64 {
+	f, _ := v.(float64)
+	return f
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // questionsMarkdown lists questions with their options.
@@ -259,11 +328,10 @@ func questionsMarkdown(questions []question) string {
 }
 
 // answersMarkdown lists the answers of a question_answered payload under
-// their questions, which questions holds by asking comment.
-func answersMarkdown(p map[string]any, questions map[int64][]question) string {
+// the questions of the asking comment.
+func answersMarkdown(p map[string]any, questions []question) string {
 	var payload struct {
-		CommentID int64 `json:"comment_id"`
-		Answers   []struct {
+		Answers []struct {
 			Key      string  `json:"key"`
 			Other    *string `json:"other"`
 			Declined bool    `json:"declined"`
@@ -282,8 +350,8 @@ func answersMarkdown(p map[string]any, questions map[int64][]question) string {
 			b.WriteString("\n\n")
 		}
 		head := "**" + a.Key + "**"
-		if j := slices.IndexFunc(questions[payload.CommentID], func(q question) bool { return q.Key == a.Key }); j >= 0 {
-			q := questions[payload.CommentID][j]
+		if j := slices.IndexFunc(questions, func(q question) bool { return q.Key == a.Key }); j >= 0 {
+			q := questions[j]
 			head = "**" + q.Header + "**: " + q.Question
 		}
 		b.WriteString(head)
@@ -303,7 +371,7 @@ func answersMarkdown(p map[string]any, questions map[int64][]question) string {
 // quote renders a Markdown body for a collapsed quote under an entry, cut to
 // maxBody UTF-16 units and without block quotes of its own: chats do not
 // nest quotes.
-func (r renderer) quote(body string) *otogi.RichText {
+func (r renderer) quote(body, linkBase string) *otogi.RichText {
 	md := markdown.Render(strings.TrimSpace(body))
 	text := md.String()
 	end, units := len(text), 0
@@ -320,7 +388,7 @@ func (r renderer) quote(body string) *otogi.RichText {
 		}
 		a.Length = min(a.Length, end-a.Offset)
 		if a.Kind == otogi.AnnotationLink && strings.HasPrefix(a.Target, "/") {
-			a.Target = r.linkBase + a.Target // todou links its own pages by path
+			a.Target = linkBase + a.Target // todou links its own pages by path
 		}
 		kept = append(kept, a)
 	}

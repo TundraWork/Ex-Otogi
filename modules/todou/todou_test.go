@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"slices"
 	"strings"
@@ -13,23 +14,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pressly/goose/v3"
+
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/modulestore"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// fakeCLI answers one-shot CLI calls.
-type fakeCLI struct{ projects []string }
+// fakeCLI answers one-shot CLI calls and keeps them.
+type fakeCLI struct {
+	projects []string
+	mu       sync.Mutex
+	calls    [][]string
+}
 
 func (f *fakeCLI) run(_ context.Context, args ...string) ([]byte, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, args)
+	f.mu.Unlock()
 	switch args[0] {
 	case "watch": // --poll --print-cursor
 		return []byte("c0\n"), nil
 	case "issue":
-		return []byte(fmt.Sprintf(`{"issue":{"title":"Title of %s","body":"Body of %s"},"timeline":[]}`, args[2], args[2])), nil
+		return []byte(fmt.Sprintf(`{"issue":{"title":"Title of %s","body":"Body of %s"},"ref_format":{}}`, args[2], args[2])), nil
+	case "comment": // view <card> <comment>
+		return []byte(`{"type":"comment","component":{"type":"questions","questions":[{"key":"q1","header":"Scope","question":"Which?"}]}}`), nil
 	case "project":
-		var ps []map[string]string
-		for _, p := range f.projects {
-			ps = append(ps, map[string]string{"slug": p})
+		var ps []map[string]any
+		for i, p := range f.projects {
+			ps = append(ps, map[string]any{"id": i + 1, "slug": p})
 		}
 		return json.Marshal(ps)
 	case "whoami":
@@ -136,6 +148,7 @@ type harness struct {
 	host    *fakeHost
 	clock   *clock
 	storage *modulestore.Storage
+	cli     *fakeCLI
 	sends   []sent
 	fail    func(otogi.ConversationID) error
 }
@@ -154,14 +167,20 @@ func newHarness(t *testing.T, cfg Config, stream streamer) *harness {
 // run. The module is stopped when the test ends.
 func startHarness(t *testing.T, storage *modulestore.Storage, cfg Config, stream streamer) *harness {
 	t.Helper()
-	cfg.CLI, cfg.Server, cfg.Token = "todou", "https://todou.test", "todou_pat_x"
+	cfg.CLI = "todou"
+	if cfg.Agents == nil {
+		cfg.Agents = map[string]AgentConfig{"neptune": {Server: "https://todou.test", Token: "todou_pat_x"}}
+	}
 	m, err := New(cfg, []string{"telegram:user:1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	h := &harness{m: m, host: &fakeHost{storage: storage, timers: map[string]otogi.Timer{}}, clock: &clock{t: time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)}, storage: storage}
 	m.now = h.clock.now
-	m.cli = client{run: (&fakeCLI{projects: []string{"web", "api"}}).run, stream: stream}
+	h.cli = &fakeCLI{projects: []string{"web", "api"}}
+	for _, a := range m.agents {
+		a.cli = client{run: h.cli.run, stream: stream}
+	}
 	if err := m.Start(context.Background(), h.host); err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +189,13 @@ func startHarness(t *testing.T, storage *modulestore.Storage, cfg Config, stream
 			t.Error(err)
 		}
 	})
-	waitFor(t, "the watcher to run", func() bool {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return !m.watcher.since.IsZero() || m.watcher.err != ""
-	})
+	for _, a := range m.agents {
+		waitFor(t, "the watcher to run", func() bool {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return !a.watcher.since.IsZero() || a.watcher.err != ""
+		})
+	}
 	return h
 }
 
@@ -233,7 +254,7 @@ func (h *harness) batch(t *testing.T, next string, records ...string) {
 		}
 		entries = append(entries, e)
 	}
-	if err := h.m.ingest(context.Background(), entries, next); err != nil {
+	if err := h.m.ingest(context.Background(), h.m.agents["neptune"], entries, next); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -281,17 +302,17 @@ func TestWatcherQueuesLinkedActivityAndRestartsOnFailure(t *testing.T) {
 		return &cliError{args: args, code: 1, stderr: "token revoked"}
 	}
 	h := newHarness(t, Config{}, stream)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
 	close(release)
 	waitFor(t, "the watcher failure", func() bool { return slices.Contains(h.host.kinds(), "todou.watch_failed") })
 
 	mu.Lock()
 	args := strings.Join(calls[0], " ")
 	mu.Unlock()
-	if !strings.Contains(args, "--follow --json --any-actor --since c0 --debounce 10 --type comment,opened") {
+	if !strings.Contains(args, "--follow --invisible --json --any-actor --since c0 --debounce 10 --type comment,opened") {
 		t.Errorf("watch args = %q", args)
 	}
-	if got, _ := h.m.store.cursor(context.Background()); got != "c1" {
+	if got, _ := h.m.store.cursor(context.Background(), "neptune"); got != "c1" {
 		t.Errorf("cursor = %q, want c1", got)
 	}
 	queue, err := h.m.store.queue(context.Background(), chat("chat:a"))
@@ -309,7 +330,7 @@ func TestWatcherQueuesLinkedActivityAndRestartsOnFailure(t *testing.T) {
 
 func TestDigestsAreThrottledAndAggregated(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
 	h.sends = nil
 
 	h.batch(t, "c1", comment(1, "web", 42, "first"))
@@ -351,8 +372,8 @@ func TestDigestsAreThrottledAndAggregated(t *testing.T) {
 
 func TestFailuresBlockTheChatUntilGivenUp(t *testing.T) {
 	h := newHarness(t, Config{MaxAttempts: 2}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
-	h.command(t, "chat:b", "", otogi.DirectionOutgoing, "link web")
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:b", "", otogi.DirectionOutgoing, "link neptune web")
 	h.sends = nil
 	h.fail = func(c otogi.ConversationID) error {
 		if c == "chat:a" {
@@ -391,7 +412,7 @@ func TestFailuresBlockTheChatUntilGivenUp(t *testing.T) {
 
 func TestRetryUsesTheSameOrigin(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
 	h.sends = nil
 	attempts := 0
 	h.fail = func(otogi.ConversationID) error {
@@ -414,8 +435,8 @@ func TestRetryUsesTheSameOrigin(t *testing.T) {
 
 func TestUnlinkDropsQueuedEntries(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link api")
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune api")
 	h.batch(t, "c1", comment(1, "web", 1, "web news"), comment(2, "api", 1, "api news"))
 	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "unlink web")
 	h.sends = nil
@@ -434,7 +455,7 @@ func TestStartRearmsChatsWithABacklog(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 	first := startHarness(t, storage, Config{}, idle)
-	first.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
+	first.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
 	first.batch(t, "c1", comment(1, "web", 1, "x"))
 	if err := first.m.Stop(context.Background()); err != nil {
 		t.Fatal(err)
@@ -457,12 +478,14 @@ func TestCommands(t *testing.T) {
 		args      string
 		want      string
 	}{
-		{"user:9", otogi.DirectionIncoming, "link web", "Your ID is telegram:user:9"},
-		{"user:1", otogi.DirectionIncoming, "link nope", "cannot read a project named \"nope\""},
-		{"user:1", otogi.DirectionIncoming, "link", "Usage: /todou link"},
-		{"user:1", otogi.DirectionIncoming, "link web", "Linked web"},
-		{"", otogi.DirectionOutgoing, "link web", "already linked"},
-		{"user:9", otogi.DirectionIncoming, "list", "Linked todou projects: web"},
+		{"user:9", otogi.DirectionIncoming, "link neptune web", "Your ID is telegram:user:9"},
+		{"user:1", otogi.DirectionIncoming, "link neptune nope", "neptune cannot read a project named \"nope\""},
+		{"user:1", otogi.DirectionIncoming, "link akarin web", "There is no agent called \"akarin\". Agents: neptune."},
+		{"user:1", otogi.DirectionIncoming, "link web", "Usage: /todou link <agent> <project> [silent]. Agents: neptune"},
+		{"user:1", otogi.DirectionIncoming, "link neptune web", "Linked web through neptune. New activity"},
+		{"", otogi.DirectionOutgoing, "link neptune web", "web is already linked here, through neptune."},
+		{"", otogi.DirectionOutgoing, "link neptune web silent", "Linked web through neptune, silently"},
+		{"user:9", otogi.DirectionIncoming, "list", "Linked todou projects:\n• web, through neptune, silently"},
 		{"user:1", otogi.DirectionIncoming, "unlink web", "Unlinked web"},
 		{"user:1", otogi.DirectionIncoming, "list", "No todou projects"},
 		{"user:9", otogi.DirectionIncoming, "frobnicate", "Usage: /todou"},
@@ -476,7 +499,7 @@ func TestCommands(t *testing.T) {
 
 func TestCooldownCommand(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link web")
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
 	steps := []struct {
 		actor     otogi.ActorID
 		direction otogi.Direction
@@ -538,5 +561,145 @@ func TestDurationsReadNaturally(t *testing.T) {
 		if got := duration(d); got != want {
 			t.Errorf("duration(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+func TestAgentsAndSilentLinks(t *testing.T) {
+	h := newHarness(t, Config{Agents: map[string]AgentConfig{
+		"neptune": {Server: "https://todou.test", Token: "a"},
+		"akarin":  {Server: "https://other.test", Token: "b", LinkBase: "https://web.other.test/"},
+	}}, idle)
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:b", "", otogi.DirectionOutgoing, "link akarin web")
+	h.command(t, "chat:c", "", otogi.DirectionOutgoing, "link neptune web silent")
+	ingest := func(agent, next string, records ...string) {
+		var entries []entry
+		for _, r := range records {
+			e, err := decodeEntry(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries = append(entries, e)
+		}
+		if err := h.m.ingest(context.Background(), h.m.agents[agent], entries, next); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ingest("neptune", "n1", comment(1, "web", 7, "seen by neptune"))
+	ingest("akarin", "a1", comment(2, "web", 7, "seen by akarin"))
+	for agent, want := range map[string]string{"neptune": "n1", "akarin": "a1"} {
+		if got, _ := h.m.store.cursor(context.Background(), agent); got != want {
+			t.Errorf("%s cursor = %q, want %q", agent, got, want)
+		}
+	}
+	for conversation, want := range map[otogi.ConversationID][]string{"chat:a": {"seen by neptune"}, "chat:b": {"seen by akarin"}, "chat:c": nil} {
+		queue, err := h.m.store.queue(context.Background(), chat(conversation))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var bodies []string
+		for _, q := range queue {
+			bodies = append(bodies, q.Entry.Body)
+		}
+		if !slices.Equal(bodies, want) {
+			t.Errorf("%s queue = %q, want %q", conversation, bodies, want)
+		}
+	}
+	if err := h.fire(t, "chat:b"); err != nil {
+		t.Fatal(err)
+	}
+	part := h.sends[len(h.sends)-1].msg.Parts[0]
+	if !slices.ContainsFunc(part.Annotations, func(a otogi.Annotation) bool { return a.Target == "https://web.other.test/projects/web/issues/7" }) {
+		t.Fatalf("akarin's digest does not link through its link_base: %+v", part.Annotations)
+	}
+	status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status")
+	if !strings.Contains(status, "Agent akarin: Notifier (@bot, machine) on https://other.test\n  Watcher: running") || !strings.Contains(status, "Agent neptune:") {
+		t.Fatalf("status = %q", status)
+	}
+}
+
+func TestReadsLeaveNoReadMarks(t *testing.T) {
+	h := newHarness(t, Config{}, idle)
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	answered := record(map[string]any{"type": "event", "event_type": "question_answered", "id": 9, "project": "web", "issue_number": 3, "issue_ref": "web#3",
+		"actor": map[string]any{"login": "john"}, "payload": map[string]any{"comment_id": 55, "answers": []any{map[string]any{"key": "q1", "selected": []any{map[string]any{"label": "This one"}}}}}})
+	h.batch(t, "c1", comment(1, "web", 3, "hi"), answered)
+	if err := h.fire(t, "chat:a"); err != nil {
+		t.Fatal(err)
+	}
+	if text := h.sends[len(h.sends)-1].msg.PlainText(); !strings.Contains(text, "Scope: Which?\n→ This one") {
+		t.Fatalf("the answer lacks its question: %q", text)
+	}
+	h.cli.mu.Lock()
+	defer h.cli.mu.Unlock()
+	var views []string
+	for _, c := range h.cli.calls {
+		if len(c) > 1 && c[0] == "issue" && c[1] == "view" || c[0] == "comment" {
+			views = append(views, strings.Join(c, " "))
+		}
+	}
+	if !slices.Equal(views, []string{"issue view web/3 --brief --json", "comment view web/3 55 --json"}) {
+		t.Fatalf("reads = %q", views)
+	}
+}
+
+func TestLinksFromBeforeAgents(t *testing.T) {
+	for name, agents := range map[string]map[string]AgentConfig{
+		"one agent adopts them":      {"neptune": {Server: "https://todou.test", Token: "a"}},
+		"several agents refuse them": {"neptune": {Server: "https://todou.test", Token: "a"}, "akarin": {Server: "https://o.test", Token: "b"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			storage, err := modulestore.Open(context.Background(), t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = storage.Close() })
+			db, err := storage.Database(context.Background(), "todou")
+			if err != nil {
+				t.Fatal(err)
+			}
+			sub, _ := fs.Sub(migrations, "migrations")
+			provider, err := goose.NewProvider(goose.DialectSQLite3, db, sub)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := provider.UpTo(context.Background(), 3); err != nil {
+				t.Fatal(err)
+			}
+			for _, q := range []string{
+				"INSERT INTO state (singleton, cursor, batch_at) VALUES (1, 'old-cursor', 1)",
+				"INSERT INTO links (platform, account, conversation, project, created_by, created_at) VALUES ('telegram', 'main', 'chat:a', 'web', 'x', 1)",
+			} {
+				if _, err := db.Exec(q); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m, err := New(Config{CLI: "todou", Agents: agents}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, a := range m.agents {
+				a.cli = client{run: (&fakeCLI{}).run, stream: idle}
+			}
+			host := &fakeHost{storage: storage, timers: map[string]otogi.Timer{}}
+			err = m.Start(context.Background(), host)
+			if len(agents) > 1 {
+				if err == nil || !strings.Contains(err.Error(), "name no agent") {
+					t.Fatalf("Start = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = m.Stop(context.Background()) })
+			links, err := m.store.links(context.Background(), nil)
+			if err != nil || len(links) != 1 || links[0].Agent != "neptune" || links[0].Silent {
+				t.Fatalf("links = %+v, %v", links, err)
+			}
+			if got, _ := m.store.cursor(context.Background(), "neptune"); got != "old-cursor" {
+				t.Fatalf("cursor = %q", got)
+			}
+		})
 	}
 }
