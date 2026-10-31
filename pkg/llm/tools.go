@@ -235,3 +235,18 @@ func (t funcTool) Function() Function { return t.f }
 func (t funcTool) Call(ctx context.Context, event otogi.Event, args json.RawMessage) (any, error) {
 	return t.call(ctx, event, args)
 }
+
+type agentKey struct{}
+
+// ContextWithAgent returns ctx naming the agent (for example a chat
+// profile) whose model runs tools in it, so a tool can attribute what it
+// writes.
+func ContextWithAgent(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, agentKey{}, name)
+}
+
+// AgentFrom returns the agent ctx names, or "".
+func AgentFrom(ctx context.Context) string {
+	name, _ := ctx.Value(agentKey{}).(string)
+	return name
+}

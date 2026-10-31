@@ -14,8 +14,9 @@ import (
 	"time"
 )
 
-// runner runs the todou CLI with args and returns its stdout. Tests replace it.
-type runner func(ctx context.Context, args ...string) ([]byte, error)
+// runner runs the todou CLI with args, and stdin when it is not empty, and
+// returns its stdout. Tests replace it.
+type runner func(ctx context.Context, stdin string, args ...string) ([]byte, error)
 
 // cliError is a failed CLI call, with its exit code and the end of stderr.
 type cliError struct {
@@ -31,11 +32,14 @@ func (e *cliError) Error() string {
 // execRunner runs the real CLI in config-free mode: the server and token come
 // from the environment, so nothing is read from or written to ~/.config/todou.
 func execRunner(path, server, token string, timeout time.Duration) runner {
-	return func(ctx context.Context, args ...string) ([]byte, error) {
+	return func(ctx context.Context, stdin string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, path, args...)
 		cmd.Env = append(os.Environ(), "TODOU_SERVER="+server, "TODOU_TOKEN="+token)
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()
@@ -220,7 +224,7 @@ func decodeEntry(raw string) (entry, error) {
 
 // now returns a cursor at the current position, for a first start.
 func (c client) now(ctx context.Context) (string, error) {
-	out, err := c.run(ctx, "watch", "--all-projects", "--poll", "--print-cursor")
+	out, err := c.run(ctx, "", "watch", "--all-projects", "--poll", "--print-cursor")
 	if err != nil {
 		return "", err
 	}
@@ -255,7 +259,7 @@ type question struct {
 // no read mark: the agent account only reports the card, it does not work
 // it.
 func (c client) issue(ctx context.Context, project string, number int64) (issue, error) {
-	out, err := c.run(ctx, "issue", "view", project+"/"+strconv.FormatInt(number, 10), "--brief", "--json")
+	out, err := c.run(ctx, "", "issue", "view", project+"/"+strconv.FormatInt(number, 10), "--brief", "--json")
 	if err != nil {
 		return issue{}, err
 	}
@@ -274,7 +278,7 @@ func (c client) issue(ctx context.Context, project string, number int64) (issue,
 // questions reads the questions a comment asks; reading a comment leaves no
 // read mark.
 func (c client) questions(ctx context.Context, project string, number, commentID int64) ([]question, error) {
-	out, err := c.run(ctx, "comment", "view", project+"/"+strconv.FormatInt(number, 10), strconv.FormatInt(commentID, 10), "--json")
+	out, err := c.run(ctx, "", "comment", "view", project+"/"+strconv.FormatInt(number, 10), strconv.FormatInt(commentID, 10), "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +301,7 @@ type project struct {
 }
 
 func (c client) projects(ctx context.Context) ([]project, error) {
-	out, err := c.run(ctx, "project", "list", "--json")
+	out, err := c.run(ctx, "", "project", "list", "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +314,7 @@ func (c client) projects(ctx context.Context) ([]project, error) {
 
 // whoami describes the agent account the token belongs to.
 func (c client) whoami(ctx context.Context) (string, error) {
-	out, err := c.run(ctx, "whoami", "--json")
+	out, err := c.run(ctx, "", "whoami", "--json")
 	if err != nil {
 		return "", err
 	}
@@ -323,4 +327,236 @@ func (c client) whoami(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("todou whoami: %w", err)
 	}
 	return fmt.Sprintf("%s (@%s, %s)", me.DisplayName, me.Login, me.Kind), nil
+}
+
+// card is a card as `issue view --brief --json` shows it.
+type card struct {
+	Number int64  `json:"number"`
+	Ref    string `json:"ref"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	Status struct {
+		Name     string `json:"name"`
+		Category string `json:"category"`
+	} `json:"status"`
+	Labels []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+	Assignees []user `json:"assignees"`
+	BlockedBy []edge `json:"blocked_by"`
+	Blocks    []edge `json:"blocks"`
+}
+
+// edge is one side of a block between cards.
+type edge struct {
+	Ref       string  `json:"ref"`
+	ClearedAt *string `json:"cleared_at"`
+}
+
+// view reads a card by any ref the CLI accepts; project, when set, is the
+// project the ref is read in (a prefix that contradicts it is refused).
+// --brief leaves no read mark.
+func (c client) view(ctx context.Context, project, ref string) (card, error) {
+	args := []string{"issue", "view", ref, "--brief", "--json"}
+	if project != "" {
+		args = append(args, "-p", project)
+	}
+	out, err := c.run(ctx, "", args...)
+	if err != nil {
+		return card{}, err
+	}
+	var view struct {
+		Issue card `json:"issue"`
+	}
+	if err := json.Unmarshal(out, &view); err != nil {
+		return card{}, fmt.Errorf("todou issue view: %w", err)
+	}
+	return view.Issue, nil
+}
+
+// remark is a comment as `comment list --json` shows it.
+type remark struct {
+	ID        int64     `json:"id"`
+	Kind      string    `json:"kind"`
+	Author    *user     `json:"author"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	HiddenAt  *string   `json:"hidden_at"`
+}
+
+// comments reads a card's last n comments, without a read mark.
+func (c client) comments(ctx context.Context, project string, number int64, n int) ([]remark, error) {
+	out, err := c.run(ctx, "", "comment", "list", cardPath(project, number), "--last", strconv.Itoa(n), "--json")
+	if err != nil {
+		return nil, err
+	}
+	var list struct {
+		Comments []remark `json:"comments"`
+	}
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil, fmt.Errorf("todou comment list: %w", err)
+	}
+	return list.Comments, nil
+}
+
+// hit is one search result.
+type hit struct {
+	Kind  string `json:"kind"`
+	Field string `json:"field"`
+	Issue struct {
+		Ref    string `json:"ref"`
+		Title  string `json:"title"`
+		Status struct {
+			Name string `json:"name"`
+		} `json:"status"`
+	} `json:"issue"`
+	Snippet struct {
+		Text string `json:"text"`
+	} `json:"snippet"`
+}
+
+// search finds cards, comments, and specs in a project matching every term.
+func (c client) search(ctx context.Context, project string, terms []string, limit int) ([]hit, error) {
+	args := append([]string{"search"}, terms...)
+	out, err := c.run(ctx, "", append(args, "-p", project, "-L", strconv.Itoa(limit), "--json")...)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Items []hit `json:"items"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("todou search: %w", err)
+	}
+	return result.Items, nil
+}
+
+// projectFacts is what a write needs to know about a project: its statuses
+// in order, its labels, and its members.
+type projectFacts struct {
+	Statuses []string `json:"statuses"`
+	Closed   []string `json:"closed_statuses"`
+	Labels   []string `json:"labels"`
+	Members  []string `json:"members"`
+}
+
+func (c client) facts(ctx context.Context, project string) (projectFacts, error) {
+	var f projectFacts
+	var statuses []struct{ Name, Category string }
+	if err := c.readJSON(ctx, &statuses, "status", "list", "-p", project, "--json"); err != nil {
+		return f, err
+	}
+	var labels []struct{ Name string }
+	if err := c.readJSON(ctx, &labels, "label", "list", "-p", project, "--json"); err != nil {
+		return f, err
+	}
+	var members []struct {
+		User user `json:"user"`
+	}
+	if err := c.readJSON(ctx, &members, "project", "members", "-p", project, "--json"); err != nil {
+		return f, err
+	}
+	for _, s := range statuses {
+		f.Statuses = append(f.Statuses, s.Name)
+		if s.Category == "closed" {
+			f.Closed = append(f.Closed, s.Name)
+		}
+	}
+	for _, l := range labels {
+		f.Labels = append(f.Labels, l.Name)
+	}
+	for _, m := range members {
+		f.Members = append(f.Members, m.User.Login)
+	}
+	return f, nil
+}
+
+// readJSON runs a read and decodes its JSON output into v.
+func (c client) readJSON(ctx context.Context, v any, args ...string) error {
+	out, err := c.run(ctx, "", args...)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(out, v); err != nil {
+		return fmt.Errorf("todou %s: %w", strings.Join(args[:2], " "), err)
+	}
+	return nil
+}
+
+func cardPath(project string, number int64) string {
+	return project + "/" + strconv.FormatInt(number, 10)
+}
+
+// create files a card. The body goes through stdin, so Markdown survives
+// verbatim.
+func (c client) create(ctx context.Context, project, title, body, status string, labels, assignees []string) (card, error) {
+	args := []string{"issue", "create", "-p", project, "--title", title, "--body-file", "-", "--json"}
+	if status != "" {
+		args = append(args, "--status", status)
+	}
+	for _, l := range labels {
+		args = append(args, "--label", l)
+	}
+	for _, a := range assignees {
+		args = append(args, "--assignee", a)
+	}
+	out, err := c.run(ctx, body, args...)
+	if err != nil {
+		return card{}, err
+	}
+	var created card
+	if err := json.Unmarshal(out, &created); err != nil {
+		return card{}, fmt.Errorf("todou issue create: %w", err)
+	}
+	return created, nil
+}
+
+// comment adds a comment, returning its ID. The body goes through stdin.
+func (c client) comment(ctx context.Context, project string, number int64, body string) (int64, error) {
+	out, err := c.run(ctx, body, "comment", "add", cardPath(project, number), "--body-file", "-", "--json")
+	if err != nil {
+		return 0, err
+	}
+	var added struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(out, &added); err != nil {
+		return 0, fmt.Errorf("todou comment add: %w", err)
+	}
+	return added.ID, nil
+}
+
+func (c client) move(ctx context.Context, project string, number int64, status string) error {
+	_, err := c.run(ctx, "", "issue", "status", cardPath(project, number), status, "--json")
+	return err
+}
+
+func (c client) assign(ctx context.Context, project string, number int64, add, remove []string) error {
+	args := []string{"issue", "edit", cardPath(project, number), "--json"}
+	for _, a := range add {
+		args = append(args, "--add-assignee", a)
+	}
+	for _, r := range remove {
+		args = append(args, "--remove-assignee", r)
+	}
+	_, err := c.run(ctx, "", args...)
+	return err
+}
+
+// block records (or, with unblock, removes) that the card waits for the
+// cards in by and that the cards in blocks wait for it.
+func (c client) block(ctx context.Context, project string, number int64, by, blocks []string, unblock bool) error {
+	verb := "block"
+	if unblock {
+		verb = "unblock"
+	}
+	args := []string{"issue", verb, cardPath(project, number), "--json"}
+	if len(by) > 0 {
+		args = append(args, "--by", strings.Join(by, ","))
+	}
+	for _, b := range blocks {
+		args = append(args, "--blocks", b)
+	}
+	_, err := c.run(ctx, "", args...)
+	return err
 }

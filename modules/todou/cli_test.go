@@ -71,10 +71,18 @@ echo "c5"
 		if got, err := c.now(context.Background()); err != nil || got != "c5" {
 			t.Fatalf("now = %q, %v", got, err)
 		}
-		_, err := c.run(context.Background(), "fail")
+		_, err := c.run(context.Background(), "", "fail")
 		var cliErr *cliError
 		if !errors.As(err, &cliErr) || cliErr.code != 4 || !strings.Contains(cliErr.stderr, "network outage") {
 			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("stdin", func(t *testing.T) {
+		script := fakeTodou(t, "cat\n")
+		c := client{run: execRunner(script, "https://todou.test", "todou_pat_x", 5*time.Second)}
+		body := "Markdown, **bold**, CJK 中文\n\nand blank lines"
+		if out, err := c.run(context.Background(), body, "comment", "add"); err != nil || string(out) != body {
+			t.Fatalf("stdin came back as %q, %v", out, err)
 		}
 	})
 }

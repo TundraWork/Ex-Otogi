@@ -17,37 +17,94 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/modulestore"
+	"github.com/TundraWork/Ex-Otogi/pkg/llm"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// fakeCLI answers one-shot CLI calls and keeps them.
+// fakeCLI answers one-shot CLI calls and keeps them, with their stdin.
+// Project "web" has prefix WEB and "api" API; cards up to 100 exist.
 type fakeCLI struct {
 	projects []string
 	mu       sync.Mutex
 	calls    [][]string
+	stdins   []string
 }
 
-func (f *fakeCLI) run(_ context.Context, args ...string) ([]byte, error) {
+func (f *fakeCLI) run(_ context.Context, stdin string, args ...string) ([]byte, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, args)
+	f.stdins = append(f.stdins, stdin)
 	f.mu.Unlock()
-	switch args[0] {
-	case "watch": // --poll --print-cursor
+	fail := func(msg string) ([]byte, error) { return nil, &cliError{args: args, code: 1, stderr: msg} }
+	verb := args[0]
+	if len(args) > 1 {
+		verb += " " + args[1]
+	}
+	switch verb {
+	case "watch --all-projects": // --poll --print-cursor
 		return []byte("c0\n"), nil
-	case "issue":
-		return []byte(fmt.Sprintf(`{"issue":{"title":"Title of %s","body":"Body of %s"},"ref_format":{}}`, args[2], args[2])), nil
-	case "comment": // view <card> <comment>
+	case "issue view":
+		ref, project := args[2], ""
+		if i := slices.Index(args, "-p"); i >= 0 {
+			project = args[i+1]
+		}
+		var number int
+		switch {
+		case strings.Contains(ref, "/"):
+			project, number = strings.Split(ref, "/")[0], int(atoi(strings.Split(ref, "/")[1]))
+		case strings.Contains(ref, "-"):
+			prefix, n, _ := strings.Cut(ref, "-")
+			if strings.ToLower(prefix) != project {
+				return fail("prefix " + prefix + " contradicts -p " + project)
+			}
+			number = int(atoi(n))
+		}
+		if number < 1 || number > 100 {
+			return fail("no such issue")
+		}
+		return []byte(fmt.Sprintf(`{"issue":{"number":%d,"ref":"%s-%d","title":"Title of %s/%d","body":"Body of %s/%d","status":{"name":"Todo","category":"open"},
+			"assignees":[{"login":"alice"}],"labels":[{"name":"kind:bug"}],"blocked_by":[{"ref":"%s-3","cleared_at":null},{"ref":"%s-4","cleared_at":"2026-10-01T00:00:00Z"}],"blocks":[]},"ref_format":{}}`,
+			number, strings.ToUpper(project), number, project, number, project, number, strings.ToUpper(project), strings.ToUpper(project))), nil
+	case "issue create":
+		return []byte(`{"number":31,"ref":"WEB-31","title":"x"}`), nil
+	case "comment add":
+		return []byte(`{"id":501,"cursor":"c9"}`), nil
+	case "comment view":
 		return []byte(`{"type":"comment","component":{"type":"questions","questions":[{"key":"q1","header":"Scope","question":"Which?"}]}}`), nil
-	case "project":
+	case "comment list":
+		return []byte(`{"comments":[{"id":7,"kind":"comment","author":{"login":"alice"},"body":"Looks broken","created_at":"2026-10-30T00:00:00Z"}]}`), nil
+	case "issue status", "issue edit", "issue block", "issue unblock":
+		return []byte(`{}`), nil
+	case "label list":
+		return []byte(`[{"name":"kind:bug"},{"name":"area:ui"}]`), nil
+	case "status list":
+		return []byte(`[{"name":"Todo","category":"open"},{"name":"Done","category":"closed"}]`), nil
+	case "project members":
+		return []byte(`[{"user":{"login":"alice"}},{"user":{"login":"bob"}}]`), nil
+	case "search " + args[1]:
+		return []byte(`{"items":[{"kind":"issue","field":"title","issue":{"ref":"WEB-5","title":"Login crash","status":{"name":"Todo"}},"snippet":{"text":"Login crash"}}]}`), nil
+	case "project list":
 		var ps []map[string]any
 		for i, p := range f.projects {
 			ps = append(ps, map[string]any{"id": i + 1, "slug": p})
 		}
 		return json.Marshal(ps)
-	case "whoami":
+	case "whoami --json":
 		return []byte(`{"login":"bot","display_name":"Notifier","kind":"machine"}`), nil
 	}
 	return nil, fmt.Errorf("unexpected call %v", args)
+}
+
+// last returns the most recent call starting with prefix, and its stdin.
+func (f *fakeCLI) last(prefix ...string) (string, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.calls) - 1; i >= 0; i-- {
+		if len(f.calls[i]) >= len(prefix) && slices.Equal(f.calls[i][:len(prefix)], prefix) {
+			return strings.Join(f.calls[i], " "), f.stdins[i]
+		}
+	}
+	return "", ""
 }
 
 // idle is a watcher that sees no activity.
@@ -94,13 +151,23 @@ func (i *fakeInvocation) Send(ctx context.Context, slot string, m otogi.Message)
 // fakeHost keeps records and timers; the watcher goroutine uses it too.
 type fakeHost struct {
 	otogi.Host
-	storage *modulestore.Storage
-	mu      sync.Mutex
-	records []otogi.Record
-	timers  map[string]otogi.Timer
+	storage  *modulestore.Storage
+	mu       sync.Mutex
+	records  []otogi.Record
+	timers   map[string]otogi.Timer
+	provided map[string]any
 }
 
 func (h *fakeHost) Logger() *slog.Logger { return slog.New(slog.DiscardHandler) }
+func (h *fakeHost) Provide(name string, service any) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.provided == nil {
+		h.provided = map[string]any{}
+	}
+	h.provided[name] = service
+	return nil
+}
 func (h *fakeHost) Database(ctx context.Context) (*sql.DB, error) {
 	return h.storage.Database(ctx, "todou")
 }
@@ -701,5 +768,123 @@ func TestLinksFromBeforeAgents(t *testing.T) {
 				t.Fatalf("cursor = %q", got)
 			}
 		})
+	}
+}
+
+// say sends a /todou message as Bob in the group "Friends" and returns the
+// reply; text is the whole message, rich lets it carry formatting.
+func (h *harness) say(t *testing.T, rich *otogi.RichText) string {
+	t.Helper()
+	text := rich.String()
+	args := strings.TrimSpace(strings.TrimPrefix(text, "/todou"))
+	e := otogi.Event{ID: "e1", Platform: "telegram", Account: "main", Direction: otogi.DirectionIncoming,
+		Conversation: otogi.Conversation{ID: "chat:a", Kind: otogi.ConversationGroup, Title: "Friends"},
+		Actor:        otogi.Actor{ID: "user:9", Name: "Bob"}, Message: rich.Message(), Command: &otogi.Command{Name: "todou", Args: args}}
+	before := len(h.sends)
+	if err := h.m.Handle(context.Background(), e, h.inv()); err != nil {
+		t.Fatal(err)
+	}
+	return h.sends[before].msg.PlainText()
+}
+
+func plain(text string) *otogi.RichText {
+	r := &otogi.RichText{}
+	r.Write(text)
+	return r
+}
+
+func TestWriteCommands(t *testing.T) {
+	h := newHarness(t, Config{}, idle)
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web silent")
+	const line = "— Bob, in Telegram “Friends”"
+
+	filing := plain("/todou new web Crash on start\nIt ")
+	filing.Mark(otogi.AnnotationBold, "", func() { filing.Write("crashes") })
+	filing.Write(" when I open it.\nEvery time.")
+	if got := h.say(t, filing); got != "Filed WEB-31: Crash on start\nhttps://todou.test/projects/web/issues/31" {
+		t.Fatalf("new: %q", got)
+	}
+	call, stdin := h.cli.last("issue", "create")
+	if call != "issue create -p web --title Crash on start --body-file - --json" || stdin != "It **crashes** when I open it.\nEvery time.\n\n"+line {
+		t.Fatalf("create: %q stdin %q", call, stdin)
+	}
+
+	for _, c := range []struct{ say, want, call, stdin string }{
+		{"/todou comment WEB-12 please check\nthe logs", "Commented on WEB-12.\nhttps://todou.test/projects/web/issues/12#comment-501", "comment add web/12 --body-file - --json", "please check\nthe logs\n\n" + line},
+		{"/todou comment 12 bare number works", "Commented on WEB-12.", "comment add web/12", "bare number works\n\n" + line},
+		{"/todou move web/12 In Progress", "Moved WEB-12 to In Progress.", "issue status web/12 In Progress --json", ""},
+		{"/todou assign WEB-12 @alice bob", "Assigned @alice, @bob to WEB-12.", "issue edit web/12 --json --add-assignee alice --add-assignee bob", ""},
+		{"/todou unassign WEB-12 alice", "Unassigned @alice from WEB-12.", "issue edit web/12 --json --remove-assignee alice", ""},
+		{"/todou block WEB-12 by WEB-3, web/4", "WEB-12 is now blocked by WEB-3, WEB-4.", "issue block web/12 --json --by web/3,web/4", ""},
+		{"/todou unblock WEB-12 blocks WEB-20", "WEB-12 no longer blocks WEB-20.", "issue unblock web/12 --json --blocks web/20", ""},
+		{"/todou view https://todou.test/projects/web/issues/12", "WEB-12 Title of web/12\nStatus: Todo · @alice · kind:bug\nBlocked by: WEB-3\nhttps://todou.test/projects/web/issues/12", "", ""},
+		{"/todou comment api/1 hi", "api is not linked to this chat.", "", ""},
+		{"/todou new api Some title", "api is not linked to this chat.", "", ""},
+		{"/todou move WEB-999 Done", "No card WEB-999 in the projects linked to this chat.", "", ""},
+		{"/todou block WEB-12 sideways WEB-3", "Usage: /todou block <card> by|blocks <card>…", "", ""},
+	} {
+		got := h.say(t, plain(c.say))
+		if !strings.HasPrefix(got, c.want) {
+			t.Errorf("%s:\n got %q\nwant %q", c.say, got, c.want)
+			continue
+		}
+		if c.call == "" {
+			continue
+		}
+		fields := strings.Fields(c.call)
+		call, stdin := h.cli.last(fields[0], fields[1], fields[2])
+		if !strings.HasPrefix(call, c.call) || stdin != c.stdin {
+			t.Errorf("%s: call %q stdin %q, want %q stdin %q", c.say, call, stdin, c.call, c.stdin)
+		}
+	}
+	var writes []string
+	for _, r := range h.host.records {
+		if r.Kind == "todou.write" {
+			p := r.Payload.(map[string]any)
+			writes = append(writes, fmt.Sprintf("%s %s by %s via %s", p["op"], p["project"], p["by"], p["path"]))
+		}
+	}
+	if len(writes) != 8 || writes[0] != "create web by telegram:user:9 via command" {
+		t.Fatalf("writes = %q", writes)
+	}
+}
+
+func TestTools(t *testing.T) {
+	h := newHarness(t, Config{}, idle)
+	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	tools := map[string]llm.Tool{}
+	for _, tool := range h.host.provided[llm.ToolsService("todou")].([]llm.Tool) {
+		tools[tool.Function().Name] = tool
+	}
+	e := otogi.Event{ID: "e2", Platform: "telegram", Account: "main", Conversation: otogi.Conversation{ID: "chat:a", Kind: otogi.ConversationDirect}, Actor: otogi.Actor{ID: "user:9", Name: "Bob"}}
+	ctx := llm.ContextWithAgent(context.Background(), "Luna")
+	call := func(name, args string) (string, error) {
+		out, err := tools[name].Call(ctx, e, json.RawMessage(args))
+		b, _ := json.Marshal(out)
+		return string(b), err
+	}
+	if _, err := call("todou_create", `{"project":"web","title":"Crash","body":"It crashes.","labels":["kind:typo"]}`); err == nil || !strings.Contains(err.Error(), `no label "kind:typo"; its labels are: kind:bug, area:ui`) {
+		t.Fatalf("unknown label: %v", err)
+	}
+	if out, err := call("todou_create", `{"project":"web","title":"Crash","body":"It crashes.","labels":["kind:bug"]}`); err != nil || out != `{"ref":"WEB-31","url":"https://todou.test/projects/web/issues/31"}` {
+		t.Fatalf("create: %s %v", out, err)
+	}
+	if call, stdin := h.cli.last("issue", "create"); !strings.Contains(call, "--label kind:bug") || stdin != "It crashes.\n\n— Bob, in a private Telegram chat via Luna" {
+		t.Fatalf("create call %q stdin %q", call, stdin)
+	}
+	if out, err := call("todou_view", `{"card":"WEB-12"}`); err != nil || !strings.Contains(out, `"body":"Body of web/12"`) || !strings.Contains(out, `"body":"Looks broken"`) {
+		t.Fatalf("view: %s %v", out, err)
+	}
+	if out, err := call("todou_search", `{"terms":"login crash"}`); err != nil || !strings.Contains(out, `"card":"WEB-5"`) {
+		t.Fatalf("search: %s %v", out, err)
+	}
+	if call, _ := h.cli.last("search"); call != "search login crash -p web -L 10 --json" {
+		t.Fatalf("search call %q", call)
+	}
+	if _, err := call("todou_block", `{"card":"WEB-12","blocked_by":["api/2"]}`); err == nil || err.Error() != "api is not linked to this chat." {
+		t.Fatalf("block across an unlinked project: %v", err)
+	}
+	if out, err := call("todou_projects", `{}`); err != nil || !strings.Contains(out, `"closed_statuses":["Done"]`) || !strings.Contains(out, `"members":["alice","bob"]`) {
+		t.Fatalf("projects: %s %v", out, err)
 	}
 }

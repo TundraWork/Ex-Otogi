@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TundraWork/Ex-Otogi/pkg/llm"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -179,10 +180,11 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{
 		ID: "todou",
 		Commands: []otogi.CommandSpec{{
-			Name: "todou", Usage: "link <agent> <project> [silent] | unlink <project> | list | cooldown [<duration> | default] | status",
+			Name: "todou", Usage: "view|comment|move|assign|block … <card> | new <project> <title> | link <agent> <project> [silent] | list | status",
 			Description: "work with todou projects linked to this chat, and post their activity",
 		}},
-		Filter: otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
+		Filter:   otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
+		Provides: []string{llm.ToolsService("todou")},
 	}
 }
 
@@ -206,6 +208,9 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 		return fmt.Errorf("todou: %d links, queued entries, or cursors name no agent; they belong to the account the module used before agents: start once with only that agent configured", n)
 	}
 	m.host, m.log = host, host.Logger()
+	if err := host.Provide(llm.ToolsService("todou"), m.tools()); err != nil {
+		return err
+	}
 	ctx, m.stop = context.WithCancel(context.WithoutCancel(ctx))
 	for _, name := range m.names {
 		a := m.agents[name]
@@ -478,7 +483,8 @@ func (m *Module) deliver(ctx context.Context, inv otogi.Invocation, to otogi.Des
 // Handle answers /todou commands.
 func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
 	verb, arg, _ := strings.Cut(e.Command.Args, " ")
-	arg = strings.TrimSpace(arg)
+	verb, rest, _ := strings.Cut(verb, "\n") // "/todou new" may break the line at once
+	arg = strings.TrimSpace(rest + " " + arg)
 	var reply string
 	var err error
 	switch verb {
@@ -496,6 +502,12 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 		default:
 			reply = "Usage: /todou unlink <project>"
 		}
+	case "view", "new", "comment", "move", "assign", "unassign", "block", "unblock":
+		reply, err = m.work(ctx, e, verb, arg)
+		var r *refusal
+		if errors.As(err, &r) {
+			reply, err = r.msg, nil
+		}
 	case "list":
 		reply, err = m.list(ctx, e)
 	case "cooldown":
@@ -503,7 +515,8 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 	case "status":
 		reply, err = m.status(ctx, e)
 	default:
-		reply = "Usage: /todou link <agent> <project> [silent] | unlink <project> | list | cooldown [<duration> | default] | status"
+		reply = "Usage: /todou view <card> | new <project> <title> | comment <card> <text> | move <card> <status> | assign|unassign <card> <login>… | " +
+			"block|unblock <card> by|blocks <card>… | link <agent> <project> [silent] | unlink <project> | list | cooldown [<duration> | default] | status"
 	}
 	if err != nil {
 		return err

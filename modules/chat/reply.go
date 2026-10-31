@@ -43,7 +43,7 @@ func (m *Module) respond(ctx context.Context, e otogi.Event, inv otogi.Invocatio
 	req.Turns = append(req.Turns, sent)
 
 	stream := inv.Stream(ctx, "reply", e.Destination())
-	out, runErr := llm.Run(ctx, p.provider, req, p.tools, e, p.MaxToolRounds, func(msg otogi.Message) error {
+	out, runErr := llm.Run(llm.ContextWithAgent(ctx, p.Name), p.provider, req, p.tools, e, p.MaxToolRounds, func(msg otogi.Message) error {
 		if len(msg.Parts) == 0 {
 			return nil
 		}

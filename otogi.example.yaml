@@ -49,7 +49,8 @@ modules:
   reminders:              # /remind 10m tea  (survives restarts)
     max_delay: 720h
   # todou:                # todou trackers, through your todou agent accounts. Link with
-  #                       # /todou link <agent> <project> [silent]; silent links get no digests
+  #                       # /todou link <agent> <project> [silent]; silent links get no digests.
+  #                       # Anyone in a linked chat may /todou view|new|comment|move|assign|block its cards
   #   cli: /usr/local/bin/todou          # todou CLI v0.6.7+ (github.com/orzFly/todou/releases)
   #   agents:                            # the accounts chats can link projects through
   #     neptune:
@@ -78,4 +79,4 @@ modules:
   #       system: |
   #         You are Otogi, a helpful member of this chat.
   #       context: 30                  # recent chat messages it sees
-  #       tools: [google_search, url_context, reminders, notes]   # built-ins, and tool groups of enabled modules
+  #       tools: [google_search, url_context, reminders, notes, todou]   # built-ins, and tool groups of enabled modules
