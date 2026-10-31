@@ -18,6 +18,7 @@ A module implements bot behavior. It:
 The module SDK is designed in [`2026-10-14-module-sdk-design.md`](superpowers/specs/2026-10-14-module-sdk-design.md) and delivered in steps:
 
 - messaging: send, send to other conversations, reply and quote (relations), edit, delete, react, send and fetch media (implemented);
+- streamed messages: `Invocation.Stream` shows a message while it is still being written, such as a language model's reply. The module passes the whole content so far to `Update` and the final content to `Close`; the driver decides how the platform shows it. Telegram shows "typing", then a live draft in private chats or an edited message elsewhere, continuing in new messages past its limits. Drivers implement `otogi.Streamer`; without one, the kernel sends the final content on `Close`;
 - commands and filters declared in the descriptor (implemented): a declared command goes only to its module, and modules receive incoming events only unless their filter opts in to outgoing or system events;
 - per-module key/value store, private SQLite database, `Starter`/`Stopper`, and typed config (implemented; see `modules/notes`);
 - cron jobs, persistent timers, and typed services shared between modules (implemented; see `modules/reminders`).

@@ -69,19 +69,29 @@ func (x *effects) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, er
 }
 
 func (x *effects) send(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {
-	key, conversation := string(e.Key), string(e.To.Conversation)
+	ref, _, err := x.sendKeyed(ctx, string(e.Key), string(e.To.Conversation), e.Message, withFloodWait)
+	return ref, err
+}
+
+// floodPolicy runs an RPC under a FLOOD_WAIT policy: withFloodWait, or a
+// stream's, which does not wait.
+type floodPolicy func(ctx context.Context, f func() (tg.UpdatesClass, error)) (tg.UpdatesClass, error)
+
+// sendKeyed sends msg at most once per key. existed reports that the key was
+// sent before, so the message may hold older content.
+func (x *effects) sendKeyed(ctx context.Context, key, conversation string, msg otogi.Message, flood floodPolicy) (ref otogi.EventRef, existed bool, err error) {
 	if sent, found, err := x.store.FindSent(ctx, key); err != nil {
-		return otogi.EventRef{}, err
+		return otogi.EventRef{}, false, err
 	} else if found {
-		return x.ref(sent.Conversation, sent.MessageID), nil
+		return x.ref(sent.Conversation, sent.MessageID), true, nil
 	}
-	content, err := encodeContent(e.Message, conversation)
+	content, err := encodeContent(msg, conversation)
 	if err != nil {
-		return otogi.EventRef{}, err
+		return otogi.EventRef{}, false, err
 	}
 	peer, err := x.peers(ctx, conversation)
 	if err != nil {
-		return otogi.EventRef{}, fmt.Errorf("telegram send: resolve %s: %w", conversation, err)
+		return otogi.EventRef{}, false, fmt.Errorf("telegram send: resolve %s: %w", conversation, err)
 	}
 	randomID := RandomID(key)
 	call := func() (tg.UpdatesClass, error) {
@@ -98,13 +108,13 @@ func (x *effects) send(ctx context.Context, e otogi.Effect) (otogi.EventRef, err
 		content.apply(req.SetEntities, req.SetReplyTo)
 		return x.api.MessagesSendMedia(ctx, req)
 	}
-	result, err := withFloodWait(ctx, call)
+	result, err := flood(ctx, call)
 	switch {
 	case tgerr.Is(err, "RANDOM_ID_DUPLICATE"):
 		// An earlier attempt was delivered but not recorded before a crash.
-		return x.ref(conversation, 0), nil
+		return x.ref(conversation, 0), true, nil
 	case err != nil:
-		return otogi.EventRef{}, fmt.Errorf("telegram send: %w", err)
+		return otogi.EventRef{}, false, fmt.Errorf("telegram send: %w", err)
 	}
 	id := sentMessageID(result, randomID)
 	// A failed record is not fatal: a replay resends with the same random_id
@@ -112,10 +122,14 @@ func (x *effects) send(ctx context.Context, e otogi.Effect) (otogi.EventRef, err
 	if err := x.store.PutSent(ctx, telegramstore.Sent{Key: key, Conversation: conversation, MessageID: id}, x.now()); err != nil {
 		x.log.Error("telegram: record sent message", "key", key, "error", err)
 	}
-	return x.ref(conversation, id), nil
+	return x.ref(conversation, id), false, nil
 }
 
 func (x *effects) edit(ctx context.Context, conversation string, id int, msg otogi.Message) error {
+	return x.editWith(ctx, conversation, id, msg, withFloodWait)
+}
+
+func (x *effects) editWith(ctx context.Context, conversation string, id int, msg otogi.Message, flood floodPolicy) error {
 	content, err := encodeContent(msg, conversation)
 	if err != nil {
 		return err
@@ -130,7 +144,7 @@ func (x *effects) edit(ctx context.Context, conversation string, id int, msg oto
 	req := &tg.MessagesEditMessageRequest{Peer: peer, ID: id}
 	req.SetMessage(content.text)
 	req.SetEntities(content.entities)
-	_, err = withFloodWait(ctx, func() (tg.UpdatesClass, error) { return x.api.MessagesEditMessage(ctx, req) })
+	_, err = flood(ctx, func() (tg.UpdatesClass, error) { return x.api.MessagesEditMessage(ctx, req) })
 	if tgerr.Is(err, "MESSAGE_NOT_MODIFIED") {
 		return nil // already applied
 	}

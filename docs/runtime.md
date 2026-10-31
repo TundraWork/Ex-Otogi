@@ -23,6 +23,8 @@ Delivery is at-least-once from the platform to modules:
 
 Because events can be replayed, outbound effects carry an idempotency key derived from (event ID, module, effect slot). A driver that records sends by key does not repeat a send on replay, and returns the original message reference. Telegram also derives `random_id` from the key, so a resend after a crash is rejected by Telegram as a duplicate. Modules with their own side effects use the same key.
 
+A streamed message (`Invocation.Stream`) is keyed the same way, and each platform message it sends is recorded under that key plus its position. A replayed event therefore rewrites the stream into the messages it already sent instead of sending new ones. The kernel owns every stream a unit of work opens: if the module returns, fails, panics, or times out with a stream still open, the kernel closes it with its last content under its own short timeout.
+
 Missed platform history is the driver's job. Telegram, for example, fetches updates it missed while offline. If history cannot be recovered, the driver records a gap in the event log and keeps running; it does not block the bot.
 
 ## Pipeline, ordering, and concurrency

@@ -119,6 +119,14 @@ type Invocation interface {
 	Delete(ctx context.Context, slot string, ref EventRef) error
 	// React sets the account's reaction to the message at ref; "" removes it.
 	React(ctx context.Context, slot string, ref EventRef, reaction string) error
+	// Stream starts a message to `to` whose content is written progressively,
+	// for example a language model's reply. Each platform shows it its own
+	// way: Telegram shows "typing" until there is content, then streams it
+	// as a live draft in private chats or by editing a message elsewhere,
+	// and continues in new messages past its limits. Nothing is sent before
+	// the first Update. The kernel closes a stream left open when the unit
+	// of work ends, with its last content.
+	Stream(ctx context.Context, slot string, to Destination) MessageStream
 	// FetchMedia downloads media from a message seen at from.
 	FetchMedia(ctx context.Context, from Destination, src MediaSource) ([]byte, error)
 	// WithOrigin returns an Invocation whose effects are keyed under id
@@ -127,6 +135,20 @@ type Invocation interface {
 	// uses it so that a retry in a later run repeats nothing. Slots are
 	// claimed per returned Invocation; ids are the module's own.
 	WithOrigin(id string) Invocation
+}
+
+// MessageStream is a message being written; see Invocation.Stream. Use it
+// from one goroutine.
+type MessageStream interface {
+	// Update sets the whole content so far, not a delta. The platform shows
+	// it now or, within its rate limits, later; an update superseded before
+	// it could be shown is skipped. Update never waits out a rate limit.
+	Update(ctx context.Context, msg Message) error
+	// Close shows msg as the final content, waiting out rate limits if it
+	// must, and returns the platform messages that hold it, in order: a long
+	// message can span several. Closing with an empty msg shows nothing.
+	// Calls after the first return its result again.
+	Close(ctx context.Context, msg Message) ([]EventRef, error)
 }
 
 // Verdict is a middleware decision.

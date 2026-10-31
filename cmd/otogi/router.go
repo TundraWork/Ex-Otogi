@@ -18,7 +18,8 @@ type driverHandle interface {
 	otogi.MediaFetcher
 }
 
-// router sends effects and media fetches to the driver of their (platform, account).
+// router sends effects, streams, and media fetches to the driver of their
+// (platform, account).
 type router map[destination]driverHandle
 
 func (r router) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {
@@ -31,6 +32,19 @@ func (r router) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, erro
 		return otogi.EventRef{}, err
 	}
 	return d.Apply(ctx, e)
+}
+
+// OpenStream starts a stream on the destination's driver, if it can stream.
+func (r router) OpenStream(ctx context.Context, e otogi.Effect) (otogi.DriverStream, error) {
+	d, err := r.driver(destination{e.To.Platform, e.To.Account})
+	if err != nil {
+		return nil, err
+	}
+	streamer, ok := d.(otogi.Streamer)
+	if !ok {
+		return nil, fmt.Errorf("platform %q cannot stream: %w", e.To.Platform, otogi.ErrUnsupported)
+	}
+	return streamer.OpenStream(ctx, e)
 }
 
 func (r router) FetchMedia(ctx context.Context, from otogi.Destination, src otogi.MediaSource) ([]byte, error) {

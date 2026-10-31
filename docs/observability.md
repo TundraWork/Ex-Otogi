@@ -21,7 +21,7 @@ What gets recorded:
 
 - every inbound event with its full rich content;
 - every module invocation outcome with duration, including errors and panics with stacks;
-- every outbound action with its content and result;
+- every outbound action with its content and result; a streamed message is one record when it closes, with its final content, the platform messages holding it, and how many updates it received and showed (each update is a prefix of the final content, so it is not recorded again);
 - driver connection state changes, catch-up runs, and gaps;
 - process start, ready, drain, stop, and component failures.
 

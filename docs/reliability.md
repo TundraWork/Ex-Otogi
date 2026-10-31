@@ -12,7 +12,8 @@ The bot loses no inbound events, recovers on its own from ordinary failures (net
 | Platform rate limit (Telegram `FLOOD_WAIT`) | Wait the indicated time within the operation's context, then retry once the wait ends. |
 | Process crash or kill | Unfinished durable inbox rows are dispatched again on restart. Sends are not repeated: they are recorded by idempotency key, and Telegram rejects a reused `random_id`. |
 | Missed history cannot be recovered | Record a gap (kind, channel, time) and continue. For Telegram, gotd reports these through its gap hooks. |
-| Module error or panic | Record the failed outcome or panic with its stack; other modules and events continue. |
+| Module error or panic | Record the failed outcome or panic with its stack; other modules and events continue. Streams it left open are closed with their last content. |
+| Platform rate limit during a streamed message | Skip updates until the wait ends (a later update supersedes them); `Close` waits it out, so the final content always arrives. |
 | Required component fails | Record the cause, shut down gracefully, and exit non-zero so the supervisor restarts the process. |
 | Invalid configuration or unreadable database at startup | Exit non-zero with a message naming the field or file. Never silently create fresh state over an unreadable database. |
 | Event log write fails | Report it on stdout and in status; keep processing events. |

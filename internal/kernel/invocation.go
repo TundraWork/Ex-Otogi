@@ -17,6 +17,7 @@ type invocation struct {
 	originID string
 	module   otogi.ModuleID
 	host     *host
+	streams  *streams
 	mu       sync.Mutex
 	slots    map[string]bool
 }
@@ -26,7 +27,7 @@ func (i *invocation) Host() otogi.Host { return i.host }
 func (i *invocation) Origin() otogi.Origin { return i.origin }
 
 func (i *invocation) WithOrigin(id string) otogi.Invocation {
-	return &invocation{kernel: i.kernel, event: i.event, origin: i.origin, originID: "module:" + id, module: i.module, host: i.host}
+	return &invocation{kernel: i.kernel, event: i.event, origin: i.origin, originID: "module:" + id, module: i.module, host: i.host, streams: i.streams}
 }
 
 func (i *invocation) Send(ctx context.Context, slot string, msg otogi.Message) (otogi.EventRef, error) {
@@ -80,23 +81,11 @@ func (i *invocation) applyToRef(ctx context.Context, slot string, e otogi.Effect
 }
 
 // apply claims slot, completes e with its idempotency key, hands it to the
-// effector, and records the outcome. Reusing a slot within one unit of work
-// is an error: both effects would share a key and the second would be lost.
+// effector, and records the outcome.
 func (i *invocation) apply(ctx context.Context, slot string, e otogi.Effect) (otogi.EventRef, error) {
-	if slot == "" {
-		return otogi.EventRef{}, fmt.Errorf("%s: empty slot: %w", e.Kind, otogi.ErrInvalid)
+	if err := i.claim(e.Kind, slot); err != nil {
+		return otogi.EventRef{}, err
 	}
-	i.mu.Lock()
-	if i.slots[slot] {
-		i.mu.Unlock()
-		return otogi.EventRef{}, fmt.Errorf("%s: slot %q already used: %w", e.Kind, slot, otogi.ErrInvalid)
-	}
-	if i.slots == nil {
-		i.slots = make(map[string]bool)
-	}
-	i.slots[slot] = true
-	i.mu.Unlock()
-
 	e.Module, e.Origin, e.Key = i.module, i.originID, otogi.IdempotencyKeyFor(i.originID, i.module, slot)
 	started := time.Now()
 	ref, err := i.kernel.effector.Apply(ctx, e)
@@ -107,6 +96,24 @@ func (i *invocation) apply(ctx context.Context, slot string, e otogi.Effect) (ot
 	}
 	i.kernel.record(i.event, "effect.applied", component, "ok", time.Since(started), map[string]any{"slot": slot, "effect": e, "ref": ref})
 	return ref, nil
+}
+
+// claim reserves slot for one effect of this unit of work. Reusing a slot is
+// an error: both effects would share a key and the second would be lost.
+func (i *invocation) claim(kind otogi.EffectKind, slot string) error {
+	if slot == "" {
+		return fmt.Errorf("%s: empty slot: %w", kind, otogi.ErrInvalid)
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.slots[slot] {
+		return fmt.Errorf("%s: slot %q already used: %w", kind, slot, otogi.ErrInvalid)
+	}
+	if i.slots == nil {
+		i.slots = make(map[string]bool)
+	}
+	i.slots[slot] = true
+	return nil
 }
 
 func validContent(msg otogi.Message) error {

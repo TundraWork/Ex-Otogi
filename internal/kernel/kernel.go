@@ -444,6 +444,8 @@ func (k *Kernel) invoke(d *delivery) (err error) {
 		ctx, cancel = context.WithTimeout(k.runCtx, d.module.timeout)
 	}
 	defer cancel()
+	inv := &invocation{kernel: k, event: d.scope, origin: d.origin, originID: d.originID, module: d.module.descriptor.ID, host: d.module.host, streams: &streams{}}
+	defer inv.closeAbandoned()
 	defer func() {
 		if r := recover(); r != nil {
 			p := &panicError{module: d.module.descriptor.ID, value: r, stack: string(debug.Stack())}
@@ -451,7 +453,7 @@ func (k *Kernel) invoke(d *delivery) (err error) {
 			err = p
 		}
 	}()
-	return d.call(ctx, &invocation{kernel: k, event: d.scope, origin: d.origin, originID: d.originID, module: d.module.descriptor.ID, host: d.module.host})
+	return d.call(ctx, inv)
 }
 
 // panicError is a recovered module panic, with its stack.

@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
-	"unicode/utf8"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/markdown"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
@@ -80,7 +79,10 @@ func (r renderer) digest(entries []entry, issues map[string]issue) []otogi.Messa
 				}
 				// Too big for any one message: fill this one and continue in
 				// the next.
-				first, rest := split(chunk, messageLimit-utf16Len(msg.String()+room), entityLimit-len(msg.Annotations()))
+				units, entities := messageLimit-utf16Len(msg.String()+room), entityLimit-len(msg.Annotations())
+				first, rest := chunk.Split(func(prefix string, annotations int) bool {
+					return utf16Len(prefix) <= units && annotations <= entities
+				})
 				if first.Len() == 0 {
 					flush()
 					continue
@@ -112,64 +114,6 @@ func joined(head, t *otogi.RichText) *otogi.RichText {
 	add(out, head)
 	out.Write("\n")
 	add(out, t)
-	return out
-}
-
-// split cuts t into a first part within units UTF-16 units and entities
-// annotations, and the rest. It cuts at the last line end in the second
-// half of what fits, else at the last point outside all formatting but
-// quotes, else where it must. Formatting across the cut continues on both
-// sides.
-func split(t *otogi.RichText, units, entities int) (first, rest *otogi.RichText) {
-	text, annotations := t.String(), t.Annotations()
-	started := func(at int) int {
-		n := 0
-		for _, a := range annotations {
-			if a.Offset < at {
-				n++
-			}
-		}
-		return n
-	}
-	end, used := 0, 0
-	for i, c := range text {
-		next := i + utf8.RuneLen(c)
-		if used += utf16.RuneLen(c); used > units || started(next) > entities {
-			break
-		}
-		end = next
-	}
-	cut := end
-	if j := strings.LastIndexByte(text[:end], '\n'); j >= 0 && j+1 >= end/2 {
-		cut = j + 1
-	} else {
-		for p := end; p > 0; {
-			inside := slices.ContainsFunc(annotations, func(a otogi.Annotation) bool {
-				return a.Kind != otogi.AnnotationBlockQuote && a.Kind != otogi.AnnotationExpandableBlockQuote && a.Offset < p && p < a.Offset+a.Length
-			})
-			if !inside {
-				cut = p
-				break
-			}
-			_, size := utf8.DecodeLastRuneInString(text[:p])
-			p -= size
-		}
-	}
-	return slice(t, 0, len(strings.TrimRight(text[:cut], "\n"))), slice(t, cut+len(text[cut:])-len(strings.TrimLeft(text[cut:], "\n")), len(text))
-}
-
-// slice is t[from:to] with its annotations clipped to the range.
-func slice(t *otogi.RichText, from, to int) *otogi.RichText {
-	var kept []otogi.Annotation
-	for _, a := range t.Annotations() {
-		start, end := max(a.Offset, from), min(a.Offset+a.Length, to)
-		if start < end {
-			a.Offset, a.Length = start-from, end-start
-			kept = append(kept, a)
-		}
-	}
-	out := &otogi.RichText{}
-	out.Append(t.String()[from:to], kept)
 	return out
 }
 
