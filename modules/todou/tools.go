@@ -27,6 +27,9 @@ func (m *Module) tools() []llm.Tool {
 				if err != nil {
 					return nil, err
 				}
+				if len(links) == 0 {
+					return nil, refuse(noLinks)
+				}
 				var out []map[string]any
 				for _, l := range links {
 					a := m.agents[l.Agent]
@@ -52,6 +55,9 @@ func (m *Module) tools() []llm.Tool {
 				links, err := m.store.links(ctx, &to)
 				if err != nil {
 					return nil, err
+				}
+				if len(links) == 0 {
+					return nil, refuse(noLinks)
 				}
 				var out []map[string]string
 				for _, l := range links {

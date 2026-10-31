@@ -15,6 +15,9 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
+// noLinks says why a chat cannot reach todou, and what fixes it.
+const noLinks = "No todou projects are linked to this chat. An operator can link one with /todou link <agent> <project>, or add silent to skip the activity digests."
+
 // refusal is a request the module turns down, said to the person (or the
 // model) in plain words; it is not a failure.
 type refusal struct{ msg string }
@@ -52,7 +55,7 @@ func (m *Module) linked(ctx context.Context, to otogi.Destination, project strin
 	}
 	i := slices.IndexFunc(links, func(l link) bool { return l.Project == project })
 	if i < 0 {
-		return nil, refuse("%s is not linked to this chat.", project)
+		return nil, refuse("%s is not linked to this chat. An operator can link it with /todou link <agent> %s, or add silent to skip the activity digests.", project, project)
 	}
 	a := m.agents[links[i].Agent]
 	if a == nil {
@@ -94,7 +97,7 @@ func (m *Module) resolve(ctx context.Context, to otogi.Destination, ref string) 
 		return target{}, err
 	}
 	if len(links) == 0 {
-		return target{}, refuse("No todou projects are linked to this chat.")
+		return target{}, refuse(noLinks)
 	}
 	if match := numberRef.FindStringSubmatch(ref); match != nil {
 		if len(links) > 1 {

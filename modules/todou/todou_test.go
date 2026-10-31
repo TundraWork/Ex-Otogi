@@ -881,10 +881,22 @@ func TestTools(t *testing.T) {
 	if call, _ := h.cli.last("search"); call != "search login crash -p web -L 10 --json" {
 		t.Fatalf("search call %q", call)
 	}
-	if _, err := call("todou_block", `{"card":"WEB-12","blocked_by":["api/2"]}`); err == nil || err.Error() != "api is not linked to this chat." {
+	if _, err := call("todou_block", `{"card":"WEB-12","blocked_by":["api/2"]}`); err == nil || !strings.HasPrefix(err.Error(), "api is not linked to this chat. An operator can link it with /todou link <agent> api") {
 		t.Fatalf("block across an unlinked project: %v", err)
 	}
 	if out, err := call("todou_projects", `{}`); err != nil || !strings.Contains(out, `"closed_statuses":["Done"]`) || !strings.Contains(out, `"members":["alice","bob"]`) {
 		t.Fatalf("projects: %s %v", out, err)
+	}
+}
+
+func TestToolsSayWhenNothingIsLinked(t *testing.T) {
+	h := newHarness(t, Config{}, idle)
+	e := otogi.Event{Platform: "telegram", Account: "main", Conversation: otogi.Conversation{ID: "chat:unlinked"}}
+	for _, tool := range h.host.provided[llm.ToolsService("todou")].([]llm.Tool) {
+		name := tool.Function().Name
+		args := `{"card":"MJT-1","terms":"x","project":"mojito","title":"t","body":"b","status":"Done"}`
+		if _, err := tool.Call(context.Background(), e, json.RawMessage(args)); name != "todou_create" && (err == nil || !strings.HasPrefix(err.Error(), "No todou projects are linked to this chat. An operator can link one")) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
