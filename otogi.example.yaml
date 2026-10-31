@@ -74,4 +74,4 @@ modules:
   #       system: |
   #         You are Otogi, a helpful member of this chat.
   #       context: 30                  # recent chat messages it sees
-  #       tools: [google_search, url_context]
+  #       tools: [google_search, url_context, reminders, notes]   # built-ins, and tool groups of enabled modules

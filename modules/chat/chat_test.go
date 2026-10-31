@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -81,9 +82,16 @@ func (i invocation) FetchMedia(_ context.Context, _ otogi.Destination, src otogi
 
 type host struct {
 	otogi.Host
-	storage *modulestore.Storage
-	records []otogi.Record
+	storage  *modulestore.Storage
+	records  []otogi.Record
+	services map[string]any
 }
+
+func (h *host) Service(name string) (any, bool) {
+	s, ok := h.services[name]
+	return s, ok
+}
+func (h *host) Module() otogi.ModuleID { return "chat" }
 
 func (h *host) Logger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 func (h *host) Database(ctx context.Context) (*sql.DB, error) {
@@ -350,7 +358,7 @@ func TestConfigErrors(t *testing.T) {
 	}{
 		"no profiles":     {nil, "at least one"},
 		"shared keyword":  {[]ProfileConfig{base, {Name: "b", Keywords: []string{"A"}, Chats: []string{group}, Provider: "gemini", Model: "m"}}, `"A" also belongs to profile "a"`},
-		"unknown tool":    {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", Tools: []string{"maps"}}}, `unknown tool "maps"`},
+		"bad tool":        {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", Tools: []string{"a b"}}}, `"a b": want a built-in`},
 		"no provider":     {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "openai", Model: "m"}}, "not configured"},
 		"bad chat":        {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{"123"}, Provider: "gemini", Model: "m"}}, "<platform>:<chat id>"},
 		"bad thinking":    {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", Thinking: "max"}}, "thinking"},
@@ -374,5 +382,56 @@ func TestPrivateChatsAndDeletedMessages(t *testing.T) {
 	text := lastUserText(h.llm["p"].requests[0])
 	if text != "otogi, what did I say?" {
 		t.Fatalf("request %q", text)
+	}
+}
+
+func TestToolGroups(t *testing.T) {
+	storage, err := modulestore.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	var seen otogi.Event
+	echo := llm.NewTool(llm.Function{Name: "shout", Description: "shouts"}, func(_ context.Context, e otogi.Event, args json.RawMessage) (any, error) {
+		seen = e
+		return strings.ToUpper(string(args)), nil
+	})
+	h := &harness{t: t, host: &host{storage: storage, services: map[string]any{"llm.tools/fun": []llm.Tool{echo}}}, llm: map[string]*provider{}, now: time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)}
+	p := &provider{responses: []llm.Response{
+		{Turn: llm.Turn{Role: llm.RoleModel, Calls: []llm.Call{{ID: "c1", Name: "shout", Args: json.RawMessage(`"hi"`)}}}, Finish: llm.FinishToolCalls},
+		answer("Shouted."),
+	}}
+	h.llm["p"] = p
+	h.m, err = New(Config{Profiles: []ProfileConfig{{Name: "otogi", Keywords: []string{"otogi"}, Chats: []string{group}, Provider: "p", Model: "m", Tools: []string{"google_search", "fun"}}}},
+		func(string) (llm.Provider, error) { return p, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.m.Descriptor().Requires; len(got) != 1 || got[0] != "llm.tools/fun" {
+		t.Fatalf("requires %v", got)
+	}
+	h.m.now = func() time.Time { return h.now }
+	if err := h.m.Start(context.Background(), h.host); err != nil {
+		t.Fatal(err)
+	}
+	ask := h.message("Alice", "otogi shout hi")
+	h.mustHandle(ask)
+	if len(p.requests) != 2 || len(p.requests[0].Tools) != 2 || p.requests[0].Tools[1].Function.Name != "shout" || seen.ID != ask.ID {
+		t.Fatalf("requests %d, tools %+v, tool saw %q", len(p.requests), p.requests[0].Tools, seen.ID)
+	}
+	var kinds []string
+	for _, r := range h.host.records {
+		kinds = append(kinds, r.Kind)
+		if r.Kind == "chat.tool" && string(r.Payload.(map[string]any)["result"].(json.RawMessage)) != `"\"HI\""` {
+			t.Errorf("tool record %+v", r.Payload)
+		}
+	}
+	if strings.Join(kinds, ",") != "chat.tool,chat.reply" {
+		t.Fatalf("records %v", kinds)
+	}
+	// The thread keeps the call and its result, so a follow-up resends them.
+	h.mustHandle(h.message("Alice", "again", replyingTo("agent-1")))
+	if turns := p.requests[2].Turns; len(turns) != 5 || turns[2].Role != llm.RoleTool {
+		t.Fatalf("follow-up turns %+v", turns)
 	}
 }

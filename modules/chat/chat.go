@@ -7,6 +7,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,8 +44,17 @@ func New(cfg Config, providers func(string) (llm.Provider, error)) (*Module, err
 // to keep the transcript of the chats it serves; only people's new messages
 // trigger agents.
 func (m *Module) Descriptor() otogi.ModuleDescriptor {
+	var requires []string
+	for _, p := range m.profiles {
+		for _, g := range p.groups {
+			if s := llm.ToolsService(g); !slices.Contains(requires, s) {
+				requires = append(requires, s)
+			}
+		}
+	}
 	return otogi.ModuleDescriptor{
 		ID:         "chat",
+		Requires:   requires,
 		Subscribes: []otogi.EventAction{otogi.ActionMessageCreated, otogi.ActionMessageEdited, otogi.ActionMessageDeleted},
 		Ordering:   otogi.OrderNone,
 		Timeout:    m.cfg.Timeout,
@@ -62,6 +72,22 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 		return err
 	}
 	m.host = host
+	for _, p := range m.profiles {
+		p.tools = map[string]llm.Tool{}
+		for _, g := range p.groups {
+			tools, err := otogi.Lookup[[]llm.Tool](host, llm.ToolsService(g))
+			if err != nil {
+				return fmt.Errorf("profile %s: tools %s: %w", p.Name, g, err)
+			}
+			for _, t := range tools {
+				name := t.Function().Name
+				if _, dup := p.tools[name]; dup {
+					return fmt.Errorf("profile %s: function %q is offered twice: %w", p.Name, name, otogi.ErrInvalid)
+				}
+				p.tools[name] = t
+			}
+		}
+	}
 	return host.Schedule("prune", "@every 1h", m.prune)
 }
 

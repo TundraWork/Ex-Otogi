@@ -43,12 +43,12 @@ func (m *Module) respond(ctx context.Context, e otogi.Event, inv otogi.Invocatio
 	req.Turns = append(req.Turns, sent)
 
 	stream := inv.Stream(ctx, "reply", e.Destination())
-	out, runErr := llm.Run(ctx, p.provider, req, nil, e, p.MaxToolRounds, func(msg otogi.Message) error {
+	out, runErr := llm.Run(ctx, p.provider, req, p.tools, e, p.MaxToolRounds, func(msg otogi.Message) error {
 		if len(msg.Parts) == 0 {
 			return nil
 		}
 		return stream.Update(ctx, present(p, e, msg))
-	}, nil)
+	}, func(c llm.CallRecord) { m.recordCall(ctx, e, p, c) })
 
 	// The reply is finished even when ctx ended, so the chat is not left
 	// with a partial answer.
@@ -307,6 +307,19 @@ func friendly(err error) string {
 		return "the model rejected the request"
 	}
 	return "something went wrong"
+}
+
+// recordCall writes a function call's record.
+func (m *Module) recordCall(ctx context.Context, e otogi.Event, p *profile, c llm.CallRecord) {
+	payload := map[string]any{"profile": p.Name, "function": c.Call.Name, "call": c.Call.ID, "args": c.Call.Args, "result": c.Result.Output}
+	outcome := "ok"
+	if c.Result.Error != "" {
+		outcome, payload["error"] = "error", c.Result.Error
+	}
+	if c.Panic != "" {
+		payload["stack"] = c.Panic
+	}
+	m.host.Record(ctx, otogi.Record{Kind: "chat.tool", Event: e.ID, Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID, Outcome: outcome, Duration: c.Duration, Payload: payload})
 }
 
 // record writes the reply's record.

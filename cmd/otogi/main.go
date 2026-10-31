@@ -17,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram"
+	"github.com/TundraWork/Ex-Otogi/internal/kernel"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -67,7 +68,13 @@ func withConfig(ctx context.Context, path, command string, args []string) error 
 		if err != nil {
 			return err
 		}
-		if _, err := buildModules(cfg.Modules, moduleEnv{operators: cfg.Operators, llm: providerLookup(providers)}); err != nil {
+		modules, err := buildModules(cfg.Modules, moduleEnv{operators: cfg.Operators, llm: providerLookup(providers)})
+		if err != nil {
+			return err
+		}
+		// The kernel checks commands and services between modules, such as
+		// a chat profile's tools; constructing it starts nothing.
+		if _, err := kernel.New(cfg.Kernel.kernel(), modules, nil, router{}, slog.New(slog.DiscardHandler)); err != nil {
 			return err
 		}
 		fmt.Printf("%s: OK (%d Telegram account(s), %d LLM provider(s), %d module(s))\n", path, len(cfg.Telegram), len(providers), len(cfg.Modules))

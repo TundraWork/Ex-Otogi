@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/llm"
+	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
 // Config is the module's section of otogi.yaml.
@@ -63,6 +64,8 @@ type profile struct {
 	chats    map[string]bool
 	context  int
 	builtins []llm.ToolSpec
+	groups   []otogi.ModuleID    // tool groups, by the module offering them
+	tools    map[string]llm.Tool // the groups' functions, by name; set in Start
 	provider llm.Provider
 }
 
@@ -138,11 +141,14 @@ func (c *Config) profiles(providers func(string) (llm.Provider, error)) ([]*prof
 			errs = append(errs, fmt.Errorf("%s: context, max_turns, max_output, and max_tool_rounds must not be negative", field))
 		}
 		for _, t := range pc.Tools {
-			if !slices.Contains(builtinTools, t) {
-				errs = append(errs, fmt.Errorf("%s.tools: unknown tool %q (built-ins: %s)", field, t, strings.Join(builtinTools, ", ")))
-				continue
+			switch {
+			case slices.Contains(builtinTools, t):
+				p.builtins = append(p.builtins, llm.ToolSpec{Builtin: t})
+			case t == "" || strings.ContainsAny(t, " :/"):
+				errs = append(errs, fmt.Errorf("%s.tools: %q: want a built-in (%s) or a module ID", field, t, strings.Join(builtinTools, ", ")))
+			default:
+				p.groups = append(p.groups, otogi.ModuleID(t))
 			}
-			p.builtins = append(p.builtins, llm.ToolSpec{Builtin: t})
 		}
 		provider, err := providers(pc.Provider)
 		if err != nil {

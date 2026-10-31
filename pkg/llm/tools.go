@@ -219,3 +219,19 @@ func Join(a, b otogi.Message) otogi.Message {
 	out.Relations = a.Relations
 	return out
 }
+
+// NewTool makes a Tool from its declaration and a function.
+func NewTool(f Function, call func(ctx context.Context, event otogi.Event, args json.RawMessage) (any, error)) Tool {
+	return funcTool{f: f, call: call}
+}
+
+type funcTool struct {
+	f    Function
+	call func(context.Context, otogi.Event, json.RawMessage) (any, error)
+}
+
+func (t funcTool) Function() Function { return t.f }
+
+func (t funcTool) Call(ctx context.Context, event otogi.Event, args json.RawMessage) (any, error) {
+	return t.call(ctx, event, args)
+}
