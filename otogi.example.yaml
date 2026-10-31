@@ -67,7 +67,8 @@ modules:
   #     - name: otogi
   #       label: "🤖 Otogi"            # optional, bold at the start of replies
   #       keywords: [otogi]            # a message starting with one triggers it; so does replying to it
-  #       chats: [telegram:chat:123]   # where it answers anyone, as /whoami prints them
+  #       chats: [telegram:channel:123]   # where it answers anyone: copy the Chat line of /whoami
+  #                                       # (supergroups are channel:..., basic groups chat:...)
   #       provider: gemini
   #       model: gemini-3.8-flash
   #       thinking: low                # minimal | low | medium | high
