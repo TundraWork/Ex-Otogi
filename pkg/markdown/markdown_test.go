@@ -37,6 +37,9 @@ func TestRender(t *testing.T) {
 				`link=https://x.example/p:"https://x.example/p"` + "\n" + `link=mailto:mail@x.example:"mail@x.example"` + "\n" + `link=https://x.example/l.png:"logo"`},
 		{"raw html", "a <b>b</b>\n\n<div>\nblock\n</div>", "a <b>b</b>\n\n<div>\nblock\n</div>\n--\n"},
 		{"unicode offsets", "日本 **語**", "日本 語\n--\n" + `bold:"語"`},
+		{"cjk emphasis beside punctuation", "教科书级别的**光学修正（Optical Sizing）**思路～", "教科书级别的光学修正（Optical Sizing）思路～\n--\n" + `bold:"光学修正（Optical Sizing）"`},
+		{"cjk strike and italic", "这是~~旧的（废弃）~~新的，*「重点」*在这", "这是旧的（废弃）新的，「重点」在这\n--\n" + `strike:"旧的（废弃）"` + "\n" + `italic:"「重点」"`},
+		{"latin needs its space as before", "a **b (c)**d", "a **b (c)**d\n--\n"},
 		{"table", "Before\n\n| Name | Score | Note |\n| :-- | --: | :-: |\n| **Alice** | 3 | [docs](https://d.example) |\n| 日本 | 12 | x |\n\nAfter",
 			"Before\n\nName  | Score |           Note\n------+-------+-------------------------\nAlice |     3 | docs (https://d.example)\n日本  |    12 |            x\n\nAfter\n--\n" +
 				`preformatted:"Name  | Score |           Note\n------+-------+-------------------------\nAlice |     3 | docs (https://d.example)\n日本  |    12 |            x"`},

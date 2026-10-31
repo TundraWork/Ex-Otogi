@@ -1,5 +1,6 @@
 // Package markdown converts between Markdown (CommonMark with GitHub's
-// strikethrough, tables, and bare-URL links) and otogi rich text, so a module
+// strikethrough, tables, and bare-URL links, and the CJK-friendly emphasis
+// amendment) and otogi rich text, so a module
 // can post Markdown written elsewhere, such as a language model's reply, as
 // formatted chat text, and hand formatted chat text to a model.
 package markdown
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	cjkfriendly "github.com/tats-u/goldmark-cjk-friendly/v2"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -21,7 +23,11 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-var parser = goldmark.New(goldmark.WithExtensions(extension.Strikethrough, extension.Table, extension.Linkify)).Parser()
+// parser reads Markdown. The CJK-friendly amendment lets ** and ~~ open
+// and close next to CJK text and punctuation, where plain CommonMark needs
+// spaces Chinese and Japanese do not use: in "的**修正（Sizing）**思路", the
+// closing ** follows "）" and precedes "思".
+var parser = goldmark.New(goldmark.WithExtensions(cjkfriendly.CJKFriendlyEmphasisAndStrikethrough, extension.Table, extension.Linkify)).Parser()
 
 // Render converts source to rich text:
 //   - emphasis to italic and bold, ~~text~~ to strike;
