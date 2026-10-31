@@ -23,9 +23,11 @@ type Provider interface {
 	// Generate runs one model turn. If partial is non-nil, it is called as
 	// output arrives from the model, per streamed chunk, with the whole reply
 	// so far: rich text and any images completed so far, ready for
-	// otogi.MessageStream.Update. A non-nil error from partial stops
-	// generation, and Generate returns it. Generate returns the complete
-	// reply when the turn ends.
+	// otogi.MessageStream.Update. When the provider retries after output
+	// began, for example because the connection dropped mid-reply, partial
+	// starts over: the reply so far can get shorter. A non-nil error from
+	// partial stops generation, and Generate returns it. Generate returns
+	// the complete reply when the turn ends.
 	//
 	// Errors wrap otogi.ErrInvalid when the provider rejects the request,
 	// and otogi.ErrUnavailable for rate limits, outages, and timeouts left

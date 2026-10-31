@@ -29,8 +29,7 @@ type call struct {
 	status      string
 	streamErr   string
 	usage       llm.Usage
-	shown       bool // partial has been called: no retry from here
-	firstOutput time.Duration
+	firstOutput time.Duration // until the first output of the first attempt that had any
 	unhandled   []json.RawMessage
 }
 
@@ -110,15 +109,15 @@ func (c *call) delta(d *ia.StepDelta) error {
 	if step["type"] != "model_output" {
 		return nil
 	}
-	if !c.shown {
-		c.shown, c.firstOutput = true, time.Since(c.started)
+	if c.firstOutput == 0 {
+		c.firstOutput = time.Since(c.started)
 	}
 	if c.partial == nil {
 		return nil
 	}
 	reply, _ := c.reply()
 	if err := c.partial(reply); err != nil {
-		return fmt.Errorf("gemini: stopped by the caller: %w", err)
+		return fmt.Errorf("gemini: %w: %w", errStopped, err)
 	}
 	return nil
 }

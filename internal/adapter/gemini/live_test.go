@@ -116,15 +116,18 @@ func TestLiveImageGenerationAndEdit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	model := env("OTOGI_GEMINI_IMAGE_MODEL", "gemini-nano-banana-2.1")
-	turns := []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "Draw a simple flat icon of a blue circle on a white background."})}
+	turns := []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "Draw a cheerful cartoon otter wearing a tiny green scarf, as a sticker."})}
 	first, err := p.Generate(ctx, llm.Request{Model: model, Turns: turns}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if first.Finish == llm.FinishBlocked {
+		t.Skipf("the model blocked the drawing: %s", first.Reason)
+	}
 	if images(first) == 0 {
 		t.Fatalf("no image in %+v", first.Turn.Content)
 	}
-	turns = append(turns, first.Turn, userTurn(otogi.Part{Kind: otogi.PartText, Text: "Make the circle green, keep everything else."}))
+	turns = append(turns, first.Turn, userTurn(otogi.Part{Kind: otogi.PartText, Text: "Now make the scarf red, keep everything else."}))
 	second, err := p.Generate(ctx, llm.Request{Model: model, Turns: turns}, nil)
 	if err != nil {
 		t.Fatal(err)

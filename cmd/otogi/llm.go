@@ -20,9 +20,9 @@ type LLMConfig struct {
 type GeminiConfig struct {
 	// APIKey is the Gemini API key.
 	APIKey string `yaml:"api_key"`
-	// BaseURL is the API's address; empty means
-	// https://generativelanguage.googleapis.com. A proxy or gateway that
-	// speaks the Gemini API works too.
+	// BaseURL is the API endpoint, with or without its version; empty means
+	// https://generativelanguage.googleapis.com/v1beta. A proxy or gateway
+	// that speaks the Gemini Interactions API works too.
 	BaseURL string `yaml:"base_url"`
 }
 

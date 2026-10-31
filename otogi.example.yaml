@@ -39,7 +39,7 @@ telegram:
 # llm:
 #   gemini:
 #     api_key: ${OTOGI_GEMINI_API_KEY}
-#     # base_url: https://generativelanguage.googleapis.com   # or a proxy/gateway speaking the Gemini API
+#     # base_url: https://generativelanguage.googleapis.com/v1beta   # the default; or a proxy/gateway speaking the Gemini API
 
 modules:
   utility: {}             # /whoami, /ping, /status, /help

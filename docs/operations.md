@@ -7,7 +7,7 @@ One `otogi` process plus its data directory on one host, run under a supervisor 
 ## Configuration
 
 - One YAML file (`otogi.yaml`; see [`otogi.example.yaml`](../otogi.example.yaml)) holds all settings, with one section per Telegram account, language model provider, and module.
-- `llm.gemini` configures the Gemini provider: `api_key` (use `${OTOGI_GEMINI_API_KEY}`) and an optional `base_url` for a proxy or gateway that speaks the Gemini API. Modules name the provider and pin their own model. Live tests against the API: `OTOGI_GEMINI_API_KEY=... go test -run Live -v ./internal/adapter/gemini`.
+- `llm.gemini` configures the Gemini provider: `api_key` (use `${OTOGI_GEMINI_API_KEY}`) and an optional `base_url`, the API endpoint with or without its version (default `https://generativelanguage.googleapis.com/v1beta`; a proxy or gateway that speaks the Gemini Interactions API works too). Modules name the provider and pin their own model. Live tests against the API: `OTOGI_GEMINI_API_KEY=... go test -run Live -v ./internal/adapter/gemini`.
 - `${VAR}` in any value is read from the environment, which is how secrets such as the app hash stay out of the file. An unset variable is an error. Use block style for such values; in flow style (`{...}`) quote them.
 - `-config PATH` selects the file (default `otogi.yaml`); the first argument selects the command: `run` (default), `validate`, `login ACCOUNT`, or `smoke`.
 - The whole config is validated at startup before anything starts. Errors name the field or the line. Unknown fields are errors, so typos surface.

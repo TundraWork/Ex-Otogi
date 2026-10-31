@@ -6,9 +6,11 @@ package gemini
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,8 +34,9 @@ const maxAttempts = 3
 type Config struct {
 	// APIKey authenticates requests.
 	APIKey string
-	// BaseURL is the API's address; empty means
-	// https://generativelanguage.googleapis.com.
+	// BaseURL is the API's endpoint, with or without its version, for
+	// example https://generativelanguage.googleapis.com/v1beta; empty means
+	// that one. A trailing version path selects the API version.
 	BaseURL string
 	// Recorder receives one record per call.
 	Recorder otogi.Recorder
@@ -55,18 +58,33 @@ func New(cfg Config) (*Provider, error) {
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("gemini: an API key is required: %w", otogi.ErrInvalid)
 	}
+	base, version := splitVersion(cfg.BaseURL)
 	// Backend and key are explicit so GOOGLE_API_KEY, GEMINI_API_KEY, and
 	// GOOGLE_GENAI_USE_VERTEXAI in the environment cannot change them.
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
 		APIKey:      cfg.APIKey,
 		Backend:     genai.BackendGeminiAPI,
 		HTTPClient:  &http.Client{Transport: transport{base: http.DefaultTransport}},
-		HTTPOptions: genai.HTTPOptions{BaseURL: cfg.BaseURL},
+		HTTPOptions: genai.HTTPOptions{BaseURL: base, APIVersion: version},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gemini: %w", err)
 	}
 	return &Provider{client: client, recorder: cfg.Recorder, log: cfg.Logger, backoff: time.Second}, nil
+}
+
+// apiVersion matches an API version path segment, such as v1beta.
+var apiVersion = regexp.MustCompile(`^v\d+((alpha|beta)\d*)?$`)
+
+// splitVersion splits an endpoint that ends in an API version into the base
+// and the version; the version is empty when the endpoint has none.
+func splitVersion(endpoint string) (base, version string) {
+	trimmed := strings.TrimSuffix(endpoint, "/")
+	i := strings.LastIndex(trimmed, "/")
+	if i < 0 || !apiVersion.MatchString(trimmed[i+1:]) || strings.HasSuffix(trimmed[:i], ":/") {
+		return endpoint, ""
+	}
+	return trimmed[:i], trimmed[i+1:]
 }
 
 // Generate runs one turn; see llm.Provider.
@@ -99,7 +117,7 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request, partial func(o
 	err = retry.Do(ctx, backoff, func(ctx context.Context) error {
 		c.reset()
 		err := p.attempt(ctx, body, c)
-		if err == nil || c.shown || ctx.Err() != nil {
+		if err == nil || errors.Is(err, errStopped) || ctx.Err() != nil {
 			return err
 		}
 		var retryable bool
@@ -110,6 +128,10 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request, partial func(o
 		return err
 	})
 	resp := c.response()
+	var blocked *blockedError
+	if errors.As(err, &blocked) {
+		resp.Finish, resp.Reason, err = llm.FinishBlocked, blocked.reason, nil
+	}
 	p.record(ctx, req, input, c, resp, err)
 	if err != nil {
 		return llm.Response{}, err
@@ -213,6 +235,10 @@ func (c *call) failure() error {
 	}
 	return nil
 }
+
+// errStopped marks an error the caller's partial callback returned, which
+// is never retried.
+var errStopped = errors.New("stopped by the caller")
 
 // finishOf maps an interaction's final status to a finish.
 func finishOf(status string) llm.Finish {

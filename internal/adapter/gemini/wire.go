@@ -21,6 +21,7 @@ import (
 
 // exchange is one HTTP request of a call, as the transport saw it.
 type exchange struct {
+	Request    string `json:"request"` // method and URL
 	Status     int    `json:"status,omitempty"`
 	Error      string `json:"error,omitempty"`       // a transport failure
 	Body       string `json:"body,omitempty"`        // the full body of a non-2xx response
@@ -49,7 +50,7 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if log == nil {
 		return resp, err
 	}
-	x := exchange{Duration: time.Since(started).String()}
+	x := exchange{Request: req.Method + " " + req.URL.String(), Duration: time.Since(started).String()}
 	if err != nil {
 		x.Error = err.Error()
 	} else {
@@ -95,14 +96,14 @@ func (e *exchanges) all() []exchange {
 	return append([]exchange(nil), e.list...)
 }
 
-// retryable says whether the last exchange failed in a way worth another
-// attempt, and how long the server asked to wait. A daily quota is not
+// retryable says whether a failed attempt is worth another, judged by its
+// last exchange, and how long the server asked to wait. A daily quota is not
 // worth retrying today.
 func (e *exchanges) retryable() (bool, time.Duration) {
 	x, ok := e.last()
 	switch {
-	case !ok || x.Status == 0:
-		return true, 0 // the request never got an answer
+	case !ok || x.Status < 300:
+		return true, 0 // no answer, or the stream broke after a good start
 	case x.Status != http.StatusRequestTimeout && x.Status != http.StatusTooManyRequests && x.Status < 500:
 		return false, 0
 	case strings.Contains(x.Body, "PerDay"):
@@ -157,11 +158,47 @@ func (e *exchanges) failure(ctx context.Context, err error) error {
 	if !ok || x.Status < 300 {
 		return fmt.Errorf("gemini: %w: %w", otogi.ErrUnavailable, err)
 	}
+	if reason := blockReason(x); reason != "" {
+		return &blockedError{reason: reason}
+	}
 	kind := otogi.ErrInvalid
 	if x.Status == http.StatusRequestTimeout || x.Status == http.StatusTooManyRequests || x.Status >= 500 {
 		kind = otogi.ErrUnavailable
 	}
 	return fmt.Errorf("gemini: HTTP %d: %s: %w", x.Status, x.Body, kind)
+}
+
+// blockedError is a prompt or reply the API refused to serve, such as
+// {"error": {"code": "image_recitation", ...}}. Generate reports it as
+// llm.FinishBlocked, not as an error.
+type blockedError struct{ reason string }
+
+func (e *blockedError) Error() string { return "gemini: blocked: " + e.reason }
+
+// blockWords mark an error code that names a block rather than a fault.
+var blockWords = []string{"recitation", "safety", "prohibited", "blocklist", "spii", "blocked"}
+
+// blockReason is "<code>: <message>" when a 400 names a block.
+func blockReason(x exchange) string {
+	if x.Status != http.StatusBadRequest {
+		return ""
+	}
+	var body struct {
+		Error struct {
+			Code    any    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(x.Body), &body) != nil {
+		return ""
+	}
+	code, _ := body.Error.Code.(string)
+	for _, w := range blockWords {
+		if strings.Contains(strings.ToLower(code), w) {
+			return code + ": " + body.Error.Message
+		}
+	}
+	return ""
 }
 
 // inputSteps converts turns to Interactions input steps. A model turn the
@@ -227,10 +264,11 @@ func contentBlocks(msg otogi.Message) ([]map[string]any, error) {
 	return blocks, nil
 }
 
-// digestMedia is v's JSON form with the data of every media block replaced
-// by its size and SHA-256, for records: a conversation's images are resent
-// on every call, and their bytes stay in the platform and the caller's
-// history.
+// digestMedia is v's JSON form with the data of every media block, and every
+// thought signature, replaced by its size and SHA-256, for records: a
+// conversation's images and signatures (opaque tokens, often hundreds of
+// kilobytes on image turns) are resent on every call, and their bytes stay
+// in the platform and the caller's history.
 func digestMedia(v any) any {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -244,10 +282,12 @@ func digestMedia(v any) any {
 	walk = func(v any) {
 		switch v := v.(type) {
 		case map[string]any:
-			if encoded, ok := v["data"].(string); ok {
-				if raw, err := base64.StdEncoding.DecodeString(encoded); err == nil {
-					sum := sha256.Sum256(raw)
-					v["data"] = map[string]any{"size": len(raw), "sha256": fmt.Sprintf("%x", sum)}
+			for _, field := range []string{"data", "signature"} {
+				if encoded, ok := v[field].(string); ok {
+					if raw, err := base64.StdEncoding.DecodeString(encoded); err == nil {
+						sum := sha256.Sum256(raw)
+						v[field] = map[string]any{"size": len(raw), "sha256": fmt.Sprintf("%x", sum)}
+					}
 				}
 			}
 			for _, x := range v {

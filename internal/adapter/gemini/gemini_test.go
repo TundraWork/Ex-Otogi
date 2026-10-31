@@ -184,7 +184,8 @@ func TestGenerateStreamsRichTextAndImages(t *testing.T) {
 	r := rec.only(t)
 	payload, _ := json.Marshal(r.Payload)
 	if r.Kind != "llm.completed" || r.Component != "llm:gemini" || r.Event != "e1" || r.Conversation != "user:7" ||
-		!strings.Contains(string(payload), `"size":12`) || strings.Contains(string(payload), "iVBORw0KGgowMDAw") || !strings.Contains(string(payload), `"module":"chat"`) {
+		!strings.Contains(string(payload), `"size":12`) || strings.Contains(string(payload), "iVBORw0KGgowMDAw") || !strings.Contains(string(payload), `"module":"chat"`) ||
+		strings.Contains(string(payload), `"signature":"c2ln"`) || !strings.Contains(string(payload), `"signature":{"sha256"`) {
 		t.Fatalf("record %+v\n%s", r, payload)
 	}
 }
@@ -243,22 +244,26 @@ func TestGenerateRetries(t *testing.T) {
 	}
 }
 
-func TestGenerateDoesNotRetryOnceOutputShows(t *testing.T) {
+func TestGenerateRetriesAStreamCutMidReply(t *testing.T) {
 	cut := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprintf(w, "event: step.start\ndata: %s\n\nevent: step.delta\ndata: %s\n\n", output, text("partial"))
 		w.(http.Flusher).Flush()
 		panic(http.ErrAbortHandler) // drop the connection mid-stream
 	}
-	s := &server{responses: []func(http.ResponseWriter, *http.Request){cut, stream(output, text("ok"), completed)}}
-	p, _ := newProvider(t, s)
-	shown := 0
-	_, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}}, func(otogi.Message) error {
-		shown++
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){cut, stream(output, text("whole"), completed)}}
+	p, rec := newProvider(t, s)
+	var partials []string
+	resp, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}}, func(m otogi.Message) error {
+		partials = append(partials, m.PlainText())
 		return nil
 	})
-	if !errors.Is(err, otogi.ErrUnavailable) || shown != 1 || len(s.requests()) != 1 {
-		t.Fatalf("err %v, shown %d, requests %d", err, shown, len(s.requests()))
+	if err != nil || resp.Markdown != "whole" || strings.Join(partials, "|") != "partial|whole" || len(s.requests()) != 2 {
+		t.Fatalf("resp %q, err %v, partials %q, requests %d", resp.Markdown, err, partials, len(s.requests()))
+	}
+	payload, _ := json.Marshal(rec.only(t).Payload)
+	if !strings.Contains(string(payload), `"wait"`) {
+		t.Fatalf("record lacks the retry:\n%s", payload)
 	}
 }
 
@@ -269,6 +274,18 @@ func TestGenerateStopsWhenPartialFails(t *testing.T) {
 	_, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}}, func(otogi.Message) error { return gone })
 	if !errors.Is(err, gone) || len(s.requests()) != 1 || rec.only(t).Kind != "llm.failed" {
 		t.Fatalf("err %v, requests %d", err, len(s.requests()))
+	}
+}
+
+func TestGenerateReportsBlocksAsAFinish(t *testing.T) {
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){failWith(400, `{"error":{"message":"Image generation blocked due to copyright/recitation.","code":"image_recitation"}}`)}}
+	p, rec := newProvider(t, s)
+	resp, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "draw"})}}, nil)
+	if err != nil || resp.Finish != llm.FinishBlocked || resp.Reason != "image_recitation: Image generation blocked due to copyright/recitation." || len(s.requests()) != 1 {
+		t.Fatalf("resp %+v, err %v, requests %d", resp, err, len(s.requests()))
+	}
+	if r := rec.only(t); r.Kind != "llm.completed" {
+		t.Fatalf("record kind %s", r.Kind)
 	}
 }
 
@@ -305,5 +322,32 @@ func TestGenerateStopsOnCancel(t *testing.T) {
 	_, err := p.Generate(ctx, llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}}, nil)
 	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > 2*time.Second {
 		t.Fatalf("err %v after %v", err, time.Since(started))
+	}
+}
+
+func TestEndpointsMayIncludeTheVersion(t *testing.T) {
+	t.Parallel()
+	for endpoint, want := range map[string][2]string{
+		"https://generativelanguage.googleapis.com/v1beta":  {"https://generativelanguage.googleapis.com", "v1beta"},
+		"https://generativelanguage.googleapis.com/v1beta/": {"https://generativelanguage.googleapis.com", "v1beta"},
+		"https://gw.example/gemini/v1alpha2":                {"https://gw.example/gemini", "v1alpha2"},
+		"https://gw.example/gemini":                         {"https://gw.example/gemini", ""},
+		"https://v1.example":                                {"https://v1.example", ""},
+		"":                                                  {"", ""},
+	} {
+		if base, version := splitVersion(endpoint); base != want[0] || version != want[1] {
+			t.Errorf("splitVersion(%q) = %q, %q; want %q, %q", endpoint, base, version, want[0], want[1])
+		}
+	}
+
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){stream(output, text("ok"), completed)}}
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+	p, err := New(Config{APIKey: "key", BaseURL: srv.URL + "/v1beta", Recorder: &recorder{}, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}}, nil); err != nil {
+		t.Fatal(err)
 	}
 }

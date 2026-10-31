@@ -10,7 +10,7 @@ The bot loses no inbound events, recovers on its own from ordinary failures (net
 | --- | --- |
 | Network or platform outage | The driver reconnects with backoff (gotd handles MTProto reconnects), then catches up on missed updates. |
 | Platform rate limit (Telegram `FLOOD_WAIT`) | Wait the indicated time within the operation's context, then retry once the wait ends. |
-| Language model rate limit or outage (HTTP 408, 429, 5xx, or no answer) | The provider retries up to 3 attempts in all, waiting what the server asks or backing off from 1s, but only before any output has been shown. A daily quota is not retried. Each attempt is in the call's record. |
+| Language model rate limit, outage, or a reply stream that drops (HTTP 408, 429, 5xx, no answer, or a broken stream) | The provider retries up to 3 attempts in all, waiting what the server asks or backing off from 1s. A retry after output began starts the reply over, and the streamed message shows the new attempt. A daily quota and a block are not retried. Each attempt is in the call's record. |
 | Process crash or kill | Unfinished durable inbox rows are dispatched again on restart. Sends are not repeated: they are recorded by idempotency key, and Telegram rejects a reused `random_id`. |
 | Missed history cannot be recovered | Record a gap (kind, channel, time) and continue. For Telegram, gotd reports these through its gap hooks. |
 | Module error or panic | Record the failed outcome or panic with its stack; other modules and events continue. Streams it left open are closed with their last content. |
