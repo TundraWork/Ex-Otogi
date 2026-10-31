@@ -50,6 +50,9 @@ type Request struct {
 	Thinking string
 	// MaxOutput limits output tokens; zero is the model's default.
 	MaxOutput int
+	// Tools are offered to the model. Run adds the functions of the tools
+	// it runs.
+	Tools []ToolSpec
 }
 
 // Role says who a turn is from.
@@ -60,6 +63,8 @@ const (
 	RoleUser Role = "user"
 	// RoleModel is the model.
 	RoleModel Role = "model"
+	// RoleTool carries the results of a model turn's function calls.
+	RoleTool Role = "tool"
 )
 
 // Turn is one turn of a conversation.
@@ -78,6 +83,10 @@ type Turn struct {
 	// keeps the model's hidden reasoning and generated images intact; other
 	// providers use Content. Store it with the turn.
 	Native *Native `json:"native,omitempty"`
+	// Calls are the functions a model turn calls, in order.
+	Calls []Call `json:"calls,omitempty"`
+	// Results answer the calls of the model turn before, in a RoleTool turn.
+	Results []Result `json:"results,omitempty"`
 }
 
 // Native is a provider's own encoding of a turn.
@@ -99,6 +108,9 @@ const (
 	// FinishBlocked is a prompt or reply the provider blocked, for example
 	// for safety; Reason says why.
 	FinishBlocked Finish = "blocked"
+	// FinishToolCalls is a turn that ends in function calls to run; see
+	// Run.
+	FinishToolCalls Finish = "tool_calls"
 	// FinishOther is any other end; Reason says what happened.
 	FinishOther Finish = "other"
 )
@@ -118,6 +130,16 @@ type Response struct {
 	Reason string
 	// Usage counts tokens.
 	Usage Usage
+	// Sources are the pages the reply cites, when a search tool grounded it.
+	Sources []Source
+}
+
+// Source is a page a reply cites.
+type Source struct {
+	// Title names the page, often its site.
+	Title string `json:"title"`
+	// URL is the page's address, possibly through the provider's redirect.
+	URL string `json:"url"`
 }
 
 // Usage counts the tokens of a turn.
@@ -130,6 +152,11 @@ type Usage struct {
 	Output int `json:"output"`
 	// Thoughts counts tokens the model spent thinking.
 	Thoughts int `json:"thoughts"`
+}
+
+// Add sums two usages.
+func (u Usage) Add(v Usage) Usage {
+	return Usage{Input: u.Input + v.Input, Cached: u.Cached + v.Cached, Output: u.Output + v.Output, Thoughts: u.Thoughts + v.Thoughts}
 }
 
 // Inline returns msg with the bytes of every media and file part fetched

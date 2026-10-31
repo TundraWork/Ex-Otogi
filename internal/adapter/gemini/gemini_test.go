@@ -351,3 +351,89 @@ func TestEndpointsMayIncludeTheVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGenerateReturnsFunctionCalls(t *testing.T) {
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){stream(
+		thought, signature,
+		`{"event_type":"step.start","index":1,"step":{"id":"call_1","type":"function_call","name":"set_reminder","arguments":{}}}`,
+		`{"event_type":"step.delta","index":1,"delta":{"type":"arguments_delta","arguments":"{\"delay\":\"10m\","}}`,
+		`{"event_type":"step.delta","index":1,"delta":{"type":"arguments_delta","arguments":"\"text\":\"water\"}"}}`,
+		`{"event_type":"step.stop","index":1}`,
+		`{"event_type":"interaction.completed","interaction":{"id":"i","status":"requires_action"}}`,
+	)}}
+	p, _ := newProvider(t, s)
+	resp, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "remind me"})}, Tools: []llm.ToolSpec{
+		{Function: &llm.Function{Name: "set_reminder", Description: "remind", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		{Builtin: llm.BuiltinGoogleSearch},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Finish != llm.FinishToolCalls || len(resp.Turn.Calls) != 1 || resp.Turn.Calls[0].ID != "call_1" || string(resp.Turn.Calls[0].Args) != `{"delay":"10m","text":"water"}` {
+		t.Fatalf("response %+v", resp)
+	}
+	if !strings.Contains(string(resp.Turn.Native.Data), `"arguments":{"delay":"10m","text":"water"},"id":"call_1","name":"set_reminder","type":"function_call"`) {
+		t.Fatalf("native %s", resp.Turn.Native.Data)
+	}
+	tools, _ := json.Marshal(s.requests()[0]["tools"])
+	if string(tools) != `[{"description":"remind","name":"set_reminder","parameters":{"type":"object"},"type":"function"},{"type":"google_search"}]` {
+		t.Fatalf("tools %s", tools)
+	}
+}
+
+func TestGenerateSendsFunctionResults(t *testing.T) {
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){stream(output, text("Done."), completed)}}
+	p, _ := newProvider(t, s)
+	native := `[{"arguments":{"a":1},"id":"c1","name":"add","type":"function_call"},{"arguments":{},"id":"c2","name":"fail","type":"function_call"}]`
+	_, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{
+		userTurn(otogi.Part{Kind: otogi.PartText, Text: "go"}),
+		{Role: llm.RoleModel, Native: &llm.Native{Provider: Name, Data: json.RawMessage(native)}},
+		{Role: llm.RoleTool, Results: []llm.Result{{CallID: "c1", Name: "add", Output: json.RawMessage(`{"sum":1}`)}, {CallID: "c2", Name: "fail", Error: "no such chat"}}},
+		{Role: llm.RoleModel, Calls: []llm.Call{{ID: "c3", Name: "add", Args: json.RawMessage(`{"a":2}`)}}},
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, _ := json.Marshal(s.requests()[0]["input"])
+	for _, want := range []string{
+		`{"call_id":"c1","name":"add","result":"{\"sum\":1}","type":"function_result"}`,
+		`{"call_id":"c2","is_error":true,"name":"fail","result":"no such chat","type":"function_result"}`,
+		`{"arguments":{"a":2},"id":"c3","name":"add","type":"function_call"}`,
+	} {
+		if !strings.Contains(string(input), want) {
+			t.Errorf("input lacks %s:\n%s", want, input)
+		}
+	}
+}
+
+func TestGenerateKeepsSearchStepsAndSources(t *testing.T) {
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){stream(
+		`{"event_type":"step.start","index":0,"step":{"id":"s1","type":"google_search_call","signature":""}}`,
+		`{"event_type":"step.delta","index":0,"delta":{"type":"google_search_call","signature":"c2ln","arguments":{"queries":["q"]}}}`,
+		`{"event_type":"step.stop","index":0}`,
+		`{"event_type":"step.start","index":1,"step":{"type":"model_output"}}`,
+		`{"event_type":"step.delta","index":1,"delta":{"type":"text","text":"Kane won."}}`,
+		`{"event_type":"step.delta","index":1,"delta":{"type":"text_annotation_delta","annotations":[{"type":"url_citation","url":"https://r/1","title":"uefa.com","start_index":0,"end_index":9},{"type":"url_citation","url":"https://r/1","title":"uefa.com"},{"type":"url_citation","url":"https://r/2","title":"bbc.com"}]}}`,
+		completed,
+	)}}
+	p, _ := newProvider(t, s)
+	resp, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "who won"})}, Tools: []llm.ToolSpec{{Builtin: llm.BuiltinGoogleSearch}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Sources) != 2 || resp.Sources[0] != (llm.Source{Title: "uefa.com", URL: "https://r/1"}) || resp.Turn.Content.PlainText() != "Kane won." {
+		t.Fatalf("response %+v", resp)
+	}
+	if !strings.Contains(string(resp.Turn.Native.Data), `{"arguments":{"queries":["q"]},"id":"s1","signature":"c2ln","type":"google_search_call"}`) {
+		t.Fatalf("native %s", resp.Turn.Native.Data)
+	}
+}
+
+func TestGenerateRejectsUnknownBuiltins(t *testing.T) {
+	s := &server{}
+	p, _ := newProvider(t, s)
+	_, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}, Tools: []llm.ToolSpec{{Builtin: "maps"}}}, nil)
+	if !errors.Is(err, otogi.ErrUnsupported) || len(s.requests()) != 0 {
+		t.Fatalf("err %v", err)
+	}
+}

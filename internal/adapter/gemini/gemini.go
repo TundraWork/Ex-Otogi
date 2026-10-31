@@ -94,7 +94,11 @@ func (p *Provider) Generate(ctx context.Context, req llm.Request, partial func(o
 	if err != nil {
 		return llm.Response{}, err
 	}
-	body, err := createBody(req, input)
+	tools, err := toolList(req.Tools)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	body, err := createBody(req, input, tools)
 	if err != nil {
 		return llm.Response{}, err
 	}
@@ -167,20 +171,21 @@ func (p *Provider) attempt(ctx context.Context, body operations.CreateInteractio
 
 // createBody is the request: stateless and streamed, with the SDK's own
 // retries off because Generate retries.
-func createBody(req llm.Request, input []json.RawMessage) (operations.CreateInteractionRequestBody, error) {
+func createBody(req llm.Request, input []json.RawMessage, tools []map[string]any) (operations.CreateInteractionRequestBody, error) {
 	var steps []ia.Step
-	data, err := json.Marshal(input)
-	if err != nil {
-		return operations.CreateInteractionRequestBody{}, fmt.Errorf("gemini: encode input: %w", err)
+	if err := convert(input, &steps); err != nil {
+		return operations.CreateInteractionRequestBody{}, fmt.Errorf("gemini: input steps: %w", err)
 	}
-	if err := json.Unmarshal(data, &steps); err != nil {
-		return operations.CreateInteractionRequestBody{}, fmt.Errorf("gemini: input steps: %w: %w", otogi.ErrInvalid, err)
+	var declared []ia.Tool
+	if err := convert(tools, &declared); err != nil {
+		return operations.CreateInteractionRequestBody{}, fmt.Errorf("gemini: tools: %w", err)
 	}
 	interaction := ia.CreateModelInteraction{
 		Model:  ia.Model(req.Model),
 		Input:  new(ia.NewInteractionsInput(steps)),
 		Store:  new(false),
 		Stream: new(true),
+		Tools:  declared,
 	}
 	if req.System != "" {
 		interaction.SystemInstruction = &req.System
@@ -197,12 +202,47 @@ func createBody(req llm.Request, input []json.RawMessage) (operations.CreateInte
 	return operations.NewCreateInteractionRequestBody(interaction), nil
 }
 
+// convert re-reads from, our wire-shaped JSON, as the SDK's typed form to.
+func convert(from, to any) error {
+	data, err := json.Marshal(from)
+	if err != nil {
+		return fmt.Errorf("encode: %w", err)
+	}
+	if err := json.Unmarshal(data, to); err != nil {
+		return fmt.Errorf("%w: %w", otogi.ErrInvalid, err)
+	}
+	return nil
+}
+
+// builtins are the built-in tools Gemini runs itself.
+var builtins = map[string]bool{llm.BuiltinGoogleSearch: true, llm.BuiltinURLContext: true, llm.BuiltinCodeExecution: true}
+
+// toolList declares the request's tools on the wire.
+func toolList(specs []llm.ToolSpec) ([]map[string]any, error) {
+	var tools []map[string]any
+	for _, s := range specs {
+		switch {
+		case s.Function != nil:
+			tool := map[string]any{"type": "function", "name": s.Function.Name, "description": s.Function.Description}
+			if len(s.Function.Parameters) > 0 {
+				tool["parameters"] = s.Function.Parameters
+			}
+			tools = append(tools, tool)
+		case builtins[s.Builtin]:
+			tools = append(tools, map[string]any{"type": s.Builtin})
+		default:
+			return nil, fmt.Errorf("gemini: tool %q: %w", s.Builtin, otogi.ErrUnsupported)
+		}
+	}
+	return tools, nil
+}
+
 // record writes the call's one event log record.
 func (p *Provider) record(ctx context.Context, req llm.Request, input []json.RawMessage, c *call, resp llm.Response, err error) {
 	work, _ := otogi.WorkFrom(ctx)
 	payload := map[string]any{
 		"module": work.Module, "origin": work.Origin, "model": req.Model,
-		"system": req.System, "thinking": req.Thinking, "max_output": req.MaxOutput,
+		"system": req.System, "thinking": req.Thinking, "max_output": req.MaxOutput, "tools": req.Tools,
 		"input":  digestMedia(input),
 		"output": digestMedia(c.stepList()),
 		"reply":  resp.Markdown, "finish": resp.Finish, "reason": resp.Reason, "usage": resp.Usage,

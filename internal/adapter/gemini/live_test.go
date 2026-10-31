@@ -8,6 +8,8 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,4 +147,65 @@ func images(resp llm.Response) int {
 		}
 	}
 	return n
+}
+
+// lockerTool answers with a code the model cannot guess, so the reply shows
+// that the call ran.
+type lockerTool struct{}
+
+func (lockerTool) Function() llm.Function {
+	return llm.Function{Name: "locker_code", Description: "Returns the code of a numbered locker.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{"locker":{"type":"integer"}},"required":["locker"]}`)}
+}
+
+func (lockerTool) Call(_ context.Context, _ otogi.Event, args json.RawMessage) (any, error) {
+	var in struct{ Locker int }
+	if err := json.Unmarshal(args, &in); err != nil {
+		return nil, err
+	}
+	return map[string]any{"locker": in.Locker, "code": "QX-" + strconv.Itoa(in.Locker*7)}, nil
+}
+
+func TestLiveFunctionsAndSearch(t *testing.T) {
+	p, rec := liveProvider(t)
+	defer logRecords(t, rec)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	model := env("OTOGI_GEMINI_MODEL", "gemini-3.8-flash")
+	tools := map[string]llm.Tool{"locker_code": lockerTool{}}
+
+	t.Run("function", func(t *testing.T) {
+		var calls []llm.CallRecord
+		out, err := llm.Run(ctx, p, llm.Request{Model: model, Thinking: "low", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "What is the code of locker 6?"})}},
+			tools, otogi.Event{}, 4, nil, func(c llm.CallRecord) { calls = append(calls, c) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("reply %q after %d calls", out.Reply.PlainText(), len(calls))
+		if len(calls) == 0 || !strings.Contains(out.Reply.PlainText(), "QX-42") {
+			t.Fatalf("the function did not reach the reply: %+v", calls)
+		}
+	})
+	t.Run("search", func(t *testing.T) {
+		out, err := llm.Run(ctx, p, llm.Request{Model: model, Thinking: "low", Tools: []llm.ToolSpec{{Builtin: llm.BuiltinGoogleSearch}},
+			Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "Search the web: what is the latest stable Go release? One sentence."})}}, nil, otogi.Event{}, 4, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("reply %q sources %+v", out.Reply.PlainText(), out.Sources)
+		if len(out.Sources) == 0 {
+			t.Fatal("no sources")
+		}
+	})
+	t.Run("search and function together", func(t *testing.T) {
+		out, err := llm.Run(ctx, p, llm.Request{Model: model, Thinking: "low", Tools: []llm.ToolSpec{{Builtin: llm.BuiltinGoogleSearch}},
+			Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "Tell me the code of locker 3, and search the web for today's date in Tokyo."})}}, tools, otogi.Event{}, 4, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("reply %q sources %d", out.Reply.PlainText(), len(out.Sources))
+		if !strings.Contains(out.Reply.PlainText(), "QX-21") {
+			t.Fatal("the function did not reach the reply")
+		}
+	})
 }

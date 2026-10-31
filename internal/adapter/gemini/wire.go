@@ -214,21 +214,55 @@ func inputSteps(turns []llm.Turn) ([]json.RawMessage, error) {
 			out = append(out, steps...)
 			continue
 		}
-		blocks, err := contentBlocks(t.Content)
+		steps, err := turnSteps(t)
 		if err != nil {
 			return nil, fmt.Errorf("gemini: turn %d: %w", i, err)
 		}
-		kind := "user_input"
-		if t.Role == llm.RoleModel {
-			kind = "model_output"
+		for _, s := range steps {
+			step, err := json.Marshal(s)
+			if err != nil {
+				return nil, fmt.Errorf("gemini: turn %d: %w", i, err)
+			}
+			out = append(out, step)
 		}
-		step, err := json.Marshal(map[string]any{"type": kind, "content": blocks})
-		if err != nil {
-			return nil, fmt.Errorf("gemini: turn %d: %w", i, err)
-		}
-		out = append(out, step)
 	}
 	return out, nil
+}
+
+// turnSteps converts a turn that has no Native steps of ours.
+func turnSteps(t llm.Turn) ([]map[string]any, error) {
+	var steps []map[string]any
+	if t.Role == llm.RoleTool {
+		for _, r := range t.Results {
+			step := map[string]any{"type": "function_result", "call_id": r.CallID, "name": r.Name, "result": string(r.Output)}
+			if r.Error != "" {
+				step["result"], step["is_error"] = r.Error, true
+			}
+			steps = append(steps, step)
+		}
+		return steps, nil
+	}
+	blocks, err := contentBlocks(t.Content)
+	if err != nil {
+		return nil, err
+	}
+	kind := "user_input"
+	if t.Role == llm.RoleModel {
+		kind = "model_output"
+	}
+	if len(blocks) > 0 || len(t.Calls) == 0 {
+		steps = append(steps, map[string]any{"type": kind, "content": blocks})
+	}
+	for _, c := range t.Calls {
+		args := map[string]any{}
+		if len(c.Args) > 0 {
+			if err := json.Unmarshal(c.Args, &args); err != nil {
+				return nil, fmt.Errorf("call %s arguments: %w: %w", c.Name, otogi.ErrInvalid, err)
+			}
+		}
+		steps = append(steps, map[string]any{"type": "function_call", "id": c.ID, "name": c.Name, "arguments": args})
+	}
+	return steps, nil
 }
 
 // contentBlocks converts a message: text as Markdown, media and files as

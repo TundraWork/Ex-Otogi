@@ -25,6 +25,7 @@ type call struct {
 	// Per attempt; see reset.
 	steps       map[int]map[string]any // by step index
 	order       []int
+	args        map[int]string // function call arguments streamed so far, by step
 	media       map[string][]byte // decoded images, by "step/content"
 	status      string
 	streamErr   string
@@ -35,7 +36,7 @@ type call struct {
 
 // reset starts an attempt afresh.
 func (c *call) reset() {
-	c.steps, c.order, c.media = map[int]map[string]any{}, nil, map[string][]byte{}
+	c.steps, c.order, c.media, c.args = map[int]map[string]any{}, nil, map[string][]byte{}, map[int]string{}
 	c.status, c.streamErr, c.usage, c.unhandled = "", "", llm.Usage{}, nil
 }
 
@@ -68,7 +69,9 @@ func (c *call) event(e *ia.InteractionSSEStreamEvent) error {
 	case d.ErrorEvent != nil:
 		raw, _ := json.Marshal(d.ErrorEvent.Error)
 		c.streamErr = "stream error " + string(raw)
-	case d.StepStop != nil, d.InteractionCreatedEvent != nil:
+	case d.StepStop != nil:
+		c.finishArguments(d.StepStop.Index)
+	case d.InteractionCreatedEvent != nil:
 	default:
 		c.unhandled = append(c.unhandled, d.UnknownRaw)
 	}
@@ -101,7 +104,29 @@ func (c *call) delta(d *ia.StepDelta) error {
 		return nil
 	case "text", "image", "audio", "video", "document":
 		step["content"] = appendContent(step["content"], delta)
+	case "arguments_delta":
+		fragment, _ := delta["arguments"].(string)
+		c.args[d.Index] += fragment
+		return nil
+	case "text_annotation_delta":
+		blocks, _ := step["content"].([]any)
+		if len(blocks) > 0 {
+			if last, ok := blocks[len(blocks)-1].(map[string]any); ok {
+				notes, _ := delta["annotations"].([]any)
+				existing, _ := last["annotations"].([]any)
+				last["annotations"] = append(existing, notes...)
+			}
+		}
+		return nil
 	default:
+		if kind != "" && kind == step["type"] { // a built-in tool's call or result
+			for k, v := range delta {
+				if k != "type" {
+					step[k] = v
+				}
+			}
+			return nil
+		}
 		raw, _ := json.Marshal(d)
 		c.unhandled = append(c.unhandled, raw)
 		return nil
@@ -120,6 +145,24 @@ func (c *call) delta(d *ia.StepDelta) error {
 		return fmt.Errorf("gemini: %w: %w", errStopped, err)
 	}
 	return nil
+}
+
+// finishArguments sets a function call's arguments from its streamed
+// fragments. Fragments that do not parse are kept as a string, so the model
+// sees its own malformed call.
+func (c *call) finishArguments(index int) {
+	raw, ok := c.args[index]
+	if !ok {
+		return
+	}
+	delete(c.args, index)
+	var args any
+	if json.Unmarshal([]byte(raw), &args) != nil {
+		args = raw
+	}
+	if step, ok := c.steps[index]; ok {
+		step["arguments"] = args
+	}
 }
 
 // appendContent appends block to a content list, joining consecutive text.
@@ -207,6 +250,9 @@ func (c *call) image(key string, block map[string]any) *otogi.Media {
 
 // response is the finished turn.
 func (c *call) response() llm.Response {
+	for index := range c.args {
+		c.finishArguments(index)
+	}
 	reply, md := c.reply()
 	steps, _ := json.Marshal(c.stepList())
 	finish := finishOf(c.status)
@@ -214,7 +260,37 @@ func (c *call) response() llm.Response {
 		Turn:     llm.Turn{Role: llm.RoleModel, Content: reply, Native: &llm.Native{Provider: Name, Data: steps}},
 		Markdown: md, Finish: finish, Usage: c.usage,
 	}
-	if finish != llm.FinishStop {
+	seen := map[string]bool{}
+	for _, i := range c.order {
+		step := c.steps[i]
+		switch step["type"] {
+		case "function_call":
+			id, _ := step["id"].(string)
+			name, _ := step["name"].(string)
+			args, _ := json.Marshal(step["arguments"])
+			resp.Turn.Calls = append(resp.Turn.Calls, llm.Call{ID: id, Name: name, Args: args})
+		case "model_output":
+			blocks, _ := step["content"].([]any)
+			for _, b := range blocks {
+				block, _ := b.(map[string]any)
+				notes, _ := block["annotations"].([]any)
+				for _, n := range notes {
+					note, _ := n.(map[string]any)
+					url, _ := note["url"].(string)
+					if note["type"] != "url_citation" || url == "" || seen[url] {
+						continue
+					}
+					seen[url] = true
+					title, _ := note["title"].(string)
+					resp.Sources = append(resp.Sources, llm.Source{Title: title, URL: url})
+				}
+			}
+		}
+	}
+	if len(resp.Turn.Calls) > 0 {
+		resp.Finish = llm.FinishToolCalls
+	}
+	if resp.Finish != llm.FinishStop && resp.Finish != llm.FinishToolCalls {
 		resp.Reason = c.status
 	}
 	return resp
