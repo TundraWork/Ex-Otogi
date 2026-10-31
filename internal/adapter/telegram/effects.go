@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf16"
 
@@ -43,6 +44,10 @@ type effects struct {
 	ref     func(conversation string, messageID int) otogi.EventRef
 	log     *slog.Logger
 	now     func() time.Time
+	// noDrafts is set once Telegram says live drafts need a bot account.
+	noDrafts atomic.Bool
+	// streamRenew overrides streamKeepAlive in tests.
+	streamRenew time.Duration
 }
 
 func (x *effects) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {

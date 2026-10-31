@@ -53,6 +53,7 @@ type stream struct {
 	conversation string
 	peer         tg.InputPeerClass
 	pace         time.Duration // streamPace; shorter in tests
+	renew        time.Duration // streamKeepAlive; shorter in tests
 	stop         context.CancelFunc
 	done         chan struct{}
 
@@ -61,7 +62,8 @@ type stream struct {
 	sent      []shown   // normal messages, one per segment
 	draft     *shown    // the live draft, with ref unset
 	next      time.Time // no update before this: pacing or FLOOD_WAIT
-	lastCall  time.Time // the last RPC, for keep-alive
+	lastCall  time.Time // the last RPC, for renewing a draft
+	lastType  time.Time // the last typing action
 	relations []otogi.Relation
 }
 
@@ -87,7 +89,11 @@ func (x *effects) openStream(ctx context.Context, e otogi.Effect) (*stream, erro
 	if err != nil {
 		return nil, fmt.Errorf("telegram stream: resolve %s: %w", conversation, err)
 	}
-	s := &stream{x: x, key: string(e.Key), conversation: conversation, peer: peer, pace: streamPace, drafts: kind == "user", done: make(chan struct{})}
+	s := &stream{x: x, key: string(e.Key), conversation: conversation, peer: peer, pace: streamPace, renew: streamKeepAlive,
+		drafts: kind == "user" && !x.noDrafts.Load(), done: make(chan struct{})}
+	if x.streamRenew > 0 {
+		s.renew = x.streamRenew
+	}
 	s.typing(ctx)
 	keepAlive, stop := context.WithCancel(ctx)
 	s.stop = stop
@@ -125,9 +131,7 @@ func (s *stream) Close(ctx context.Context, msg otogi.Message) ([]otogi.EventRef
 		}
 	}
 	err := s.show(ctx, msg, true, withFloodWait)
-	if len(s.sent) == 0 {
-		_ = s.call(ctx, &tg.SendMessageCancelAction{}) // stop "typing"; it also ends by itself
-	}
+	_ = s.call(ctx, &tg.SendMessageCancelAction{}) // edits do not end "typing"; it also ends by itself
 	refs := make([]otogi.EventRef, len(s.sent))
 	for i, m := range s.sent {
 		refs[i] = m.ref
@@ -149,9 +153,14 @@ func (s *stream) show(ctx context.Context, msg otogi.Message, final bool, flood 
 			if !tgerr.IsCode(err, 400) {
 				return err
 			}
-			// Drafts are not allowed here, e.g. in a chat with a bot.
+			// Drafts are not allowed here: in a chat with a bot, or from a
+			// user account at all (USER_BOT_REQUIRED), which stops trying
+			// for the account.
 			s.x.log.Info("telegram: live draft rejected; streaming by edits", "conversation", s.conversation, "error", err)
 			s.drafts = false
+			if tgerr.Is(err, "USER_BOT_REQUIRED") {
+				s.x.noDrafts.Store(true)
+			}
 		}
 		if err := s.showSegment(ctx, i, seg, flood); err != nil {
 			return err
@@ -200,7 +209,9 @@ func (s *stream) edit(ctx context.Context, i int, seg segment, flood floodPolicy
 		s.sent[i].seg = seg
 		return nil
 	}
-	if err := s.x.editWith(ctx, s.conversation, id, s.message(i, seg), flood); err != nil {
+	msg := s.message(i, seg)
+	msg.Relations = nil // what a message replies to is set when it is sent
+	if err := s.x.editWith(ctx, s.conversation, id, msg, flood); err != nil {
 		return err
 	}
 	s.lastCall = time.Now()
@@ -277,16 +288,22 @@ func (s *stream) noWait(_ context.Context, f func() (tg.UpdatesClass, error)) (t
 }
 
 func (s *stream) typing(ctx context.Context) {
-	if err := s.call(ctx, &tg.SendMessageTypingAction{}); err != nil && !errors.Is(err, errPaused) {
+	err := s.call(ctx, &tg.SendMessageTypingAction{})
+	switch {
+	case err == nil:
+		s.lastType = time.Now()
+	case !errors.Is(err, errPaused):
 		s.x.log.Debug("telegram: typing action", "conversation", s.conversation, "error", err)
 	}
 }
 
-// keepAlive renews the typing action until there is content, and the live
-// draft while a reply pauses, until the stream closes.
+// keepAlive keeps showing that a reply is coming until the stream closes:
+// it renews the live draft while a reply pauses, and otherwise the typing
+// action, which clients drop after a few seconds and every sent message
+// ends.
 func (s *stream) keepAlive(ctx context.Context) {
 	defer close(s.done)
-	ticker := time.NewTicker(streamKeepAlive)
+	ticker := time.NewTicker(s.renew)
 	defer ticker.Stop()
 	for {
 		select {
@@ -295,16 +312,18 @@ func (s *stream) keepAlive(ctx context.Context) {
 		case <-ticker.C:
 		}
 		s.mu.Lock()
-		if time.Since(s.lastCall) >= streamKeepAlive && !time.Now().Before(s.next) {
+		if !time.Now().Before(s.next) {
 			switch {
 			case s.draft != nil:
-				draft := *s.draft
-				s.draft = nil
-				if err := s.showDraft(ctx, draft.index, draft.seg); err != nil && !errors.Is(err, errPaused) {
-					s.draft = &draft
-					s.x.log.Debug("telegram: renew live draft", "conversation", s.conversation, "error", err)
+				if time.Since(s.lastCall) >= s.renew {
+					draft := *s.draft
+					s.draft = nil
+					if err := s.showDraft(ctx, draft.index, draft.seg); err != nil && !errors.Is(err, errPaused) {
+						s.draft = &draft
+						s.x.log.Debug("telegram: renew live draft", "conversation", s.conversation, "error", err)
+					}
 				}
-			case len(s.sent) == 0:
+			case time.Since(s.lastType) >= s.renew:
 				s.typing(ctx)
 			}
 		}

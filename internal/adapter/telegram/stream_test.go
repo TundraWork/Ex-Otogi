@@ -112,7 +112,7 @@ func TestStreamEditsOutsidePrivateChats(t *testing.T) {
 	if refs := closeStream(t, s, otogi.TextMessage("Hello!")); len(refs) != 1 {
 		t.Fatalf("refs %v", refs)
 	}
-	wantCalls(t, log, "typing", "send 0 Hel", "edit 77 Hello", "edit 77 Hello!")
+	wantCalls(t, log, "typing", "send 0 Hel", "edit 77 Hello", "edit 77 Hello!", "cancel")
 }
 
 func TestStreamDraftsInPrivateChats(t *testing.T) {
@@ -122,7 +122,7 @@ func TestStreamDraftsInPrivateChats(t *testing.T) {
 	update(t, s, "Hello")
 	closeStream(t, s, otogi.TextMessage("Hello!"))
 	draft := RandomID("k#draft0") % 1000
-	wantCalls(t, log, "typing", fmt.Sprintf("draft %d Hel", draft), fmt.Sprintf("draft %d Hello", draft), "send 0 Hello!")
+	wantCalls(t, log, "typing", fmt.Sprintf("draft %d Hel", draft), fmt.Sprintf("draft %d Hello", draft), "send 0 Hello!", "cancel")
 }
 
 func TestStreamFallsBackToEditsWhenDraftsAreRejected(t *testing.T) {
@@ -138,7 +138,7 @@ func TestStreamFallsBackToEditsWhenDraftsAreRejected(t *testing.T) {
 	update(t, s, "Hel")
 	update(t, s, "Hello")
 	closeStream(t, s, otogi.TextMessage("Hello"))
-	wantCalls(t, log, "typing", fmt.Sprintf("draft %d Hel", RandomID("k#draft0")%1000), "send 0 Hel", "edit 77 Hello")
+	wantCalls(t, log, "typing", fmt.Sprintf("draft %d Hel", RandomID("k#draft0")%1000), "send 0 Hel", "edit 77 Hello", "cancel")
 }
 
 func TestStreamPacesUpdates(t *testing.T) {
@@ -152,7 +152,7 @@ func TestStreamPacesUpdates(t *testing.T) {
 	s.next = time.Time{} // the pace has passed
 	s.mu.Unlock()
 	closeStream(t, s, otogi.TextMessage("abc"))
-	wantCalls(t, log, "typing", "send 0 a", "edit 77 abc")
+	wantCalls(t, log, "typing", "send 0 a", "edit 77 abc", "cancel")
 }
 
 func TestStreamPausesOnFloodWait(t *testing.T) {
@@ -174,7 +174,7 @@ func TestStreamPausesOnFloodWait(t *testing.T) {
 	if waited := time.Since(started); waited < 500*time.Millisecond {
 		t.Fatalf("Close waited %v, want the rest of the FLOOD_WAIT", waited)
 	}
-	wantCalls(t, log, "typing", "send 0 a", "edit 77 ab", "edit 77 abcd")
+	wantCalls(t, log, "typing", "send 0 a", "edit 77 ab", "edit 77 abcd", "cancel")
 }
 
 func TestStreamContinuesPastTheMessageLimit(t *testing.T) {
@@ -192,9 +192,9 @@ func TestStreamContinuesPastTheMessageLimit(t *testing.T) {
 			refs := closeStream(t, s, rich.Message())
 			first := strings.TrimSuffix(strings.Repeat(line, 40), "\n")
 			second := strings.Repeat(line, 10) // the text's own last line end stays
-			want := []string{"typing", "send 1 " + short(first), "send 1 " + short(second)}
+			want := []string{"typing", "send 1 " + short(first), "send 1 " + short(second), "cancel"}
 			if conversation == "user:7" {
-				want = []string{"typing", "send 1 " + short(first), fmt.Sprintf("draft %d %s", RandomID("k#draft1")%1000, short(second)), "send 1 " + short(second)}
+				want = []string{"typing", "send 1 " + short(first), fmt.Sprintf("draft %d %s", RandomID("k#draft1")%1000, short(second)), "send 1 " + short(second), "cancel"}
 			}
 			wantCalls(t, log, want...)
 			if len(refs) != 2 {
@@ -216,7 +216,7 @@ func TestStreamPlacesMediaInOrder(t *testing.T) {
 	if refs := closeStream(t, s, msg); len(refs) != 3 {
 		t.Fatalf("refs %v", refs)
 	}
-	wantCalls(t, log, "typing", "send 0 look", "media", "send 0 done")
+	wantCalls(t, log, "typing", "send 0 look", "media", "send 0 done", "cancel")
 }
 
 func TestStreamReplayEditsTheMessagesItSent(t *testing.T) {
@@ -226,7 +226,7 @@ func TestStreamReplayEditsTheMessagesItSent(t *testing.T) {
 	}
 	s := openTestStream(t, x, "chat:5")
 	refs := closeStream(t, s, otogi.TextMessage("regenerated"))
-	wantCalls(t, log, "typing", "edit 50 regenerated")
+	wantCalls(t, log, "typing", "edit 50 regenerated", "cancel")
 	if _, id, _ := messageTarget(refs[0]); id != 50 {
 		t.Fatalf("refs %v", refs)
 	}
@@ -258,4 +258,60 @@ func TestLayoutKeepsFormattingAcrossTheCut(t *testing.T) {
 			t.Fatalf("annotations %+v", seg.text.Annotations())
 		}
 	}
+}
+
+// replyTo is a reply relation to message 9 of chat:5.
+func replyTo(t *testing.T, x *effects) []otogi.Relation {
+	t.Helper()
+	return []otogi.Relation{{Kind: otogi.RelationReply, Target: x.ref("chat:5", 9)}}
+}
+
+func TestStreamRepliesOnlyWhenSending(t *testing.T) {
+	x, log, _ := newEffects(t, streamAnswer(nil))
+	s := openTestStream(t, x, "chat:5")
+	for _, text := range []string{"Hel", "Hello"} {
+		msg := otogi.TextMessage(text)
+		msg.Relations = replyTo(t, x)
+		if _, err := s.Update(context.Background(), msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	final := otogi.TextMessage("Hello!")
+	final.Relations = replyTo(t, x)
+	closeStream(t, s, final)
+	wantCalls(t, log, "typing", "send 0 Hel", "edit 77 Hello", "edit 77 Hello!", "cancel")
+	sent := log.find(t, func(r bin.Encoder) bool { _, ok := r.(*tg.MessagesSendMessageRequest); return ok }).(*tg.MessagesSendMessageRequest)
+	if reply, ok := sent.ReplyTo.(*tg.InputReplyToMessage); !ok || reply.ReplyToMsgID != 9 {
+		t.Fatalf("the first message does not reply: %+v", sent.ReplyTo)
+	}
+}
+
+func TestStreamStopsTryingDraftsForUserAccounts(t *testing.T) {
+	x, log, _ := newEffects(t, streamAnswer(func(request bin.Encoder) error {
+		if q, ok := request.(*tg.MessagesSetTypingRequest); ok {
+			if _, draft := q.Action.(*tg.SendMessageTextDraftAction); draft {
+				return tgerr.New(400, "USER_BOT_REQUIRED")
+			}
+		}
+		return nil
+	}))
+	first := openTestStream(t, x, "user:7")
+	update(t, first, "Hi")
+	closeStream(t, first, otogi.TextMessage("Hi"))
+	second := openTestStream(t, x, "user:8")
+	update(t, second, "Yo")
+	closeStream(t, second, otogi.TextMessage("Yo"))
+	drafts := strings.Count(log.calls(), "draft ")
+	if drafts != 1 {
+		t.Fatalf("%d draft attempts, want 1:\n%s", drafts, log.calls())
+	}
+}
+
+func TestStreamKeepsTypingWhileEditing(t *testing.T) {
+	x, log, _ := newEffects(t, streamAnswer(nil))
+	x.streamRenew = 10 * time.Millisecond
+	s := openTestStream(t, x, "chat:5")
+	update(t, s, "partial")
+	eventually(t, "typing renewed after content", func() bool { return strings.Count(log.calls(), "typing") >= 2 })
+	closeStream(t, s, otogi.TextMessage("done"))
 }

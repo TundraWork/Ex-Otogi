@@ -139,7 +139,10 @@ func (m *Mapper) mapMessage(message tg.MessageClass, action otogi.EventAction, n
 		var ok bool
 		peer, ok = value.GetPeerID()
 		if !ok {
-			return Result{}, fmt.Errorf("empty message without peer: %w", otogi.ErrInvalid)
+			// gotd's stand-in for Telegram's short "sent" confirmation of
+			// the account's own message, which carries no chat or content;
+			// the send itself is recorded by whoever sent it.
+			return Result{}, nil
 		}
 		completeness = otogi.CompletenessUnavailable
 		rich = otogi.Message{}

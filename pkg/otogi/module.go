@@ -122,7 +122,8 @@ type Invocation interface {
 	// Stream starts a message to `to` whose content is written progressively,
 	// for example a language model's reply. Each platform shows it its own
 	// way: Telegram shows "typing" until there is content, then streams it
-	// as a live draft in private chats or by editing a message elsewhere,
+	// as a live draft where Telegram allows it (bot accounts in private
+	// chats) or by editing a message as it grows (user accounts, groups),
 	// and continues in new messages past its limits. Nothing is sent before
 	// the first Update. The kernel closes a stream left open when the unit
 	// of work ends, with its last content.

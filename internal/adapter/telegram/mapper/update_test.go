@@ -147,3 +147,12 @@ func TestServicePreservesCompleteMessageAndRelations(t *testing.T) {
 		t.Fatalf("relations=%+v", relations)
 	}
 }
+
+func TestShortSentConfirmationsMapToNothing(t *testing.T) {
+	t.Parallel()
+	m := New(Config{Platform: "telegram", Account: "main"})
+	result, err := m.Map(&tg.UpdateNewMessage{Message: &tg.MessageEmpty{ID: 13}})
+	if err != nil || len(result.Events) != 0 || len(result.Locators) != 0 {
+		t.Fatalf("result %+v, err %v", result, err)
+	}
+}
