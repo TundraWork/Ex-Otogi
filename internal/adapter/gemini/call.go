@@ -25,7 +25,7 @@ type call struct {
 	// Per attempt; see reset.
 	steps       map[int]map[string]any // by step index
 	order       []int
-	args        map[int]string // function call arguments streamed so far, by step
+	args        map[int]string    // function call arguments streamed so far, by step
 	media       map[string][]byte // decoded images, by "step/content"
 	status      string
 	streamErr   string
