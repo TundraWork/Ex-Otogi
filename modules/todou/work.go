@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/markdown"
@@ -115,7 +116,7 @@ func (m *Module) resolve(ctx context.Context, to otogi.Destination, ref string) 
 		if a == nil {
 			continue
 		}
-		if t, err := m.read(ctx, a, l.Project, ref); err == nil {
+		if t, err := m.read(quiet(ctx), a, l.Project, ref); err == nil {
 			return t, nil
 		}
 	}
@@ -128,7 +129,7 @@ func (m *Module) read(ctx context.Context, a *agent, project, ref string) (targe
 	if err != nil {
 		var cli *cliError
 		if errors.As(err, &cli) {
-			return target{}, refuse("Could not read %s: %s", ref, cli.stderr)
+			return target{}, refuse("Could not read %s: %s", ref, tail(cli.stderr, 500))
 		}
 		return target{}, err
 	}
@@ -194,18 +195,19 @@ func (s source) signed(body string) string {
 // write runs a write as the agent and records it as todou.write, with who
 // asked, the arguments, and the outcome. A CLI failure becomes a refusal
 // carrying todou's own message, so the person sees why.
-func (m *Module) write(ctx context.Context, src source, a *agent, project, op string, args map[string]any, do func() (any, error)) (any, error) {
-	result, err := do()
+func (m *Module) write(ctx context.Context, src source, a *agent, project, op string, args map[string]any, do func(context.Context) (any, error)) (any, error) {
+	started := time.Now()
+	result, err := do(quiet(ctx))
 	payload := map[string]any{"agent": a.name, "project": project, "op": op, "args": args, "by": src.event.ActorKey(), "path": src.path(), "result": result}
 	outcome := "ok"
 	if err != nil {
 		outcome, payload["error"] = "error", err.Error()
 	}
 	e := src.event
-	m.host.Record(ctx, otogi.Record{Kind: "todou.write", Event: e.ID, Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID, Outcome: outcome, Payload: payload})
+	m.host.Record(ctx, otogi.Record{Kind: "todou.write", Event: e.ID, Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID, Outcome: outcome, Duration: time.Since(started), Payload: payload})
 	var cli *cliError
 	if errors.As(err, &cli) {
-		return nil, refuse("todou refused: %s", cli.stderr)
+		return nil, refuse("todou refused: %s", tail(cli.stderr, 500))
 	}
 	return result, err
 }
@@ -238,7 +240,7 @@ func (m *Module) create(ctx context.Context, src source, project, title, body, s
 		}
 	}
 	args := map[string]any{"title": title, "body": src.signed(body), "status": status, "labels": labels, "assignees": assignees}
-	result, err := m.write(ctx, src, a, project, "create", args, func() (any, error) {
+	result, err := m.write(ctx, src, a, project, "create", args, func(ctx context.Context) (any, error) {
 		c, err := a.cli.create(ctx, project, title, src.signed(body), status, labels, assignees)
 		if err != nil {
 			return nil, err
@@ -257,7 +259,7 @@ func (m *Module) commentOn(ctx context.Context, src source, t target, body strin
 	if strings.TrimSpace(body) == "" {
 		return "", refuse("The comment is empty.")
 	}
-	result, err := m.write(ctx, src, t.agent, t.project, "comment", map[string]any{"card": t.path(), "body": src.signed(body)}, func() (any, error) {
+	result, err := m.write(ctx, src, t.agent, t.project, "comment", map[string]any{"card": t.path(), "body": src.signed(body)}, func(ctx context.Context) (any, error) {
 		id, err := t.agent.cli.comment(ctx, t.project, t.card.Number, src.signed(body))
 		if err != nil {
 			return nil, err
@@ -271,7 +273,7 @@ func (m *Module) commentOn(ctx context.Context, src source, t target, body strin
 }
 
 func (m *Module) move(ctx context.Context, src source, t target, status string) error {
-	_, err := m.write(ctx, src, t.agent, t.project, "move", map[string]any{"card": t.path(), "status": status}, func() (any, error) {
+	_, err := m.write(ctx, src, t.agent, t.project, "move", map[string]any{"card": t.path(), "status": status}, func(ctx context.Context) (any, error) {
 		return nil, t.agent.cli.move(ctx, t.project, t.card.Number, status)
 	})
 	return err
@@ -281,7 +283,7 @@ func (m *Module) assign(ctx context.Context, src source, t target, add, remove [
 	if len(add) == 0 && len(remove) == 0 {
 		return refuse("Name someone to assign or unassign.")
 	}
-	_, err := m.write(ctx, src, t.agent, t.project, "assign", map[string]any{"card": t.path(), "add": add, "remove": remove}, func() (any, error) {
+	_, err := m.write(ctx, src, t.agent, t.project, "assign", map[string]any{"card": t.path(), "add": add, "remove": remove}, func(ctx context.Context) (any, error) {
 		return nil, t.agent.cli.assign(ctx, t.project, t.card.Number, add, remove)
 	})
 	return err
@@ -305,7 +307,7 @@ func (m *Module) block(ctx context.Context, src source, t target, by, blocks []t
 	if unblock {
 		op = "unblock"
 	}
-	_, err := m.write(ctx, src, t.agent, t.project, op, map[string]any{"card": t.path(), "by": paths(by), "blocks": paths(blocks)}, func() (any, error) {
+	_, err := m.write(ctx, src, t.agent, t.project, op, map[string]any{"card": t.path(), "by": paths(by), "blocks": paths(blocks)}, func(ctx context.Context) (any, error) {
 		return nil, t.agent.cli.block(ctx, t.project, t.card.Number, paths(by), paths(blocks), unblock)
 	})
 	return err

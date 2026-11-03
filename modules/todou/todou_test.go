@@ -246,7 +246,7 @@ func startHarness(t *testing.T, storage *modulestore.Storage, cfg Config, stream
 	m.now = h.clock.now
 	h.cli = &fakeCLI{projects: []string{"web", "api"}}
 	for _, a := range m.agents {
-		a.cli = client{run: h.cli.run, stream: stream}
+		a.cli = client{run: m.recorded(a.name, h.cli.run), stream: stream}
 	}
 	if err := m.Start(context.Background(), h.host); err != nil {
 		t.Fatal(err)
@@ -361,6 +361,8 @@ func TestWatcherQueuesLinkedActivityAndRestartsOnFailure(t *testing.T) {
 			return idle(ctx, args, stdout, stderr)
 		}
 		<-release
+		stderr("still watching — nothing new in 60s (1h0m total)")
+		stderr("transient failure 1 (tls handshake eof); retrying in 2.0s")
 		for _, line := range []string{comment(1, "web", 42, "linked"), comment(2, "other", 1, "unlinked"), cursor("c1"), comment(3, "web", 42, "no cursor yet: replayed")} {
 			if err := stdout([]byte(line)); err != nil {
 				return err
@@ -378,6 +380,10 @@ func TestWatcherQueuesLinkedActivityAndRestartsOnFailure(t *testing.T) {
 	mu.Unlock()
 	if !strings.Contains(args, "--follow --invisible --json --any-actor --since c0 --debounce 10 --type comment,opened") {
 		t.Errorf("watch args = %q", args)
+	}
+	// The heartbeat is routine; the retried failure is recorded.
+	if kinds := h.host.kinds(); len(slices.DeleteFunc(kinds, func(k string) bool { return k != "todou.watch_warning" })) != 1 {
+		t.Errorf("records = %v", h.host.kinds())
 	}
 	if got, _ := h.m.store.cursor(context.Background(), "neptune"); got != "c1" {
 		t.Errorf("cursor = %q, want c1", got)
@@ -821,6 +827,7 @@ func TestWriteCommands(t *testing.T) {
 		{"/todou comment api/1 hi", "api is not linked to this chat.", "", ""},
 		{"/todou new api Some title", "api is not linked to this chat.", "", ""},
 		{"/todou move WEB-999 Done", "No card WEB-999 in the projects linked to this chat.", "", ""},
+		{"/todou view web/999", "Could not read web/999: no such issue", "", ""},
 		{"/todou block WEB-12 sideways WEB-3", "Usage: /todou block <card> by|blocks <card>…", "", ""},
 	} {
 		got := h.say(t, plain(c.say))
@@ -846,6 +853,18 @@ func TestWriteCommands(t *testing.T) {
 	}
 	if len(writes) != 8 || writes[0] != "create web by telegram:user:9 via command" {
 		t.Fatalf("writes = %q", writes)
+	}
+	// Probing linked projects for WEB-999 expects refusals; reading web/999
+	// is a real failure.
+	var failed []string
+	for _, r := range h.host.records {
+		if r.Kind == "todou.call_failed" {
+			p := r.Payload.(map[string]any)
+			failed = append(failed, fmt.Sprintf("%v exit %v: %v", p["args"], p["exit"], p["stderr"]))
+		}
+	}
+	if !slices.Equal(failed, []string{"[issue view web/999 --brief --json -p web] exit 1: no such issue"}) {
+		t.Fatalf("failed calls = %q", failed)
 	}
 }
 

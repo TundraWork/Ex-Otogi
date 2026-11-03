@@ -166,7 +166,7 @@ func New(cfg Config, operators []string) (*Module, error) {
 			base = strings.TrimSuffix(a.Server, "/")
 		}
 		m.agents[name] = &agent{name: name, cfg: a, linkBase: base,
-			cli: client{run: execRunner(cfg.CLI, a.Server, a.Token, cfg.CLITimeout), stream: execStreamer(cfg.CLI, a.Server, a.Token)}}
+			cli: client{run: m.recorded(name, execRunner(cfg.CLI, a.Server, a.Token, cfg.CLITimeout)), stream: execStreamer(cfg.CLI, a.Server, a.Token)}}
 		m.render.links[name] = base
 		m.names = append(m.names, name)
 	}
@@ -285,7 +285,7 @@ func (m *Module) runWatcher(ctx context.Context, a *agent) (err error) {
 		return err
 	}
 	if cursor == "" {
-		if cursor, err = a.cli.now(ctx); err != nil {
+		if cursor, err = a.cli.now(quiet(ctx)); err != nil { // a failure is recorded as todou.watch_failed
 			return err
 		}
 		if err := m.store.ingest(ctx, a.name, cursor, nil, m.now()); err != nil {
@@ -296,8 +296,23 @@ func (m *Module) runWatcher(ctx context.Context, a *agent) (err error) {
 	a.watcher.since = m.now()
 	a.mu.Unlock()
 	return a.cli.follow(ctx, cursor, m.cfg.Events, m.cfg.Debounce,
-		func(line string) { m.log.Info("todou watch: "+line, "agent", a.name) },
+		func(line string) { m.watchSaid(ctx, a, line) },
 		func(entries []entry, cursor string) error { return m.ingest(ctx, a, entries, cursor) })
+}
+
+// watchSaid logs a line the watcher wrote to stderr. Its idle heartbeats are
+// routine; failures it retries on its own are recorded, since they are where
+// a delay in notifications comes from.
+func (m *Module) watchSaid(ctx context.Context, a *agent, line string) {
+	switch lower := strings.ToLower(line); {
+	case strings.HasPrefix(lower, "still watching"):
+		m.log.Debug("todou watch: "+line, "agent", a.name)
+	case strings.Contains(lower, "fail") || strings.Contains(lower, "error") || strings.Contains(lower, "retry") || strings.Contains(lower, "gave up"):
+		m.log.Warn("todou watch: "+line, "agent", a.name)
+		m.host.Record(ctx, otogi.Record{Kind: "todou.watch_warning", Outcome: "warning", Payload: map[string]any{"agent": a.name, "line": line}})
+	default:
+		m.log.Info("todou watch: "+line, "agent", a.name)
+	}
 }
 
 func (m *Module) watcherFailed(ctx context.Context, a *agent, err error, retry time.Duration) {

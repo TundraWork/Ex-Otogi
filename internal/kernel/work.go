@@ -125,6 +125,7 @@ func (k *Kernel) tick(now time.Time) {
 	err := k.cfg.Storage.DueTimers(k.runCtx, now, handlers, func(module otogi.ModuleID, t otogi.Timer) { k.runTimer(module, t) })
 	if err != nil && k.runCtx.Err() == nil {
 		k.log.Error("timers: load due timers", "error", err)
+		k.record(otogi.Event{}, "timer.failed", "kernel", "error", 0, map[string]any{"step": "load due timers", "error": err.Error()})
 	}
 }
 
@@ -132,6 +133,7 @@ func (k *Kernel) runJob(j *job, at time.Time) {
 	id := j.entry.descriptor.ID
 	if j.pending.Swap(true) {
 		k.log.Warn("job skipped: previous run still pending", "module", id, "job", j.name)
+		k.record(otogi.Event{}, "job.skipped", "module:"+string(id), "skipped", 0, map[string]any{"job": j.name, "scheduled_at": at, "reason": "previous run still pending"})
 		return
 	}
 	d := &delivery{
@@ -196,6 +198,7 @@ func (k *Kernel) finishTimer(module otogi.ModuleID, t otogi.Timer, running strin
 	}
 	if err != nil {
 		k.log.Error("timers: update after run", "module", module, "timer", t.Key, "error", err)
+		k.record(otogi.Event{}, "timer.failed", "module:"+string(module), "error", 0, map[string]any{"step": "update after run", "timer": t.Key, "error": err.Error()})
 	}
 }
 

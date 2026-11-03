@@ -12,13 +12,15 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
 // runner runs the todou CLI with args, and stdin when it is not empty, and
 // returns its stdout. Tests replace it.
 type runner func(ctx context.Context, stdin string, args ...string) ([]byte, error)
 
-// cliError is a failed CLI call, with its exit code and the end of stderr.
+// cliError is a failed CLI call, with its exit code and stderr.
 type cliError struct {
 	args   []string
 	code   int
@@ -46,11 +48,45 @@ func execRunner(path, server, token string, timeout time.Duration) runner {
 		var exit *exec.ExitError
 		switch {
 		case errors.As(err, &exit):
-			return nil, &cliError{args: args, code: exit.ExitCode(), stderr: tail(stderr.String(), 500)}
+			return nil, &cliError{args: args, code: exit.ExitCode(), stderr: strings.TrimSpace(stderr.String())}
 		case err != nil:
 			return nil, fmt.Errorf("run todou %s: %w", strings.Join(args, " "), err)
 		}
 		return stdout.Bytes(), nil
+	}
+}
+
+type quietKey struct{}
+
+// quiet marks the CLI calls made under ctx as ones whose failure is expected
+// or recorded by the caller, so recorded leaves them out.
+func quiet(ctx context.Context) context.Context {
+	return context.WithValue(ctx, quietKey{}, true)
+}
+
+// recorded wraps an agent's runner so every failed call is logged and
+// recorded as todou.call_failed, with its arguments, input, exit code, and
+// stderr. Calls under quiet are left out: probing each linked project for a
+// prefix ref expects refusals, and writes record their own outcome. Calls
+// cut short by the caller's context are left to the caller.
+func (m *Module) recorded(agent string, run runner) runner {
+	return func(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+		started := time.Now()
+		out, err := run(ctx, stdin, args...)
+		if err == nil || ctx.Err() != nil || ctx.Value(quietKey{}) != nil {
+			return out, err
+		}
+		payload := map[string]any{"agent": agent, "args": args, "error": err.Error()}
+		if stdin != "" {
+			payload["stdin"] = stdin
+		}
+		var cli *cliError
+		if errors.As(err, &cli) {
+			payload["exit"], payload["stderr"] = cli.code, cli.stderr
+		}
+		m.log.Warn("todou: call failed", "agent", agent, "args", args, "duration", time.Since(started), "error", err)
+		m.host.Record(ctx, otogi.Record{Kind: "todou.call_failed", Outcome: "error", Duration: time.Since(started), Payload: payload})
+		return out, err
 	}
 }
 

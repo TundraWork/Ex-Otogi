@@ -444,6 +444,7 @@ func TestKernelRecordsEventLog(t *testing.T) {
 	rec := &recorder{}
 	modules := []otogi.Module{
 		module("ok", func(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
+			inv.Host().Record(ctx, otogi.Record{Kind: "ok.note"})
 			_, err := inv.Send(ctx, "reply", otogi.TextMessage("pong"))
 			return err
 		}),
@@ -460,10 +461,17 @@ func TestKernelRecordsEventLog(t *testing.T) {
 
 	o := await(t, submit(t, k, event("c", "ping")))
 	got := rec.kinds(o.EventID)
-	for _, want := range []string{"event.received kernel", "module.completed module:ok", "effect.applied module:ok", "module.failed module:bad", "module.panicked module:crash"} {
+	for _, want := range []string{"event.received kernel", "ok.note module:ok", "effect.applied module:ok", "module.failed module:bad", "module.panicked module:crash"} {
 		if _, ok := got[want]; !ok {
 			t.Errorf("missing record %q; have %v", want, keys(got))
 		}
+	}
+	if _, ok := got["module.completed module:ok"]; ok {
+		t.Error("a routine completion was recorded; it should only be counted")
+	}
+	counts := k.Stats().Modules
+	if counts["ok"].Completed != 1 || counts["bad"].Failed != 1 || counts["crash"].Panicked != 1 {
+		t.Errorf("module counts = %+v", counts)
 	}
 	if received := got["event.received kernel"]; received.Conversation != "c" || received.Payload.(otogi.Event).Message.PlainText() != "ping" {
 		t.Errorf("event.received = %+v", received)
@@ -622,5 +630,21 @@ func TestWorkIsInTheContext(t *testing.T) {
 	want := otogi.Work{Module: "m", Origin: string(o.EventID), Event: o.EventID, Destination: otogi.Destination{Platform: "test", Account: "bot", Conversation: "c"}}
 	if w := <-got; w != want {
 		t.Fatalf("work %+v, want %+v", w, want)
+	}
+}
+
+func TestKernelRecordsSlowModule(t *testing.T) {
+	rec := &recorder{}
+	slow := module("slow", func(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
+		time.Sleep(150 * time.Millisecond)
+		return nil
+	})
+	k := start(t, Config{Recorder: rec, HandlerTimeout: 200 * time.Millisecond}, []otogi.Module{slow}, nil, nil)
+	o := await(t, submit(t, k, event("c", "ping")))
+	if r, ok := rec.kinds(o.EventID)["module.completed module:slow"]; !ok || r.Outcome != "slow" {
+		t.Fatalf("slow completion record = %+v, %v", r, ok)
+	}
+	if c := k.Stats().Modules["slow"]; c.Slow != 1 || c.Completed != 0 {
+		t.Errorf("counts = %+v", c)
 	}
 }

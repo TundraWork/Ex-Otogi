@@ -17,7 +17,9 @@ type Host interface {
 	Module() ModuleID
 	// Logger logs with the module ID attached.
 	Logger() *slog.Logger
-	// Record writes an event log record with component "module:<id>".
+	// Record writes an event log record with component "module:<id>". A
+	// record without an event, written while handling one, joins that
+	// event's trace.
 	Record(ctx context.Context, r Record)
 	// Store is the module's own key/value store.
 	Store() Store

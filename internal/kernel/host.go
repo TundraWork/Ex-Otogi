@@ -43,6 +43,9 @@ func (h *host) Logger() *slog.Logger   { return h.log }
 
 func (h *host) Record(ctx context.Context, r otogi.Record) {
 	r.Component = "module:" + string(h.Module())
+	if w, ok := otogi.WorkFrom(ctx); ok && r.Event == "" && w.Event != "" {
+		r.Event, r.Platform, r.Account, r.Conversation = w.Event, w.Destination.Platform, w.Destination.Account, w.Destination.Conversation
+	}
 	if r.At.IsZero() {
 		r.At = time.Now()
 	}

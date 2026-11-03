@@ -151,6 +151,7 @@ func (i *invocation) closeAbandoned() {
 			defer func() {
 				if r := recover(); r != nil {
 					i.kernel.log.Error("closing an abandoned stream panicked", "module", i.module, "slot", s.slot, "panic", r)
+					i.kernel.record(i.event, "effect.failed", "module:"+string(i.module), "error", 0, map[string]any{"effect": "stream", "slot": s.slot, "error": fmt.Sprint("closing an abandoned stream panicked: ", r)})
 				}
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), abandonedStreamTimeout)

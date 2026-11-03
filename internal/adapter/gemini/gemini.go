@@ -244,6 +244,14 @@ func toolList(specs []llm.ToolSpec) ([]map[string]any, error) {
 	return tools, nil
 }
 
+// A call slower than slowCall in all, or silent for slowSilence at a
+// stretch, is logged as a warning. Normal calls on the test deployment take
+// 5 to 50 s, image generation included.
+const (
+	slowCall    = 60 * time.Second
+	slowSilence = 30 * time.Second
+)
+
 // record writes the call's one event log record.
 func (p *Provider) record(ctx context.Context, req llm.Request, input []json.RawMessage, c *call, resp llm.Response, err error) {
 	work, _ := otogi.WorkFrom(ctx)
@@ -274,7 +282,15 @@ func (p *Provider) record(ctx context.Context, req llm.Request, input []json.Raw
 	for _, x := range xs {
 		headers = append(headers, x.Duration)
 	}
-	p.log.Info("gemini: call", "model", req.Model, "outcome", outcome, "took", took.Round(time.Millisecond).String(),
+	// Every call is recorded; the process log keeps the ones worth a look.
+	level := slog.LevelDebug
+	switch {
+	case err != nil:
+		level = slog.LevelError
+	case len(xs) > 1 || took > slowCall || quiet.d > slowSilence:
+		level = slog.LevelWarn
+	}
+	p.log.Log(ctx, level, "gemini: call", "model", req.Model, "outcome", outcome, "took", took.Round(time.Millisecond).String(),
 		"headers_after", headers, "first_output", c.firstOutput.Round(time.Millisecond).String(), "events", len(c.timeline),
 		"longest_silence", quiet.For, "silence_after", quiet.After, "silence_at", quiet.At, "interactions", c.interactions, "error", errText(err))
 	p.recorder.Record(context.Background(), otogi.Record{

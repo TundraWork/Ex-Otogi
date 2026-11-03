@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,6 +70,23 @@ type moduleEntry struct {
 	descriptor otogi.ModuleDescriptor
 	subscribes map[otogi.EventAction]bool
 	timeout    time.Duration
+	counts     outcomeCounts
+}
+
+// outcomeCounts counts a module's deliveries by outcome since start. Routine
+// completions are counted rather than recorded one by one: the event log
+// keeps what happened (events, effects, the module's own records) and what
+// went wrong.
+type outcomeCounts struct {
+	completed, slow, failed, panicked atomic.Int64
+}
+
+// ModuleCounts is what status shows of one module's deliveries.
+type ModuleCounts struct {
+	Completed int64 `json:"completed"`
+	Slow      int64 `json:"slow"` // completed, but past half its timeout
+	Failed    int64 `json:"failed"`
+	Panicked  int64 `json:"panicked"`
 }
 
 // Kernel routes events to modules. Create it with New, then Start, Submit
@@ -420,15 +438,22 @@ func (k *Kernel) run(d *delivery) {
 	outcome := otogi.ModuleOutcome{Module: d.module.descriptor.ID, Err: err, Duration: time.Since(started)}
 	component := "module:" + string(outcome.Module)
 	var panicked *panicError
+	counts := &d.module.counts
 	switch {
 	case errors.As(err, &panicked):
+		counts.panicked.Add(1)
 		k.record(d.scope, "module.panicked", component, "error", outcome.Duration, map[string]any{"origin": d.originID, "error": err.Error(), "stack": panicked.stack})
 	case err != nil:
+		counts.failed.Add(1)
 		k.log.Error("module failed", "origin", d.originID, "module", outcome.Module, "duration", outcome.Duration, "error", err)
 		k.record(d.scope, "module.failed", component, "error", outcome.Duration, map[string]any{"origin": d.originID, "error": err.Error()})
+	case outcome.Duration > d.module.timeout/2:
+		counts.slow.Add(1)
+		k.log.Warn("module slow", "origin", d.originID, "module", outcome.Module, "duration", outcome.Duration, "timeout", d.module.timeout)
+		k.record(d.scope, "module.completed", component, "slow", outcome.Duration, map[string]any{"origin": d.originID, "timeout": d.module.timeout.String()})
 	default:
+		counts.completed.Add(1)
 		k.log.Debug("module completed", "origin", d.originID, "module", outcome.Module, "duration", outcome.Duration)
-		k.record(d.scope, "module.completed", component, "ok", outcome.Duration, map[string]any{"origin": d.originID})
 	}
 	if d.done != nil {
 		d.done(outcome)
@@ -489,10 +514,11 @@ func errorText(err error) string {
 
 // Stats is a snapshot of the kernel for status reporting.
 type Stats struct {
-	State       string `json:"state"`
-	InFlight    int    `json:"in_flight"`
-	MaxInFlight int    `json:"max_in_flight"`
-	Workers     int    `json:"workers"`
+	State       string                          `json:"state"`
+	InFlight    int                             `json:"in_flight"`
+	MaxInFlight int                             `json:"max_in_flight"`
+	Workers     int                             `json:"workers"`
+	Modules     map[otogi.ModuleID]ModuleCounts `json:"modules"` // deliveries since start
 }
 
 // Stats returns the kernel's current state and load.
@@ -500,9 +526,14 @@ func (k *Kernel) Stats() Stats {
 	k.mu.Lock()
 	state := k.state
 	k.mu.Unlock()
+	modules := make(map[otogi.ModuleID]ModuleCounts, len(k.modules))
+	for _, entry := range k.modules {
+		c := &entry.counts
+		modules[entry.descriptor.ID] = ModuleCounts{Completed: c.completed.Load(), Slow: c.slow.Load(), Failed: c.failed.Load(), Panicked: c.panicked.Load()}
+	}
 	return Stats{
 		State:    [...]string{stateNew: "new", stateReady: "ready", stateDraining: "draining", stateStopped: "stopped"}[state],
-		InFlight: len(k.slots), MaxInFlight: k.cfg.MaxInFlight, Workers: k.cfg.Workers,
+		InFlight: len(k.slots), MaxInFlight: k.cfg.MaxInFlight, Workers: k.cfg.Workers, Modules: modules,
 	}
 }
 

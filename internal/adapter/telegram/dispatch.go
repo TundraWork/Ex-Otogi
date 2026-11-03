@@ -150,7 +150,7 @@ func (d *dispatcher) mapRow(ctx context.Context, row telegramstore.InboxRow) ([]
 				return nil, err
 			}
 			if !found {
-				d.log.Warn("telegram: deleted message has no known conversation; skipping", "box", del.Box, "message", del.MessageID)
+				d.log.Debug("telegram: deleted message has no known conversation; skipping", "box", del.Box, "message", del.MessageID)
 				continue
 			}
 		}

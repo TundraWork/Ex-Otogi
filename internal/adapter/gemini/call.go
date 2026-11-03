@@ -57,6 +57,7 @@ type silence struct {
 	For   string `json:"for"`
 	After string `json:"after"` // the event before it, or "request" from the start
 	At    string `json:"at"`    // when it began, since the call began
+	d     time.Duration
 }
 
 // longestSilence finds the longest gap between the call's start, its
@@ -68,7 +69,7 @@ func (c *call) longestSilence(end time.Duration) silence {
 	for _, m := range append(c.timeline, mark{after: end, Event: "end"}) {
 		if gap := m.after - prev; gap > bestFor {
 			bestFor = gap
-			best = silence{For: gap.Round(time.Millisecond).String(), After: prevName, At: prev.Round(time.Millisecond).String()}
+			best = silence{For: gap.Round(time.Millisecond).String(), After: prevName, At: prev.Round(time.Millisecond).String(), d: gap}
 		}
 		prev, prevName = m.after, m.Event
 	}

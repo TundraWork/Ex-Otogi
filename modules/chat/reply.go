@@ -130,7 +130,16 @@ func (m *Module) userContent(ctx context.Context, e otogi.Event, inv otogi.Invoc
 // large or cannot be fetched.
 func (m *Module) mediaPart(ctx context.Context, inv otogi.Invocation, from otogi.Destination, media otogi.Media) otogi.Message {
 	word := mediaWord(media)
+	skipped := func(reason string, err error, size int64) {
+		m.host.Logger().Warn("chat: media left out", "reason", reason, "media", word, "bytes", size, "error", err)
+		payload := map[string]any{"reason": reason, "from": from, "source": media.Source.Kind, "url": media.Source.URL, "locator": media.Source.Locator, "bytes": size, "limit": maxMediaBytes}
+		if err != nil {
+			payload["error"] = err.Error()
+		}
+		m.host.Record(ctx, otogi.Record{Kind: "chat.media_skipped", Outcome: "skipped", Payload: payload})
+	}
 	if media.ByteSize > maxMediaBytes {
+		skipped("too large", nil, media.ByteSize)
 		return otogi.TextMessage("[" + word + ", too large to show]")
 	}
 	data, err := media.Source.Inline, error(nil)
@@ -138,7 +147,7 @@ func (m *Module) mediaPart(ctx context.Context, inv otogi.Invocation, from otogi
 		data, err = inv.FetchMedia(ctx, from, media.Source)
 	}
 	if err != nil || len(data) > maxMediaBytes {
-		m.host.Logger().Warn("chat: media left out", "error", err, "bytes", len(data))
+		skipped("could not be loaded", err, int64(len(data)))
 		return otogi.TextMessage("[" + word + ", could not be loaded]")
 	}
 	media.Source = otogi.MediaSource{Kind: otogi.MediaSourceInline, Inline: data}
