@@ -452,3 +452,43 @@ func TestGenerateSniffsImageTypes(t *testing.T) {
 		t.Fatalf("parts %+v", parts)
 	}
 }
+
+func TestRecordsShowWhereTimeWent(t *testing.T) {
+	slow := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Request-Id", "req-123")
+		send := func(e string) {
+			_, _ = fmt.Fprintf(w, "event: x\ndata: %s\n\n", e)
+			w.(http.Flusher).Flush()
+		}
+		send(`{"event_type":"interaction.created","interaction":{"id":"int-9","status":"in_progress"}}`)
+		send(output)
+		time.Sleep(300 * time.Millisecond) // the server goes quiet mid-stream
+		send(text("late"))
+		send(`{"event_type":"interaction.completed","interaction":{"id":"int-9","status":"completed"}}`)
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}
+	s := &server{responses: []func(http.ResponseWriter, *http.Request){slow}}
+	p, rec := newProvider(t, s)
+	if _, err := p.Generate(context.Background(), llm.Request{Model: "m", Turns: []llm.Turn{userTurn(otogi.Part{Kind: otogi.PartText, Text: "hi"})}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	payload := rec.only(t).Payload.(map[string]any)
+	quiet := payload["longest_silence"].(silence)
+	if d, _ := time.ParseDuration(quiet.For); d < 300*time.Millisecond || quiet.After != "step.start" {
+		t.Errorf("longest silence %+v", quiet)
+	}
+	if ids := payload["interactions"].([]string); len(ids) != 1 || ids[0] != "int-9" {
+		t.Errorf("interactions %v", ids)
+	}
+	if marks := payload["timeline"].([]mark); len(marks) != 4 || marks[2].Event != "step.delta:text" || *marks[2].Index != 1 || marks[2].Bytes == 0 {
+		t.Errorf("timeline %+v", marks)
+	}
+	x := payload["http"].([]exchange)[0]
+	if x.Proto == "" || x.Remote == "" || x.Sent == "" || x.BodyDone == "" || x.BodyBytes == 0 || x.Headers.Get("X-Request-Id") != "req-123" || x.Started.IsZero() {
+		t.Errorf("exchange %+v", x)
+	}
+	if done, _ := time.ParseDuration(x.BodyDone); done < 300*time.Millisecond {
+		t.Errorf("body done after %s, before the stream ended", x.BodyDone)
+	}
+}

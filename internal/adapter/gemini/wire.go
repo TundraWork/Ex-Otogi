@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,24 +22,44 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// exchange is one HTTP request of a call, as the transport saw it.
+// exchange is one HTTP request of a call, as the transport saw it: enough
+// to tell where time went (the network, the server's first byte, or the
+// stream) and to match the request in the provider's own logs. Durations
+// count from the request's start. Request headers are left out: they carry
+// the API key.
 type exchange struct {
-	Request    string `json:"request"` // method and URL
-	Status     int    `json:"status,omitempty"`
-	Error      string `json:"error,omitempty"`       // a transport failure
-	Body       string `json:"body,omitempty"`        // the full body of a non-2xx response
-	RetryAfter string `json:"retry_after,omitempty"` // the Retry-After header
-	Duration   string `json:"duration"`              // until the response headers
-	Wait       string `json:"wait,omitempty"`        // waited before the next attempt
+	Request    string      `json:"request"` // method and URL
+	Started    time.Time   `json:"started"` // wall clock, to match the provider's logs
+	Status     int         `json:"status,omitempty"`
+	Proto      string      `json:"proto,omitempty"`
+	Remote     string      `json:"remote,omitempty"`   // the server's address
+	Reused     bool        `json:"reused"`             // a pooled connection
+	IdleFor    string      `json:"idle_for,omitempty"` // how long it sat in the pool
+	DNS        string      `json:"dns,omitempty"`
+	Connected  string      `json:"connected,omitempty"`
+	TLS        string      `json:"tls,omitempty"`
+	Sent       string      `json:"sent,omitempty"`      // the request fully written
+	Duration   string      `json:"duration"`            // until the response headers
+	Headers    http.Header `json:"headers,omitempty"`   // the response's
+	BodyDone   string      `json:"body_done,omitempty"` // until the body ended or was closed
+	BodyBytes  int64       `json:"body_bytes"`
+	BodyError  string      `json:"body_error,omitempty"`
+	Error      string      `json:"error,omitempty"`       // a transport failure
+	Body       string      `json:"body,omitempty"`        // the full body of a non-2xx response
+	RetryAfter string      `json:"retry_after,omitempty"` // the Retry-After header
+	Wait       string      `json:"wait,omitempty"`        // waited before the next attempt
 }
 
 // exchanges are a call's HTTP requests: retry attempts and continuation hops.
 type exchanges struct {
 	mu   sync.Mutex
-	list []exchange
+	list []*exchange
 }
 
 type exchangesKey struct{}
+
+// since is the time since started, to the millisecond.
+func since(started time.Time) string { return time.Since(started).Round(time.Millisecond).String() }
 
 // transport keeps each exchange of a call, found through the request's
 // context, so errors and retries are decided on what the wire said, and the
@@ -45,31 +68,101 @@ type transport struct{ base http.RoundTripper }
 
 func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	log, _ := req.Context().Value(exchangesKey{}).(*exchanges)
-	started := time.Now()
-	resp, err := t.base.RoundTrip(req)
 	if log == nil {
+		return t.base.RoundTrip(req)
+	}
+	started := time.Now()
+	x := &exchange{Request: req.Method + " " + req.URL.String(), Started: started}
+	set := func(f func()) {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		f()
+	}
+	set(func() { log.list = append(log.list, x) })
+	trace := &httptrace.ClientTrace{
+		DNSDone: func(httptrace.DNSDoneInfo) { set(func() { x.DNS = since(started) }) },
+		ConnectDone: func(_, addr string, err error) {
+			set(func() {
+				x.Connected = since(started)
+				if err == nil {
+					x.Remote = addr
+				}
+			})
+		},
+		TLSHandshakeDone: func(tls.ConnectionState, error) { set(func() { x.TLS = since(started) }) },
+		GotConn: func(info httptrace.GotConnInfo) {
+			set(func() {
+				x.Reused = info.Reused
+				if info.WasIdle {
+					x.IdleFor = info.IdleTime.Round(time.Millisecond).String()
+				}
+				if x.Remote == "" && info.Conn != nil {
+					x.Remote = info.Conn.RemoteAddr().String()
+				}
+			})
+		},
+		WroteRequest: func(httptrace.WroteRequestInfo) { set(func() { x.Sent = since(started) }) },
+	}
+	resp, err := t.base.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	set(func() { x.Duration = since(started) })
+	if err != nil {
+		set(func() { x.Error = err.Error() })
 		return resp, err
 	}
-	x := exchange{Request: req.Method + " " + req.URL.String(), Duration: time.Since(started).String()}
-	if err != nil {
-		x.Error = err.Error()
-	} else {
-		x.Status = resp.StatusCode
+	set(func() {
+		x.Status, x.Proto, x.Headers = resp.StatusCode, resp.Proto, resp.Header.Clone()
 		x.RetryAfter = resp.Header.Get("Retry-After")
-		if resp.StatusCode >= 300 {
-			body, readErr := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(body))
-			x.Body = string(body)
+	})
+	if resp.StatusCode >= 300 {
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		set(func() {
+			x.Body, x.BodyBytes, x.BodyDone = string(body), int64(len(body)), since(started)
 			if readErr != nil {
 				x.Error = "read body: " + readErr.Error()
 			}
-		}
+		})
+		return resp, nil
 	}
-	log.mu.Lock()
-	log.list = append(log.list, x)
-	log.mu.Unlock()
-	return resp, err
+	resp.Body = &timedBody{ReadCloser: resp.Body, set: set, x: x, started: started}
+	return resp, nil
+}
+
+// timedBody notes how long a response body took to arrive, how much came,
+// and how it ended.
+type timedBody struct {
+	io.ReadCloser
+	set     func(func())
+	x       *exchange
+	started time.Time
+	n       int64
+	once    sync.Once
+}
+
+func (b *timedBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.set(func() { b.n += int64(n) })
+	if err != nil {
+		b.finish(err)
+	}
+	return n, err
+}
+
+func (b *timedBody) Close() error {
+	b.finish(nil)
+	return b.ReadCloser.Close()
+}
+
+func (b *timedBody) finish(err error) {
+	b.once.Do(func() {
+		b.set(func() {
+			b.x.BodyDone, b.x.BodyBytes = since(b.started), b.n
+			if err != nil && !errors.Is(err, io.EOF) {
+				b.x.BodyError = err.Error()
+			}
+		})
+	})
 }
 
 func (e *exchanges) last() (exchange, bool) {
@@ -78,7 +171,13 @@ func (e *exchanges) last() (exchange, bool) {
 	if len(e.list) == 0 {
 		return exchange{}, false
 	}
-	return e.list[len(e.list)-1], true
+	return *e.list[len(e.list)-1], true
+}
+
+func (e *exchanges) count() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.list)
 }
 
 // waited notes the delay before the next attempt.
@@ -93,7 +192,11 @@ func (e *exchanges) waited(d time.Duration) {
 func (e *exchanges) all() []exchange {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return append([]exchange(nil), e.list...)
+	out := make([]exchange, len(e.list))
+	for i, x := range e.list {
+		out[i] = *x
+	}
+	return out
 }
 
 // retryable says whether a failed attempt is worth another, judged by its

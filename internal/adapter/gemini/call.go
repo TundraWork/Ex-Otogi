@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,45 @@ type call struct {
 	usage       llm.Usage
 	firstOutput time.Duration // until the first output of the first attempt that had any
 	unhandled   []json.RawMessage
+
+	// Across attempts: when each stream event arrived, and the interaction
+	// IDs the server gave, for telling a slow server from a slow network.
+	timeline     []mark
+	interactions []string
+}
+
+// mark is one stream event's arrival.
+type mark struct {
+	At      string `json:"at"` // since the call began
+	Attempt int    `json:"attempt"`
+	Event   string `json:"event"` // the event type, and a delta's type
+	Index   *int   `json:"index,omitempty"`
+	Bytes   int    `json:"bytes"`
+
+	after time.Duration
+}
+
+// silence is the longest stretch without a stream event.
+type silence struct {
+	For   string `json:"for"`
+	After string `json:"after"` // the event before it, or "request" from the start
+	At    string `json:"at"`    // when it began, since the call began
+}
+
+// longestSilence finds the longest gap between the call's start, its
+// events, and end.
+func (c *call) longestSilence(end time.Duration) silence {
+	var best silence
+	var bestFor time.Duration
+	prev, prevName := time.Duration(0), "request"
+	for _, m := range append(c.timeline, mark{after: end, Event: "end"}) {
+		if gap := m.after - prev; gap > bestFor {
+			bestFor = gap
+			best = silence{For: gap.Round(time.Millisecond).String(), After: prevName, At: prev.Round(time.Millisecond).String()}
+		}
+		prev, prevName = m.after, m.Event
+	}
+	return best
 }
 
 // reset starts an attempt afresh.
@@ -41,11 +81,47 @@ func (c *call) reset() {
 	c.status, c.streamErr, c.usage, c.unhandled = "", "", llm.Usage{}, nil
 }
 
+// note puts a stream event on the timeline.
+func (c *call) note(e *ia.InteractionSSEStreamEvent) {
+	d := e.Data
+	m := mark{Attempt: c.exchanges.count(), Event: string(d.Type), after: time.Since(c.started)}
+	m.At = m.after.Round(time.Millisecond).String()
+	switch {
+	case d.StepStart != nil:
+		m.Index = &d.StepStart.Index
+	case d.StepDelta != nil:
+		m.Index, m.Event = &d.StepDelta.Index, m.Event+":"+string(d.StepDelta.Delta.Type)
+	case d.StepStop != nil:
+		m.Index = &d.StepStop.Index
+	case d.InteractionStatusUpdate != nil:
+		m.Event += ":" + string(d.InteractionStatusUpdate.Status)
+	}
+	if raw, err := json.Marshal(d); err == nil {
+		m.Bytes = len(raw)
+	}
+	c.timeline = append(c.timeline, m)
+	if ev := d.InteractionCreatedEvent; ev != nil {
+		c.addInteraction(ev.Interaction)
+	}
+	if ev := d.InteractionCompletedEvent; ev != nil {
+		c.addInteraction(ev.Interaction)
+	}
+}
+
+// addInteraction keeps the ID of an interaction the server reported.
+func (c *call) addInteraction(interaction any) {
+	fields, _ := object(interaction)
+	if id, _ := fields["id"].(string); id != "" && !slices.Contains(c.interactions, id) {
+		c.interactions = append(c.interactions, id)
+	}
+}
+
 // event applies one stream event.
 func (c *call) event(e *ia.InteractionSSEStreamEvent) error {
 	if e == nil {
 		return nil
 	}
+	c.note(e)
 	d := e.Data
 	switch {
 	case d.StepStart != nil:

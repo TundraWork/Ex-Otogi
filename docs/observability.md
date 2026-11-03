@@ -22,7 +22,18 @@ What gets recorded:
 - every inbound event with its full rich content;
 - every module invocation outcome with duration, including errors and panics with stacks;
 - every outbound action with its content and result; a streamed message is one record when it closes, with its final content, the platform messages holding it, and how many updates it received and showed (each update is a prefix of the final content, so it is not recorded again);
-- every language model call: the calling module and event, the model and settings, the system instruction and every turn sent, the reply's steps (thoughts included) and Markdown, how it ended, token usage, time to first output, and every HTTP request with its status and the full body of each error. Media data and the model's thought signatures appear as their size and SHA-256: a conversation's images and signatures are resent on every call, and the bytes stay in the platform message and the module's history;
+- every language model call: the calling module and event, the model and settings, the system instruction and every turn sent, the reply's steps (thoughts included) and Markdown, how it ended, token usage, time to first output, and every HTTP request with its status and the full body of each error. To tell a slow provider from a slow network, the record also has:
+  - each HTTP request's wall-clock start;
+  - DNS, connect, TLS and request-sent times;
+  - whether a pooled connection was reused, and how long it had idled;
+  - protocol and server address;
+  - time to response headers, and to the end of the body, with its size;
+  - every response header (request headers carry the API key and are left out);
+  - the stream's timeline: each event's arrival, type, step and size;
+  - the provider's interaction IDs;
+  - the longest silence and what preceded it.
+
+  The same summary is one `gemini: call` line in the process log. Media data and the model's thought signatures appear as their size and SHA-256: a conversation's images and signatures are resent on every call, and the bytes stay in the platform message and the module's history;
 - driver connection state changes, catch-up runs, and gaps;
 - process start, ready, drain, stop, and component failures.
 

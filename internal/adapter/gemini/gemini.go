@@ -202,6 +202,13 @@ func createBody(req llm.Request, input []json.RawMessage, tools []map[string]any
 	return operations.NewCreateInteractionRequestBody(interaction), nil
 }
 
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // convert re-reads from, our wire-shaped JSON, as the SDK's typed form to.
 func convert(from, to any) error {
 	data, err := json.Marshal(from)
@@ -246,8 +253,13 @@ func (p *Provider) record(ctx context.Context, req llm.Request, input []json.Raw
 		"input":  digestMedia(input),
 		"output": digestMedia(c.stepList()),
 		"reply":  resp.Markdown, "finish": resp.Finish, "reason": resp.Reason, "usage": resp.Usage,
-		"status": c.status, "http": c.exchanges.all(),
+		"status": c.status,
 	}
+	xs := c.exchanges.all()
+	payload["http"] = xs
+	took := time.Since(c.started)
+	quiet := c.longestSilence(took)
+	payload["started"], payload["timeline"], payload["interactions"], payload["longest_silence"] = c.started, c.timeline, c.interactions, quiet
 	if c.firstOutput > 0 {
 		payload["first_output"] = c.firstOutput.String()
 	}
@@ -258,6 +270,13 @@ func (p *Provider) record(ctx context.Context, req llm.Request, input []json.Raw
 	if err != nil {
 		kind, outcome, payload["error"] = "llm.failed", "error", err.Error()
 	}
+	headers := make([]string, 0, len(xs))
+	for _, x := range xs {
+		headers = append(headers, x.Duration)
+	}
+	p.log.Info("gemini: call", "model", req.Model, "outcome", outcome, "took", took.Round(time.Millisecond).String(),
+		"headers_after", headers, "first_output", c.firstOutput.Round(time.Millisecond).String(), "events", len(c.timeline),
+		"longest_silence", quiet.For, "silence_after", quiet.After, "silence_at", quiet.At, "interactions", c.interactions, "error", errText(err))
 	p.recorder.Record(context.Background(), otogi.Record{
 		At: time.Now(), Kind: kind, Component: "llm:" + Name, Event: work.Event,
 		Platform: work.Destination.Platform, Account: work.Destination.Account, Conversation: work.Destination.Conversation,
