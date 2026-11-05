@@ -242,3 +242,39 @@ func (s *store) prune(ctx context.Context, cutoff time.Time) (int64, error) {
 	}
 	return total, nil
 }
+
+// access returns where agents were allowed or denied with /chat.
+func (s *store) access(ctx context.Context) (map[string]map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT profile, chat, allowed FROM access")
+	if err != nil {
+		return nil, fmt.Errorf("chat store: access: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]map[string]bool{}
+	for rows.Next() {
+		var profile, chat string
+		var allowed bool
+		if err := rows.Scan(&profile, &chat, &allowed); err != nil {
+			return nil, fmt.Errorf("chat store: access: %w", err)
+		}
+		if out[profile] == nil {
+			out[profile] = map[string]bool{}
+		}
+		out[profile][chat] = allowed
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("chat store: access: %w", err)
+	}
+	return out, nil
+}
+
+// setAccess records that an operator allowed or denied an agent in a chat.
+func (s *store) setAccess(ctx context.Context, profile, chat string, allowed bool, by string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO access (profile, chat, allowed, by, at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (profile, chat) DO UPDATE SET allowed = excluded.allowed, by = excluded.by, at = excluded.at`,
+		profile, chat, allowed, by, at.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("chat store: set access: %w", err)
+	}
+	return nil
+}

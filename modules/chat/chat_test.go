@@ -72,6 +72,11 @@ type invocation struct {
 	h *harness
 }
 
+func (i invocation) Send(_ context.Context, _ string, msg otogi.Message) (otogi.EventRef, error) {
+	i.h.replies = append(i.h.replies, msg.PlainText())
+	return otogi.EventRef{}, nil
+}
+
 func (i invocation) Stream(context.Context, string, otogi.Destination) otogi.MessageStream {
 	s := &stream{h: i.h}
 	i.h.streams = append(i.h.streams, s)
@@ -108,6 +113,7 @@ type harness struct {
 	host    *host
 	llm     map[string]*provider
 	streams []*stream
+	replies []string // sent with Send: command replies
 	sent    int
 	now     time.Time
 	seq     int
@@ -134,7 +140,7 @@ func newHarness(t *testing.T, profiles ...ProfileConfig) *harness {
 			return p, nil
 		}
 		return nil, fmt.Errorf("provider %q: %w", name, otogi.ErrInvalid)
-	})
+	}, []string{"telegram:user:op"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +375,7 @@ func TestConfigErrors(t *testing.T) {
 		"two prompts":     {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", System: "x", SystemFile: "card.md"}}, "use one"},
 		"missing card":    {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", SystemFile: "/nonexistent/card.md"}}, "system_file: open /nonexistent/card.md"},
 	} {
-		if _, err := New(Config{Profiles: c.profiles}, providers); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := New(Config{Profiles: c.profiles}, providers, nil); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err %v, want %q", name, err, c.want)
 		}
 	}
@@ -408,7 +414,7 @@ func TestToolGroups(t *testing.T) {
 	}}
 	h.llm["p"] = p
 	h.m, err = New(Config{Profiles: []ProfileConfig{{Name: "otogi", Keywords: []string{"otogi"}, Chats: []string{group}, Provider: "p", Model: "m", Tools: []string{"google_search", "fun"}}}},
-		func(string) (llm.Provider, error) { return p, nil })
+		func(string) (llm.Provider, error) { return p, nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,5 +489,55 @@ func TestCharacterCardAndTemperature(t *testing.T) {
 	req := p.requests[0]
 	if !strings.HasPrefix(req.System, "# Role: 水月\n\n称呼你为「博士」。") || req.Temperature == nil || *req.Temperature != 1.2 {
 		t.Fatalf("system %q, temperature %v", req.System, req.Temperature)
+	}
+}
+
+// Operators change where agents answer with /chat; the change outlasts a
+// restart and wins over the config, and anyone can see the list.
+func TestChatAllowAndDeny(t *testing.T) {
+	h := newHarness(t, ProfileConfig{Name: "Luna", Keywords: []string{"luna"}, Chats: []string{group}, Provider: "luna", Model: "m"},
+		ProfileConfig{Name: "Mizuki", Keywords: []string{"水月"}, Provider: "mizuki", Model: "m"})
+	command := func(actor, args string) string {
+		e := h.message(actor, "/chat "+args)
+		e.Command = &otogi.Command{Name: "chat", Args: args, Argv: strings.Fields(args)}
+		h.mustHandle(e)
+		return h.replies[len(h.replies)-1]
+	}
+	for _, c := range []struct{ actor, args, want string }{
+		{"alice", "list", "In telegram:chat:1: Luna."},
+		{"alice", "allow 水月", "Only operators can change where agents answer. Your ID is telegram:user:alice."},
+		{"op", "allow 水月", "Mizuki now answers in telegram:chat:1."},
+		{"op", "allow mizuki", "Mizuki already answers in telegram:chat:1."},
+		{"op", "deny luna", "Luna no longer answers in telegram:chat:1."},
+		{"op", "allow luna qq:group:G1", "Luna now answers in qq:group:G1."},
+		{"op", "allow nobody", `No agent "nobody"; the agents are Luna, Mizuki.`},
+		{"op", "allow luna G1", `"G1" is not a chat; name it as /whoami prints it, like telegram:chat:1.`},
+		{"bob", "list", "In telegram:chat:1: Mizuki."},
+		{"bob", "list qq:group:G1", "In qq:group:G1: Luna."},
+	} {
+		if got := command(c.actor, c.args); got != c.want {
+			t.Errorf("/chat %s by %s: %q, want %q", c.args, c.actor, got, c.want)
+		}
+	}
+	h.llm["mizuki"].responses = []llm.Response{answer("博士！")}
+	h.mustHandle(h.message("alice", "水月 你好"))
+	h.mustHandle(h.message("alice", "luna hi"))
+	if len(h.llm["mizuki"].requests) != 1 || len(h.llm["luna"].requests) != 0 {
+		t.Fatalf("mizuki %d, luna %d requests", len(h.llm["mizuki"].requests), len(h.llm["luna"].requests))
+	}
+	if r := h.host.records[0]; r.Kind != "chat.access" || r.Payload.(map[string]any)["by"] != "telegram:user:op" {
+		t.Fatalf("record %+v", r)
+	}
+
+	// The changes are stored: a restarted module keeps them.
+	again, err := New(h.m.cfg, func(string) (llm.Provider, error) { return &provider{}, nil }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := again.Start(context.Background(), h.host); err != nil {
+		t.Fatal(err)
+	}
+	if !again.answers(again.byName["Mizuki"], group) || again.answers(again.byName["Luna"], group) {
+		t.Fatal("access lost on restart")
 	}
 }

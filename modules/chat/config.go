@@ -38,7 +38,8 @@ type ProfileConfig struct {
 	// set it, the first one answers.
 	Mention bool `yaml:"mention"`
 	// Chats lists where the agent answers, as /whoami prints them
-	// ("telegram:chat:123").
+	// ("telegram:chat:123"). Operators can change it at runtime with
+	// /chat allow and /chat deny, which take precedence.
 	Chats []string `yaml:"chats"`
 	// Provider names a provider configured under llm.
 	Provider string `yaml:"provider"`
@@ -133,9 +134,6 @@ func (c *Config) profiles(providers func(string) (llm.Provider, error)) ([]*prof
 			}
 			keywords[folded] = pc.Name
 			p.keywords = append(p.keywords, k)
-		}
-		if len(pc.Chats) == 0 {
-			errs = append(errs, fmt.Errorf("%s.chats: at least one is required", field))
 		}
 		for _, chat := range pc.Chats {
 			if platform, id, ok := strings.Cut(chat, ":"); !ok || platform == "" || id == "" {

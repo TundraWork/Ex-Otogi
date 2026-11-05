@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/llm"
@@ -18,22 +19,26 @@ import (
 
 // Module is the chat module.
 type Module struct {
-	cfg      Config
-	profiles []*profile
-	byName   map[string]*profile
-	host     otogi.Host
-	store    *store
-	now      func() time.Time
+	cfg       Config
+	profiles  []*profile
+	byName    map[string]*profile
+	operators []string
+	host      otogi.Host
+	store     *store
+	now       func() time.Time
+
+	mu     sync.RWMutex
+	access map[string]map[string]bool // profile → chat → allowed, set with /chat; overrides the config
 }
 
 // New validates the configuration; providers finds the providers profiles
-// name.
-func New(cfg Config, providers func(string) (llm.Provider, error)) (*Module, error) {
+// name. operators may change where agents answer with /chat.
+func New(cfg Config, providers func(string) (llm.Provider, error), operators []string) (*Module, error) {
 	profiles, err := cfg.profiles(providers)
 	if err != nil {
 		return nil, err
 	}
-	m := &Module{cfg: cfg, profiles: profiles, byName: map[string]*profile{}, now: time.Now}
+	m := &Module{cfg: cfg, profiles: profiles, byName: map[string]*profile{}, operators: operators, now: time.Now, access: map[string]map[string]bool{}}
 	for _, p := range profiles {
 		m.byName[p.Name] = p
 	}
@@ -53,8 +58,12 @@ func (m *Module) Descriptor() otogi.ModuleDescriptor {
 		}
 	}
 	return otogi.ModuleDescriptor{
-		ID:         "chat",
-		Requires:   requires,
+		ID:       "chat",
+		Requires: requires,
+		Commands: []otogi.CommandSpec{{
+			Name: "chat", Usage: "list [chat] | allow <agent> [chat] | deny <agent> [chat]",
+			Description: "show which agents answer in a chat, or (operators) change it",
+		}},
 		Subscribes: []otogi.EventAction{otogi.ActionMessageCreated, otogi.ActionMessageEdited, otogi.ActionMessageDeleted},
 		Ordering:   otogi.OrderNone,
 		Timeout:    m.cfg.Timeout,
@@ -69,6 +78,9 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 		return err
 	}
 	if m.store, err = openStore(ctx, db); err != nil {
+		return err
+	}
+	if m.access, err = m.store.access(ctx); err != nil {
 		return err
 	}
 	m.host = host
@@ -102,6 +114,9 @@ func (m *Module) prune(ctx context.Context, _ otogi.Invocation) error {
 
 // Handle keeps the transcript of served chats and answers triggers.
 func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
+	if e.Command != nil && e.Command.Name == "chat" {
+		return m.command(ctx, e, inv)
+	}
 	if e.Action == otogi.ActionMessageDeleted {
 		return m.store.forget(ctx, e.Platform, e.Account, string(e.SourceID))
 	}
@@ -124,7 +139,7 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 // serves reports whether any profile answers in chat.
 func (m *Module) serves(chat string) bool {
 	for _, p := range m.profiles {
-		if p.chats[chat] {
+		if m.answers(p, chat) {
 			return true
 		}
 	}
@@ -138,7 +153,7 @@ func (m *Module) route(ctx context.Context, e otogi.Event) (*profile, int64, str
 	chat, text := chatKey(e), firstText(e.Message)
 	var named *profile
 	for _, p := range m.profiles {
-		if p.chats[chat] && p.keyword(text) {
+		if m.answers(p, chat) && p.keyword(text) {
 			named = p
 			break
 		}
@@ -148,7 +163,7 @@ func (m *Module) route(ctx context.Context, e otogi.Event) (*profile, int64, str
 		if err != nil {
 			return nil, 0, "", err
 		}
-		if p := m.byName[name]; found && p != nil && p.chats[chat] && (named == nil || named == p) {
+		if p := m.byName[name]; found && p != nil && m.answers(p, chat) && (named == nil || named == p) {
 			return p, turn, "reply", nil
 		}
 	}
@@ -157,7 +172,7 @@ func (m *Module) route(ctx context.Context, e otogi.Event) (*profile, int64, str
 	}
 	if e.Mentioned {
 		for _, p := range m.profiles {
-			if p.chats[chat] && p.Mention {
+			if m.answers(p, chat) && p.Mention {
 				return p, 0, "mention", nil
 			}
 		}

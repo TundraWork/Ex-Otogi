@@ -49,7 +49,7 @@ var moduleRegistry = map[string]moduleFactory{
 		if err := decodeSection(config, &cfg); err != nil {
 			return nil, err
 		}
-		return chat.New(cfg, env.llm)
+		return chat.New(cfg, env.llm, env.operators)
 	},
 	"echo":      configured(func(struct{}) *echo.Module { return echo.New() }),
 	"notes":     configured(notes.New),

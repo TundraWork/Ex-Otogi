@@ -11,7 +11,7 @@ The event log is the primary observability tool. It is an append-only SQLite tab
 Each record has:
 
 - a monotonically increasing ID and a timestamp;
-- a kind: `event.received`, `event.dropped`, `module.completed`, `module.failed`, `module.panicked`, `job.skipped`, `timer.failed`, `effect.applied`, `effect.failed`, `driver.state`, `driver.gap`, `inbox.failed`, `llm.completed`, `llm.failed`, `process.state`, or a module's own kind (`chat.reply`, `chat.tool`, `chat.media_skipped`, `todou.write`, `todou.call_failed`, `todou.watch_warning`, `todou.watch_failed`, `todou.delivery_failed`);
+- a kind: `event.received`, `event.dropped`, `module.completed`, `module.failed`, `module.panicked`, `job.skipped`, `timer.failed`, `effect.applied`, `effect.failed`, `driver.state`, `driver.gap`, `inbox.failed`, `llm.completed`, `llm.failed`, `process.state`, or a module's own kind (`chat.reply`, `chat.tool`, `chat.media_skipped`, `chat.access`, `todou.write`, `todou.call_failed`, `todou.watch_warning`, `todou.watch_failed`, `todou.delivery_failed`);
 - the component (`kernel`, `module:<id>`, `middleware:<id>`, `driver:telegram/<account>`, `llm:<provider>`, `process`);
 - the correlated event ID when there is one, plus platform, account, and conversation;
 - an outcome and a duration where applicable;

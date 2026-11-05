@@ -80,7 +80,8 @@ modules:
   #       label: "🤖 Otogi"            # optional, bold at the start of replies
   #       keywords: [otogi]            # a message starting with one triggers it; so does replying to it
   #       mention: true                # so does an @ to the bot, or a private message to a QQ bot
-  #       chats: [telegram:channel:123]   # where it answers anyone: copy the Chat line of /whoami
+  #       chats: [telegram:channel:123]   # where it answers anyone: copy the Chat line of /whoami;
+  #                                       # operators can change it with /chat allow|deny <agent> [chat]
   #                                       # (supergroups are channel:..., basic groups chat:...)
   #       provider: gemini
   #       model: gemini-3.8-flash
