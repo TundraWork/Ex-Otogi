@@ -371,7 +371,7 @@ func TestWatcherQueuesLinkedActivityAndRestartsOnFailure(t *testing.T) {
 		return &cliError{args: args, code: 1, stderr: "token revoked"}
 	}
 	h := newHarness(t, Config{}, stream)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
 	close(release)
 	waitFor(t, "the watcher failure", func() bool { return slices.Contains(h.host.kinds(), "todou.watch_failed") })
 
@@ -395,7 +395,7 @@ func TestWatcherQueuesLinkedActivityAndRestartsOnFailure(t *testing.T) {
 	if _, ok := h.timer("chat:a"); !ok {
 		t.Fatal("digest timer not armed")
 	}
-	if status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status"); !strings.Contains(status, "Watcher: failed 0s ago, restarting: todou watch") || !strings.Contains(status, "token revoked") ||
+	if status := h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "status"); !strings.Contains(status, "Watcher: failed 0s ago, restarting: todou watch") || !strings.Contains(status, "token revoked") ||
 		!strings.Contains(status, "Queued here: 1 entries") || !strings.Contains(status, "Notifier (@bot, machine)") {
 		t.Fatalf("status = %q", status)
 	}
@@ -403,7 +403,7 @@ func TestWatcherQueuesLinkedActivityAndRestartsOnFailure(t *testing.T) {
 
 func TestDigestsAreThrottledAndAggregated(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
 	h.sends = nil
 
 	h.batch(t, "c1", comment(1, "web", 42, "first"))
@@ -445,8 +445,8 @@ func TestDigestsAreThrottledAndAggregated(t *testing.T) {
 
 func TestFailuresBlockTheChatUntilGivenUp(t *testing.T) {
 	h := newHarness(t, Config{MaxAttempts: 2}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
-	h.command(t, "chat:b", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
+	h.command(t, "chat:b", "user:1", otogi.DirectionIncoming, "link neptune web")
 	h.sends = nil
 	h.fail = func(c otogi.ConversationID) error {
 		if c == "chat:a" {
@@ -478,14 +478,14 @@ func TestFailuresBlockTheChatUntilGivenUp(t *testing.T) {
 	if len(h.sends) != 2 || !strings.Contains(h.sends[1].msg.PlainText(), "y") {
 		t.Fatalf("sends = %+v", h.sends)
 	}
-	if status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status"); !strings.Contains(status, "1 failed") || !strings.Contains(status, "CHAT_WRITE_FORBIDDEN") {
+	if status := h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "status"); !strings.Contains(status, "1 failed") || !strings.Contains(status, "CHAT_WRITE_FORBIDDEN") {
 		t.Fatalf("status = %q", status)
 	}
 }
 
 func TestRetryUsesTheSameOrigin(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
 	h.sends = nil
 	attempts := 0
 	h.fail = func(otogi.ConversationID) error {
@@ -508,10 +508,10 @@ func TestRetryUsesTheSameOrigin(t *testing.T) {
 
 func TestUnlinkDropsQueuedEntries(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune api")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune api")
 	h.batch(t, "c1", comment(1, "web", 1, "web news"), comment(2, "api", 1, "api news"))
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "unlink web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "unlink web")
 	h.sends = nil
 	if err := h.fire(t, "chat:a"); err != nil {
 		t.Fatal(err)
@@ -528,7 +528,7 @@ func TestStartRearmsChatsWithABacklog(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 	first := startHarness(t, storage, Config{}, idle)
-	first.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	first.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
 	first.batch(t, "c1", comment(1, "web", 1, "x"))
 	if err := first.m.Stop(context.Background()); err != nil {
 		t.Fatal(err)
@@ -556,8 +556,8 @@ func TestCommands(t *testing.T) {
 		{"user:1", otogi.DirectionIncoming, "link akarin web", "There is no agent called \"akarin\". Agents: neptune."},
 		{"user:1", otogi.DirectionIncoming, "link web", "Usage: /todou link <agent> <project> [silent]. Agents: neptune"},
 		{"user:1", otogi.DirectionIncoming, "link neptune web", "Linked web through neptune. New activity"},
-		{"", otogi.DirectionOutgoing, "link neptune web", "web is already linked here, through neptune."},
-		{"", otogi.DirectionOutgoing, "link neptune web silent", "Linked web through neptune, silently"},
+		{"user:1", otogi.DirectionIncoming, "link neptune web", "web is already linked here, through neptune."},
+		{"user:1", otogi.DirectionIncoming, "link neptune web silent", "Linked web through neptune, silently"},
 		{"user:9", otogi.DirectionIncoming, "list", "Linked todou projects:\n• web, through neptune, silently"},
 		{"user:1", otogi.DirectionIncoming, "unlink web", "Unlinked web"},
 		{"user:1", otogi.DirectionIncoming, "list", "No todou projects"},
@@ -572,7 +572,7 @@ func TestCommands(t *testing.T) {
 
 func TestCooldownCommand(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
 	steps := []struct {
 		actor     otogi.ActorID
 		direction otogi.Direction
@@ -606,7 +606,7 @@ func TestCooldownCommand(t *testing.T) {
 		t.Fatalf("with no cooldown, sends = %d, want each batch at once", len(h.sends))
 	}
 
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "cooldown 1h")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "cooldown 1h")
 	h.batch(t, "c3", comment(3, "web", 1, "three"))
 	if err := h.fire(t, "chat:a"); err != nil {
 		t.Fatal(err)
@@ -614,13 +614,13 @@ func TestCooldownCommand(t *testing.T) {
 	if timer, ok := h.timer("chat:a"); !ok || !timer.At.Equal(h.clock.now().Add(time.Hour)) {
 		t.Fatalf("timer = %+v, want an hour after the last digest", timer)
 	}
-	if got := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "cooldown default"); got != "Cooldown reset to the default, 5m." {
+	if got := h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "cooldown default"); got != "Cooldown reset to the default, 5m." {
 		t.Fatalf("reset = %q", got)
 	}
 	if timer, ok := h.timer("chat:a"); !ok || !timer.At.Equal(h.clock.now()) {
 		t.Fatalf("timer = %+v, want re-armed now", timer)
 	}
-	if status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status"); !strings.Contains(status, "\nCooldown: 5m, last digest 0s ago\n") {
+	if status := h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "status"); !strings.Contains(status, "\nCooldown: 5m, last digest 0s ago\n") {
 		t.Fatalf("status = %q", status)
 	}
 }
@@ -642,9 +642,9 @@ func TestAgentsAndSilentLinks(t *testing.T) {
 		"neptune": {Server: "https://todou.test", Token: "a"},
 		"akarin":  {Server: "https://other.test", Token: "b", LinkBase: "https://web.other.test/"},
 	}}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
-	h.command(t, "chat:b", "", otogi.DirectionOutgoing, "link akarin web")
-	h.command(t, "chat:c", "", otogi.DirectionOutgoing, "link neptune web silent")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
+	h.command(t, "chat:b", "user:1", otogi.DirectionIncoming, "link akarin web")
+	h.command(t, "chat:c", "user:1", otogi.DirectionIncoming, "link neptune web silent")
 	ingest := func(agent, next string, records ...string) {
 		var entries []entry
 		for _, r := range records {
@@ -685,7 +685,7 @@ func TestAgentsAndSilentLinks(t *testing.T) {
 	if !slices.ContainsFunc(part.Annotations, func(a otogi.Annotation) bool { return a.Target == "https://web.other.test/projects/web/issues/7" }) {
 		t.Fatalf("akarin's digest does not link through its link_base: %+v", part.Annotations)
 	}
-	status := h.command(t, "chat:a", "", otogi.DirectionOutgoing, "status")
+	status := h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "status")
 	if !strings.Contains(status, "Agent akarin: Notifier (@bot, machine) on https://other.test\n  Watcher: running") || !strings.Contains(status, "Agent neptune:") {
 		t.Fatalf("status = %q", status)
 	}
@@ -693,7 +693,7 @@ func TestAgentsAndSilentLinks(t *testing.T) {
 
 func TestReadsLeaveNoReadMarks(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
 	answered := record(map[string]any{"type": "event", "event_type": "question_answered", "id": 9, "project": "web", "issue_number": 3, "issue_ref": "web#3",
 		"actor": map[string]any{"login": "john"}, "payload": map[string]any{"comment_id": 55, "answers": []any{map[string]any{"key": "q1", "selected": []any{map[string]any{"label": "This one"}}}}}})
 	h.batch(t, "c1", comment(1, "web", 3, "hi"), answered)
@@ -801,7 +801,7 @@ func plain(text string) *otogi.RichText {
 
 func TestWriteCommands(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web silent")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web silent")
 	const line = "— Bob, in Telegram “Friends”"
 
 	filing := plain("/todou new web Crash on start\nIt ")
@@ -870,7 +870,7 @@ func TestWriteCommands(t *testing.T) {
 
 func TestTools(t *testing.T) {
 	h := newHarness(t, Config{}, idle)
-	h.command(t, "chat:a", "", otogi.DirectionOutgoing, "link neptune web")
+	h.command(t, "chat:a", "user:1", otogi.DirectionIncoming, "link neptune web")
 	tools := map[string]llm.Tool{}
 	for _, tool := range h.host.provided[llm.ToolsService("todou")].([]llm.Tool) {
 		tools[tool.Function().Name] = tool

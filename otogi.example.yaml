@@ -19,7 +19,7 @@ management:
   # token: ${OTOGI_MANAGEMENT_TOKEN}   # required if addr is not loopback
 
 # Platform-qualified actor IDs (as /whoami prints them) allowed to use operator
-# commands such as /status. The bot account's own messages always are.
+# commands such as /status, /todou link, and /chat allow|deny.
 operators: []             # e.g. ["telegram:user:123456789"]
 
 commands:

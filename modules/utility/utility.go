@@ -54,7 +54,7 @@ type CommandInfo struct {
 // Deps are runtime views the composition root provides.
 type Deps struct {
 	// Operators are the platform-qualified actor IDs ("telegram:user:123")
-	// allowed to use operator commands. The account's own messages always are.
+	// allowed to use operator commands.
 	Operators []string
 	// Status returns the current runtime status.
 	Status func(ctx context.Context) Status
@@ -68,9 +68,7 @@ type Module struct{ deps Deps }
 // New returns the module.
 func New(_ Config, deps Deps) *Module { return &Module{deps: deps} }
 
-// Descriptor declares the commands. Outgoing messages are admitted so the
-// account's owner can use them; no reply starts with a command prefix, so a
-// reply never invokes a command.
+// Descriptor declares the commands.
 func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{
 		ID: "utility",
@@ -80,7 +78,6 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 			{Name: "status", Description: "show the bot's runtime status (operators only)"},
 			{Name: "help", Description: "list the available commands"},
 		},
-		Filter: otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
 	}
 }
 
@@ -110,10 +107,9 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 	return err
 }
 
-// IsOperator reports whether e comes from the account itself or from an
-// actor listed in operators.
+// IsOperator reports whether e comes from an actor listed in operators.
 func IsOperator(e otogi.Event, operators []string) bool {
-	return e.Direction == otogi.DirectionOutgoing || (e.Actor.ID != "" && slices.Contains(operators, e.ActorKey()))
+	return e.Actor.ID != "" && slices.Contains(operators, e.ActorKey())
 }
 
 func denied(e otogi.Event) string {

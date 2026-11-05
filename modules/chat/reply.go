@@ -221,7 +221,7 @@ func (m *Module) system(p *profile, e otogi.Event) string {
 	}
 	return strings.TrimSpace(p.System) + "\n\n" + fmt.Sprintf(
 		"You are %s, talking in %s on %s. It is %s. People address you by starting a message with your name, by mentioning you, or by replying to you. "+
-			"In group chats each message starts with its sender's name. You speak through a shared account: chat lines marked (this account) were sent by you, another agent, or the account's owner. "+
+			"In group chats each message starts with its sender's name. You speak through a shared account: chat lines marked (this account) were sent by you or by another agent or feature of this bot. "+
 			"Write in Markdown.",
 		p.Name, where, e.Platform, m.now().In(time.Local).Format("Monday, 2 January 2006, 15:04 MST"))
 }

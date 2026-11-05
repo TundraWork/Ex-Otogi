@@ -23,7 +23,9 @@ type commandParser struct{ prefixes []string }
 func (commandParser) ID() otogi.MiddlewareID { return "commands" }
 
 func (p commandParser) Intercept(_ context.Context, e *otogi.Event) (otogi.Verdict, error) {
-	if e.Command != nil || e.Action != otogi.ActionMessageCreated {
+	// The account's own messages are never commands: they are what the bot
+	// sent, and a reply that happened to start with a prefix must not run.
+	if e.Command != nil || e.Action != otogi.ActionMessageCreated || e.Direction == otogi.DirectionOutgoing {
 		return otogi.Continue, nil
 	}
 	text := strings.TrimSpace(withoutLeadingMention(*e))

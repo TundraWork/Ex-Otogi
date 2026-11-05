@@ -23,10 +23,15 @@ func TestCommandParser(t *testing.T) {
 		{"/ not a command", "", nil},
 		{"/path/to/file", "", nil},
 		{"/ping", string(otogi.ActionMessageEdited), nil}, // edits are not commands
+		{"/ping", "outgoing", nil},                        // nor is what the account sent
 	}
 	for _, test := range tests {
 		e := event("c", test.text)
-		if test.action != "" {
+		switch test.action {
+		case "":
+		case "outgoing":
+			e.Direction = otogi.DirectionOutgoing
+		default:
 			e.Action = otogi.EventAction(test.action)
 		}
 		if verdict, err := parser.Intercept(context.Background(), &e); verdict != otogi.Continue || err != nil {

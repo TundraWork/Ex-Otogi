@@ -42,9 +42,6 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{ID: "notes", Commands: []otogi.CommandSpec{
 		{Name: "note", Usage: "[text | clear]", Description: "add, list, or clear this chat's notes"},
 	},
-		// The account's owner may use the command too; no reply starts with
-		// a command prefix, so replies never trigger it.
-		Filter:   otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
 		Provides: []string{llm.ToolsService("notes")},
 	}
 }

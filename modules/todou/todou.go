@@ -114,8 +114,7 @@ type watcherState struct {
 }
 
 // New validates cfg and returns the module. operators are the
-// platform-qualified actor IDs allowed to link and unlink projects; the
-// account's own messages always are.
+// platform-qualified actor IDs allowed to link and unlink projects.
 func New(cfg Config, operators []string) (*Module, error) {
 	var errs []error
 	if cfg.CLI == "" {
@@ -174,8 +173,7 @@ func New(cfg Config, operators []string) (*Module, error) {
 	return m, nil
 }
 
-// Descriptor declares /todou. The account's owner may use it too; no reply
-// starts with a command prefix, so replies never trigger it.
+// Descriptor declares /todou.
 func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{
 		ID: "todou",
@@ -183,7 +181,6 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 			Name: "todou", Usage: "view|comment|move|assign|block … <card> | new <project> <title> | link <agent> <project> [silent] | list | status",
 			Description: "work with todou projects linked to this chat, and post their activity",
 		}},
-		Filter:   otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
 		Provides: []string{llm.ToolsService("todou")},
 	}
 }
@@ -611,7 +608,7 @@ func cooldownText(d time.Duration) string {
 }
 
 func (m *Module) operator(e otogi.Event) bool {
-	return e.Direction == otogi.DirectionOutgoing || (e.ActorKey() != "" && slices.Contains(m.operators, e.ActorKey()))
+	return e.Actor.ID != "" && slices.Contains(m.operators, e.ActorKey())
 }
 
 // link links a project to the chat through an agent, after checking that

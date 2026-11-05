@@ -48,7 +48,7 @@ func TestCommands(t *testing.T) {
 		{"whoami", command("whoami", otogi.DirectionIncoming, "user:9"), []string{"You: telegram:user:9", "Chat: telegram:chat:42 (group)", "Account: telegram:main"}, "Message"},
 		{"ping", command("ping", otogi.DirectionIncoming, "user:9"), []string{"Pong."}, ""},
 		{"status for operator", command("status", otogi.DirectionIncoming, "user:1"), []string{"Status: ready", "Driver telegram/main: ready, 0 pending", "Event log: ok"}, ""},
-		{"status for owner", command("status", otogi.DirectionOutgoing, "user:5"), []string{"Version: v1"}, ""},
+		{"own message is not an operator", command("status", otogi.DirectionOutgoing, "user:5"), []string{"Only operators"}, "Version"},
 		{"status denied", command("status", otogi.DirectionIncoming, "user:9"), []string{"Only operators", "telegram:user:9"}, "Version"},
 		{"help", command("help", otogi.DirectionIncoming, "user:9"), []string{"Commands:\n/help\n/note [text] — notes"}, ""},
 	}

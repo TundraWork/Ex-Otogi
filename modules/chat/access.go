@@ -64,7 +64,7 @@ func (m *Module) list(e otogi.Event, argv []string) (string, error) {
 }
 
 func (m *Module) change(ctx context.Context, e otogi.Event, allow bool, argv []string) (string, error) {
-	if e.Direction != otogi.DirectionOutgoing && !slices.Contains(m.operators, e.ActorKey()) {
+	if e.Actor.ID == "" || !slices.Contains(m.operators, e.ActorKey()) {
 		return fmt.Sprintf("Only operators can change where agents answer. Your ID is %s.", e.ActorKey()), nil
 	}
 	if len(argv) == 0 {

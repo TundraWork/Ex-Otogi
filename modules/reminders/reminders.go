@@ -41,9 +41,6 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{ID: "reminders", Commands: []otogi.CommandSpec{
 		{Name: "remind", Usage: "<delay> <text>", Description: "remind this chat after a delay such as 10m or 1h30m"},
 	},
-		// The account's owner may use the command too; no reply starts with
-		// a command prefix, so replies never trigger it.
-		Filter:   otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming, otogi.DirectionOutgoing}},
 		Provides: []string{llm.ToolsService("reminders")},
 	}
 }
