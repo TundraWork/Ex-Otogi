@@ -102,6 +102,11 @@ func (d *Driver) Start(ctx context.Context) error {
 		_ = store.Close()
 		return err
 	}
+	self, username, err := store.Bot(ctx)
+	if err != nil {
+		_ = store.Close()
+		return err
+	}
 	// Check the credentials now, so a wrong secret fails startup plainly
 	// rather than as a reconnect loop.
 	if _, err := d.api.accessToken(ctx); err != nil {
@@ -110,7 +115,7 @@ func (d *Driver) Start(ctx context.Context) error {
 	}
 	wake := make(chan struct{}, 1)
 	d.mu.Lock()
-	d.store = store
+	d.store, d.self, d.username = store, self, username
 	d.effects = &effects{
 		api: d.api, store: store, account: otogi.AccountID(d.cfg.AccountKey), wake: wake, log: d.log, now: time.Now,
 		self: d.selfUser, retries: 3, backoff: time.Second,

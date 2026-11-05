@@ -90,6 +90,19 @@ func (s *Store) Bind(ctx context.Context, account, appID string) error {
 	return nil
 }
 
+// SetBot stores the bot's own user ID and name.
+func (s *Store) SetBot(ctx context.Context, id, name string) error {
+	return s.exec(ctx, "store bot", "UPDATE binding SET bot_id = ?, bot_name = ?", id, name)
+}
+
+// Bot returns the bot's own user ID and name, empty before the first READY.
+func (s *Store) Bot(ctx context.Context) (id, name string, err error) {
+	if err := s.db.QueryRowContext(ctx, "SELECT bot_id, bot_name FROM binding").Scan(&id, &name); err != nil {
+		return "", "", fmt.Errorf("read bot: %w", err)
+	}
+	return id, name, nil
+}
+
 // Session is the stored gateway session.
 type Session struct {
 	ID        string

@@ -184,6 +184,20 @@ func (s *session) start(ctx context.Context) error {
 		return err
 	}
 	if ok {
+		// Only READY names the bot's own user, which it needs to tell its
+		// own group messages apart; a database from before that was kept
+		// starts one fresh session to learn it.
+		if self, _, err := s.g.store.Bot(ctx); err != nil {
+			return err
+		} else if self == "" {
+			if err := s.g.store.ClearSession(ctx); err != nil {
+				return err
+			}
+			s.g.gap("bot_unknown", fmt.Sprintf("identifying instead of resuming session %s at seq %d to learn the bot's own user", stored.ID, stored.Seq))
+			ok = false
+		}
+	}
+	if ok {
 		s.id = stored.ID
 		s.seq.Store(stored.Seq)
 		return s.write(ctx, opResume, map[string]any{"token": "QQBot " + token, "session_id": stored.ID, "seq": stored.Seq})
@@ -265,6 +279,9 @@ func (s *session) dispatch(ctx context.Context, f frame) error {
 		}
 		s.id = r.SessionID
 		if err := s.g.store.SetSession(ctx, qqstore.Session{ID: s.id, Seq: s.seq.Load(), UpdatedAt: s.g.now()}); err != nil {
+			return err
+		}
+		if err := s.g.store.SetBot(ctx, r.User.ID, r.User.Username); err != nil {
 			return err
 		}
 		s.becameReady("identified", r.User.ID, r.User.Username)

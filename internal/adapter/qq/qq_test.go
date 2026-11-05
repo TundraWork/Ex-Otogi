@@ -66,6 +66,11 @@ func TestGatewayIdentifiesPersistsAndResumes(t *testing.T) {
 	if e := k.next(t); e.SourceID != "m2" {
 		t.Fatalf("replayed event = %+v", e)
 	}
+	// The bot's own user, from the first session's READY, survives the
+	// restart; a resume does not repeat it.
+	if s := d2.Status(context.Background()); s.Bot != "B1 Otogi" {
+		t.Fatalf("bot after resume = %q", s.Bot)
+	}
 	select {
 	case e := <-k.got:
 		t.Fatalf("the duplicate was dispatched: %+v", e)
