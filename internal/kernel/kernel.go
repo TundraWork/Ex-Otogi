@@ -73,10 +73,8 @@ type moduleEntry struct {
 	counts     outcomeCounts
 }
 
-// outcomeCounts counts a module's deliveries by outcome since start. Routine
-// completions are counted rather than recorded one by one: the event log
-// keeps what happened (events, effects, the module's own records) and what
-// went wrong.
+// outcomeCounts counts a module's deliveries by outcome since start, for
+// status; each delivery is also recorded.
 type outcomeCounts struct {
 	completed, slow, failed, panicked atomic.Int64
 }
@@ -454,6 +452,7 @@ func (k *Kernel) run(d *delivery) {
 	default:
 		counts.completed.Add(1)
 		k.log.Debug("module completed", "origin", d.originID, "module", outcome.Module, "duration", outcome.Duration)
+		k.record(d.scope, "module.completed", component, "ok", outcome.Duration, map[string]any{"origin": d.originID})
 	}
 	if d.done != nil {
 		d.done(outcome)

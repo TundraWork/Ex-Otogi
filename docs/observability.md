@@ -11,7 +11,7 @@ The event log is the primary observability tool. It is an append-only SQLite tab
 Each record has:
 
 - a monotonically increasing ID and a timestamp;
-- a kind: `event.received`, `event.dropped`, `module.completed` (slow runs only), `module.failed`, `module.panicked`, `job.skipped`, `timer.failed`, `effect.applied`, `effect.failed`, `driver.state`, `driver.gap`, `inbox.failed`, `llm.completed`, `llm.failed`, `process.state`, or a module's own kind (`chat.reply`, `chat.tool`, `chat.media_skipped`, `todou.write`, `todou.call_failed`, `todou.watch_warning`, `todou.watch_failed`, `todou.delivery_failed`);
+- a kind: `event.received`, `event.dropped`, `module.completed`, `module.failed`, `module.panicked`, `job.skipped`, `timer.failed`, `effect.applied`, `effect.failed`, `driver.state`, `driver.gap`, `inbox.failed`, `llm.completed`, `llm.failed`, `process.state`, or a module's own kind (`chat.reply`, `chat.tool`, `chat.media_skipped`, `todou.write`, `todou.call_failed`, `todou.watch_warning`, `todou.watch_failed`, `todou.delivery_failed`);
 - the component (`kernel`, `module:<id>`, `middleware:<id>`, `driver:telegram/<account>`, `llm:<provider>`, `process`);
 - the correlated event ID when there is one, plus platform, account, and conversation;
 - an outcome and a duration where applicable;
@@ -20,7 +20,7 @@ Each record has:
 What gets recorded:
 
 - every inbound event with its full rich content;
-- every module run that went wrong, with its duration: errors, panics with stacks, and runs that completed but took more than half their timeout (`module.completed`, outcome `slow`). Routine completions are counted per module in status rather than recorded one by one: what a run did shows as its effects and the module's own records, and a run that did nothing visible needs no record. A record a module writes while handling an event joins that event's trace;
+- every module invocation outcome with duration, including errors and panics with stacks; a run that completed but took more than half its timeout has outcome `slow`. A record a module writes while handling an event joins that event's trace;
 - every job run skipped because the previous one is still running, and every failure to load or update a timer;
 - every outbound action with its content and result; a streamed message is one record when it closes, with its final content, the platform messages holding it, and how many updates it received and showed (each update is a prefix of the final content, so it is not recorded again);
 - every language model call: the calling module and event, the model and settings, the system instruction and every turn sent, the reply's steps (thoughts included) and Markdown, how it ended, token usage, time to first output, and every HTTP request with its status and the full body of each error. To tell a slow provider from a slow network, the record also has:

@@ -461,13 +461,10 @@ func TestKernelRecordsEventLog(t *testing.T) {
 
 	o := await(t, submit(t, k, event("c", "ping")))
 	got := rec.kinds(o.EventID)
-	for _, want := range []string{"event.received kernel", "ok.note module:ok", "effect.applied module:ok", "module.failed module:bad", "module.panicked module:crash"} {
+	for _, want := range []string{"event.received kernel", "ok.note module:ok", "module.completed module:ok", "effect.applied module:ok", "module.failed module:bad", "module.panicked module:crash"} {
 		if _, ok := got[want]; !ok {
 			t.Errorf("missing record %q; have %v", want, keys(got))
 		}
-	}
-	if _, ok := got["module.completed module:ok"]; ok {
-		t.Error("a routine completion was recorded; it should only be counted")
 	}
 	counts := k.Stats().Modules
 	if counts["ok"].Completed != 1 || counts["bad"].Failed != 1 || counts["crash"].Panicked != 1 {
