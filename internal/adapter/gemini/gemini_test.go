@@ -465,7 +465,7 @@ func TestRecordsShowWhereTimeWent(t *testing.T) {
 		send(output)
 		time.Sleep(300 * time.Millisecond) // the server goes quiet mid-stream
 		send(text("late"))
-		send(`{"event_type":"interaction.completed","interaction":{"id":"int-9","status":"completed"}}`)
+		send(`{"event_type":"interaction.completed","interaction":{"id":"int-9","status":"completed","service_tier":"standard"}}`)
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}
 	s := &server{responses: []func(http.ResponseWriter, *http.Request){slow}}
@@ -480,6 +480,9 @@ func TestRecordsShowWhereTimeWent(t *testing.T) {
 	}
 	if ids := payload["interactions"].([]string); len(ids) != 1 || ids[0] != "int-9" {
 		t.Errorf("interactions %v", ids)
+	}
+	if tier := payload["service_tier"]; tier != "standard" {
+		t.Errorf("service tier %v", tier)
 	}
 	if marks := payload["timeline"].([]mark); len(marks) != 4 || marks[2].Event != "step.delta:text" || *marks[2].Index != 1 || marks[2].Bytes == 0 {
 		t.Errorf("timeline %+v", marks)

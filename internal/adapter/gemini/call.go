@@ -39,6 +39,7 @@ type call struct {
 	// IDs the server gave, for telling a slow server from a slow network.
 	timeline     []mark
 	interactions []string
+	tier         string // the service tier the call ran on, as the server reports it
 }
 
 // mark is one stream event's arrival.
@@ -109,11 +110,15 @@ func (c *call) note(e *ia.InteractionSSEStreamEvent) {
 	}
 }
 
-// addInteraction keeps the ID of an interaction the server reported.
+// addInteraction keeps the ID of an interaction the server reported, and
+// the service tier it ran on.
 func (c *call) addInteraction(interaction any) {
 	fields, _ := object(interaction)
 	if id, _ := fields["id"].(string); id != "" && !slices.Contains(c.interactions, id) {
 		c.interactions = append(c.interactions, id)
+	}
+	if tier, _ := fields["service_tier"].(string); tier != "" {
+		c.tier = tier
 	}
 }
 

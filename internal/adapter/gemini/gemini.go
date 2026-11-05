@@ -274,7 +274,7 @@ func (p *Provider) record(ctx context.Context, req llm.Request, input []json.Raw
 	payload["http"] = xs
 	took := time.Since(c.started)
 	quiet := c.longestSilence(took)
-	payload["started"], payload["timeline"], payload["interactions"], payload["longest_silence"] = c.started, c.timeline, c.interactions, quiet
+	payload["started"], payload["timeline"], payload["interactions"], payload["longest_silence"], payload["service_tier"] = c.started, c.timeline, c.interactions, quiet, c.tier
 	if c.firstOutput > 0 {
 		payload["first_output"] = c.firstOutput.String()
 	}
@@ -299,7 +299,7 @@ func (p *Provider) record(ctx context.Context, req llm.Request, input []json.Raw
 	}
 	p.log.Log(ctx, level, "gemini: call", "model", req.Model, "outcome", outcome, "took", took.Round(time.Millisecond).String(),
 		"headers_after", headers, "first_output", c.firstOutput.Round(time.Millisecond).String(), "events", len(c.timeline),
-		"longest_silence", quiet.For, "silence_after", quiet.After, "silence_at", quiet.At, "interactions", c.interactions, "error", errText(err))
+		"longest_silence", quiet.For, "silence_after", quiet.After, "silence_at", quiet.At, "interactions", c.interactions, "service_tier", c.tier, "error", errText(err))
 	p.recorder.Record(context.Background(), otogi.Record{
 		At: time.Now(), Kind: kind, Component: "llm:" + Name, Event: work.Event,
 		Platform: work.Destination.Platform, Account: work.Destination.Account, Conversation: work.Destination.Conversation,
