@@ -50,6 +50,9 @@ type Request struct {
 	Thinking string
 	// MaxOutput limits output tokens; zero is the model's default.
 	MaxOutput int
+	// Temperature is the sampling temperature, from 0 (most predictable)
+	// to 2; nil is the model's default.
+	Temperature *float64
 	// Tools are offered to the model. Run adds the functions of the tools
 	// it runs.
 	Tools []ToolSpec

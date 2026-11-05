@@ -190,13 +190,20 @@ func createBody(req llm.Request, input []json.RawMessage, tools []map[string]any
 	if req.System != "" {
 		interaction.SystemInstruction = &req.System
 	}
-	if req.Thinking != "" || req.MaxOutput > 0 {
+	if req.Thinking != "" || req.MaxOutput > 0 || req.Temperature != nil {
 		interaction.GenerationConfig = &ia.GenerationConfig{}
 		if req.Thinking != "" {
 			interaction.GenerationConfig.ThinkingLevel = ia.ThinkingLevel(req.Thinking).ToPointer()
 		}
 		if req.MaxOutput > 0 {
 			interaction.GenerationConfig.MaxOutputTokens = &req.MaxOutput
+		}
+		if req.Temperature != nil {
+			// The Interactions API marks temperature deprecated, but still
+			// applies it (checked live 2026-11-05: it validates the range).
+			// When the SDK drops the field, the build fails here.
+			t := float32(*req.Temperature)
+			interaction.GenerationConfig.Temperature = &t //nolint:staticcheck // see above
 		}
 	}
 	return operations.NewCreateInteractionRequestBody(interaction), nil
@@ -257,7 +264,7 @@ func (p *Provider) record(ctx context.Context, req llm.Request, input []json.Raw
 	work, _ := otogi.WorkFrom(ctx)
 	payload := map[string]any{
 		"module": work.Module, "origin": work.Origin, "model": req.Model,
-		"system": req.System, "thinking": req.Thinking, "max_output": req.MaxOutput, "tools": req.Tools,
+		"system": req.System, "thinking": req.Thinking, "max_output": req.MaxOutput, "temperature": req.Temperature, "tools": req.Tools,
 		"input":  digestMedia(input),
 		"output": digestMedia(c.stepList()),
 		"reply":  resp.Markdown, "finish": resp.Finish, "reason": resp.Reason, "usage": resp.Usage,

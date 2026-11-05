@@ -3,6 +3,7 @@ package chat
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -47,8 +48,15 @@ type ProfileConfig struct {
 	Thinking string `yaml:"thinking"`
 	// MaxOutput limits reply tokens; zero is the model default.
 	MaxOutput int `yaml:"max_output"`
+	// Temperature is the sampling temperature, 0 to 2; empty is the model
+	// default (1 for Gemini). Higher is livelier, lower more predictable.
+	Temperature *float64 `yaml:"temperature"`
 	// System is the system prompt.
 	System string `yaml:"system"`
+	// SystemFile is a Markdown file holding the system prompt instead, such
+	// as a long character card; read once at startup. A relative path is
+	// from the working directory, like data_dir.
+	SystemFile string `yaml:"system_file"`
 	// Context is how many recent chat messages the agent sees; default 30,
 	// zero for none.
 	Context *int `yaml:"context"`
@@ -137,6 +145,18 @@ func (c *Config) profiles(providers func(string) (llm.Provider, error)) ([]*prof
 		}
 		if pc.Model == "" {
 			errs = append(errs, fmt.Errorf("%s.model is required", field))
+		}
+		if pc.Temperature != nil && (*pc.Temperature < 0 || *pc.Temperature > 2) {
+			errs = append(errs, fmt.Errorf("%s.temperature %v: want 0 to 2", field, *pc.Temperature))
+		}
+		if pc.SystemFile != "" {
+			if pc.System != "" {
+				errs = append(errs, fmt.Errorf("%s: system and system_file are both set; use one", field))
+			} else if card, err := os.ReadFile(pc.SystemFile); err != nil {
+				errs = append(errs, fmt.Errorf("%s.system_file: %w", field, err))
+			} else {
+				p.System = strings.TrimSpace(string(card))
+			}
 		}
 		if !slices.Contains([]string{"", "minimal", "low", "medium", "high"}, pc.Thinking) {
 			errs = append(errs, fmt.Errorf("%s.thinking %q: want minimal, low, medium, or high", field, pc.Thinking))

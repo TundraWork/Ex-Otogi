@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -363,6 +365,9 @@ func TestConfigErrors(t *testing.T) {
 		"bad chat":        {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{"123"}, Provider: "gemini", Model: "m"}}, "<platform>:<chat id>"},
 		"bad thinking":    {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", Thinking: "max"}}, "thinking"},
 		"duplicate names": {[]ProfileConfig{base, {Name: "a", Keywords: []string{"b"}, Chats: []string{group}, Provider: "gemini", Model: "m"}}, "used twice"},
+		"hot":             {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", Temperature: ptr(2.5)}}, "temperature 2.5: want 0 to 2"},
+		"two prompts":     {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", System: "x", SystemFile: "card.md"}}, "use one"},
+		"missing card":    {[]ProfileConfig{{Name: "a", Keywords: []string{"a"}, Chats: []string{group}, Provider: "gemini", Model: "m", SystemFile: "/nonexistent/card.md"}}, "system_file: open /nonexistent/card.md"},
 	} {
 		if _, err := New(Config{Profiles: c.profiles}, providers); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err %v, want %q", name, err, c.want)
@@ -459,5 +464,24 @@ func TestMentionTrigger(t *testing.T) {
 	h.mustHandle(h.message("Alice", "hello", func(e *otogi.Event) { e.Mentioned = false }))
 	if len(p.requests) != 1 || len(h.llm["otogi"].requests) != 0 {
 		t.Fatal("an unmentioned message triggered an agent")
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// A character card comes from its file, and the temperature reaches the
+// provider.
+func TestCharacterCardAndTemperature(t *testing.T) {
+	card := filepath.Join(t.TempDir(), "mizuki.md")
+	if err := os.WriteFile(card, []byte("# Role: 水月\n\n称呼你为「博士」。\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, ProfileConfig{Name: "Mizuki", Keywords: []string{"水月"}, Chats: []string{group}, Provider: "mizuki", Model: "m", SystemFile: card, Temperature: ptr(1.2)})
+	p := h.llm["mizuki"]
+	p.responses = []llm.Response{answer("博士！")}
+	h.mustHandle(h.message("Alice", "水月，你好"))
+	req := p.requests[0]
+	if !strings.HasPrefix(req.System, "# Role: 水月\n\n称呼你为「博士」。") || req.Temperature == nil || *req.Temperature != 1.2 {
+		t.Fatalf("system %q, temperature %v", req.System, req.Temperature)
 	}
 }

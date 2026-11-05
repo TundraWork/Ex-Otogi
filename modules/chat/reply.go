@@ -36,7 +36,7 @@ func (m *Module) respond(ctx context.Context, e otogi.Event, inv otogi.Invocatio
 			sent.Content = llm.Join(otogi.TextMessage(context), user.Content)
 		}
 	}
-	req := llm.Request{Model: p.Model, System: m.system(p, e), Thinking: p.Thinking, MaxOutput: p.MaxOutput, Tools: p.builtins}
+	req := llm.Request{Model: p.Model, System: m.system(p, e), Thinking: p.Thinking, MaxOutput: p.MaxOutput, Temperature: p.Temperature, Tools: p.builtins}
 	for _, t := range path {
 		req.Turns = append(req.Turns, t.Turn)
 	}
@@ -220,7 +220,7 @@ func (m *Module) system(p *profile, e otogi.Event) string {
 		where += " called " + e.Conversation.Title
 	}
 	return strings.TrimSpace(p.System) + "\n\n" + fmt.Sprintf(
-		"You are %s, talking in %s on %s. It is %s. People address you by starting a message with your name or by replying to you. "+
+		"You are %s, talking in %s on %s. It is %s. People address you by starting a message with your name, by mentioning you, or by replying to you. "+
 			"In group chats each message starts with its sender's name. You speak through a shared account: chat lines marked (this account) were sent by you, another agent, or the account's owner. "+
 			"Write in Markdown.",
 		p.Name, where, e.Platform, m.now().In(time.Local).Format("Monday, 2 January 2006, 15:04 MST"))
