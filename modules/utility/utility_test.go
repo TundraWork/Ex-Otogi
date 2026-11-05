@@ -45,7 +45,7 @@ func TestCommands(t *testing.T) {
 		want      []string
 		forbidden string
 	}{
-		{"whoami", command("whoami", otogi.DirectionIncoming, "user:9"), []string{"You: telegram:user:9", "Chat: telegram:chat:42 (group)", "Account: telegram:main", "Message: telegram:common:chat:42:7"}, ""},
+		{"whoami", command("whoami", otogi.DirectionIncoming, "user:9"), []string{"You: telegram:user:9", "Chat: telegram:chat:42 (group)", "Account: telegram:main"}, "Message"},
 		{"ping", command("ping", otogi.DirectionIncoming, "user:9"), []string{"Pong."}, ""},
 		{"status for operator", command("status", otogi.DirectionIncoming, "user:1"), []string{"Status: ready", "Driver telegram/main: ready, 0 pending", "Event log: ok"}, ""},
 		{"status for owner", command("status", otogi.DirectionOutgoing, "user:5"), []string{"Version: v1"}, ""},

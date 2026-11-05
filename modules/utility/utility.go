@@ -134,9 +134,6 @@ func whoami(e otogi.Event) string {
 		fmt.Fprintf(&b, " (%s)", e.Conversation.Kind)
 	}
 	fmt.Fprintf(&b, "\nAccount: %s:%s", e.Platform, e.Account)
-	if e.SourceID != "" {
-		fmt.Fprintf(&b, "\nMessage: %s", e.SourceID)
-	}
 	return b.String()
 }
 
