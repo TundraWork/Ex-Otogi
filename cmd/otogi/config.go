@@ -27,6 +27,7 @@ type Config struct {
 	Commands        CommandsConfig       `yaml:"commands"`
 	Operators       []string             `yaml:"operators"`
 	Telegram        []TelegramAccount    `yaml:"telegram"`
+	QQ              []QQAccount          `yaml:"qq"`
 	LLM             LLMConfig            `yaml:"llm"`
 	Modules         map[string]yaml.Node `yaml:"modules"`
 }
@@ -71,6 +72,14 @@ type TelegramAccount struct {
 	AppHash  string `yaml:"app_hash"`
 	Session  string `yaml:"session"`
 	Database string `yaml:"database"`
+}
+
+// QQAccount configures one QQ bot (QQ Open Platform, q.qq.com).
+type QQAccount struct {
+	Account   string `yaml:"account"`
+	AppID     string `yaml:"app_id"`
+	AppSecret string `yaml:"app_secret"`
+	Database  string `yaml:"database"`
 }
 
 func (k KernelConfig) kernel() kernel.Config {
@@ -134,6 +143,11 @@ func (c *Config) applyDefaults() {
 			a.Database = filepath.Join(c.DataDir, "telegram", a.Account, "state.sqlite")
 		}
 	}
+	for i := range c.QQ {
+		if a := &c.QQ[i]; a.Database == "" {
+			a.Database = filepath.Join(c.DataDir, "qq", a.Account, "state.sqlite")
+		}
+	}
 }
 
 func (c Config) validate() error {
@@ -165,6 +179,20 @@ func (c Config) validate() error {
 		seen[a.Account] = true
 		if a.AppID <= 0 || a.AppHash == "" {
 			errs = append(errs, fmt.Errorf("%s: app_id and app_hash are required", field))
+		}
+	}
+	seen = map[string]bool{}
+	for i, a := range c.QQ {
+		field := fmt.Sprintf("qq[%d]", i)
+		switch {
+		case a.Account == "":
+			errs = append(errs, fmt.Errorf("%s.account is required", field))
+		case seen[a.Account]:
+			errs = append(errs, fmt.Errorf("%s.account %q is used twice", field, a.Account))
+		}
+		seen[a.Account] = true
+		if a.AppID == "" || a.AppSecret == "" {
+			errs = append(errs, fmt.Errorf("%s: app_id and app_secret are required", field))
 		}
 	}
 	errs = append(errs, c.LLM.validate()...)

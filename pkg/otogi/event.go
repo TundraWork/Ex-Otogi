@@ -146,6 +146,11 @@ type Event struct {
 	// Command is set when the message invokes a bot command, by the command
 	// parser middleware or by a driver with native commands.
 	Command *Command `json:"command,omitempty"`
+	// Mentioned reports that the message mentions the receiving account, as
+	// with an @ to a bot in a group. A mention in the text has a mention
+	// annotation whose Target is the account's own actor ID; a platform may
+	// also strip it and only set Mentioned.
+	Mentioned bool `json:"mentioned,omitempty"`
 	// Extensions carry platform data that has no portable meaning yet.
 	Extensions []Extension `json:"extensions,omitempty"`
 }

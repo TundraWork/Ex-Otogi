@@ -77,7 +77,7 @@ func withConfig(ctx context.Context, path, command string, args []string) error 
 		if _, err := kernel.New(cfg.Kernel.kernel(), modules, nil, router{}, slog.New(slog.DiscardHandler)); err != nil {
 			return err
 		}
-		fmt.Printf("%s: OK (%d Telegram account(s), %d LLM provider(s), %d module(s))\n", path, len(cfg.Telegram), len(providers), len(cfg.Modules))
+		fmt.Printf("%s: OK (%d Telegram account(s), %d QQ bot(s), %d LLM provider(s), %d module(s))\n", path, len(cfg.Telegram), len(cfg.QQ), len(providers), len(cfg.Modules))
 		return nil
 	case "login":
 		if len(args) != 1 {

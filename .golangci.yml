@@ -26,6 +26,7 @@ linters:
             - "**/modules/**"
             - "**/internal/adapter/**"
             - "!**/internal/adapter/telegram/**"
+            - "!**/internal/adapter/qq/**"
             - "!$test"
           deny: &repository-internals
             - pkg: github.com/TundraWork/Ex-Otogi/internal
@@ -39,6 +40,11 @@ linters:
           list-mode: lax
           files: ["**/internal/adapter/telegram/**", "!$test"]
           allow: [github.com/TundraWork/Ex-Otogi/internal/adapter/telegram]
+          deny: *repository-internals
+        qq-adapter:
+          list-mode: lax
+          files: ["**/internal/adapter/qq/**", "!$test"]
+          allow: [github.com/TundraWork/Ex-Otogi/internal/adapter/qq]
           deny: *repository-internals
         platform-sdks:
           files: ["$all", "!**/internal/adapter/telegram/**"]

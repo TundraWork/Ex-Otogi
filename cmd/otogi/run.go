@@ -12,6 +12,7 @@ import (
 
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/management"
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/modulestore"
+	"github.com/TundraWork/Ex-Otogi/internal/adapter/qq"
 	"github.com/TundraWork/Ex-Otogi/internal/adapter/telegram"
 	"github.com/TundraWork/Ex-Otogi/internal/kernel"
 	"github.com/TundraWork/Ex-Otogi/modules/utility"
@@ -113,6 +114,17 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 		statuses = append(statuses, func(ctx context.Context) any { return d.Status(ctx) })
 		telegramDrivers = append(telegramDrivers, d)
 	}
+	var qqDrivers []*qq.Driver
+	for _, a := range cfg.QQ {
+		d := qq.New(qq.Config{
+			AccountKey: a.Account, AppID: a.AppID, AppSecret: a.AppSecret, DatabasePath: a.Database,
+			Kernel: k, Logger: log, Recorder: events,
+		})
+		routes[destination{qq.Platform, otogi.AccountID(a.Account)}] = d
+		drivers = append(drivers, d)
+		statuses = append(statuses, func(ctx context.Context) any { return d.Status(ctx) })
+		qqDrivers = append(qqDrivers, d)
+	}
 	status = func(ctx context.Context) utility.Status {
 		stats, health := k.Stats(), events.Health(ctx)
 		s := utility.Status{
@@ -124,6 +136,13 @@ func run(ctx context.Context, cfg Config, log *slog.Logger) (failure error) {
 			ds := d.Status(ctx)
 			s.Drivers = append(s.Drivers, utility.DriverStatus{
 				Name: "telegram/" + ds.Account, Ready: ds.Ready, Error: ds.Error,
+				Detail: fmt.Sprintf("%d pending, %d failed inbox rows, %d gaps", ds.PendingInbox, ds.FailedInbox, ds.Gaps),
+			})
+		}
+		for _, d := range qqDrivers {
+			ds := d.Status(ctx)
+			s.Drivers = append(s.Drivers, utility.DriverStatus{
+				Name: "qq/" + ds.Account, Ready: ds.Ready, Error: ds.Error,
 				Detail: fmt.Sprintf("%d pending, %d failed inbox rows, %d gaps", ds.PendingInbox, ds.FailedInbox, ds.Gaps),
 			})
 		}
