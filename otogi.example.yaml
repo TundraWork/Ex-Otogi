@@ -35,6 +35,14 @@ telegram:
     # session: data/telegram/main/session.json
     # database: data/telegram/main/state.sqlite
 
+# QQ bots on the official QQ Bot API (create one at q.qq.com; set its events
+# to WebSocket in the console). Each is optional.
+# qq:
+#   - account: otogi      # becomes the event account ID
+#     app_id: ${OTOGI_QQ_APP_ID}
+#     app_secret: ${OTOGI_QQ_APP_SECRET}
+#     # database: data/qq/otogi/state.sqlite
+
 # Language model providers that modules can use; each is optional.
 # llm:
 #   gemini:
@@ -71,12 +79,15 @@ modules:
   #     - name: otogi
   #       label: "🤖 Otogi"            # optional, bold at the start of replies
   #       keywords: [otogi]            # a message starting with one triggers it; so does replying to it
+  #       mention: true                # so does an @ to the bot, or a private message to a QQ bot
   #       chats: [telegram:channel:123]   # where it answers anyone: copy the Chat line of /whoami
   #                                       # (supergroups are channel:..., basic groups chat:...)
   #       provider: gemini
   #       model: gemini-3.8-flash
   #       thinking: low                # minimal | low | medium | high
+  #       # temperature: 1.2             # 0 to 2; default: the model's (1 for Gemini)
   #       system: |
   #         You are Otogi, a helpful member of this chat.
+  #       # system_file: agents/otogi.md # or the prompt from a Markdown file, such as a character card
   #       context: 30                  # recent chat messages it sees
   #       tools: [google_search, url_context, reminders, notes, todou]   # built-ins, and tool groups of enabled modules
