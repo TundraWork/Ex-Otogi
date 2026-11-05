@@ -53,6 +53,7 @@ type Driver struct {
 
 	mu        sync.Mutex
 	store     *qqstore.Store
+	effects   *effects
 	started   bool
 	ready     bool
 	self      string // the bot's own user ID, from READY
@@ -107,8 +108,13 @@ func (d *Driver) Start(ctx context.Context) error {
 		_ = store.Close()
 		return fmt.Errorf("qq: get an access token for app %s: %w", d.cfg.AppID, err)
 	}
+	wake := make(chan struct{}, 1)
 	d.mu.Lock()
 	d.store = store
+	d.effects = &effects{
+		api: d.api, store: store, account: otogi.AccountID(d.cfg.AccountKey), wake: wake, log: d.log, now: time.Now,
+		self: d.selfUser, retries: 3, backoff: time.Second,
+	}
 	d.mu.Unlock()
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -117,7 +123,6 @@ func (d *Driver) Start(ctx context.Context) error {
 	d.mu.Lock()
 	d.cancel, d.drain = cancel, stopDispatch
 	d.mu.Unlock()
-	wake := make(chan struct{}, 1)
 	gw := &gateway{
 		api: d.api, store: store, wake: wake, log: d.log, now: time.Now, record: d.record, backoff: d.backoff,
 		ready: d.markReady, gap: func(kind, detail string) { d.recordGap(store, kind, detail) },
@@ -162,6 +167,12 @@ func (d *Driver) selfID() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.self
+}
+
+func (d *Driver) selfUser() (string, string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.self, d.username
 }
 
 func (d *Driver) finish(runCtx context.Context, store *qqstore.Store, err error) {
@@ -306,10 +317,15 @@ func (d *Driver) Stop(ctx context.Context) error {
 	}
 }
 
-// Apply performs an effect; see otogi.Effector. Sending comes in the next
-// milestone.
-func (d *Driver) Apply(_ context.Context, e otogi.Effect) (otogi.EventRef, error) {
-	return otogi.EventRef{}, fmt.Errorf("qq: %s: %w", e.Kind, otogi.ErrUnsupported)
+// Apply performs an effect; see otogi.Effector.
+func (d *Driver) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {
+	d.mu.Lock()
+	x := d.effects
+	d.mu.Unlock()
+	if x == nil {
+		return otogi.EventRef{}, fmt.Errorf("qq: not started: %w", otogi.ErrUnavailable)
+	}
+	return x.Apply(ctx, e)
 }
 
 func prune(ctx context.Context, store *qqstore.Store, log *slog.Logger) error {

@@ -101,6 +101,12 @@ func (d *dispatcher) dispatch(ctx context.Context, row qqstore.InboxRow) (bool, 
 	if f.T == "INTERACTION_CREATE" {
 		d.acknowledge(ctx, f)
 	}
+	if isMessage(f.T) && event.Direction == otogi.DirectionIncoming {
+		// A reply to it may then be a passive one.
+		if err := d.store.PutOrigin(ctx, string(event.ID), string(event.SourceID), string(event.Conversation.ID), row.ReceivedAt); err != nil {
+			return false, err
+		}
+	}
 	if err := d.kernel.Submit(ctx, event, func(o otogi.Outcome) { d.finish(row.ID, o) }); err != nil {
 		// Events are validated above, so the kernel is shutting down or ctx
 		// ended. The row stays pending for the next start.

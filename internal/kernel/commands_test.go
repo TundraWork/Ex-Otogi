@@ -38,6 +38,26 @@ func TestCommandParser(t *testing.T) {
 	}
 }
 
+// "@Otogi /status" in a group runs /status; a mention of someone else
+// before a command does not.
+func TestCommandAfterMentionOfTheAccount(t *testing.T) {
+	parser := CommandParser([]string{"/"})
+	for _, test := range []struct {
+		mentioned bool
+		want      bool
+	}{{true, true}, {false, false}} {
+		e := event("c", "@Otogi /status now")
+		e.Mentioned = test.mentioned
+		e.Message.Parts[0].Annotations = []otogi.Annotation{{Offset: 0, Length: 6, Kind: otogi.AnnotationMention, Target: "user:B1"}}
+		if _, err := parser.Intercept(context.Background(), &e); err != nil {
+			t.Fatal(err)
+		}
+		if got := e.Command != nil && e.Command.Name == "status" && e.Command.Args == "now"; got != test.want {
+			t.Errorf("mentioned %v: command = %+v", test.mentioned, e.Command)
+		}
+	}
+}
+
 func TestCommandsAndFiltersRouteEvents(t *testing.T) {
 	var mu sync.Mutex
 	got := map[otogi.ModuleID][]string{}

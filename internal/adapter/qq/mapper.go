@@ -57,6 +57,21 @@ type attachment struct {
 // messageQuote is the message_type of a message that quotes another.
 const messageQuote = 103
 
+// sentType is the dispatch type of a C2C message the bot sent, which the
+// driver queues itself: QQ does not echo those.
+const sentType = "OTOGI_C2C_SENT"
+
+// sentMessage is the payload of a sentType dispatch.
+type sentMessage struct {
+	ID        string `json:"id"`
+	Content   string `json:"content"` // as sent: text, or Markdown
+	Timestamp string `json:"timestamp"`
+	Peer      string `json:"peer"` // the user's openid
+	RefIdx    string `json:"ref_idx,omitempty"`
+	Self      string `json:"self"`
+	SelfName  string `json:"self_name,omitempty"`
+}
+
 func isMessage(t string) bool {
 	return t == "C2C_MESSAGE_CREATE" || t == "GROUP_MESSAGE_CREATE" || t == "GROUP_AT_MESSAGE_CREATE"
 }
@@ -79,6 +94,9 @@ type mapper struct {
 // as messages, everything else as a service event carrying the payload, so
 // nothing QQ sends is lost.
 func (m *mapper) mapFrame(ctx context.Context, f frame, received time.Time) (otogi.Event, error) {
+	if f.T == sentType {
+		return m.sent(f, received)
+	}
 	if !isMessage(f.T) {
 		return m.service(f, received)
 	}
@@ -90,7 +108,9 @@ func (m *mapper) mapFrame(ctx context.Context, f frame, received time.Time) (oto
 		Platform: Platform, Account: m.account, SourceID: otogi.SourceEventID(msg.ID),
 		Action: otogi.ActionMessageCreated, Direction: otogi.DirectionIncoming,
 		ReceivedAt: received, Completeness: otogi.CompletenessComplete,
-		Mentioned: f.T == "GROUP_AT_MESSAGE_CREATE", // QQ strips the @ itself
+		// QQ strips the @ from these itself; a C2C message is always for
+		// the bot.
+		Mentioned: f.T == "GROUP_AT_MESSAGE_CREATE" || f.T == "C2C_MESSAGE_CREATE",
 	}
 	if t, err := time.Parse(time.RFC3339, msg.Timestamp); err == nil {
 		e.OccurredAt = t.UTC()
@@ -119,6 +139,25 @@ func (m *mapper) mapFrame(ctx context.Context, f frame, received time.Time) (oto
 		}
 	}
 	e.Extensions = []otogi.Extension{{Namespace: extensionNamespace, Name: f.T, Version: 1, MediaType: "application/json", Data: f.D}}
+	return e, nil
+}
+
+// sent maps a C2C message the bot sent.
+func (m *mapper) sent(f frame, received time.Time) (otogi.Event, error) {
+	var s sentMessage
+	if err := json.Unmarshal(f.D, &s); err != nil {
+		return otogi.Event{}, fmt.Errorf("decode %s: %w", f.T, err)
+	}
+	e := otogi.Event{
+		Platform: Platform, Account: m.account, SourceID: otogi.SourceEventID(s.ID),
+		Conversation: otogi.Conversation{ID: otogi.ConversationID("user:" + s.Peer), Kind: otogi.ConversationDirect},
+		Actor:        otogi.Actor{ID: otogi.ActorID("user:" + s.Self), Name: s.SelfName},
+		Action:       otogi.ActionMessageCreated, Direction: otogi.DirectionOutgoing,
+		ReceivedAt: received, Completeness: otogi.CompletenessComplete, Message: otogi.TextMessage(s.Content),
+	}
+	if t, err := time.Parse(time.RFC3339, s.Timestamp); err == nil {
+		e.OccurredAt = t
+	}
 	return e, nil
 }
 

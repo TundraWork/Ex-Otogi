@@ -106,12 +106,16 @@ func (m *Module) userContent(ctx context.Context, e otogi.Event, inv otogi.Invoc
 	if e.Conversation.Kind != otogi.ConversationDirect {
 		prefix = speaker(e.Actor) + ": "
 	}
-	for _, part := range e.Message.Parts {
+	for i, part := range e.Message.Parts {
 		switch {
 		case part.Kind == otogi.PartText:
+			body, annotations := part.Text, part.Annotations
+			if i == 0 {
+				body, annotations = withoutLeadingMention(e, body, annotations)
+			}
 			text := otogi.RichText{}
 			text.Write(prefix)
-			text.Append(part.Text, part.Annotations)
+			text.Append(body, annotations)
 			prefix = ""
 			msg = llm.Join(msg, text.Message())
 		case part.Media != nil:
@@ -348,4 +352,23 @@ func (m *Module) record(ctx context.Context, e otogi.Event, p *profile, trigger 
 		outcome, payload["error"] = "error", err.Error()
 	}
 	m.host.Record(ctx, otogi.Record{Kind: "chat.reply", Event: e.ID, Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID, Outcome: outcome, Duration: d, Payload: payload})
+}
+
+// withoutLeadingMention drops the @ that addressed the account from the
+// start of a message: the agent was addressed, and the mention says nothing
+// more.
+func withoutLeadingMention(e otogi.Event, text string, annotations []otogi.Annotation) (string, []otogi.Annotation) {
+	if !e.Mentioned {
+		return text, annotations
+	}
+	for _, a := range annotations {
+		if a.Kind == otogi.AnnotationMention && a.Offset == 0 {
+			var r otogi.RichText
+			r.Append(text, annotations)
+			from := a.Length + len(text[a.Length:]) - len(strings.TrimLeft(text[a.Length:], " "))
+			rest := r.Slice(from, r.Len())
+			return rest.String(), rest.Annotations()
+		}
+	}
+	return text, annotations
 }

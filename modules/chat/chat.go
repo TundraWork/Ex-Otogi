@@ -155,6 +155,13 @@ func (m *Module) route(ctx context.Context, e otogi.Event) (*profile, int64, str
 	if named != nil {
 		return named, 0, "keyword", nil
 	}
+	if e.Mentioned {
+		for _, p := range m.profiles {
+			if p.chats[chat] && p.Mention {
+				return p, 0, "mention", nil
+			}
+		}
+	}
 	return nil, 0, "", nil
 }
 

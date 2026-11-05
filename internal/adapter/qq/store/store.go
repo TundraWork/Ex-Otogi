@@ -28,6 +28,8 @@ var ErrAccountMismatch = errors.New("qq store: database belongs to another bot")
 const (
 	InboxRetention = 7 * 24 * time.Hour
 	RefRetention   = 30 * 24 * time.Hour
+	// SendRetention outlasts any replay of the event that caused a send.
+	SendRetention = 7 * 24 * time.Hour
 )
 
 // Store is the adapter's SQLite state. It is safe for concurrent use; a single
@@ -213,6 +215,113 @@ func (s *Store) FindRef(ctx context.Context, refIdx string) (string, bool, error
 	return id, true, nil
 }
 
+// FindRefIdx returns the REFIDX of a message, which a quote names.
+func (s *Store) FindRefIdx(ctx context.Context, messageID string) (string, bool, error) {
+	var idx string
+	err := s.db.QueryRowContext(ctx, "SELECT ref_idx FROM refs WHERE message_id = ? LIMIT 1", messageID).Scan(&idx)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("find ref idx: %w", err)
+	}
+	return idx, true, nil
+}
+
+// InsertInbox persists a payload the driver made itself, such as the event
+// for a message it sent, unless one with the same dedup key exists.
+func (s *Store) InsertInbox(ctx context.Context, dedupKey string, payload []byte, at time.Time) error {
+	return s.exec(ctx, "insert inbox row", "INSERT INTO inbox (dedup_key, payload, received_at) VALUES (?, ?, ?) ON CONFLICT (dedup_key) DO NOTHING",
+		dedupKey, payload, at.UnixMilli())
+}
+
+// PutOrigin records the QQ message behind a submitted event.
+func (s *Store) PutOrigin(ctx context.Context, eventID, messageID, conversation string, at time.Time) error {
+	return s.exec(ctx, "put origin", "INSERT INTO origins (event_id, message_id, conversation, received_at) VALUES (?, ?, ?, ?) ON CONFLICT (event_id) DO NOTHING",
+		eventID, messageID, conversation, at.UnixMilli())
+}
+
+// Send is a claimed send.
+type Send struct {
+	Key, Conversation string
+	// MsgID and MsgSeq make it a passive reply; MsgID is empty for a
+	// proactive send.
+	MsgID  string
+	MsgSeq int
+	// MessageID is the message QQ created, once sent.
+	MessageID string
+	Sent      bool
+}
+
+// Window is how long, and how many times, a message may be replied to
+// passively.
+type Window struct {
+	For     time.Duration
+	Replies int
+}
+
+// ClaimSend returns the send for key, claiming it if it is new: as a passive
+// reply to the message behind origin when that message is in conversation,
+// still inside window, and has replies left, and as a proactive send
+// otherwise. existed reports a send claimed before, by an earlier attempt.
+func (s *Store) ClaimSend(ctx context.Context, key, conversation, origin string, window Window, now time.Time) (send Send, existed bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Send{}, false, fmt.Errorf("claim send: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	send = Send{Key: key}
+	var state string
+	err = tx.QueryRowContext(ctx, "SELECT conversation, msg_id, msg_seq, message_id, state FROM sends WHERE key = ?", key).
+		Scan(&send.Conversation, &send.MsgID, &send.MsgSeq, &send.MessageID, &state)
+	switch {
+	case err == nil:
+		send.Sent = state == "sent"
+		return send, true, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return Send{}, false, fmt.Errorf("claim send: %w", err)
+	}
+	send.Conversation = conversation
+	var messageID string
+	var replies int
+	err = tx.QueryRowContext(ctx, "SELECT message_id, replies FROM origins WHERE event_id = ? AND conversation = ? AND received_at > ?",
+		origin, conversation, now.Add(-window.For).UnixMilli()).Scan(&messageID, &replies)
+	switch {
+	case err == nil && replies < window.Replies:
+		send.MsgID, send.MsgSeq = messageID, replies+1
+		if _, err := tx.ExecContext(ctx, "UPDATE origins SET replies = replies + 1 WHERE event_id = ?", origin); err != nil {
+			return Send{}, false, fmt.Errorf("claim send: %w", err)
+		}
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return Send{}, false, fmt.Errorf("claim send: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO sends (key, conversation, msg_id, msg_seq, state, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+		key, conversation, send.MsgID, send.MsgSeq, now.UnixMilli()); err != nil {
+		return Send{}, false, fmt.Errorf("claim send: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Send{}, false, fmt.Errorf("claim send: %w", err)
+	}
+	return send, false, nil
+}
+
+// MakeProactive turns a claimed send into a proactive one, after QQ refused
+// it as a passive reply.
+func (s *Store) MakeProactive(ctx context.Context, key string) error {
+	return s.exec(ctx, "make send proactive", "UPDATE sends SET msg_id = '', msg_seq = 0 WHERE key = ?", key)
+}
+
+// CompleteSend records the message a send created.
+func (s *Store) CompleteSend(ctx context.Context, key, messageID string) error {
+	return s.exec(ctx, "complete send", "UPDATE sends SET state = 'sent', message_id = ? WHERE key = ?", messageID, key)
+}
+
+// ReleaseSend forgets a send QQ refused, so a later attempt may claim it
+// afresh.
+func (s *Store) ReleaseSend(ctx context.Context, key string) error {
+	return s.exec(ctx, "release send", "DELETE FROM sends WHERE key = ? AND state = 'pending'", key)
+}
+
 // RecordGap records that events may have been lost.
 func (s *Store) RecordGap(ctx context.Context, kind, detail string, at time.Time) error {
 	return s.exec(ctx, "record gap", "INSERT INTO gaps (kind, detail, detected_at) VALUES (?, ?, ?)", kind, detail, at.UnixMilli())
@@ -223,6 +332,8 @@ func (s *Store) Prune(ctx context.Context, now time.Time) error {
 	return errors.Join(
 		s.exec(ctx, "prune inbox", "DELETE FROM inbox WHERE state != 'pending' AND finished_at < ?", now.Add(-InboxRetention).UnixMilli()),
 		s.exec(ctx, "prune refs", "DELETE FROM refs WHERE created_at < ?", now.Add(-RefRetention).UnixMilli()),
+		s.exec(ctx, "prune origins", "DELETE FROM origins WHERE received_at < ?", now.Add(-SendRetention).UnixMilli()),
+		s.exec(ctx, "prune sends", "DELETE FROM sends WHERE created_at < ?", now.Add(-SendRetention).UnixMilli()),
 	)
 }
 

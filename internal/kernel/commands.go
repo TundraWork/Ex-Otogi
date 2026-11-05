@@ -26,7 +26,7 @@ func (p commandParser) Intercept(_ context.Context, e *otogi.Event) (otogi.Verdi
 	if e.Command != nil || e.Action != otogi.ActionMessageCreated {
 		return otogi.Continue, nil
 	}
-	text := strings.TrimSpace(e.Message.PlainText())
+	text := strings.TrimSpace(withoutLeadingMention(*e))
 	for _, prefix := range p.prefixes {
 		rest, ok := strings.CutPrefix(text, prefix)
 		if !ok {
@@ -43,4 +43,19 @@ func (p commandParser) Intercept(_ context.Context, e *otogi.Event) (otogi.Verdi
 		return otogi.Continue, nil
 	}
 	return otogi.Continue, nil
+}
+
+// withoutLeadingMention is the message's text without a leading mention of
+// the receiving account, so "@Otogi /status" runs /status in a group.
+func withoutLeadingMention(e otogi.Event) string {
+	text := e.Message.PlainText()
+	if !e.Mentioned || len(e.Message.Parts) == 0 || e.Message.Parts[0].Kind != otogi.PartText {
+		return text
+	}
+	for _, a := range e.Message.Parts[0].Annotations {
+		if a.Kind == otogi.AnnotationMention && a.Offset == 0 {
+			return text[a.Length:]
+		}
+	}
+	return text
 }

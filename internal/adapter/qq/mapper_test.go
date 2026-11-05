@@ -113,3 +113,11 @@ func TestMapServiceEvents(t *testing.T) {
 		t.Fatalf("unknown = %+v", e)
 	}
 }
+
+func TestMapSentMessage(t *testing.T) {
+	m := testMapper(t)
+	e := mapOne(t, m, sentType, `{"id":"s1","content":"**hi**","timestamp":"2026-11-06T02:00:00Z","peer":"U1","self":"B1","self_name":"Otogi"}`)
+	if e.Direction != otogi.DirectionOutgoing || e.Conversation.ID != "user:U1" || e.Actor.ID != "user:B1" || e.Actor.Name != "Otogi" || e.Message.PlainText() != "**hi**" || e.SourceID != "s1" {
+		t.Fatalf("event = %+v", e)
+	}
+}

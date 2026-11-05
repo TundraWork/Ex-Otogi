@@ -32,6 +32,10 @@ type ProfileConfig struct {
 	Label string `yaml:"label"`
 	// Keywords trigger the agent when a message starts with one.
 	Keywords []string `yaml:"keywords"`
+	// Mention triggers the agent when a message mentions the account, as
+	// people address a bot in a QQ group. When several profiles in a chat
+	// set it, the first one answers.
+	Mention bool `yaml:"mention"`
 	// Chats lists where the agent answers, as /whoami prints them
 	// ("telegram:chat:123").
 	Chats []string `yaml:"chats"`

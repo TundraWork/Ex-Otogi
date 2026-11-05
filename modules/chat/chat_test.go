@@ -435,3 +435,29 @@ func TestToolGroups(t *testing.T) {
 		t.Fatalf("follow-up turns %+v", turns)
 	}
 }
+
+// A profile with mention: true answers a message that mentions the account,
+// and the @ itself is left out of the prompt; without the flag, a mention
+// does not trigger.
+func TestMentionTrigger(t *testing.T) {
+	h := newHarness(t,
+		ProfileConfig{Name: "luna", Keywords: []string{"luna"}, Mention: true, Chats: []string{group}, Provider: "luna", Model: "m"},
+		ProfileConfig{Name: "otogi", Keywords: []string{"otogi"}, Chats: []string{group}, Provider: "otogi", Model: "m"})
+	p := h.llm["luna"]
+	p.responses = []llm.Response{answer("Meow.")}
+	mentioned := func(e *otogi.Event) {
+		e.Mentioned = true
+		e.Message.Parts[0].Annotations = []otogi.Annotation{{Offset: 0, Length: 6, Kind: otogi.AnnotationMention, Target: "user:B1"}}
+	}
+	h.mustHandle(h.message("Alice", "@Luna  draw a cat", mentioned))
+	if len(p.requests) != 1 || lastUserText(p.requests[0]) != "Alice: draw a cat" {
+		t.Fatalf("requests %+v", p.requests)
+	}
+	if r := h.host.records[len(h.host.records)-1]; r.Payload.(map[string]any)["trigger"] != "mention" {
+		t.Fatalf("record %+v", r)
+	}
+	h.mustHandle(h.message("Alice", "hello", func(e *otogi.Event) { e.Mentioned = false }))
+	if len(p.requests) != 1 || len(h.llm["otogi"].requests) != 0 {
+		t.Fatal("an unmentioned message triggered an agent")
+	}
+}
