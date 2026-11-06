@@ -24,7 +24,7 @@ Kernel, modules, and adapters import only `pkg/...` from this repository: `pkg/o
 
 ## Language model providers
 
-Modules that use language models depend only on `pkg/llm`: `Provider.Generate` takes a conversation of `otogi.Message` turns and streams back the reply as `otogi.Message` (rich text and any generated images). The composition root builds the providers configured under `llm:` (today `internal/adapter/gemini`) and hands module factories a lookup by name, so several modules share one provider. A provider records every call itself, attributed to the module and event through `otogi.WorkFrom(ctx)`; it keeps no state, and conversations live in the calling module's own storage. Design: [`2026-10-31-llm-provider-design.md`](superpowers/specs/2026-10-31-llm-provider-design.md).
+Modules that use language models depend only on `pkg/llm`: `Provider.Generate` takes a conversation of `otogi.Message` turns and streams back the reply as `otogi.Message` (rich text and any generated images). The composition root builds the providers configured under `llm:` (today `internal/adapter/gemini`) and hands module factories a lookup by name, so several modules share one provider. A provider records every call itself, attributed to the module and event through `otogi.WorkFrom(ctx)`; it keeps no state, and conversations live in the calling module's own storage.
 
 ## Platform types stay in their adapter
 

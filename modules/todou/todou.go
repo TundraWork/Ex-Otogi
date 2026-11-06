@@ -4,8 +4,7 @@
 // streams new activity into a queue per chat it is linked to, and each chat
 // gets the queue as one digest at most once per min_interval, through a
 // transactional outbox: in order and exactly once per chat. Silent links
-// only grant access. See docs/superpowers/specs/2026-10-16-todou-notifier-design.md
-// and docs/superpowers/specs/2026-11-01-todou-agents-and-writes-design.md.
+// only grant access.
 package todou
 
 import (

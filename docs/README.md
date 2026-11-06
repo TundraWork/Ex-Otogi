@@ -4,7 +4,7 @@ These documents describe the design of the `next` runtime: a self-hosted, single
 
 ## Status
 
-`next` is a work in progress, not a release. It runs as a single `otogi` binary configured by `otogi.yaml`, with the core kernel, an echo module, and a Telegram MTProto user-account driver ([runbook](runbooks/core-runtime-smoke.md#run-the-bot)). The 2026-10-14 cleanup ([contracts](superpowers/specs/2026-10-14-lean-core-contracts-design.md), [Telegram](superpowers/specs/2026-10-14-telegram-on-gotd-design.md)) brought the code in line with these documents.
+`next` is a work in progress, not a release. It runs as a single `otogi` binary configured by `otogi.yaml`, with the core kernel, an echo module, and a Telegram MTProto user-account driver ([runbook](runbooks/core-runtime-smoke.md#run-the-bot)).
 
 ## Documents
 
@@ -24,7 +24,7 @@ These documents describe the design of the `next` runtime: a self-hosted, single
 | [`runbooks/core-runtime-smoke.md`](runbooks/core-runtime-smoke.md) | Build, gates, and offline smoke |
 | [`runbooks/telegram-mtproto.md`](runbooks/telegram-mtproto.md) | Telegram storage, login, backup, recovery, upgrade |
 
-`docs/superpowers/` holds the design specs and plans of past milestones. They are historical records: where they disagree with these documents, these documents win.
+Design specs and plans of milestones are kept locally under `docs/superpowers/`, which is not part of the repository. These documents are the reference.
 
 ## Changing the design
 

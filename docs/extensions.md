@@ -15,7 +15,7 @@ A module implements bot behavior. It:
 
 ### SDK
 
-The module SDK is designed in [`2026-10-14-module-sdk-design.md`](superpowers/specs/2026-10-14-module-sdk-design.md) and delivered in steps:
+The module SDK is delivered in steps:
 
 - messaging: send, send to other conversations, reply and quote (relations), edit, delete, react, send and fetch media (implemented);
 - streamed messages: `Invocation.Stream` shows a message while it is still being written, such as a language model's reply. The module passes the whole content so far to `Update` and the final content to `Close`; the driver decides how the platform shows it. Telegram shows "typing" for as long as the reply is being written, and the reply as a live draft (bot accounts, private chats) or as a message edited as it grows (user accounts, and everywhere else), continuing in new messages past its limits. QQ streams a private-chat reply in one message that grows, within QQ's reply window, and finishes it as ordinary messages if QQ refuses a chunk or the reply outgrows one message; QQ groups cannot stream and get the final content. Drivers implement `otogi.Streamer`; without one, the kernel sends the final content on `Close`;
@@ -23,7 +23,7 @@ The module SDK is designed in [`2026-10-14-module-sdk-design.md`](superpowers/sp
 - per-module key/value store, private SQLite database, `Starter`/`Stopper`, and typed config (implemented; see `modules/notes`);
 - cron jobs, persistent timers, and typed services shared between modules (implemented; see `modules/reminders`);
 - language models: a module whose config names a provider (`provider: gemini`, `model: ...`) gets it from the composition root's `llm` lookup and calls `Generate` with `otogi.Message` turns. `llm.Inline` fetches chat media for a prompt. Passing `Update` of an `Invocation.Stream` as the partial callback streams the reply into the chat. Keep each `Response.Turn`, `Native` included, to continue the conversation: the provider resends its own turns exactly, which keeps the model's hidden reasoning and generated images intact. `llm.Run` adds tools: provider built-ins (`google_search`, `url_context`, `code_execution`) and functions that modules offer as `llm.Tool`s through the service `llm.ToolsService(<module>)` (`llm.tools/<module>`); it runs the model's calls round by round and streams the reply across rounds. `reminders` (`set_reminder`), `notes` (`add_note`, `list_notes`), and `todou` (read and work the todou projects linked to the chat) are the tool groups: a module provides `[]llm.Tool` from `Start` under the name it lists in `Provides`, and a chat profile names the module in `tools`.
-- `modules/chat`: language model agents that answer keyword-led messages and replies to them in allowlisted chats, with the recent chat as context; see [its design](superpowers/specs/2026-10-31-chat-module-design.md);
+- `modules/chat`: language model agents that answer keyword-led messages and replies to them in allowlisted chats, with the recent chat as context;
 - formatted text: `otogi.RichText` builds annotated text, and `pkg/markdown` converts Markdown into it (see `modules/todou`) and back, for handing chat text to a language model.
 
 Every effect names a slot; the kernel derives its idempotency key from the unit of work (event, job run, or timer run), the module, and the slot, so replays never repeat effects. Drivers receive effects through `otogi.Effector` and return `ErrUnsupported` for kinds they do not implement.

@@ -11,7 +11,7 @@ An event is an immutable `pkg/otogi` value with:
 - timestamps, actor, and relations (reply, thread, edit target, and so on);
 - a rich content graph of ordered typed parts (text with annotations, media, files, embeds, and unknown platform data kept as extensions).
 
-The model is designed against Telegram, Matrix, XMPP, Discord, and QQ, so one module sees the same shapes whichever platform the event came from. Details are in the Telegram design spec under `docs/superpowers/specs/`.
+The model is designed against Telegram, Matrix, XMPP, Discord, and QQ, so one module sees the same shapes whichever platform the event came from.
 
 ## Delivery
 
@@ -37,7 +37,7 @@ Which modules receive an event: if the event carries a command (set by the comma
 
 Modules are independent: there is no order between modules for the same event. Anything that must happen before all modules belongs in middleware.
 
-When every delivery of an event has finished, the kernel calls the driver's `done` callback with the outcome. Details are in the [lean core contracts design](superpowers/specs/2026-10-14-lean-core-contracts-design.md).
+When every delivery of an event has finished, the kernel calls the driver's `done` callback with the outcome.
 
 ## Jobs and timers
 

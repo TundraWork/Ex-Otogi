@@ -1,7 +1,7 @@
 // Package chat answers people in chats with language model agents. Each
-// agent profile answers in the chats it lists when a message starts with one
-// of its keywords, or replies to a message it sent. See
-// docs/superpowers/specs/2026-10-31-chat-module-design.md.
+// agent profile answers in the chats it lists (or operators allow with
+// /chat) when a message starts with one of its keywords, mentions the
+// account, or replies to a message it sent.
 package chat
 
 import (

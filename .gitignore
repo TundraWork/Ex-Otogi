@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# AI-written design specs and plans: kept locally, never committed
+/docs/superpowers/
+
 # Repository-local caches and temporary files
 .cache/
 .tmp/
