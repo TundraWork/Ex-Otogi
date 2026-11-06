@@ -100,6 +100,9 @@ func (d *Driver) Start(ctx context.Context) error {
 	}
 	if err := store.Bind(ctx, d.cfg.AccountKey, d.cfg.AppID); err != nil {
 		_ = store.Close()
+		if errors.Is(err, qqstore.ErrAccountMismatch) {
+			return fmt.Errorf("%w; if the account now runs another bot on purpose, move %s aside so it starts afresh", err, d.cfg.DatabasePath)
+		}
 		return err
 	}
 	self, username, err := store.Bot(ctx)
@@ -320,6 +323,18 @@ func (d *Driver) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// OpenStream starts a streamed message; see otogi.Streamer. Only C2C
+// replies stream; QQ cannot stream in groups.
+func (d *Driver) OpenStream(ctx context.Context, e otogi.Effect) (otogi.DriverStream, error) {
+	d.mu.Lock()
+	x := d.effects
+	d.mu.Unlock()
+	if x == nil {
+		return nil, fmt.Errorf("qq: not started: %w", otogi.ErrUnavailable)
+	}
+	return x.OpenStream(ctx, e)
 }
 
 // Apply performs an effect; see otogi.Effector.

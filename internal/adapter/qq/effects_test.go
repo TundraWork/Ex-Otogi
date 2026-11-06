@@ -19,11 +19,12 @@ import (
 // sendServer answers message and file posts, numbering the messages, and
 // lets a test script failures by request.
 type sendServer struct {
-	mu     sync.Mutex
-	posts  []map[string]any // bodies of message posts, in order
-	paths  []string
-	fail   func(path string, body map[string]any) (status int, response string, ok bool)
-	nextID int
+	mu      sync.Mutex
+	posts   []map[string]any // bodies of message posts, in order
+	streams []map[string]any // bodies of stream chunks, in order
+	paths   []string
+	fail    func(path string, body map[string]any) (status int, response string, ok bool)
+	nextID  int
 }
 
 func newEffects(t *testing.T) (*effects, *sendServer, *qqstore.Store) {
@@ -47,6 +48,9 @@ func newEffects(t *testing.T) (*effects, *sendServer, *qqstore.Store) {
 			}
 		}
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/stream_messages"):
+			srv.streams = append(srv.streams, in)
+			_, _ = w.Write([]byte(`{"id":"st1","timestamp":"2026-11-06T10:00:00+08:00"}`))
 		case strings.HasSuffix(r.URL.Path, "/files"):
 			_, _ = w.Write([]byte(`{"file_uuid":"u","file_info":"INFO","ttl":3600}`))
 		case r.Method == http.MethodDelete:
