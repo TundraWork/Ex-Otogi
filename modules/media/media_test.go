@@ -12,6 +12,7 @@ import (
 	"image/gif"
 	"image/png"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -146,14 +147,19 @@ func (i *invocation) fetches() int {
 	return i.fetched
 }
 
-const chat = "qq:group-1"
+const (
+	chat = "qq:group-1"
+	// operator is the actor the tests' module takes as an operator.
+	operator = "user:op"
+)
 
 type harness struct {
-	t     *testing.T
-	m     *Module
-	host  *host
-	inv   *invocation
-	steps []*provider
+	t         *testing.T
+	m         *Module
+	host      *host
+	inv       *invocation
+	steps     []*provider
+	operators []string // what the module's operators function returns
 }
 
 // newHarness starts the module with one fake model per step, the test
@@ -165,7 +171,7 @@ func newHarness(t *testing.T, steps int) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = storage.Close() })
-	h := &harness{t: t, host: &host{storage: storage, allowed: map[string]bool{chat: true}, services: map[string]any{}}, inv: &invocation{files: map[string][]byte{}}}
+	h := &harness{t: t, host: &host{storage: storage, allowed: map[string]bool{chat: true}, services: map[string]any{}}, inv: &invocation{files: map[string][]byte{}}, operators: []string{"qq:" + operator}}
 	cfg := Config{Language: "Chinese"}
 	byName := map[string]*provider{}
 	for i := range steps {
@@ -180,7 +186,7 @@ func newHarness(t *testing.T, steps int) *harness {
 			return p, nil
 		}
 		return nil, otogi.ErrInvalid
-	})
+	}, func() []string { return h.operators })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,9 +839,29 @@ func TestPrune(t *testing.T) {
 	if err := h.m.store.putSource(ctx, "url:old", old, day); err != nil {
 		t.Fatal(err)
 	}
-	n, err := h.m.store.prune(ctx, day.AddDate(0, 0, 10))
-	if err != nil || n != 2 {
-		t.Fatalf("prune = %d, %v; want 2 rows", n, err)
+	later := day.AddDate(0, 0, 10)
+	pic := []otogi.Media{{Role: otogi.MediaImage}}
+	if err := h.m.store.putRecent(ctx, from, "old-message", pic, later.Add(-3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.m.store.putRecent(ctx, from, "new-message", pic, later.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.m.store.addSticker(ctx, sticker{SHA256: []byte{9}, MediaType: "image/png", Bytes: []byte("png")}, "qq:"+operator, day, h.m.limits); err != nil {
+		t.Fatal(err)
+	}
+	n, err := h.m.store.prune(ctx, later, later.Add(-recentMedia))
+	if err != nil || n != 3 {
+		t.Fatalf("prune = %d, %v; want 3 rows", n, err)
+	}
+	if _, ok, _ := h.m.store.recent(ctx, from, "old-message", time.Time{}); ok {
+		t.Error("the old message's media is still kept")
+	}
+	if _, ok, _ := h.m.store.recent(ctx, from, "new-message", time.Time{}); !ok {
+		t.Error("the recent message's media was pruned")
+	}
+	if all, _ := h.m.store.stickers(ctx); len(all) != 1 {
+		t.Errorf("stickers after pruning = %d, want 1: stickers are not pruned", len(all))
 	}
 	if _, ok, _ := h.m.store.get(ctx, old); ok {
 		t.Error("the old description is still kept")
@@ -851,13 +877,19 @@ func TestPrune(t *testing.T) {
 func TestDescriptor(t *testing.T) {
 	h := newHarness(t, 1)
 	d := h.m.Descriptor()
-	if d.Ordering != otogi.OrderNone || len(d.Provides) != 1 || d.Provides[0] != contract.Service || d.Allowlists[0].Name != describeList {
+	if d.Ordering != otogi.OrderNone || !slices.Equal(d.Provides, []string{contract.Service, contract.StickersService}) || d.Allowlists[0].Name != describeList {
 		t.Fatalf("descriptor = %+v", d)
+	}
+	if len(d.Commands) != 1 || d.Commands[0].Name != "sticker" {
+		t.Fatalf("commands = %+v", d.Commands)
 	}
 	if _, ok := h.host.services[contract.Service].(contract.Describer); !ok {
 		t.Fatal("the media service was not provided")
 	}
-	if _, err := New(Config{Steps: []Step{{Provider: "nope", Model: "m"}}}, func(string) (llm.Provider, error) { return nil, otogi.ErrInvalid }); !errors.Is(err, otogi.ErrInvalid) {
+	if _, ok := h.host.services[contract.StickersService].(contract.Stickers); !ok {
+		t.Fatal("the stickers service was not provided")
+	}
+	if _, err := New(Config{Steps: []Step{{Provider: "nope", Model: "m"}}}, func(string) (llm.Provider, error) { return nil, otogi.ErrInvalid }, nil); !errors.Is(err, otogi.ErrInvalid) {
 		t.Fatalf("New with an unknown provider = %v", err)
 	}
 }

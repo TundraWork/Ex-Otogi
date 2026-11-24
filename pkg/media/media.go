@@ -2,7 +2,9 @@
 // images, animations, and videos people send, kept by content. The media
 // module provides it as Service, describing media itself as messages
 // arrive; a module that reads descriptions lists Service in its
-// descriptor's Requires and looks it up with otogi.Lookup[Describer].
+// descriptor's Requires and looks it up with otogi.Lookup[Describer]. The
+// module also provides StickersService, the pictures operators keep for
+// agents to send, looked up with otogi.Lookup[Stickers].
 package media
 
 import (
@@ -61,4 +63,35 @@ type Describer interface {
 	// Lookup returns the kept description of m, seen in from, without
 	// waiting; ok is false when there is none.
 	Lookup(ctx context.Context, from otogi.Destination, m otogi.Media) (d Description, ok bool, err error)
+}
+
+// StickersService is the name the media module provides Stickers under.
+const StickersService = "media.stickers"
+
+// Sticker is a picture operators keep for agents to send.
+type Sticker struct {
+	// ID is the sticker's number; it is never reused.
+	ID int
+	// Kind is what its description said it is; empty when it was not
+	// described.
+	Kind Kind
+	// Text is what a list of stickers shows: the operator's note, else the
+	// description's summary.
+	Text string
+}
+
+// ErrNoSticker reports a sticker number that is not kept.
+var ErrNoSticker = errors.New("media: no such sticker")
+
+// Stickers gives the stickers operators keep with the media module's
+// /sticker command. It is safe for concurrent use.
+type Stickers interface {
+	// List returns the stickers by number, leaving out those with neither
+	// a note nor a description.
+	List(ctx context.Context) ([]Sticker, error)
+	// Picture returns sticker id's picture as inline media ready to send:
+	// MediaAnimation for a GIF, MediaImage otherwise, with its MediaType and
+	// its SHA-256 in Hashes. It fails with ErrNoSticker when there is no
+	// such sticker.
+	Picture(ctx context.Context, id int) (otogi.Media, Sticker, error)
 }

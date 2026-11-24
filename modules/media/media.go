@@ -4,6 +4,10 @@
 // in its own Handle, as messages arrive; other modules only wait for or
 // look up the result. A picture whose driver gives its digest (QQ's MD5) is
 // known again without fetching it.
+//
+// Operators keep stickers with /sticker: their pictures, kept in the
+// module's database, are what agents may send, provided as the service
+// contract.Stickers.
 package media
 
 import (
@@ -40,16 +44,20 @@ const (
 
 // Module is the media module. Once started it is the media service.
 type Module struct {
-	steps    []step
-	language string
-	store    *store
-	host     otogi.Host
-	waits    *waits
-	now      func() time.Time
+	steps     []step
+	limits    stickerLimits
+	language  string
+	operators func() []string
+	store     *store
+	host      otogi.Host
+	waits     *waits
+	now       func() time.Time
 }
 
-// New resolves the steps' providers and builds the module. It does no I/O.
-func New(cfg Config, providers func(string) (llm.Provider, error)) (*Module, error) {
+// New resolves the steps' providers and builds the module. operators returns
+// the platform-qualified actor IDs ("telegram:user:123") who may manage
+// stickers, as they are now. It does no I/O.
+func New(cfg Config, providers func(string) (llm.Provider, error), operators func() []string) (*Module, error) {
 	steps, err := cfg.steps(providers)
 	if err != nil {
 		return nil, err
@@ -58,12 +66,12 @@ func New(cfg Config, providers func(string) (llm.Provider, error)) (*Module, err
 	if language == "" {
 		language = defaultLanguage
 	}
-	return &Module{steps: steps, language: language, waits: newWaits(time.Now), now: time.Now}, nil
+	return &Module{steps: steps, limits: stickerLimits{count: maxStickers, total: maxStickerTotal}, language: language, operators: operators, waits: newWaits(time.Now), now: time.Now}, nil
 }
 
 // Descriptor declares the module: it describes the media of people's new
-// messages in the chats on its describe list, unordered, and provides the
-// media service.
+// messages in the chats on its describe list, unordered; keeps stickers
+// with /sticker; and provides the media and stickers services.
 func (*Module) Descriptor() otogi.ModuleDescriptor {
 	return otogi.ModuleDescriptor{
 		ID:         "media",
@@ -71,13 +79,14 @@ func (*Module) Descriptor() otogi.ModuleDescriptor {
 		Ordering:   otogi.OrderNone,
 		Timeout:    handleTimeout,
 		Filter:     otogi.Filter{Directions: []otogi.Direction{otogi.DirectionIncoming}},
-		Provides:   []string{contract.Service},
+		Provides:   []string{contract.Service, contract.StickersService},
+		Commands:   []otogi.CommandSpec{{Name: stickerCommand, Usage: "add [note] | list | note <n> [note] | remove <n>", Description: "manage the stickers agents may send (operators only)"}},
 		Allowlists: []otogi.AllowlistSpec{{Name: describeList, Title: "Describe media", Description: "Images, animations, and videos in these chats are sent to the configured models and described."}},
 	}
 }
 
-// Start opens the database, provides the media service, and schedules
-// pruning.
+// Start opens the database, provides the media and stickers services, and
+// schedules pruning.
 func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 	db, err := host.Database(ctx)
 	if err != nil {
@@ -90,11 +99,15 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 	if err := host.Provide(contract.Service, contract.Describer(m)); err != nil {
 		return err
 	}
+	if err := host.Provide(contract.StickersService, contract.Stickers(stickers{m})); err != nil {
+		return err
+	}
 	return host.Schedule("prune", "@every 24h", m.prune)
 }
 
 func (m *Module) prune(ctx context.Context, _ otogi.Invocation) error {
-	n, err := m.store.prune(ctx, m.now().Add(-retention))
+	now := m.now()
+	n, err := m.store.prune(ctx, now.Add(-retention), now.Add(-recentMedia))
 	if err != nil {
 		return err
 	}
@@ -102,23 +115,45 @@ func (m *Module) prune(ctx context.Context, _ otogi.Invocation) error {
 	return nil
 }
 
-// Handle describes each piece of media of a message in a chat on the
-// describe list. A step that fails is recorded as media.failed and not
+// Handle runs /sticker, and describes each piece of media of a message in
+// a chat on the describe list, keeping it for recentMedia so /sticker add
+// can reply to it. A step that fails is recorded as media.failed and not
 // returned, so it is not recorded twice; fetching and storage errors are
 // returned.
 func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation) error {
+	if e.Command != nil && e.Command.Name == stickerCommand {
+		return m.runSticker(ctx, e, inv)
+	}
 	if !m.host.Allowed(describeList, e.ChatKey()) {
 		return nil
 	}
+	media := mediaOf(e.Message)
+	if len(media) == 0 {
+		return nil
+	}
 	var errs []error
-	for _, p := range e.Message.Parts {
-		if p.Kind == otogi.PartMedia && p.Media != nil {
-			if err := m.handleOne(ctx, e, inv, *p.Media); err != nil {
-				errs = append(errs, err)
-			}
+	if e.SourceID != "" {
+		if err := m.store.putRecent(ctx, e.Destination(), string(e.SourceID), media, m.now()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, md := range media {
+		if err := m.handleOne(ctx, e, inv, md); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// mediaOf returns the media of msg.
+func mediaOf(msg otogi.Message) []otogi.Media {
+	var out []otogi.Media
+	for _, p := range msg.Parts {
+		if p.Kind == otogi.PartMedia && p.Media != nil {
+			out = append(out, *p.Media)
+		}
+	}
+	return out
 }
 
 // handleOne describes md unless it is kept already. However it ends,

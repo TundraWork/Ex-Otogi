@@ -50,8 +50,10 @@ var moduleKinds = map[otogi.ModuleID]moduleKind{
 	"decision": kind(func(c decision.Config, env moduleEnv) (otogi.Module, error) {
 		return built(decision.New(c, env.secret))
 	}),
-	"echo":      kind(func(struct{}, moduleEnv) (otogi.Module, error) { return echo.New(), nil }),
-	"media":     kind(func(c media.Config, env moduleEnv) (otogi.Module, error) { return built(media.New(c, env.llm)) }),
+	"echo": kind(func(struct{}, moduleEnv) (otogi.Module, error) { return echo.New(), nil }),
+	"media": kind(func(c media.Config, env moduleEnv) (otogi.Module, error) {
+		return built(media.New(c, env.llm, env.operators))
+	}),
 	"notes":     kind(func(c notes.Config, _ moduleEnv) (otogi.Module, error) { return notes.New(c), nil }),
 	"reminders": kind(func(c reminders.Config, _ moduleEnv) (otogi.Module, error) { return reminders.New(c), nil }),
 	"safety":    kind(func(c safety.Config, _ moduleEnv) (otogi.Module, error) { return built(safety.New(c)) }),

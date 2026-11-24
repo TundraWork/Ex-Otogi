@@ -42,7 +42,7 @@ func TestLiveDescribe(t *testing.T) {
 	h.m, err = New(Config{Language: "Chinese", Steps: []Step{
 		{Provider: "gemini", Model: first, Thinking: "minimal"},
 		{Provider: "gemini", Model: "gemini-3.1-flash-lite", Thinking: "minimal"},
-	}}, func(string) (llm.Provider, error) { return provider, nil })
+	}}, func(string) (llm.Provider, error) { return provider, nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
