@@ -10,7 +10,9 @@ import {
   label,
   noun,
   pathLabel,
+  placeholder,
   removedFrom,
+  swapped,
   validate,
 } from "./schema.ts";
 
@@ -184,4 +186,51 @@ test("pathLabel reads a path as its labels", () => {
   assert.equal(pathLabel("profiles[1].max_media_mb"), "Profiles 2 › Max media MB");
   assert.equal(pathLabel("telegram[0].app_hash"), "Telegram accounts 1 › App hash");
   assert.equal(pathLabel(""), "Settings");
+});
+
+test("changes reports items that only moved as the list's new order, once", () => {
+  const [a, b, c] = [{ n: "a" }, { n: "b" }, { n: "c" }];
+  assert.deepEqual(changes({ l: [a, b, c] }, { l: [b, a, c] }), [
+    { path: "l", from: [a, b, c], to: [b, a, c], moved: true },
+  ]);
+  // Moved and edited is a change of each item, as before.
+  assert.deepEqual(changes({ l: [a, b] }, { l: [{ n: "B" }, a] }), [
+    { path: "l[0].n", from: "a", to: "B" },
+    { path: "l[1].n", from: "b", to: "a" },
+  ]);
+});
+
+test("swapped follows paths past two items trading places", () => {
+  const paths = new Set(["profiles[0]", "profiles[1].judge", "profiles[2]", "people[1]"]);
+  assert.deepEqual([...swapped(paths, "profiles", 0, 1)].sort(), [
+    "people[1]",
+    "profiles[0].judge",
+    "profiles[1]",
+    "profiles[2]",
+  ]);
+});
+
+test("label spells the keys that name a tool or a service", () => {
+  assert.equal(label("cli"), "todou CLI");
+  assert.equal(label("cli_timeout"), "CLI timeout");
+  assert.equal(label("jev"), "TypeSafe Jev");
+});
+
+test("placeholder is the default, filled in from the fields beside it where it depends on them", () => {
+  assert.equal(placeholder({ type: "integer", default: 20 }, {}, false), "Default 20");
+  assert.equal(placeholder({ type: "string" }, {}, false), "");
+  assert.equal(placeholder({ type: "integer" }, {}, false), "Default");
+  assert.equal(placeholder({ type: "integer" }, {}, true), "");
+  assert.equal(placeholder({ type: "string", format: "duration" }, {}, false), "Like 5m");
+  const session: JSONSchema = {
+    type: "string",
+    "x-placeholder": "telegram/{account}/session.json in the data directory",
+  };
+  assert.equal(
+    placeholder(session, { account: "main" }, false),
+    "Default telegram/main/session.json in the data directory",
+  );
+  // Until what it depends on is set, it has none.
+  assert.equal(placeholder(session, { account: "" }, false), "");
+  assert.equal(placeholder({ type: "string", "x-placeholder": "{server}" }, {}, false), "");
 });

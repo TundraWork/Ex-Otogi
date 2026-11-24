@@ -11,6 +11,7 @@ import {
   sibling,
   takesImages,
   thinkingNote,
+  toolModules,
 } from "./llm.ts";
 
 const flash = { id: "deepseek-flash", display_name: "DeepSeek-V4.1-Flash", input_modalities: ["text", "image"] };
@@ -96,4 +97,17 @@ test("a thinking level the model's list does not give is marked; with no levels 
   assert.equal(thinkingNote("medium", pro), "deepseek-v4-pro does not list it");
   assert.equal(thinkingNote("medium", flash), undefined);
   assert.equal(thinkingNote("medium", undefined), undefined);
+});
+
+test("toolModules are the modules that offer agents tools, with whether each runs", () => {
+  const modules = [
+    { id: "echo", running: true, provides: [] },
+    { id: "notes", running: false, provides: ["llm.tools/notes"] },
+    { id: "media", running: true, provides: ["media.describe", "media.stickers"] },
+    { id: "todou", running: true, provides: ["llm.tools/todou"] },
+  ];
+  assert.deepEqual(toolModules(modules), [
+    { id: "notes", running: false },
+    { id: "todou", running: true },
+  ]);
 });

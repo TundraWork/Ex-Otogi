@@ -95,7 +95,7 @@ func (a moduleAPI) Modules(ctx context.Context) ([]management.Module, error) {
 	var out []management.Module
 	for _, id := range slices.Sorted(maps.Keys(s.kinds)) {
 		r, saved := current[id]
-		m := management.Module{ID: string(id), Enabled: r.Enabled, Revision: r.Revision, IgnoreBots: s.kernel.IgnoresBots(id), Allowlists: []management.Allowlist{}, Commands: []management.Command{}}
+		m := management.Module{ID: string(id), Enabled: r.Enabled, Revision: r.Revision, IgnoreBots: s.kernel.IgnoresBots(id), Allowlists: []management.Allowlist{}, Commands: []management.Command{}, Provides: []string{}}
 		d, ok := running[id]
 		m.Running = ok
 		if !ok { // describe it as its current settings would build it
@@ -115,6 +115,7 @@ func (a moduleAPI) Modules(ctx context.Context) ([]management.Module, error) {
 			m.Allowlists = append(m.Allowlists, management.Allowlist{Name: l.Name, Title: l.Title, Description: l.Description, About: string(l.About), Chats: chats[[2]string{string(id), l.Name}]})
 		}
 		m.Handles = len(d.Subscribes) > 0 || len(d.Commands) > 0
+		m.Provides = append(m.Provides, d.Provides...)
 		for _, c := range d.Commands {
 			m.Commands = append(m.Commands, management.Command{Name: c.Name, Usage: c.Usage, Description: c.Description})
 		}

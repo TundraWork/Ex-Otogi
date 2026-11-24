@@ -40,7 +40,7 @@ type Config struct {
 type AgentConfig struct {
 	Server   string       `json:"server" minLength:"1" doc:"The todou server URL."`
 	Token    otogi.Secret `json:"token" doc:"The account's personal access token (todou_pat_...)."`
-	LinkBase string       `json:"link_base,omitempty" doc:"The web URL issue links point to; default the server URL."`
+	LinkBase string       `json:"link_base,omitempty" placeholder:"{server}" doc:"The web URL issue links point to; default the server URL."`
 }
 
 // DefaultEvents are the activity types notified when Config.Events is unset.

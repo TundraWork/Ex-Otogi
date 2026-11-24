@@ -29,13 +29,16 @@ export function SettingsPage({
       >
         <ArrowLeft className="size-4" /> Settings
       </Link>
-      <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-        <Tile tone={page.tone} icon={page.icon} size="lg" />
-        <div className="min-w-0 flex-1 basis-64">
-          <h1 className="font-bold text-2xl leading-tight tracking-[-0.035em] sm:text-[1.875rem]">{page.title}</h1>
-          <p className="max-w-[70ch] text-muted-foreground text-sm">{about}</p>
+      {/* On a phone the tile and the title share a line, and what the page is about runs under both. */}
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-start sm:gap-y-0">
+        <div className="sm:row-span-2">
+          <Tile tone={page.tone} icon={page.icon} size="lg" />
         </div>
-        {action}
+        <h1 className="font-bold text-2xl leading-tight tracking-[-0.035em] sm:text-[1.875rem]">{page.title}</h1>
+        <p className="col-span-full max-w-[70ch] text-muted-foreground text-sm sm:col-span-1 sm:col-start-2">{about}</p>
+        {action && (
+          <div className="col-span-full sm:col-span-1 sm:col-start-3 sm:row-span-2 sm:row-start-1">{action}</div>
+        )}
       </div>
       {children}
     </div>

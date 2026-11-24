@@ -103,7 +103,7 @@ export function SecretNote({ value }: { value: unknown }) {
   if (secret?.source === "panel") {
     return (
       <>
-        Set in the panel by {secret.by || "someone unknown"}
+        {secret.by ? `Set in the panel by ${secret.by}` : "Set in the panel; setter not recorded"}
         {secret.at && (
           <>
             {" · "}

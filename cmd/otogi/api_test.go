@@ -131,6 +131,11 @@ func TestManagementAPI(t *testing.T) {
 	_, body = do("PATCH", "/api/modules/chat", "", `{"ignore_bots": false}`, 200)
 	contains("chat takes bots", body, `"ignore_bots":false`, `"running":true`)
 	do("PATCH", "/api/modules/chat", "", `{}`, 422)
+	// What each module provides, running or not, from which the panel offers chat the modules whose tools agents may use.
+	_, body = do("GET", "/api/modules/notes", "", "", 200)
+	contains("notes, off", body, `"running":false`, `"provides":["llm.tools/notes"]`)
+	_, body = do("GET", "/api/modules/echo", "", "", 200)
+	contains("echo", body, `"provides":[]`)
 	do("PATCH", "/api/modules/nope", "", `{"ignore_bots": false}`, 404)
 	_, body = do("GET", "/api/modules/notes/settings/revisions", "", "", 200)
 	contains("notes history", body, `"revision":1`, `"by":"management API"`, `"more":false`)

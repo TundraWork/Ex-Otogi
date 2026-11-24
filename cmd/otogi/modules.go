@@ -278,6 +278,7 @@ func (k settingsSchema) schemaDocument() (map[string]any, error) {
 		return nil, fmt.Errorf("decode schema: %w", err)
 	}
 	doc["x-order"] = fieldOrder(k.config)
+	fieldHints(k.config, doc)
 	for _, l := range k.keys {
 		doc["properties"].(map[string]any)[l.list].(map[string]any)["x-key"] = l.key
 	}
@@ -294,6 +295,7 @@ func (k settingsSchema) schemaDocument() (map[string]any, error) {
 			}
 			if t := k.registry.TypeFromRef("#/$defs/" + name); t != nil {
 				d["x-order"] = fieldOrder(t)
+				fieldHints(t, d)
 			}
 			ordered[name] = d
 		}
@@ -319,6 +321,38 @@ func fieldOrder(t reflect.Type) []string {
 		}
 	}
 	return names
+}
+
+// fieldHints copies what a struct's fields say for the panel alone into
+// their schema, which huma has no keyword for: a unit:"MB" tag becomes
+// x-unit, shown after the number; a placeholder tag becomes x-placeholder,
+// the default of a field that depends on the fields beside it, which the
+// panel fills in, such as "telegram/{account}/session.json"; ordered:"true"
+// becomes x-ordered, a list whose items the panel lets the operator move,
+// as their order is what the module does with them.
+func fieldHints(t reflect.Type, schema map[string]any) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	props, _ := schema["properties"].(map[string]any)
+	if t.Kind() != reflect.Struct || props == nil {
+		return
+	}
+	for f := range t.Fields() {
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		prop, _ := props[cmp.Or(name, f.Name)].(map[string]any)
+		if prop == nil {
+			continue
+		}
+		for tag, key := range map[string]string{"unit": "x-unit", "placeholder": "x-placeholder"} {
+			if v := f.Tag.Get(tag); v != "" {
+				prop[key] = v
+			}
+		}
+		if f.Tag.Get("ordered") == "true" {
+			prop["x-ordered"] = true
+		}
+	}
 }
 
 // durationSchema describes an otogi.Duration.

@@ -216,6 +216,49 @@ func TestSettingsSchemas(t *testing.T) {
 	}
 }
 
+// The modules whose tools chat's agents may use are module IDs to the
+// schema, which the panel offers from what the modules provide: one saved
+// before its module was renamed or removed still passes the schema's check,
+// and is the kernel's to refuse.
+func TestChatToolsAreModuleIDsToTheSchema(t *testing.T) {
+	stale := []byte(`{"profiles": [{"name": "Luna", "keywords": ["luna"], "provider": "gemini", "model": "m"}], "tools": ["gone"]}`)
+	if err := moduleKinds["chat"].check(stale); err != nil {
+		t.Errorf("a module that is gone: %v", err)
+	}
+	doc, _ := moduleKinds["chat"].schemaDocument()
+	if items := doc["properties"].(map[string]any)["tools"].(map[string]any)["items"].(map[string]any); items["format"] != "tool-module" {
+		t.Errorf("chat's tools' items %v", items)
+	}
+}
+
+// A field's unit, its placeholder when its default depends on the fields
+// beside it, and a list's order mattering come with its schema as x-unit,
+// x-placeholder, and x-ordered, in the settings' own type and in the types
+// under $defs.
+func TestSchemaCarriesUnitsAndPlaceholders(t *testing.T) {
+	type item struct {
+		Name string `json:"name"`
+		Path string `json:"path,omitempty" placeholder:"{name}/state.sqlite"`
+	}
+	type config struct {
+		Size  int    `json:"size,omitempty" unit:"MB"`
+		Items []item `json:"items" ordered:"true"`
+	}
+	doc, err := schemaOf[config]().schemaDocument()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := doc["properties"].(map[string]any)["size"].(map[string]any); size["x-unit"] != "MB" {
+		t.Errorf("size %v", size)
+	}
+	if items := doc["properties"].(map[string]any)["items"].(map[string]any); items["x-ordered"] != true {
+		t.Errorf("items %v", items)
+	}
+	if path := doc["$defs"].(map[string]any)["Item"].(map[string]any)["properties"].(map[string]any)["path"].(map[string]any); path["x-placeholder"] != "{name}/state.sqlite" {
+		t.Errorf("path %v", path)
+	}
+}
+
 // The panel offers a provider's models for a field of format llm-model, and
 // marks its thinking levels for one of llm-thinking, by the provider the
 // field named provider beside it names: every such field has one.

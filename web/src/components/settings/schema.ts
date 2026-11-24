@@ -27,6 +27,13 @@ export type JSONSchema = {
   patternDescription?: string;
   "x-order"?: string[];
   "x-key"?: string;
+  /** x-unit is what a number counts, shown after it: MB, %. */
+  "x-unit"?: string;
+  /** x-placeholder is the default of a field that depends on the fields
+   * beside it, which fill in its {names}: see placeholder. */
+  "x-placeholder"?: string;
+  /** x-ordered marks a list whose order is what the module does with it. */
+  "x-ordered"?: boolean;
 };
 
 export type Kind = "string" | "integer" | "number" | "boolean" | "array" | "map" | "object";
@@ -52,9 +59,15 @@ export function properties(s: JSONSchema): [string, JSONSchema][] {
 
 // The words of a key that are not written as the key has them. The schema
 // has no titles, so openai, a map of services, and the lists of accounts
-// are named here.
+// are named here, and in titles the keys that name a tool or a service.
+const titles: Record<string, string> = {
+  cli: "todou CLI",
+  jev: "TypeSafe Jev",
+};
+
 const spelt: Record<string, string> = {
   api: "API",
+  cli: "CLI",
   id: "ID",
   url: "URL",
   kb: "KB",
@@ -68,6 +81,7 @@ const spelt: Record<string, string> = {
 
 /** label turns max_tool_rounds into "Max tool rounds", and base_url into "Base URL". */
 export function label(key: string): string {
+  if (titles[key]) return titles[key];
   const words = key.replace(/[a-z]+/g, (word) => spelt[word] ?? word).replaceAll("_", " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
@@ -85,6 +99,27 @@ export function pathLabel(path: string): string {
     .split(".")
     .map((part) => label(part).replace(/\[(\d+)\]/g, (_, i) => ` ${Number(i) + 1}`))
     .join(" › ");
+}
+
+/** placeholder is what an empty field shows: its default, filled in from
+ * the fields beside it (siblings, its object's values) when it depends on
+ * them, and none until they are set; an optional number without one has
+ * the module's own. */
+export function placeholder(s: JSONSchema, siblings: unknown, required: boolean): string {
+  const template = s["x-placeholder"];
+  if (template) {
+    const values = (siblings ?? {}) as Record<string, unknown>;
+    let missing = false;
+    const filled = template.replace(/\{(\w+)\}/g, (_, key: string) => {
+      const v = values[key];
+      if (typeof v !== "string" || !v) missing = true;
+      return String(v);
+    });
+    return missing ? "" : `Default ${filled}`;
+  }
+  if (s.default !== undefined) return `Default ${s.default}`;
+  if (s.format === "duration") return "Like 5m";
+  return ["integer", "number"].includes(kindOf(s)) && !required ? "Default" : "";
 }
 
 /** entrySchema is the schema of a map's values. */
@@ -196,6 +231,17 @@ export function removedFrom(paths: ReadonlySet<string>, list: string, index: num
   return next;
 }
 
+/** swapped follows paths past two items of a list trading places. */
+export function swapped(paths: ReadonlySet<string>, list: string, a: number, b: number): Set<string> {
+  const next = new Set<string>();
+  for (const path of paths) {
+    const at = path.startsWith(`${list}[`) ? Number.parseInt(path.slice(list.length + 1), 10) : -1;
+    const to = at === a ? b : at === b ? a : at;
+    next.add(to === at ? path : `${list}[${to}${path.slice(path.indexOf("]", list.length))}`);
+  }
+  return next;
+}
+
 /** clean drops unset optional values, which the module defaults. A map
  * keeps its empty entries: there the key is the setting. */
 export function clean(root: JSONSchema, value: unknown, schema = root): unknown {
@@ -214,11 +260,14 @@ export function clean(root: JSONSchema, value: unknown, schema = root): unknown 
   return value;
 }
 
-export type Change = { path: string; from: unknown; to: unknown };
+/** Change is a value that differs; moved, a list whose items only changed
+ * places, from one order to the other. */
+export type Change = { path: string; from: unknown; to: unknown; moved?: true };
 
 /** changes lists what differs between two settings, by path. In a list of
  * objects, the items that stay the same before and after the changed ones
- * are not changes, so removing one item reports that item only. */
+ * are not changes, so removing one item reports that item only, and items
+ * that only changed places are one change, of the list's order. */
 export function changes(before: unknown, after: unknown, path = ""): Change[] {
   const isObj = (v: unknown) => v !== null && typeof v === "object" && !Array.isArray(v);
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -235,6 +284,8 @@ export function changes(before: unknown, after: unknown, path = ""): Change[] {
     while (head < short && same(before[head], after[head])) head++;
     let tail = 0;
     while (tail < short - head && same(before.at(-1 - tail), after.at(-1 - tail))) tail++;
+    const sorted = (l: unknown[]) => l.map((v) => JSON.stringify(v)).sort();
+    if (head < short && same(sorted(before), sorted(after))) return [{ path, from: before, to: after, moved: true }];
     return Array.from({ length: Math.max(before.length, after.length) - head - tail }, (_, n) => {
       const i = head + n;
       return changes(

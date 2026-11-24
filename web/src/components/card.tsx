@@ -7,7 +7,8 @@ export function Card({ className, ...props }: ComponentProps<"section">) {
 }
 
 /** CardHeader titles a card: an optional tile, the title with a note beside
- * it or a description under it, and the card's actions as children. */
+ * it or a description under it, and the card's actions as children. A card
+ * the page's heading already names has only the note. */
 export function CardHeader({
   icon,
   title,
@@ -16,7 +17,7 @@ export function CardHeader({
   children,
 }: {
   icon?: ReactNode;
-  title: string;
+  title?: string;
   note?: ReactNode;
   description?: ReactNode;
   children?: ReactNode;
@@ -26,8 +27,8 @@ export function CardHeader({
       {icon}
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2">
-          <h2 className="font-semibold text-[15px] leading-tight">{title}</h2>
-          {note && <span className="text-muted-foreground text-xs">{note}</span>}
+          {title && <h2 className="font-semibold text-[15px] leading-tight">{title}</h2>}
+          {note && <span className={cn("text-muted-foreground", title ? "text-xs" : "text-sm")}>{note}</span>}
         </div>
         {description && <p className="text-muted-foreground text-xs">{description}</p>}
       </div>

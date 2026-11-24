@@ -62,7 +62,7 @@ function SecretsPage() {
         </Button>
       }
     >
-      <Card className="@container mt-6 pt-3.5">
+      <Card className="@container mt-6 max-w-4xl pt-3.5">
         {secrets && secrets.length > 0 && (
           <div aria-hidden className={cn("mx-3.5 hidden px-3 pb-2 font-medium text-muted-foreground text-xs", columns)}>
             <span>Name</span>
@@ -105,7 +105,16 @@ function SecretRow({ secret: s, onSet, onRemove }: { secret: Secret; onSet: () =
   const source = sources[s.source];
   return (
     <li className={cn("grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 py-3", columns)}>
-      <span className="wrap-anywhere font-medium font-mono text-[13px]">{s.name}</span>
+      {/* A long name breaks after its underscores first. */}
+      <span className="wrap-anywhere font-medium font-mono text-[13px]">
+        {s.name.split(/(?<=_)/).map((part, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the parts of one name, in order
+          <Fragment key={i}>
+            {part}
+            <wbr />
+          </Fragment>
+        ))}
+      </span>
       <span
         className={cn(
           "flex items-center gap-2 text-sm",
@@ -119,8 +128,14 @@ function SecretRow({ secret: s, onSet, onRemove }: { secret: Secret; onSet: () =
       <span className="col-span-full min-w-0 text-muted-foreground text-sm @3xl:col-auto">
         {s.source === "panel" ? (
           <>
-            <span className="@3xl:sr-only">Set by </span>
-            <span className="wrap-anywhere">{s.by || "Unknown"}</span>
+            {s.by ? (
+              <>
+                <span className="@3xl:sr-only">Set by </span>
+                <span className="wrap-anywhere">{s.by}</span>
+              </>
+            ) : (
+              "Setter not recorded"
+            )}
             {s.at && (
               <>
                 {" · "}

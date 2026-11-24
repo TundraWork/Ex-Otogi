@@ -16,20 +16,20 @@ import (
 
 // Config is the module's settings.
 type Config struct {
-	Retention   otogi.Duration  `json:"retention,omitempty" default:"720h" doc:"How long threads and the chat transcript are kept; 720h is 30 days."`
+	Retention   otogi.Duration  `json:"retention,omitempty" default:"720h" doc:"How long threads and the chat transcript are kept."`
 	Timeout     otogi.Duration  `json:"timeout,omitempty" default:"5m" doc:"The longest one reply may take, tool calls included."`
 	ToolReserve *float64        `json:"tool_reserve,omitempty" minimum:"0" default:"2" doc:"When less of a reply's time is left than this many of its slowest model rounds, the agent stops calling tools and answers with what it has found. 0 calls tools until the time is up."`
-	MaxMediaMB  int             `json:"max_media_mb,omitempty" minimum:"1" default:"20" doc:"The largest picture or file the agent is shown, in megabytes; a larger one is named instead."`
-	Profiles    []ProfileConfig `json:"profiles" minItems:"1" doc:"The agents. Each answers in the chats on its allowlist."`
-	Tools       []string        `json:"tools,omitempty" enum:"notes,reminders,todou" doc:"Modules whose tools agents may use. Each gets a list of the chats where agents are offered its tools; a chat on none of them gets none."`
+	MaxMediaMB  int             `json:"max_media_mb,omitempty" minimum:"1" default:"20" unit:"MB" doc:"The largest picture or file the agent is shown, in megabytes; a larger one is named instead."`
+	Profiles    []ProfileConfig `json:"profiles" minItems:"1" ordered:"true" doc:"The agents. Each answers in the chats on its allowlist."`
+	Tools       []string        `json:"tools,omitempty" format:"tool-module" doc:"Modules whose tools agents may use. Each gets a list of the chats where agents are offered its tools; a chat on none of them gets none."`
 	People      []PersonConfig  `json:"people,omitempty" doc:"People agents know by more than the name the platform gives them. Everyone else is called by that name, has no note, and a threshold factor of 1."`
 }
 
 // PersonConfig is what agents know about one person.
 type PersonConfig struct {
-	User            string  `json:"user" minLength:"1" format:"actor" doc:"The person: the platform (qq or telegram), a colon, and their sender ID as a chat's page lists it under People, below their name; for example qq:user:7C2E04D1A9B35F86E0C4D2B17A9F3E58. A person's ID on QQ is the same in every group and private chat. The same person on another platform is another entry."`
+	User            string  `json:"user" minLength:"1" format:"actor" doc:"The person: the platform (qq or telegram), a colon, and their sender ID as a chat's People list shows it, such as telegram:user:123456789. A QQ ID is the same in every chat; the same person on another platform is another entry."`
 	Name            string  `json:"name,omitempty" doc:"What agents call them, in place of the name the platform gives; that name follows in parentheses where it differs, since people mention them by it."`
-	Note            string  `json:"note,omitempty" doc:"Who they are, told to agents where they appear in the conversation: for example the owner, or a friend of the owner's who talks about VRChat. Agents may repeat it, in any chat the person is in."`
+	Note            string  `json:"note,omitempty" format:"text" doc:"Who they are, told to agents where they appear in the conversation: for example the owner, or a friend of the owner's who talks about VRChat. Agents may repeat it, in any chat the person is in."`
 	ThresholdFactor float64 `json:"threshold_factor,omitempty" minimum:"0.1" maximum:"10" default:"1" doc:"Multiplies the judgment thresholds of their messages: below 1 their messages wake agents more easily, above 1 less. Past 1, judgments are not asked about their messages and never wake agents for them; mentions and replies still do."`
 }
 
@@ -66,8 +66,8 @@ func (c *Config) people() (map[string]person, error) {
 type ProfileConfig struct {
 	Name          string       `json:"name" minLength:"1" doc:"Identifies the agent and names its allowlist. Its threads are stored under it, so it cannot be changed once saved. To replace a profile, add the other in one save and remove it in another."`
 	Label         string       `json:"label,omitempty" doc:"When set, starts each reply in bold."`
-	Keywords      []string     `json:"keywords" minItems:"1" doc:"A message starting with one of them triggers the agent; so does replying to it. In a group, with judge.wake on, they only tell the judgment the agent's names: it decides whether such a message is talking to the agent, and when it fails, the keyword triggers the agent as without it."`
-	Mention       bool         `json:"mention,omitempty" doc:"A message mentioning the bot account triggers the agent too. A reply to a message the account sent for another module, such as a card or a reminder, does not, though Telegram and QQ count it as a mention. When several agents in a chat set it, the first answers."`
+	Keywords      []string     `json:"keywords" minItems:"1" doc:"A message starting with one, or a reply to the agent, triggers it. In a group with judge.wake on, they name the agent for the judgment, which decides whether the message talks to it; when the judgment fails, the keyword triggers it."`
+	Mention       bool         `json:"mention,omitempty" doc:"A message mentioning the bot account triggers the agent too; a reply to a card or reminder the account sent for another module does not, though Telegram and QQ count it as one. Of several agents in a chat that set it, the first answers."`
 	Provider      string       `json:"provider" minLength:"1" format:"llm-provider" doc:"A language model provider set in the panel under Language models: gemini, or the name of an OpenAI-compatible service such as deepseek."`
 	Model         string       `json:"model" minLength:"1" format:"llm-model" doc:"The provider's model ID."`
 	Thinking      string       `json:"thinking,omitempty" enum:"minimal,low,medium,high" format:"llm-thinking" doc:"How much the model thinks before answering; unset is the model's default."`
@@ -76,7 +76,7 @@ type ProfileConfig struct {
 	System        string       `json:"system,omitempty" format:"markdown" doc:"The system prompt: who the agent is and how it talks, in Markdown."`
 	Context       *int         `json:"context,omitempty" minimum:"0" default:"30" doc:"How many recent chat messages the agent sees; 0 for none."`
 	MaxTurns      int          `json:"max_turns,omitempty" minimum:"1" default:"40" doc:"How many turns of a thread are sent, newest kept."`
-	Tools         []string     `json:"tools,omitempty" enum:"web_search,url_context,code_execution" doc:"The model's built-in tools the agent uses everywhere it answers. web_search is the provider's own search: Google Search on Gemini, cited; on DeepSeek, searching and opening pages over several steps. url_context reads the pages the conversation links (Gemini, DeepSeek). code_execution runs code the model writes (Gemini). Modules' tools are offered per chat: see Tools, after the profiles."`
+	Tools         []string     `json:"tools,omitempty" enum:"web_search,url_context,code_execution" doc:"Built-in tools the agent uses everywhere: web_search, the provider's search (cited Google Search on Gemini, multi-step on DeepSeek); url_context reads linked pages (Gemini, DeepSeek); code_execution runs code (Gemini). Module tools: Tools, below."`
 	MaxToolRounds int          `json:"max_tool_rounds,omitempty" minimum:"1" default:"8" doc:"The most rounds of tool calls in one reply."`
 	Judge         *JudgeConfig `json:"judge,omitempty" doc:"Has the decision service judge, in groups, the messages no keyword, reply, or mention triggers. Needs the decision module."`
 	Media         *MediaConfig `json:"media,omitempty" doc:"Use the media module's descriptions: in the recent messages, the quoted message, and the wake judgment, and, with as_text, in place of the current message's media. Needs the media module, with the agent's chats on its describe list."`
@@ -85,13 +85,13 @@ type ProfileConfig struct {
 // MediaConfig has an agent read the media module's descriptions.
 type MediaConfig struct {
 	AsText   bool  `json:"as_text,omitempty" doc:"Give the model descriptions instead of the current and the quoted message's media, for a model that sees images poorly or not at all. Media left undescribed is named by its kind, not shown."`
-	Stickers []int `json:"stickers,omitempty" doc:"The numbers of the stickers, as /sticker list shows them, this agent is shown when it may send one. Empty gives it no stickers and no send_sticker. The list goes before each turn, at full price on every reply since it comes after the cached part of the request; the agent picks one with send_sticker and it is sent after its reply, at most one per reply. It may also send a kept sticker not listed here when someone names its number. Verified on QQ only so far."`
+	Stickers []int `json:"stickers,omitempty" doc:"Stickers, by /sticker list number, it may send with send_sticker after its reply, one at most; empty gives none. The list goes past the cached part, at full price each reply. A kept sticker named by number can be sent too. Verified on QQ only."`
 }
 
 // JudgeConfig has the decision service judge group messages for an agent.
 // Each block turns one judgment on.
 type JudgeConfig struct {
-	Rules string      `json:"rules,omitempty" doc:"What else counts, or does not, as talking to the agent: for example that its name is also a product people discuss."`
+	Rules string      `json:"rules,omitempty" format:"text" doc:"What else counts, or does not, as talking to the agent: for example that its name is also a product people discuss."`
 	Wake  *WakeConfig `json:"wake,omitempty" doc:"Answer group messages addressed to the agent that no trigger caught, such as its name in the middle of a sentence."`
 }
 

@@ -37,7 +37,17 @@ import {
   settingsQuery,
   subjectKey,
 } from "@/queries/modules";
-import { type Change, changes, clean, type JSONSchema, type Problem, pathLabel, properties, validate } from "./schema";
+import {
+  type Change,
+  changes,
+  clean,
+  itemTitle,
+  type JSONSchema,
+  type Problem,
+  pathLabel,
+  properties,
+  validate,
+} from "./schema";
 import { controlId, SchemaFields, SettingsContext, type SettingsForm, useReveal } from "./schema-form";
 
 type Current = Schemas["SettingsOutputBody"];
@@ -90,7 +100,7 @@ export function SettingsCard({
   }
   return (
     <Card>
-      <SettingsHeader current={current}>
+      <SettingsHeader of={of} current={current}>
         <HistorySheet of={of} effect={effect} {...how} current={current} unsaved={0} onRestored={keep} />
       </SettingsHeader>
       <p className="px-4 pb-4 text-muted-foreground text-sm">This module has no settings.</p>
@@ -98,10 +108,12 @@ export function SettingsCard({
   );
 }
 
-function SettingsHeader({ current, children }: { current: Current; children: ReactNode }) {
+/** SettingsHeader is a settings card's: on a module's page titled Settings,
+ * on a page under Settings, which the page's heading names, only the revision. */
+function SettingsHeader({ of, current, children }: { of: Subject; current: Current; children: ReactNode }) {
   return (
     <CardHeader
-      title="Settings"
+      title={"module" in of ? "Settings" : undefined}
       note={`${current.revision ? `Revision ${current.revision}` : "Never saved"}${current.by ? `, by ${current.by}` : ""}`}
     >
       {children}
@@ -242,7 +254,7 @@ function SettingsEditor({
 
   return (
     <Card>
-      <SettingsHeader current={current}>
+      <SettingsHeader of={of} current={current}>
         <HistorySheet
           of={of}
           effect={effect}
@@ -364,7 +376,8 @@ function SettingsEditor({
                 </p>
               </Notice>
             )}
-            {reviewed?.(settingsOf(was), settingsOf(cleaned), root)}
+            {/* Once refused, the refusal is what to read: what else a save says waits for one that can succeed. */}
+            {!failure && reviewed?.(settingsOf(was), settingsOf(cleaned), root)}
             <ChangeList changes={diff} />
           </DialogPanel>
           <DialogFooter>
@@ -405,6 +418,21 @@ function ChangeList({ changes: list }: { changes: Change[] }) {
         // A list item or a group of fields that is not there was added or removed; a field that is not set has its default.
         const group = [c.from, c.to].some((v) => v !== null && typeof v === "object" && !Array.isArray(v));
         const unset = c.path.endsWith("]") || group ? "none" : "default";
+        if (c.moved) {
+          return (
+            <li key={c.path} className="surface-inset rounded-lg px-3 py-2 text-sm">
+              <div className="font-medium font-mono text-xs">
+                {c.path} <span className="font-normal font-sans text-muted-foreground">new order</span>
+              </div>
+              <div className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 text-xs">
+                <span className="text-muted-foreground">was</span>
+                <Order items={c.from as unknown[]} />
+                <span className="text-muted-foreground">now</span>
+                <Order items={c.to as unknown[]} />
+              </div>
+            </li>
+          );
+        }
         return (
           <li key={c.path} className="surface-inset rounded-lg px-3 py-2 text-sm">
             <div className="font-medium font-mono text-xs">{c.path}</div>
@@ -418,6 +446,20 @@ function ChangeList({ changes: list }: { changes: Change[] }) {
         );
       })}
     </ul>
+  );
+}
+
+/** Order names a list's items in their order, each by its name or model. */
+function Order({ items }: { items: unknown[] }) {
+  return (
+    <ol className="flex flex-wrap gap-x-3 font-mono">
+      {items.map((v, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: the place is what is shown
+        <li key={i}>
+          <span className="text-muted-foreground tabular">{i + 1}.</span> {itemTitle({}, v) ?? JSON.stringify(v)}
+        </li>
+      ))}
+    </ol>
   );
 }
 

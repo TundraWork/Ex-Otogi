@@ -184,7 +184,7 @@ func statusError(name string, status int, body []byte) error {
 	if json.Unmarshal(body, &e) == nil && e.Error.Message != "" {
 		message = e.Error.Message
 	}
-	return fmt.Errorf("openai %s: HTTP %d: %s: %w", name, status, message, kind)
+	return &llm.HTTPError{Provider: "openai " + name, Status: status, Message: message, Kind: kind}
 }
 
 // retryAfter is the wait the last attempt's Retry-After asked for, in

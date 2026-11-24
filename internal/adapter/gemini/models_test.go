@@ -104,5 +104,9 @@ func TestListModelsFailsWithTheStatusAndTheProvidersMessage(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), fmt.Sprint("HTTP ", tc.status)) || !strings.Contains(err.Error(), tc.body) {
 			t.Errorf("HTTP %d: error %v, want the status and the body", tc.status, err)
 		}
+		// Operators read the text: it ends with what the service said, not the kind's word.
+		if err != nil && strings.HasSuffix(err.Error(), ": "+tc.kind.Error()) {
+			t.Errorf("HTTP %d: error %q ends with %q", tc.status, err, tc.kind)
+		}
 	}
 }

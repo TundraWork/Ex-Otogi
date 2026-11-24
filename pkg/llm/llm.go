@@ -51,6 +51,26 @@ type ModelLister interface {
 	ListModels(ctx context.Context) ([]Model, error)
 }
 
+// HTTPError is a failing HTTP status a provider's service answered with.
+// Its text is what operators read, in records and in the panel: the status
+// and the service's own message, without Kind's word. errors.Is finds Kind:
+// otogi.ErrUnavailable for a rate limit or an outage, otogi.ErrInvalid for
+// a request the service refused.
+type HTTPError struct {
+	Provider string // how the text starts, such as "gemini" or "openai deepseek"
+	Status   int
+	Message  string // the service's own, in full
+	Kind     error
+}
+
+// Error is "<provider>: HTTP <status>: <message>".
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("%s: HTTP %d: %s", e.Provider, e.Status, e.Message)
+}
+
+// Unwrap returns Kind.
+func (e *HTTPError) Unwrap() error { return e.Kind }
+
 // Model is a model a provider offers, as its list describes it. Only the ID
 // is always known; every other field is empty when the list does not say.
 type Model struct {

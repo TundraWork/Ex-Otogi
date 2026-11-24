@@ -18,6 +18,7 @@
   --border: --alpha(var(--color-black) / 8%);
   --card: var(--color-white);
   --destructive: var(--color-red-500);
+  --destructive-solid: var(--color-red-600);
   --foreground: var(--color-neutral-800);
   --input: --alpha(var(--color-black) / 10%);
   --muted: --alpha(var(--color-black) / 4%);
@@ -54,6 +55,7 @@
   --color-input: var(--input);
   --color-foreground: var(--foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-solid: var(--destructive-solid);
   --color-border: var(--border);
   --color-background: var(--background);
   --color-accent-foreground: var(--accent-foreground);

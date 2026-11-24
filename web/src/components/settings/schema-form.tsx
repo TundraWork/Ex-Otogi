@@ -1,13 +1,17 @@
 import { type AnyFieldApi, getBy, type ReactFormExtendedApi, useStore } from "@tanstack/react-form";
-import { Check, ChevronRight, CircleAlert, Lock, Plus, Trash2, X } from "lucide-react";
-import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { ArrowDown, ArrowUp, Check, ChevronRight, CircleAlert, Lock, Plus, Trash2, X } from "lucide-react";
+import { createContext, Fragment, type ReactNode, useContext, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { sibling } from "@/lib/llm";
-import { cn } from "@/lib/utils";
+import { reading } from "@/lib/duration";
+import { sibling, toolModules } from "@/lib/llm";
+import { cn, textLink } from "@/lib/utils";
+import { modulesQuery } from "@/queries/modules";
 import { usePeopleNames } from "@/queries/people";
 import { ActorNote, ActorPicker, ActorTags } from "./actor-picker";
 import { EnumSelect } from "./enum-select";
@@ -21,9 +25,11 @@ import {
   label,
   noun,
   type Problem,
+  placeholder,
   properties,
   removedFrom,
   resolve,
+  swapped,
 } from "./schema";
 import { SecretNote, SecretPicker } from "./secret-picker";
 
@@ -93,6 +99,11 @@ export function useReveal(id: string) {
       setOpenPaths((paths) => removedFrom(paths, list, index));
       setAdded((paths) => removedFrom(paths, list, index));
     },
+    /** swap follows two list items trading places. */
+    swap: (list: string, a: number, b: number) => {
+      setOpenPaths((paths) => swapped(paths, list, a, b));
+      setAdded((paths) => swapped(paths, list, a, b));
+    },
     reveal: (path: string) => {
       const around = [...path.matchAll(/\[\d+\]/g)].map((m) => path.slice(0, m.index + m[0].length));
       setOpenPaths((paths) => new Set([...paths, ...around]));
@@ -115,6 +126,10 @@ function labelling(id: string, row: { doc?: string; note?: unknown; error?: stri
 }
 
 export type Labelling = ReturnType<typeof labelling>;
+
+/** describedBy adds what follows a control, by the end of its ID, to what describes it. */
+const describedBy = (a: Labelling, part: string) =>
+  [a["aria-describedby"], `${a.id}-${part}`].filter(Boolean).join(" ");
 
 /** SchemaFields renders an object's fields, in the order of the type;
  * locked names the one shown read-only: the key of a saved list item. */
@@ -154,7 +169,7 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
     )
     .map((p) => p.message)
     .join("; ");
-  const beside = useBeside(form, name, s.format);
+  const beside = useBeside(form, name, s);
   if (kind === "object") {
     return (
       <form.Field name={name}>
@@ -199,7 +214,10 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
   }
   // A switch is always one way or the other: nothing about it is required.
   const row = { doc, error, required: required && kind !== "boolean" };
-  const noted = locked || ["secret", "llm-provider", "llm-model", "llm-thinking", "actor"].includes(s.format ?? "");
+  const noted =
+    locked ||
+    s.items?.format === "tool-module" ||
+    ["secret", "llm-provider", "llm-model", "llm-thinking", "actor"].includes(s.format ?? "");
   return (
     <form.Field name={name}>
       {(field: AnyFieldApi) => (
@@ -221,6 +239,8 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
               <ProviderNote value={field.state.value} />
             ) : s.format === "actor" ? (
               <ActorNote value={field.state.value} />
+            ) : s.items?.format === "tool-module" ? (
+              <ToolModulesNote value={field.state.value} />
             ) : s.format === "llm-model" ? (
               <ModelNote value={field.state.value} provider={beside.provider} />
             ) : (
@@ -229,8 +249,9 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
               )
             )
           }
-          labels={!s.items?.enum}
-          block={kind === "array" || s.format === "markdown"}
+          // A group of chips has no one control the title could label.
+          labels={!s.items?.enum && s.items?.format !== "tool-module"}
+          block={kind === "array" || s.format === "markdown" || s.format === "text"}
           inline={kind === "boolean"}
         >
           <Control
@@ -248,18 +269,23 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
   );
 }
 
-/** Beside is what a field of a language model format reads from the fields
- * beside it: an llm-model field the provider, an llm-thinking field the
- * provider and the model (see lib/llm). */
-type Beside = { provider?: unknown; model?: unknown };
+/** Beside is what a field reads from the fields beside it: an llm-model
+ * field the provider, an llm-thinking field the provider and the model (see
+ * lib/llm), and one with an x-placeholder all of them, its siblings. */
+type Beside = { provider?: unknown; model?: unknown; siblings?: unknown };
 
-function useBeside(form: SettingsForm, name: string, format?: string): Beside {
+function useBeside(form: SettingsForm, name: string, schema: JSONSchema): Beside {
+  const format = schema.format;
   const llm = format?.startsWith("llm-") && format !== "llm-provider";
   const provider = useStore(form.store, (s) => (llm ? getBy(s.values, sibling(name, "provider")) : undefined));
   const model = useStore(form.store, (s) =>
     format === "llm-thinking" ? getBy(s.values, sibling(name, "model")) : undefined,
   );
-  return { provider, model };
+  const parent = name.replace(/\.?[^.[\]]+$/, "");
+  const siblings = useStore(form.store, (s) =>
+    schema["x-placeholder"] ? (parent ? getBy(s.values, parent) : s.values) : undefined,
+  );
+  return { provider, model, siblings };
 }
 
 function Row({
@@ -300,37 +326,45 @@ function Row({
     </>
   );
   return (
+    // The description runs under the title, across the row; the control sits
+    // beside the title where the row is wide enough, and under the
+    // description where it is not.
     <div
       className={cn(
-        "grid grid-cols-1 gap-x-8 gap-y-2 py-3.5",
-        block ? "grid-cols-1" : "sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]",
-        inline && "grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_auto]",
+        "grid grid-cols-1 gap-x-8 gap-y-1.5 py-3.5",
+        !block && !inline && "sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]",
+        inline && "grid-cols-[minmax(0,1fr)_auto]",
       )}
     >
-      <div className="min-w-0">
-        <div className="flex items-center justify-between gap-3 font-medium text-sm">
-          {labels ? (
-            <label id={`${id}-label`} htmlFor={id}>
-              {text}
-            </label>
-          ) : (
-            <div id={`${id}-label`}>{text}</div>
-          )}
-          {action}
-        </div>
-        {doc && (
-          <p id={`${id}-doc`} className="mt-0.5 break-words text-muted-foreground text-xs leading-relaxed">
-            {doc}
-          </p>
+      <div
+        className={cn(
+          "flex min-w-0 items-center justify-between gap-3 self-start font-medium text-sm",
+          inline ? "min-h-8" : !block && "sm:min-h-8",
         )}
+      >
+        {labels ? (
+          <label id={`${id}-label`} htmlFor={id}>
+            {text}
+          </label>
+        ) : (
+          <div id={`${id}-label`}>{text}</div>
+        )}
+        {action}
+      </div>
+      {doc && (
+        <p id={`${id}-doc`} className="col-span-full break-words text-muted-foreground text-xs leading-relaxed">
+          {doc}
+        </p>
+      )}
+      <div
+        className={cn("min-w-0", !block && "sm:col-start-2 sm:row-start-1", inline && "col-start-2 row-start-1 pt-1.5")}
+      >
+        {children}
         {note && (
-          <p id={`${id}-note`} className="mt-0.5 text-muted-foreground text-xs leading-relaxed empty:hidden">
+          <p id={`${id}-note`} className="mt-1.5 text-muted-foreground text-xs leading-relaxed empty:hidden">
             {note}
           </p>
         )}
-      </div>
-      <div className={cn("min-w-0", inline && "pt-0.5")}>
-        {children}
         {error && (
           <p id={`${id}-error`} className="mt-1.5 wrap-anywhere text-destructive-foreground text-xs">
             {error}
@@ -369,7 +403,18 @@ function Control({
     if (item.enum) {
       // An unset list shows the choices the module makes for it.
       const chosen = (value ?? schema.default ?? []) as unknown[];
-      return <Choices labelling={a} options={item.enum} value={chosen} onChange={onChange} />;
+      return (
+        <Choices
+          labelling={a}
+          options={item.enum}
+          value={chosen}
+          onChange={onChange}
+          unknown="not one of the choices"
+        />
+      );
+    }
+    if (item.format === "tool-module") {
+      return <ToolModuleChoices labelling={a} value={(value as string[] | undefined) ?? []} onChange={onChange} />;
     }
     // An unset list shows what it is by default. When that is something, a
     // list emptied is a list of nothing; otherwise an optional one is unset.
@@ -408,21 +453,38 @@ function Control({
     }
     return <EnumSelect {...props} />;
   }
+  const shown = placeholder(schema, beside?.siblings, Boolean(a["aria-required"]));
   if (kind === "integer" || kind === "number") {
-    return (
+    const unit = schema["x-unit"];
+    const input = (
       <Input
         {...a}
+        aria-describedby={unit ? describedBy(a, "unit") : a["aria-describedby"]}
         type="number"
         inputMode={kind === "integer" ? "numeric" : "decimal"}
-        className="tabular"
+        // An ID is not a quantity: nothing to step through.
+        className={cn(
+          "tabular",
+          schema.format === "id" &&
+            "[&_input]:[appearance:textfield] [&_input::-webkit-inner-spin-button]:appearance-none [&_input::-webkit-outer-spin-button]:appearance-none",
+        )}
         value={(value as number | undefined) ?? ""}
         min={schema.minimum}
         max={schema.maximum}
         step={kind === "integer" ? 1 : "any"}
-        placeholder={schema.default !== undefined ? `Default ${schema.default}` : a["aria-required"] ? "" : "Default"}
+        placeholder={shown}
         onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
         onBlur={onBlur}
       />
+    );
+    if (!unit) return input;
+    return (
+      <div className="flex items-center gap-2">
+        {input}
+        <span id={`${a.id}-unit`} className="flex-none text-muted-foreground text-sm">
+          {unit}
+        </span>
+      </div>
     );
   }
   const text = (value as string | undefined) ?? "";
@@ -441,6 +503,12 @@ function Control({
       </div>
     );
   }
+  if (schema.format === "text") {
+    // Grows with what it holds.
+    return (
+      <Textarea {...a} className="min-h-0" value={text} onChange={(e) => onChange(e.target.value)} onBlur={onBlur} />
+    );
+  }
   if (schema.format === "secret") {
     return <SecretPicker value={text} onChange={onChange} onBlur={onBlur} labelling={a} />;
   }
@@ -454,35 +522,55 @@ function Control({
     return <ActorPicker value={text} onChange={onChange} onBlur={onBlur} labelling={a} />;
   }
   const mono = schema.format === "duration";
-  return (
+  // A duration says how long it is, the default's when it is unset.
+  const long = mono ? reading(text || schema.default) : undefined;
+  const input = (
     <Input
       {...a}
+      aria-describedby={long ? describedBy(a, "reading") : a["aria-describedby"]}
       readOnly={locked}
       title={locked ? "Saved names cannot be changed" : undefined}
       className={cn(mono && "font-mono text-[13px]", locked && "bg-muted shadow-none")}
       value={text}
-      placeholder={
-        schema.default !== undefined ? `Default ${schema.default}` : schema.format === "duration" ? "Like 5m" : ""
-      }
+      placeholder={shown}
       spellCheck={!mono}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
     />
   );
+  if (!long) return input;
+  return (
+    <div>
+      {input}
+      <p id={`${a.id}-reading`} className="mt-1 text-muted-foreground text-xs">
+        {long}
+      </p>
+    </div>
+  );
 }
 
-/** Choices picks any of a few fixed values, each a chip that toggles. */
+/** Choices picks any of a few values, each a chip that toggles; marks says
+ * more of some, such as that a module is off. A value chosen that is not
+ * one of them, such as one saved before it was renamed, stays as a chip
+ * that removes it, flagged with why: unknown. */
 function Choices({
   labelling: a,
   options,
   value,
   onChange,
+  unknown,
+  marks = {},
 }: {
   labelling: Labelling;
   options: unknown[];
   value: unknown[];
   onChange: (v: unknown[]) => void;
+  unknown: string;
+  marks?: Record<string, string>;
 }) {
+  const extras = value.filter((v) => !options.includes(v));
+  const chip =
+    "hit-target relative inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 font-mono text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:h-9";
   return (
     // biome-ignore lint/a11y/useSemanticElements: a fieldset would need the row's title inside it as its legend
     <div
@@ -495,16 +583,19 @@ function Choices({
     >
       {options.map((o) => {
         const on = value.includes(o);
+        const mark = marks[String(o)];
         return (
           <button
             key={String(o)}
             type="button"
             aria-pressed={on}
             onClick={() =>
-              onChange(on ? value.filter((w) => w !== o) : options.filter((x) => x === o || value.includes(x)))
+              onChange(
+                on ? value.filter((w) => w !== o) : [...options.filter((x) => x === o || value.includes(x)), ...extras],
+              )
             }
             className={cn(
-              "hit-target relative inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 font-mono text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:h-9",
+              chip,
               on
                 ? "border-foreground/80 bg-foreground text-background"
                 : "bg-background text-muted-foreground shadow-xs/5 hover:text-foreground",
@@ -512,10 +603,81 @@ function Choices({
           >
             {on && <Check className="size-3" />}
             {String(o)}
+            {mark && (
+              <span className={cn("font-sans", on ? "text-background/72" : "text-muted-foreground")}>{mark}</span>
+            )}
           </button>
         );
       })}
+      {extras.map((o) => (
+        <button
+          key={String(o)}
+          type="button"
+          aria-label={`Remove ${o}: ${unknown}`}
+          onClick={() => onChange(value.filter((w) => w !== o))}
+          // The reason may wrap in a narrow row.
+          className={cn(
+            chip,
+            "h-auto min-h-7 py-1 text-left pointer-coarse:h-auto pointer-coarse:min-h-9 border-destructive/36 bg-destructive/4 text-destructive-foreground hover:bg-destructive/8",
+          )}
+        >
+          <CircleAlert className="size-3" />
+          {String(o)}
+          <span className="font-sans">{unknown}</span>
+          <X className="size-3" />
+        </button>
+      ))}
     </div>
+  );
+}
+
+/** ToolModuleChoices picks the modules whose tools agents may use, of those
+ * that offer tools, marking the ones that are off. */
+function ToolModuleChoices({
+  labelling: a,
+  value,
+  onChange,
+}: {
+  labelling: Labelling;
+  value: string[];
+  onChange: (v: unknown) => void;
+}) {
+  const { data: modules } = useQuery(modulesQuery);
+  // Until the modules are known, every chosen one would look unknown.
+  if (!modules) return null;
+  const tools = toolModules(modules);
+  return (
+    <Choices
+      labelling={a}
+      options={tools.map((t) => t.id)}
+      value={value}
+      onChange={(v) => onChange(v.length ? v : undefined)}
+      unknown="no module offers tools by this name"
+      marks={Object.fromEntries(tools.filter((t) => !t.running).map((t) => [t.id, "off"]))}
+    />
+  );
+}
+
+/** ToolModulesNote says which modules chosen are off: the bot refuses the
+ * settings until they run, since agents can use only a running module's tools. */
+function ToolModulesNote({ value }: { value: unknown }) {
+  const { data: modules } = useQuery(modulesQuery);
+  const chosen = (value as string[] | undefined) ?? [];
+  const off = toolModules(modules ?? []).filter((t) => !t.running && chosen.includes(t.id));
+  if (off.length === 0) return null;
+  return (
+    <span className="text-warning-foreground">
+      {off.map((t, i) => (
+        <Fragment key={t.id}>
+          {i > 0 && (i === off.length - 1 ? " and " : ", ")}
+          <Link to="/modules/$module" params={{ module: t.id }} className={cn(textLink, "font-medium")}>
+            {t.id}
+          </Link>
+        </Fragment>
+      ))}{" "}
+      {off.length === 1 ? "is" : "are"} off. Turn {off.length === 1 ? "it" : "them"} on first: agents can use only a
+      running module's tools, and until then the bot refuses these settings.
+    </span>
   );
 }
 
@@ -597,7 +759,7 @@ function RowProblems({ count }: { count: number }) {
 
 /** ObjectList edits a list of objects, such as chat agent profiles. */
 function ObjectList({ schema, name, title, doc, required }: FieldProps) {
-  const { form, root, id: prefix, saved, problems, open, setOpen, forget, reveal, added, add } = useSettings();
+  const { form, root, id: prefix, saved, problems, open, setOpen, forget, swap, reveal, added, add } = useSettings();
   const item = resolve(root, schema.items ?? {});
   const id = controlId(prefix, name);
   const one = noun(title);
@@ -626,6 +788,18 @@ function ObjectList({ schema, name, title, doc, required }: FieldProps) {
                 const own = problems.find((p) => p.path === path)?.message;
                 const inside = problems.filter((p) => p.path.startsWith(`${path}.`) || p.path.startsWith(`${path}[`));
                 const isOpen = open.has(path);
+                /** move trades places with the item at to, keeping the focus on the
+                 * button pressed, or on the other one where the item cannot go further. */
+                const move = (to: number) => {
+                  field.swapValues(i, to);
+                  swap(name, i, to);
+                  const [dir, other] = to < i ? ["up", "down"] : ["down", "up"];
+                  requestAnimationFrame(() => {
+                    const at = controlId(prefix, `${name}[${to}]`);
+                    const button = document.getElementById(`${at}-${dir}`) as HTMLButtonElement | null;
+                    (button?.disabled ? document.getElementById(`${at}-${other}`) : button)?.focus();
+                  });
+                };
                 return (
                   <Collapsible
                     // biome-ignore lint/suspicious/noArrayIndexKey: items have no identity until named
@@ -644,6 +818,31 @@ function ObjectList({ schema, name, title, doc, required }: FieldProps) {
                         <span className="min-w-0 flex-1 truncate">{heading}</span>
                         {!isOpen && inside.length > 0 && <RowProblems count={inside.length} />}
                       </CollapsibleTrigger>
+                      {/* Where the order is what the module does, such as which model is tried first. */}
+                      {schema["x-ordered"] && (
+                        <>
+                          <Button
+                            id={`${itemId}-up`}
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Move ${heading} up`}
+                            disabled={i === 0}
+                            onClick={() => move(i - 1)}
+                          >
+                            <ArrowUp />
+                          </Button>
+                          <Button
+                            id={`${itemId}-down`}
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Move ${heading} down`}
+                            disabled={i === items.length - 1}
+                            onClick={() => move(i + 1)}
+                          >
+                            <ArrowDown />
+                          </Button>
+                        </>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon-sm"

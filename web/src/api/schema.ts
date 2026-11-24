@@ -950,6 +950,8 @@ export interface components {
             ignore_bots: boolean;
             /** @description Why its current settings do not build, when they do not; its allowlists are then unknown. */
             problem?: string;
+            /** @description The services it offers other modules, running or not, such as llm.tools/notes, the tools agents may use; empty when its settings do not build. */
+            provides: string[];
             /**
              * Format: int64
              * @description Its current settings revision; 0 when never saved.

@@ -29,7 +29,7 @@ type Config struct {
 	MaxText      int        `json:"max_text,omitempty" minimum:"50" default:"560" doc:"How much of a post's text a card shows, in characters; a longer one is cut where X would offer Show more."`
 	MaxQuoteText int        `json:"max_quote_text,omitempty" minimum:"50" default:"280" doc:"How much of a quoted post's text a card shows, in characters."`
 	Videos       *bool      `json:"videos,omitempty" default:"true" doc:"Send a post's videos and GIFs after its card, as videos. Whether a post whose pictures the card censors sends them is Content safety's."`
-	MaxVideoMB   int        `json:"max_video_mb,omitempty" minimum:"1" default:"50" doc:"The largest video sent, in megabytes; a larger one is skipped. A video is held in memory while it is sent. From the embed endpoint, the encoding of highest bitrate that fits is sent."`
+	MaxVideoMB   int        `json:"max_video_mb,omitempty" minimum:"1" default:"50" unit:"MB" doc:"The largest video sent, in megabytes; a larger one is skipped. A video is held in memory while it is sent. From the embed endpoint, the encoding of highest bitrate that fits is sent."`
 }
 
 // Module is the twitter module.

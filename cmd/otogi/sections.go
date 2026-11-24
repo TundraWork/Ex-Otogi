@@ -118,7 +118,7 @@ func (y *system) retention() time.Duration { return time.Duration(y.keep.Load())
 type generalSettings struct {
 	Operators         []string       `json:"operators,omitempty" format:"actor" doc:"Who may use operator commands such as /status and /todou link: platform-qualified actor IDs as /whoami prints them, for example telegram:user:123456789."`
 	CommandPrefixes   []string       `json:"command_prefixes" required:"false" default:"[\"/\"]" doc:"What starts a command: with /, the message \"/name args\" invokes a module's command. An empty list turns commands off."`
-	EventlogRetention otogi.Duration `json:"eventlog_retention,omitempty" default:"720h" doc:"How long event log records are kept, and chat history with them; 720h is 30 days."`
+	EventlogRetention otogi.Duration `json:"eventlog_retention,omitempty" default:"720h" doc:"How long event log records are kept, and chat history with them."`
 	LogLevel          string         `json:"log_level,omitempty" enum:"debug,info,warn,error" default:"info" doc:"The least severe lines the process log has."`
 }
 

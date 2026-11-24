@@ -27,10 +27,10 @@ type accountsSettings struct {
 
 type telegramSettings struct {
 	Account       string       `json:"account" minLength:"1" doc:"The name the bot knows the account by: its login, its events and chats, and what modules keep for it are all under this name, so it cannot be changed once saved. To replace an account, remove it in one save and add the other in the next."`
-	AppID         int          `json:"app_id" minimum:"1" doc:"The application's api_id, from my.telegram.org."`
+	AppID         int          `json:"app_id" minimum:"1" format:"id" doc:"The application's api_id, from my.telegram.org."`
 	AppHash       otogi.Secret `json:"app_hash" doc:"The application's api_hash."`
-	Session       string       `json:"session,omitempty" doc:"The session file; unset is telegram/<account>/session.json in the data directory."`
-	Database      string       `json:"database,omitempty" doc:"The driver's database; unset is telegram/<account>/state.sqlite in the data directory."`
+	Session       string       `json:"session,omitempty" placeholder:"telegram/{account}/session.json in the data directory" doc:"The session file; unset is telegram/<account>/session.json in the data directory."`
+	Database      string       `json:"database,omitempty" placeholder:"telegram/{account}/state.sqlite in the data directory" doc:"The driver's database; unset is telegram/<account>/state.sqlite in the data directory."`
 	UploadThreads int          `json:"upload_threads,omitempty" minimum:"0" default:"8" doc:"How many parts of a file upload at once."`
 }
 
@@ -38,7 +38,7 @@ type qqSettings struct {
 	Account   string       `json:"account" minLength:"1" doc:"The name the bot knows the account by: its login, its events and chats, and what modules keep for it are all under this name, so it cannot be changed once saved. To replace an account, remove it in one save and add the other in the next."`
 	AppID     string       `json:"app_id" minLength:"1" doc:"The bot's AppID."`
 	AppSecret otogi.Secret `json:"app_secret" doc:"The bot's AppSecret."`
-	Database  string       `json:"database,omitempty" doc:"The driver's database; unset is qq/<account>/state.sqlite in the data directory."`
+	Database  string       `json:"database,omitempty" placeholder:"qq/{account}/state.sqlite in the data directory" doc:"The driver's database; unset is qq/<account>/state.sqlite in the data directory."`
 }
 
 // validate checks what the schema cannot say, and for the file's accounts

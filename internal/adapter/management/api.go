@@ -72,6 +72,7 @@ type Module struct {
 	Counts     ModuleCounts `json:"counts" doc:"Its deliveries since the process started."`
 	IgnoreBots bool         `json:"ignore_bots" doc:"Whether it ignores messages from bot accounts; on unless turned off."`
 	Handles    bool         `json:"handles" doc:"Whether it handles messages or commands at all; ignore_bots means something only then."`
+	Provides   []string     `json:"provides" nullable:"false" doc:"The services it offers other modules, running or not, such as llm.tools/notes, the tools agents may use; empty when its settings do not build."`
 }
 
 // Allowlist is a module's list of the chats it answers in.

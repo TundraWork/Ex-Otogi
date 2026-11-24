@@ -268,7 +268,7 @@ func (e *exchanges) failure(ctx context.Context, err error) error {
 	if x.Status == http.StatusRequestTimeout || x.Status == http.StatusTooManyRequests || x.Status >= 500 {
 		kind = otogi.ErrUnavailable
 	}
-	return fmt.Errorf("gemini: HTTP %d: %s: %w", x.Status, x.Body, kind)
+	return &llm.HTTPError{Provider: "gemini", Status: x.Status, Message: x.Body, Kind: kind}
 }
 
 // blockedError is a prompt or reply the API refused to serve, such as

@@ -24,7 +24,7 @@ type Config struct {
 // JevConfig configures TypeSafe Jev.
 type JevConfig struct {
 	APIKey  otogi.Secret   `json:"api_key" doc:"The TypeSafe API key."`
-	BaseURL string         `json:"base_url,omitempty" pattern:"^https?://" default:"https://api.typesafe.ai/v1/systemone" doc:"The Jev endpoint."`
+	BaseURL string         `json:"base_url,omitempty" pattern:"^https?://" patternDescription:"an http:// or https:// URL" default:"https://api.typesafe.ai/v1/systemone" doc:"The Jev endpoint."`
 	Model   string         `json:"model,omitempty" default:"jev-latest" doc:"The Jev model. jev-latest follows TypeSafe's upgrades, so judgments can change with no change here. Thresholds are tuned against one version: to keep judgments stable, name it, such as jev-1.14.0."`
 	Timeout otogi.Duration `json:"timeout,omitempty" default:"5s" doc:"The longest one request may take. A request is not retried: a timeout is no decision."`
 }

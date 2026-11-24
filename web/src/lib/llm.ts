@@ -93,3 +93,9 @@ export function thinkingNote(level: string, m: Model | undefined): string | unde
   if (!m?.thinking_levels?.length || m.thinking_levels.includes(level)) return undefined;
   return `${m.id} does not list it`;
 }
+
+/** toolModules are the modules that offer agents tools, the service
+ * llm.tools/<id>, with whether each runs: chat can use only a running one's. */
+export function toolModules(modules: { id: string; running: boolean; provides: string[] }[]) {
+  return modules.filter((m) => m.provides.includes(`llm.tools/${m.id}`)).map(({ id, running }) => ({ id, running }));
+}

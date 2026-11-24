@@ -25,7 +25,7 @@ type llmSettings struct {
 
 type geminiSettings struct {
 	APIKey  otogi.Secret `json:"api_key" doc:"The Gemini API key."`
-	BaseURL string       `json:"base_url,omitempty" doc:"The API endpoint, with or without its version; unset is https://generativelanguage.googleapis.com/v1beta. A proxy or gateway that speaks the Gemini Interactions API works too."`
+	BaseURL string       `json:"base_url,omitempty" default:"https://generativelanguage.googleapis.com/v1beta" doc:"The API endpoint, with or without its version. A proxy or gateway that speaks the Gemini Interactions API works too."`
 }
 
 type openAISettings struct {

@@ -1020,6 +1020,13 @@
             "description": "Why its current settings do not build, when they do not; its allowlists are then unknown.",
             "type": "string"
           },
+          "provides": {
+            "description": "The services it offers other modules, running or not, such as llm.tools/notes, the tools agents may use; empty when its settings do not build.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "revision": {
             "description": "Its current settings revision; 0 when never saved.",
             "format": "int64",
@@ -1038,7 +1045,8 @@
           "commands",
           "counts",
           "ignore_bots",
-          "handles"
+          "handles",
+          "provides"
         ],
         "type": "object"
       },
