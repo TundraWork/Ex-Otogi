@@ -847,7 +847,7 @@ func TestPrune(t *testing.T) {
 	if err := h.m.store.putRecent(ctx, from, "new-message", pic, later.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.m.store.addSticker(ctx, sticker{SHA256: []byte{9}, MediaType: "image/png", Bytes: []byte("png")}, "qq:"+operator, day, h.m.limits); err != nil {
+	if _, _, err := h.m.store.addSticker(ctx, sticker{SHA256: []byte{9}, MediaType: "image/png", Bytes: []byte("png")}, "qq:"+operator, day); err != nil {
 		t.Fatal(err)
 	}
 	n, err := h.m.store.prune(ctx, later, later.Add(-recentMedia))

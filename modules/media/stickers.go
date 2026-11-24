@@ -179,34 +179,23 @@ func (m *Module) addSticker(ctx context.Context, e otogi.Event, inv otogi.Invoca
 		payload["id"] = kept
 		return skip("already kept", fmt.Sprintf("Already kept as sticker %d.", kept))
 	}
-	full := func() (string, error) {
-		return skip("full", fmt.Sprintf("There are %d stickers already; remove one first.", m.limits.count))
-	}
-	tooMuch := func() (string, error) {
-		return skip("too much in all", fmt.Sprintf("The stickers would take more than %d MiB; remove some first.", m.limits.total>>20))
-	}
-	// Checked before describing, so a full collection costs no model call;
-	// addSticker checks again as it inserts.
+	// Checked before describing, so a full collection costs no model call.
 	count, total, err := m.store.stickerUsage(ctx)
 	switch {
 	case err != nil:
 		return "", err
 	case count >= m.limits.count:
-		return full()
+		return skip("full", fmt.Sprintf("There are %d stickers already; remove one first.", m.limits.count))
 	case total+int64(len(data)) > m.limits.total:
-		return tooMuch()
+		return skip("too much in all", fmt.Sprintf("The stickers would take more than %d MiB; remove some first.", m.limits.total>>20))
 	}
 	d, err := m.stickerDescription(ctx, e, md, data, sum[:])
 	if err != nil {
 		return "", err
 	}
 	st := sticker{SHA256: sum[:], MediaType: mediaType, Bytes: data, Kind: d.Kind, Summary: d.Summary, Note: note}
-	id, existed, err := m.store.addSticker(ctx, st, e.ActorKey(), m.now(), m.limits)
+	id, existed, err := m.store.addSticker(ctx, st, e.ActorKey(), m.now())
 	switch {
-	case errors.Is(err, errStickersFull):
-		return full()
-	case errors.Is(err, errStickersTooLarge):
-		return tooMuch()
 	case err != nil:
 		return "", err
 	case existed:

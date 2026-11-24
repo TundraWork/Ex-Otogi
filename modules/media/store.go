@@ -184,26 +184,14 @@ func (st sticker) text() string {
 	return st.Summary
 }
 
-var (
-	// errStickersFull reports that as many stickers as allowed are kept.
-	errStickersFull = errors.New("media: too many stickers")
-	// errStickersTooLarge reports that keeping one more would pass the
-	// limit on their bytes in all.
-	errStickersTooLarge = errors.New("media: stickers too large in all")
-)
-
 // addSticker keeps st, added by by at now, and returns its number. When a
-// sticker with st's digest is kept already, it returns that one's number
-// and existed. It fails with errStickersFull or errStickersTooLarge when
-// keeping st would pass one of lim. One statement checks and inserts, so
-// two operators adding at once cannot pass the limits together.
-func (s *store) addSticker(ctx context.Context, st sticker, by string, now time.Time, lim stickerLimits) (id int, existed bool, err error) {
+// sticker with st's digest is kept already, as when a message is delivered
+// again, it returns that one's number and existed.
+func (s *store) addSticker(ctx context.Context, st sticker, by string, now time.Time) (id int, existed bool, err error) {
 	res, err := s.db.ExecContext(ctx, `INSERT INTO stickers (sha256, media_type, bytes, kind, summary, note, added_by, added_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE (SELECT count(*) FROM stickers) < ? AND (SELECT coalesce(sum(length(bytes)), 0) FROM stickers) + ? <= ?
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (sha256) DO NOTHING`,
-		st.SHA256, st.MediaType, st.Bytes, string(st.Kind), st.Summary, st.Note, by, now.UnixMilli(),
-		lim.count, len(st.Bytes), lim.total)
+		st.SHA256, st.MediaType, st.Bytes, string(st.Kind), st.Summary, st.Note, by, now.UnixMilli())
 	if err != nil {
 		return 0, false, fmt.Errorf("media store: keep sticker: %w", err)
 	}
@@ -214,21 +202,11 @@ func (s *store) addSticker(ctx context.Context, st sticker, by string, now time.
 		}
 		return int(last), false, nil
 	}
-	if id, ok, err := s.stickerByDigest(ctx, st.SHA256); err != nil || ok {
-		return id, ok, err
+	id, ok, err := s.stickerByDigest(ctx, st.SHA256)
+	if err == nil && !ok {
+		err = errors.New("media store: keep sticker: neither inserted nor kept")
 	}
-	count, total, err := s.stickerUsage(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-	if count >= lim.count {
-		return 0, false, errStickersFull
-	}
-	if total+int64(len(st.Bytes)) > lim.total {
-		return 0, false, errStickersTooLarge
-	}
-	// A sticker kept or removed in between; the caller can try again.
-	return 0, false, fmt.Errorf("media store: keep sticker: the stickers changed meanwhile: %w", otogi.ErrUnavailable)
+	return id, true, err
 }
 
 // stickerByDigest returns the number of the sticker with digest sum.
