@@ -1,5 +1,5 @@
 import { type AnyFieldApi, getBy, type ReactFormExtendedApi, useStore } from "@tanstack/react-form";
-import { Check, ChevronRight, CircleAlert, Plus, Trash2, X } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, Lock, Plus, Trash2, X } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -8,6 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { sibling } from "@/lib/llm";
 import { cn } from "@/lib/utils";
+import { usePeopleNames } from "@/queries/people";
+import { ActorNote, ActorPicker, ActorTags } from "./actor-picker";
 import { EnumSelect } from "./enum-select";
 import { ModelNote, ModelPicker, ProviderNote, ProviderPicker, ThinkingNote, ThinkingSelect } from "./llm-pickers";
 import {
@@ -20,6 +22,7 @@ import {
   noun,
   type Problem,
   properties,
+  removedFrom,
   resolve,
 } from "./schema";
 import { SecretNote, SecretPicker } from "./secret-picker";
@@ -52,9 +55,12 @@ export function controlId(id: string, path: string): string {
 }
 
 /** useReveal keeps which list items are open, and opens the ones around a
- * path to move the focus to its control. */
+ * path to move the focus to its control. It also keeps which items were
+ * added since the form last started over from a revision (see settle):
+ * the others are saved, and a saved item's key cannot change. */
 export function useReveal(id: string) {
   const [open, setOpenPaths] = useState<ReadonlySet<string>>(new Set());
+  const [added, setAdded] = useState<ReadonlySet<string>>(new Set());
   const [target, setTarget] = useState<{ path: string } | null>(null);
   useEffect(() => {
     if (!target) return;
@@ -77,17 +83,16 @@ export function useReveal(id: string) {
         else next.delete(path);
         return next;
       }),
+    added,
+    /** add notes a list item as added, not saved. */
+    add: (path: string) => setAdded((paths) => new Set([...paths, path])),
+    /** settle makes every item a saved one, as the form starts over from a revision. */
+    settle: () => setAdded(new Set()),
     /** forget follows a removed list item: the items after it move up one. */
-    forget: (list: string, index: number) =>
-      setOpenPaths((paths) => {
-        const next = new Set<string>();
-        for (const path of paths) {
-          const at = path.startsWith(`${list}[`) ? Number.parseInt(path.slice(list.length + 1), 10) : -1;
-          if (at < index) next.add(path);
-          else if (at > index) next.add(`${list}[${at - 1}${path.slice(path.indexOf("]", list.length))}`);
-        }
-        return next;
-      }),
+    forget: (list: string, index: number) => {
+      setOpenPaths((paths) => removedFrom(paths, list, index));
+      setAdded((paths) => removedFrom(paths, list, index));
+    },
     reveal: (path: string) => {
       const around = [...path.matchAll(/\[\d+\]/g)].map((m) => path.slice(0, m.index + m[0].length));
       setOpenPaths((paths) => new Set([...paths, ...around]));
@@ -111,8 +116,9 @@ function labelling(id: string, row: { doc?: string; note?: unknown; error?: stri
 
 export type Labelling = ReturnType<typeof labelling>;
 
-/** SchemaFields renders an object's fields, in the order of the type. */
-export function SchemaFields({ schema, path }: { schema: JSONSchema; path: string }) {
+/** SchemaFields renders an object's fields, in the order of the type;
+ * locked names the one shown read-only: the key of a saved list item. */
+export function SchemaFields({ schema, path, locked }: { schema: JSONSchema; path: string; locked?: string }) {
   const { root } = useSettings();
   const s = resolve(root, schema);
   const required = new Set(s.required ?? []);
@@ -125,6 +131,7 @@ export function SchemaFields({ schema, path }: { schema: JSONSchema; path: strin
           name={path ? `${path}.${key}` : key}
           title={label(key)}
           required={required.has(key)}
+          locked={key === locked}
         />
       ))}
     </div>
@@ -133,7 +140,7 @@ export function SchemaFields({ schema, path }: { schema: JSONSchema; path: strin
 
 type FieldProps = { schema: JSONSchema; name: string; title: string; doc?: string; required: boolean };
 
-function SchemaField({ schema, name, title, required }: FieldProps) {
+function SchemaField({ schema, name, title, required, locked }: FieldProps & { locked?: boolean }) {
   const { form, root, id: prefix, problems } = useSettings();
   const s = resolve(root, schema);
   const kind = kindOf(s);
@@ -192,7 +199,7 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
   }
   // A switch is always one way or the other: nothing about it is required.
   const row = { doc, error, required: required && kind !== "boolean" };
-  const noted = ["secret", "llm-provider", "llm-model", "llm-thinking"].includes(s.format ?? "");
+  const noted = locked || ["secret", "llm-provider", "llm-model", "llm-thinking", "actor"].includes(s.format ?? "");
   return (
     <form.Field name={name}>
       {(field: AnyFieldApi) => (
@@ -203,10 +210,17 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
           // A secret's row says who set the one chosen, and when; a
           // provider's or a model's, how it stands against what is set.
           note={
-            s.format === "secret" ? (
+            locked ? (
+              <span className="inline-flex items-center gap-1">
+                <Lock className="size-3 flex-none" aria-hidden />
+                Saved names cannot be changed.
+              </span>
+            ) : s.format === "secret" ? (
               <SecretNote value={field.state.value} />
             ) : s.format === "llm-provider" ? (
               <ProviderNote value={field.state.value} />
+            ) : s.format === "actor" ? (
+              <ActorNote value={field.state.value} />
             ) : s.format === "llm-model" ? (
               <ModelNote value={field.state.value} provider={beside.provider} />
             ) : (
@@ -226,6 +240,7 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
             onBlur={field.handleBlur}
             labelling={labelling(id, { ...row, note: noted })}
             beside={beside}
+            locked={locked}
           />
         </Row>
       )}
@@ -333,6 +348,7 @@ function Control({
   onBlur,
   labelling: a,
   beside,
+  locked,
 }: {
   schema: JSONSchema;
   value: unknown;
@@ -340,6 +356,8 @@ function Control({
   onBlur?: () => void;
   labelling: Labelling;
   beside?: Beside;
+  /** locked shows a text read-only: see SchemaFields. */
+  locked?: boolean;
 }) {
   const kind = kindOf(schema);
   if (kind === "boolean") {
@@ -356,6 +374,15 @@ function Control({
     // An unset list shows what it is by default. When that is something, a
     // list emptied is a list of nothing; otherwise an optional one is unset.
     const unset = (schema.default ?? []) as unknown[];
+    if (item.format === "actor") {
+      return (
+        <ActorTags
+          labelling={a}
+          value={((value as string[] | undefined) ?? unset) as string[]}
+          onChange={(v) => onChange(v.length || unset.length || a["aria-required"] ? v : undefined)}
+        />
+      );
+    }
     return (
       <Tags
         labelling={a}
@@ -423,11 +450,16 @@ function Control({
   if (schema.format === "llm-model") {
     return <ModelPicker value={text} provider={beside?.provider} onChange={onChange} onBlur={onBlur} labelling={a} />;
   }
+  if (schema.format === "actor" && !locked) {
+    return <ActorPicker value={text} onChange={onChange} onBlur={onBlur} labelling={a} />;
+  }
   const mono = schema.format === "duration";
   return (
     <Input
       {...a}
-      className={cn(mono && "font-mono text-[13px]")}
+      readOnly={locked}
+      title={locked ? "Saved names cannot be changed" : undefined}
+      className={cn(mono && "font-mono text-[13px]", locked && "bg-muted shadow-none")}
       value={text}
       placeholder={
         schema.default !== undefined ? `Default ${schema.default}` : schema.format === "duration" ? "Like 5m" : ""
@@ -565,12 +597,19 @@ function RowProblems({ count }: { count: number }) {
 
 /** ObjectList edits a list of objects, such as chat agent profiles. */
 function ObjectList({ schema, name, title, doc, required }: FieldProps) {
-  const { form, root, id: prefix, saved, problems, open, setOpen, forget, reveal } = useSettings();
+  const { form, root, id: prefix, saved, problems, open, setOpen, forget, reveal, added, add } = useSettings();
   const item = resolve(root, schema.items ?? {});
   const id = controlId(prefix, name);
   const one = noun(title);
   const error = problems.find((p) => p.path === name)?.message;
   const savedCount = ((getBy(saved, name) as unknown[] | undefined) ?? []).length;
+  // An item of a person, without a name of its own, is called by theirs.
+  const actor = properties(item).find(([, p]) => p.format === "actor")?.[0];
+  const people = usePeopleNames(
+    useStore(form.store, (s) =>
+      actor ? ((getBy(s.values, name) as Record<string, unknown>[] | undefined) ?? []).map((v) => v?.[actor]) : [],
+    ),
+  );
   return (
     <form.Field name={name} mode="array">
       {(field: AnyFieldApi) => {
@@ -582,7 +621,8 @@ function ObjectList({ schema, name, title, doc, required }: FieldProps) {
                 const path = `${name}[${i}]`;
                 const itemId = controlId(prefix, path);
                 // A saved item with nothing to call it by is its place in the list.
-                const heading = itemTitle(item, value) ?? (i < savedCount ? `${label(one)} ${i + 1}` : `New ${one}`);
+                const heading =
+                  itemTitle(item, value, people) ?? (i < savedCount ? `${label(one)} ${i + 1}` : `New ${one}`);
                 const own = problems.find((p) => p.path === path)?.message;
                 const inside = problems.filter((p) => p.path.startsWith(`${path}.`) || p.path.startsWith(`${path}[`));
                 const isOpen = open.has(path);
@@ -623,7 +663,11 @@ function ObjectList({ schema, name, title, doc, required }: FieldProps) {
                     )}
                     <CollapsiblePanel>
                       <div className="border-t px-3.5">
-                        <SchemaFields schema={item} path={path} />
+                        <SchemaFields
+                          schema={item}
+                          path={path}
+                          locked={added.has(path) ? undefined : schema["x-key"]}
+                        />
                       </div>
                     </CollapsiblePanel>
                   </Collapsible>
@@ -637,6 +681,7 @@ function ObjectList({ schema, name, title, doc, required }: FieldProps) {
                 className="self-start"
                 onClick={() => {
                   field.pushValue(blank(root, item));
+                  add(`${name}[${items.length}]`);
                   reveal(`${name}[${items.length}]`);
                 }}
               >

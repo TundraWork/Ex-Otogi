@@ -205,6 +205,15 @@ func TestSettingsSchemas(t *testing.T) {
 	if !strings.Contains(string(data), `"format":"secret"`) || !strings.Contains(string(data), `"format":"duration"`) || !strings.Contains(string(data), `"$defs"`) {
 		t.Fatalf("todou schema %s", data)
 	}
+	// The fields that name people, which the panel looks up among the people seen.
+	doc, _ = sections[generalSection].schemaDocument()
+	if items := doc["properties"].(map[string]any)["operators"].(map[string]any)["items"].(map[string]any); items["format"] != "actor" {
+		t.Errorf("operators' items %v", items)
+	}
+	doc, _ = moduleKinds["chat"].schemaDocument()
+	if user := doc["$defs"].(map[string]any)["PersonConfig"].(map[string]any)["properties"].(map[string]any)["user"].(map[string]any); user["format"] != "actor" {
+		t.Errorf("chat's people's user %v", user)
+	}
 }
 
 // The panel offers a provider's models for a field of format llm-model, and

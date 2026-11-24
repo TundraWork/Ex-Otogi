@@ -169,6 +169,7 @@ function SettingsEditor({
   /** load starts the form over from a revision. */
   const load = (from: Current) => {
     form.reset((from.settings ?? {}) as Record<string, unknown>);
+    view.settle();
     setBase(from);
     setReview(false);
     setAttempted(false);

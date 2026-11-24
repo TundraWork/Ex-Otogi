@@ -1206,6 +1206,29 @@
         ],
         "type": "object"
       },
+      "PersonChat": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The chat as /whoami prints it.",
+            "type": "string"
+          },
+          "last_seen": {
+            "description": "When they were last seen in it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name the operator gave it, else the platform's latest title; absent when it has neither.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "last_seen"
+        ],
+        "type": "object"
+      },
       "Poll": {
         "additionalProperties": false,
         "properties": {
@@ -1535,6 +1558,36 @@
           "people",
           "first_seen",
           "last_seen"
+        ],
+        "type": "object"
+      },
+      "SeenPerson": {
+        "additionalProperties": false,
+        "properties": {
+          "chats": {
+            "description": "The chats they were last seen in, most recent first, up to 3.",
+            "items": {
+              "$ref": "#/components/schemas/PersonChat"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "The platform-qualified actor ID, as operators and the chat module's people name them, such as telegram:user:123.",
+            "type": "string"
+          },
+          "last_seen": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "description": "The latest name they were seen with, in any chat.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "last_seen",
+          "chats"
         ],
         "type": "object"
       },
@@ -3104,6 +3157,69 @@
         "summary": "Restore earlier settings",
         "tags": [
           "Settings"
+        ]
+      }
+    },
+    "/api/people": {
+      "get": {
+        "description": "The people seen sending messages in any chat, each once, found by any name they were seen with or by their ID, ignoring ASCII case: the one whose ID is q first, then the most recently seen. Without q, the most recently seen.",
+        "operationId": "list-people",
+        "parameters": [
+          {
+            "description": "Part of a name, or of a platform-qualified ID such as telegram:user:123.",
+            "explode": false,
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "description": "Part of a name, or of a platform-qualified ID such as telegram:user:123.",
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 20,
+              "format": "int64",
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SeenPerson"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "People the bot has seen, found by name or ID",
+        "tags": [
+          "Chats"
         ]
       }
     },

@@ -27,7 +27,7 @@ type Config struct {
 
 // PersonConfig is what agents know about one person.
 type PersonConfig struct {
-	User            string  `json:"user" minLength:"1" doc:"The person: the platform (qq or telegram), a colon, and their sender ID as a chat's page lists it under People, below their name; for example qq:user:7C2E04D1A9B35F86E0C4D2B17A9F3E58. A person's ID on QQ is the same in every group and private chat. The same person on another platform is another entry."`
+	User            string  `json:"user" minLength:"1" format:"actor" doc:"The person: the platform (qq or telegram), a colon, and their sender ID as a chat's page lists it under People, below their name; for example qq:user:7C2E04D1A9B35F86E0C4D2B17A9F3E58. A person's ID on QQ is the same in every group and private chat. The same person on another platform is another entry."`
 	Name            string  `json:"name,omitempty" doc:"What agents call them, in place of the name the platform gives; that name follows in parentheses where it differs, since people mention them by it."`
 	Note            string  `json:"note,omitempty" doc:"Who they are, told to agents where they appear in the conversation: for example the owner, or a friend of the owner's who talks about VRChat. Agents may repeat it, in any chat the person is in."`
 	ThresholdFactor float64 `json:"threshold_factor,omitempty" minimum:"0.1" maximum:"10" default:"1" doc:"Multiplies the judgment thresholds of their messages: below 1 their messages wake agents more easily, above 1 less. Past 1, judgments are not asked about their messages and never wake agents for them; mentions and replies still do."`
@@ -64,7 +64,7 @@ func (c *Config) people() (map[string]person, error) {
 
 // ProfileConfig configures one agent.
 type ProfileConfig struct {
-	Name          string       `json:"name" minLength:"1" doc:"Identifies the agent and names its allowlist. Its threads are stored under it: keep it stable."`
+	Name          string       `json:"name" minLength:"1" doc:"Identifies the agent and names its allowlist. Its threads are stored under it, so it cannot be changed once saved. To replace a profile, add the other in one save and remove it in another."`
 	Label         string       `json:"label,omitempty" doc:"When set, starts each reply in bold."`
 	Keywords      []string     `json:"keywords" minItems:"1" doc:"A message starting with one of them triggers the agent; so does replying to it. In a group, with judge.wake on, they only tell the judgment the agent's names: it decides whether such a message is talking to the agent, and when it fails, the keyword triggers the agent as without it."`
 	Mention       bool         `json:"mention,omitempty" doc:"A message mentioning the bot account triggers the agent too. A reply to a message the account sent for another module, such as a card or a reminder, does not, though Telegram and QQ count it as a mention. When several agents in a chat set it, the first answers."`

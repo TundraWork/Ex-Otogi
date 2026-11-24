@@ -67,6 +67,10 @@ BOOTH cards and X cards draw with Content safety's settings: turn Content safety
 
 Where a module answers: Add chats on its page, picking from the chats the bot has seen, or the module switches on a chat's page in Chats.
 
+A field that names a person, such as a chat person's User or the operators in General, searches the people the bot has seen in any chat, by name or ID (`GET /api/people?q=`): each is shown with their ID and where they were last seen, and choosing one fills in the ID, with their name beside it. An ID can be typed too, for someone who has not written yet: it saves, marked Not seen in any chat. A chat person without a name of their own is listed by the name the bot last saw them with.
+
+A chat profile's name cannot be changed once saved: it names the profile's allowlist, and its threads are stored under it, so another name would be another profile, with an empty allowlist and no threads. The panel shows a saved profile's name, like a saved account's, read-only; a new one's is typed in. To replace a profile, add the other in one save and remove the old one in the next. Restoring a revision from before such a replacement is refused for the same reason; `otogi settings revert` (below) is not.
+
 ## Settings outside modules
 
 The settings outside modules are in four sections, saved, reviewed, and restored like a module's (Settings in the panel; `/api/system/general`, `/api/system/llm`, `/api/system/accounts`, and `/api/system/process` from the server). Two apply while the bot runs:

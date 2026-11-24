@@ -53,3 +53,21 @@ ORDER BY last_seen DESC LIMIT 1;
 
 -- name: ChatName :one
 SELECT name, title FROM chats WHERE platform = sqlc.arg(platform) AND conversation = sqlc.arg(conversation);
+
+-- name: People :many
+-- Each person seen in any chat whose ID, platform-qualified, or any name
+-- they were seen with has q, ignoring ASCII case: the one of ID q first,
+-- then the most recently seen.
+WITH search AS (SELECT lower(sqlc.arg(q)) AS q)
+SELECT p.platform, p.actor, CAST(MAX(p.last_seen) AS INTEGER) AS last_seen
+FROM chat_people p, search s
+GROUP BY p.platform, p.actor
+HAVING s.q = '' OR instr(lower(p.platform || ':' || p.actor), s.q) > 0 OR MAX(instr(lower(p.name), s.q)) > 0
+ORDER BY lower(p.platform || ':' || p.actor) = s.q DESC, last_seen DESC
+LIMIT sqlc.arg(limit);
+
+-- name: PersonChats :many
+SELECT p.conversation, p.name, p.last_seen, COALESCE(c.name, '') AS chat_name, COALESCE(c.title, '') AS chat_title
+FROM chat_people p LEFT JOIN chats c ON c.platform = p.platform AND c.conversation = p.conversation
+WHERE p.platform = sqlc.arg(platform) AND p.actor = sqlc.arg(actor)
+ORDER BY p.last_seen DESC;

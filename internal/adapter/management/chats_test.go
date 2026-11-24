@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -98,5 +99,88 @@ func TestChatPeopleAndNames(t *testing.T) {
 	}
 	if chat, person, err := l.Names(ctx, "qq", "user:U9", "user:U9"); chat != "" || person != "" || err != nil {
 		t.Fatalf("unknown names %q %q %v", chat, person, err)
+	}
+}
+
+// People are found across chats and platforms by any name they were seen
+// with or by their ID, each once, under the latest name, with the chats
+// they were last seen in; with nothing to find, the most recently seen.
+func TestPeople(t *testing.T) {
+	l := openLog(t)
+	ctx := context.Background()
+	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	send := func(platform, conversation, title, actor, name string) {
+		at = at.Add(time.Minute)
+		e := otogi.Event{ID: otogi.EventID("e" + at.Format("1504")), Platform: otogi.PlatformID(platform), Account: "a", Action: otogi.ActionMessageCreated, Direction: otogi.DirectionIncoming,
+			Conversation: otogi.Conversation{ID: otogi.ConversationID(conversation), Kind: otogi.ConversationGroup, Title: title},
+			Actor:        otogi.Actor{ID: otogi.ActorID(actor), Name: name}, Message: otogi.TextMessage("hi")}
+		l.Record(ctx, otogi.Record{At: at, Kind: "event.received", Component: "kernel", Event: e.ID, Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID, Payload: e})
+	}
+	send("telegram", "chat:1", "Friends", "user:5", "Alice")
+	send("telegram", "chat:2", "Work", "user:5", "Alice W.") // the latest name, in another chat
+	send("telegram", "chat:3", "", "user:6", "Bob")
+	send("qq", "group:G1", "茶话会", "user:A1", "alice")
+	send("telegram", "chat:3", "", "user:56", "Carol")
+	if _, err := l.NameChat(ctx, "telegram", "chat:2", "The office"); err != nil {
+		t.Fatal(err)
+	}
+	found := func(q string, limit int) string {
+		t.Helper()
+		people, err := l.People(ctx, q, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, p := range people {
+			var chats []string
+			for _, c := range p.Chats {
+				chats = append(chats, c.ID+"="+c.Name)
+			}
+			out = append(out, p.ID+" "+p.Name+" "+strings.Join(chats, ","))
+		}
+		return strings.Join(out, "; ")
+	}
+	for _, c := range []struct {
+		q     string
+		limit int
+		want  string
+	}{
+		// By a name, whatever its case, on every platform, by an earlier name too.
+		{"ALICE", 20, "qq:user:A1 alice qq:group:G1=茶话会; telegram:user:5 Alice W. telegram:chat:2=The office,telegram:chat:1=Friends"},
+		{"alice w", 20, "telegram:user:5 Alice W. telegram:chat:2=The office,telegram:chat:1=Friends"},
+		// By ID, the one of exactly that ID first; the chat without a title has no name.
+		{"telegram:user:5", 20, "telegram:user:5 Alice W. telegram:chat:2=The office,telegram:chat:1=Friends; telegram:user:56 Carol telegram:chat:3="},
+		{"user:6", 20, "telegram:user:6 Bob telegram:chat:3="},
+		{"qq:", 20, "qq:user:A1 alice qq:group:G1=茶话会"},
+		{"nobody", 20, ""},
+		// Nothing to find: the most recently seen, as many as asked for.
+		{"", 2, "telegram:user:56 Carol telegram:chat:3=; qq:user:A1 alice qq:group:G1=茶话会"},
+		{"  ", 20, "telegram:user:56 Carol telegram:chat:3=; qq:user:A1 alice qq:group:G1=茶话会; telegram:user:6 Bob telegram:chat:3=; telegram:user:5 Alice W. telegram:chat:2=The office,telegram:chat:1=Friends"},
+	} {
+		if got := found(c.q, c.limit); got != c.want {
+			t.Errorf("People(%q, %d):\n got %s\nwant %s", c.q, c.limit, got, c.want)
+		}
+	}
+	people, _ := l.People(ctx, "bob", 20)
+	if len(people) != 1 || !people[0].LastSeen.Equal(time.Date(2026, 11, 1, 12, 3, 0, 0, time.UTC)) {
+		t.Fatalf("Bob %+v", people)
+	}
+}
+
+// A person seen in many chats lists the few they were last seen in.
+func TestPersonsChatsAreFew(t *testing.T) {
+	l := openLog(t)
+	ctx := context.Background()
+	at := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	for i := range 5 {
+		at = at.Add(time.Minute)
+		e := otogi.Event{ID: otogi.EventID(fmt.Sprintf("e%d", i)), Platform: "qq", Account: "a", Action: otogi.ActionMessageCreated, Direction: otogi.DirectionIncoming,
+			Conversation: otogi.Conversation{ID: otogi.ConversationID(fmt.Sprintf("group:%d", i)), Kind: otogi.ConversationGroup},
+			Actor:        otogi.Actor{ID: "user:A1", Name: "Alice"}, Message: otogi.TextMessage("hi")}
+		l.Record(ctx, otogi.Record{At: at, Kind: "event.received", Component: "kernel", Event: e.ID, Platform: e.Platform, Account: e.Account, Conversation: e.Conversation.ID, Payload: e})
+	}
+	people, err := l.People(ctx, "", 20)
+	if err != nil || len(people) != 1 || len(people[0].Chats) != 3 || people[0].Chats[0].ID != "qq:group:4" || people[0].Chats[2].ID != "qq:group:2" {
+		t.Fatalf("people %+v, %v", people, err)
 	}
 }

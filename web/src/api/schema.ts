@@ -321,6 +321,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/people": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * People the bot has seen, found by name or ID
+         * @description The people seen sending messages in any chat, each once, found by any name they were seen with or by their ID, ignoring ASCII case: the one whose ID is q first, then the most recently seen. Without q, the most recently seen.
+         */
+        get: operations["list-people"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/restart": {
         parameters: {
             query?: never;
@@ -985,6 +1005,17 @@ export interface components {
             /** @description The latest name they were seen with. */
             name?: string;
         };
+        PersonChat: {
+            /** @description The chat as /whoami prints it. */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When they were last seen in it.
+             */
+            last_seen: string;
+            /** @description The name the operator gave it, else the platform's latest title; absent when it has neither. */
+            name?: string;
+        };
         Poll: {
             multiple?: boolean;
             options?: string[] | null;
@@ -1099,6 +1130,16 @@ export interface components {
             people: number;
             platform: string;
             title?: string;
+        };
+        SeenPerson: {
+            /** @description The chats they were last seen in, most recent first, up to 3. */
+            chats: components["schemas"]["PersonChat"][];
+            /** @description The platform-qualified actor ID, as operators and the chat module's people name them, such as telegram:user:123. */
+            id: string;
+            /** Format: date-time */
+            last_seen: string;
+            /** @description The latest name they were seen with, in any chat. */
+            name?: string;
         };
         SessionOutputBody: {
             name?: string;
@@ -1934,6 +1975,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Revision"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-people": {
+        parameters: {
+            query?: {
+                /** @description Part of a name, or of a platform-qualified ID such as telegram:user:123. */
+                q?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeenPerson"][] | null;
                 };
             };
             /** @description Error */

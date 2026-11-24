@@ -124,6 +124,51 @@ func (l *EventLog) ChatPeople(ctx context.Context, platform, conversation string
 	return out, nil
 }
 
+// SeenPerson is someone the bot has seen sending messages, in any chat.
+type SeenPerson struct {
+	ID       string       `json:"id" doc:"The platform-qualified actor ID, as operators and the chat module's people name them, such as telegram:user:123."`
+	Name     string       `json:"name,omitempty" doc:"The latest name they were seen with, in any chat."`
+	LastSeen time.Time    `json:"last_seen"`
+	Chats    []PersonChat `json:"chats" nullable:"false" doc:"The chats they were last seen in, most recent first, up to 3."`
+}
+
+// PersonChat is a chat someone was seen in.
+type PersonChat struct {
+	ID       string    `json:"id" doc:"The chat as /whoami prints it."`
+	Name     string    `json:"name,omitempty" doc:"The name the operator gave it, else the platform's latest title; absent when it has neither."`
+	LastSeen time.Time `json:"last_seen" doc:"When they were last seen in it."`
+}
+
+// People finds the people seen in any chat by their platform-qualified ID
+// or any name they were seen with, ignoring ASCII case, each once: the one
+// whose ID is q first, then the most recently seen, up to limit. An empty q
+// finds everyone.
+func (l *EventLog) People(ctx context.Context, q string, limit int) ([]SeenPerson, error) {
+	db := queries.New(l.db)
+	rows, err := db.People(ctx, queries.PeopleParams{Q: strings.TrimSpace(q), Limit: int64(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("event log: people: %w", err)
+	}
+	out := make([]SeenPerson, len(rows))
+	for i, r := range rows {
+		chats, err := db.PersonChats(ctx, queries.PersonChatsParams{Platform: r.Platform, Actor: r.Actor})
+		if err != nil {
+			return nil, fmt.Errorf("event log: person's chats: %w", err)
+		}
+		p := SeenPerson{ID: r.Platform + ":" + r.Actor, LastSeen: time.UnixMilli(r.LastSeen).UTC(), Chats: []PersonChat{}}
+		for _, c := range chats {
+			if p.Name == "" {
+				p.Name = c.Name
+			}
+			if len(p.Chats) < 3 {
+				p.Chats = append(p.Chats, PersonChat{ID: r.Platform + ":" + c.Conversation, Name: cmp.Or(c.ChatName, c.ChatTitle), LastSeen: time.UnixMilli(c.LastSeen).UTC()})
+			}
+		}
+		out[i] = p
+	}
+	return out, nil
+}
+
 // Names returns what a chat and a person are called: the chat by the name
 // the operator gave it, else the platform's latest title, and the person
 // by the latest name they were seen with anywhere. Unknown ones are "".

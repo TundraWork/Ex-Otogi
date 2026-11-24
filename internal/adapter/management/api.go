@@ -690,6 +690,19 @@ func registerChats(api huma.API, modules Modules, events *EventLog, media func(c
 			}
 			return withDays(ctx, c)
 		})
+	huma.Register(api, huma.Operation{OperationID: "list-people", Method: http.MethodGet, Path: "/api/people", Summary: "People the bot has seen, found by name or ID",
+		Description: "The people seen sending messages in any chat, each once, found by any name they were seen with or by their ID, ignoring ASCII case: the one whose ID is q first, then the most recently seen. Without q, the most recently seen.", Tags: []string{"Chats"}},
+		func(ctx context.Context, in *struct {
+			Q     string `query:"q" maxLength:"200" doc:"Part of a name, or of a platform-qualified ID such as telegram:user:123."`
+			Limit int    `query:"limit" minimum:"1" maximum:"50" default:"20"`
+		},
+		) (*struct{ Body []SeenPerson }, error) {
+			people, err := events.People(ctx, in.Q, in.Limit)
+			if err != nil {
+				return nil, problem(err)
+			}
+			return &struct{ Body []SeenPerson }{people}, nil
+		})
 	huma.Register(api, huma.Operation{OperationID: "list-chat-messages", Method: http.MethodGet, Path: "/api/chats/{chat}/messages", Summary: "A chat's conversation, newest first",
 		Description: "People's messages and the bot's, as long as the event log keeps them. Each of the bot's names the module that sent it and that module's records for the event it answered.", Tags: []string{"Chats"}},
 		func(ctx context.Context, in *struct {

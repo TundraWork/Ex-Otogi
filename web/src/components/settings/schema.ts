@@ -1,6 +1,8 @@
 // The JSON Schema of module settings, as the server generates it from each
 // module's Config type: object properties (ordered by x-order), arrays,
-// maps (additionalProperties), and $defs references.
+// maps (additionalProperties), and $defs references. A list whose items'
+// key cannot change once saved, such as accounts' names, says which field
+// that is in x-key.
 
 export type JSONSchema = {
   type?: string | string[];
@@ -24,6 +26,7 @@ export type JSONSchema = {
   pattern?: string;
   patternDescription?: string;
   "x-order"?: string[];
+  "x-key"?: string;
 };
 
 export type Kind = "string" | "integer" | "number" | "boolean" | "array" | "map" | "object";
@@ -169,14 +172,28 @@ export function blank(root: JSONSchema, s: JSONSchema): unknown {
 }
 
 /** itemTitle names a list item by its name, its model, or else the first
- * value it has; an item with none has no title. */
-export function itemTitle(s: JSONSchema, value: unknown): string | undefined {
+ * value it has; an item with none has no title. A field of format actor is
+ * the person's name in people, by ID, when it has theirs. */
+export function itemTitle(s: JSONSchema, value: unknown, people?: ReadonlyMap<string, string>): string | undefined {
   const item = (value ?? {}) as Record<string, unknown>;
   for (const key of ["name", "label", "model", ...properties(s).map(([k]) => k)]) {
     const v = item[key];
+    if (typeof v === "string" && v && s.properties?.[key]?.format === "actor") return people?.get(v) || v;
     if ((typeof v === "string" && v) || typeof v === "number") return String(v);
   }
   return undefined;
+}
+
+/** removedFrom follows paths past the removal of a list's item: those in
+ * the item go, and those in the items after it move up one. */
+export function removedFrom(paths: ReadonlySet<string>, list: string, index: number): Set<string> {
+  const next = new Set<string>();
+  for (const path of paths) {
+    const at = path.startsWith(`${list}[`) ? Number.parseInt(path.slice(list.length + 1), 10) : -1;
+    if (at < index) next.add(path);
+    else if (at > index) next.add(`${list}[${at - 1}${path.slice(path.indexOf("]", list.length))}`);
+  }
+  return next;
 }
 
 /** clean drops unset optional values, which the module defaults. A map

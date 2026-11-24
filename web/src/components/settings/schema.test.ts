@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // Node runs this file as it is, so the import names the file.
-import { changes, check, clean, itemTitle, type JSONSchema, label, noun, pathLabel, validate } from "./schema.ts";
+import {
+  changes,
+  check,
+  clean,
+  itemTitle,
+  type JSONSchema,
+  label,
+  noun,
+  pathLabel,
+  removedFrom,
+  validate,
+} from "./schema.ts";
 
 const root: JSONSchema = {
   type: "object",
@@ -31,7 +42,11 @@ const root: JSONSchema = {
       type: "object",
       required: ["user"],
       "x-order": ["user", "name", "factor"],
-      properties: { user: { type: "string" }, name: { type: "string" }, factor: { type: "number", maximum: 10 } },
+      properties: {
+        user: { type: "string", format: "actor" },
+        name: { type: "string" },
+        factor: { type: "number", maximum: 10 },
+      },
     },
     Judge: { type: "object", required: ["rules"], properties: { rules: { type: "string" } } },
   },
@@ -120,6 +135,19 @@ test("itemTitle is the item's name, model, or first value", () => {
   assert.equal(itemTitle(person, { user: "telegram:user:1", name: "Tundra" }), "Tundra");
   assert.equal(itemTitle(person, { user: "telegram:user:1" }), "telegram:user:1");
   assert.equal(itemTitle(person, { name: "" }), undefined);
+});
+
+test("itemTitle of an item without a name is the name of the person it names, when the bot has seen them", () => {
+  const person = root.$defs?.Person as JSONSchema;
+  const names = new Map([["telegram:user:1", "Alice"]]);
+  assert.equal(itemTitle(person, { user: "telegram:user:1" }, names), "Alice");
+  assert.equal(itemTitle(person, { user: "telegram:user:1", name: "Tundra" }, names), "Tundra");
+  assert.equal(itemTitle(person, { user: "telegram:user:2" }, names), "telegram:user:2");
+});
+
+test("removedFrom moves the paths of the items after a removed one up one, and drops its own", () => {
+  const paths = new Set(["profiles[0]", "profiles[1]", "profiles[1].judge", "profiles[3]", "people[2]"]);
+  assert.deepEqual([...removedFrom(paths, "profiles", 1)], ["profiles[0]", "profiles[2]", "people[2]"]);
 });
 
 test("label reads a key as words, with units in capitals", () => {

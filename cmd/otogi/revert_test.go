@@ -124,3 +124,16 @@ func TestSettingsRevertOfAModule(t *testing.T) {
 		t.Fatalf("revert of an ID with no settings: %v, history %q", err, history())
 	}
 }
+
+// The offline revert stores the revision it goes back to as it is, even one
+// a save would refuse, such as a chat persona under its old name: it is how
+// a revision already stored is put right.
+func TestSettingsRevertOfARenamedPersona(t *testing.T) {
+	revert, history, _ := revertHarness(t, "chat", `{"profiles":[{"name":"Luna"}]}`, `{"profiles":[{"name":"Mizuki"}]}`)
+	if _, err := revert(); err != nil {
+		t.Fatal(err)
+	}
+	if got := history(); !strings.HasPrefix(got, `3 true {"profiles":[{"name":"Luna"}]} by otogi settings revert`+"\n") {
+		t.Fatalf("after the revert:\n%s", got)
+	}
+}

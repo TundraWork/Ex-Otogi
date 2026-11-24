@@ -55,20 +55,23 @@ type section struct {
 	// onRestart marks settings the process reads when it starts: apply only
 	// validates them, and a saved revision waits for the next start.
 	onRestart bool
-	// change refuses what settings may not become from what they are, when
-	// that depends on both; nil when any valid settings may follow any.
-	change func(was, now []byte) error
 }
 
 var sections = map[otogi.ModuleID]section{
 	generalSection:  sectionOf(generalFromFile, (*system).applyGeneral, nil),
 	llmSection:      sectionOf(llmFromFile, (*system).applyLLM, (*moduleSettings).builtWithProvider),
-	accountsSection: keepingNames(onRestart(sectionOf(accountsFromFile, checkAccounts, nil))),
+	accountsSection: onRestart(sectionOf(accountsFromFile, checkAccounts, nil)).keeping(accountNames...),
 	processSection:  onRestart(sectionOf(processFromFile, checkProcess, nil)),
 }
 
 func onRestart(sec section) section {
 	sec.onRestart = true
+	return sec
+}
+
+// keeping gives a section's keyed lists: see keyedList.
+func (sec section) keeping(lists ...keyedList) section {
+	sec.keys = lists
 	return sec
 }
 
@@ -113,7 +116,7 @@ func (y *system) retention() time.Duration { return time.Duration(y.keep.Load())
 
 // generalSettings is the system:general section.
 type generalSettings struct {
-	Operators         []string       `json:"operators,omitempty" doc:"Who may use operator commands such as /status and /todou link: platform-qualified actor IDs as /whoami prints them, for example telegram:user:123456789."`
+	Operators         []string       `json:"operators,omitempty" format:"actor" doc:"Who may use operator commands such as /status and /todou link: platform-qualified actor IDs as /whoami prints them, for example telegram:user:123456789."`
 	CommandPrefixes   []string       `json:"command_prefixes" required:"false" default:"[\"/\"]" doc:"What starts a command: with /, the message \"/name args\" invokes a module's command. An empty list turns commands off."`
 	EventlogRetention otogi.Duration `json:"eventlog_retention,omitempty" default:"720h" doc:"How long event log records are kept, and chat history with them; 720h is 30 days."`
 	LogLevel          string         `json:"log_level,omitempty" enum:"debug,info,warn,error" default:"info" doc:"The least severe lines the process log has."`

@@ -218,6 +218,102 @@ func (q *Queries) NameChat(ctx context.Context, arg NameChatParams) (int64, erro
 	return result.RowsAffected()
 }
 
+const people = `-- name: People :many
+WITH search AS (SELECT lower(?2) AS q)
+SELECT p.platform, p.actor, CAST(MAX(p.last_seen) AS INTEGER) AS last_seen
+FROM chat_people p, search s
+GROUP BY p.platform, p.actor
+HAVING s.q = '' OR instr(lower(p.platform || ':' || p.actor), s.q) > 0 OR MAX(instr(lower(p.name), s.q)) > 0
+ORDER BY lower(p.platform || ':' || p.actor) = s.q DESC, last_seen DESC
+LIMIT ?1
+`
+
+type PeopleParams struct {
+	Limit int64
+	Q     string
+}
+
+type PeopleRow struct {
+	Platform string
+	Actor    string
+	LastSeen int64
+}
+
+// Each person seen in any chat whose ID, platform-qualified, or any name
+// they were seen with has q, ignoring ASCII case: the one of ID q first,
+// then the most recently seen.
+func (q *Queries) People(ctx context.Context, arg PeopleParams) ([]PeopleRow, error) {
+	rows, err := q.db.QueryContext(ctx, people, arg.Limit, arg.Q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PeopleRow
+	for rows.Next() {
+		var i PeopleRow
+		if err := rows.Scan(&i.Platform, &i.Actor, &i.LastSeen); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const personChats = `-- name: PersonChats :many
+SELECT p.conversation, p.name, p.last_seen, COALESCE(c.name, '') AS chat_name, COALESCE(c.title, '') AS chat_title
+FROM chat_people p LEFT JOIN chats c ON c.platform = p.platform AND c.conversation = p.conversation
+WHERE p.platform = ?1 AND p.actor = ?2
+ORDER BY p.last_seen DESC
+`
+
+type PersonChatsParams struct {
+	Platform string
+	Actor    string
+}
+
+type PersonChatsRow struct {
+	Conversation string
+	Name         string
+	LastSeen     int64
+	ChatName     string
+	ChatTitle    string
+}
+
+func (q *Queries) PersonChats(ctx context.Context, arg PersonChatsParams) ([]PersonChatsRow, error) {
+	rows, err := q.db.QueryContext(ctx, personChats, arg.Platform, arg.Actor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PersonChatsRow
+	for rows.Next() {
+		var i PersonChatsRow
+		if err := rows.Scan(
+			&i.Conversation,
+			&i.Name,
+			&i.LastSeen,
+			&i.ChatName,
+			&i.ChatTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const personName = `-- name: PersonName :one
 SELECT name FROM chat_people
 WHERE platform = ?1 AND actor = ?2 AND name <> ''

@@ -164,6 +164,9 @@ func TestManagementAPI(t *testing.T) {
 	_, body = do("PATCH", "/api/chats/telegram:chat:1", "", `{"name": "Old friends"}`, 200)
 	contains("named chat", body, `"name":"Old friends"`, `"days":[{"day":"`)
 	do("GET", "/api/chats/telegram:chat:404", "", "", 404)
+	_, body = do("GET", "/api/people?q=ALI", "", "", 200)
+	contains("people", body, `"id":"telegram:user:5"`, `"name":"Alice"`, `"chats":[{"id":"telegram:chat:1","name":"Old friends"`)
+	do("GET", "/api/people?limit=51", "", "", 422)
 	_, body = do("GET", "/api/chats/telegram:chat:1/messages", "", "", 200)
 	var page struct {
 		Messages []management.ChatMessage `json:"messages"`
@@ -288,6 +291,79 @@ func TestRefusedSettingsNameTheirFields(t *testing.T) {
 	if r := refused("/api/system/llm/settings", `"1"`, `{}`); len(r.Errors) != 0 || !strings.Contains(r.Detail, "rebuild chat") || !strings.Contains(r.Detail, "profiles[0].provider") ||
 		strings.HasSuffix(r.Detail, ": invalid") {
 		t.Errorf("a provider in use removed: %+v", r)
+	}
+}
+
+// A chat persona's name is kept as an account's is: a save, or a restore,
+// in which the profiles lose a name and gain another is refused at the
+// list, and replacing a persona takes two saves. The schema marks the
+// field the panel shows read-only once saved.
+func TestAPersonasNameCannotBeChanged(t *testing.T) {
+	_, do := apiHarness(t, slog.New(slog.DiscardHandler))
+	t.Setenv("OTOGI_TEST_GEMINI_KEY", "value-gemini")
+	do("PUT", "/api/system/llm/settings", `"0"`, `{"gemini": {"api_key": "${OTOGI_TEST_GEMINI_KEY}"}}`, 200)
+	profile := func(name, keyword string) string {
+		return `{"name": "` + name + `", "keywords": ["` + keyword + `"], "provider": "gemini", "model": "m"}`
+	}
+	profiles := func(p ...string) string { return `{"profiles": [` + strings.Join(p, ", ") + `]}` }
+	revision := func() string {
+		t.Helper()
+		header, _ := do("GET", "/api/modules/chat/settings", "", "", 200)
+		return header.Get("ETag")
+	}
+	refused := func(method, path, ifMatch, body, change string) {
+		t.Helper()
+		_, answer := do(method, path, ifMatch, body, 422)
+		var r struct {
+			Errors []struct{ Location, Message string } `json:"errors"`
+		}
+		if err := json.Unmarshal([]byte(answer), &r); err != nil {
+			t.Fatal(err)
+		}
+		if len(r.Errors) != 1 || r.Errors[0].Location != "profiles" || !strings.Contains(r.Errors[0].Message, "cannot be changed") || !strings.Contains(r.Errors[0].Message, change) {
+			t.Fatalf("%s %s refused with %s", method, path, answer)
+		}
+		if got := revision(); got != ifMatch {
+			t.Fatalf("after a refusal the revision is %s, want %s", got, ifMatch)
+		}
+	}
+
+	do("PUT", "/api/modules/chat/settings", `"0"`, profiles(profile("Luna", "luna")), 200)
+	refused("PUT", "/api/modules/chat/settings", `"1"`, profiles(profile("Mizuki", "luna")), "Mizuki for Luna")
+	// Another field of the persona, a persona more, and one fewer are no change of name.
+	do("PUT", "/api/modules/chat/settings", `"1"`, profiles(profile("Luna", "moon")), 200)
+	do("PUT", "/api/modules/chat/settings", `"2"`, profiles(profile("Luna", "moon"), profile("Sora", "sora")), 200)
+	do("PUT", "/api/modules/chat/settings", `"3"`, profiles(profile("Sora", "sora")), 200)
+	// Replacing one, the only one: the other comes in one save, the old one goes in the next.
+	do("PUT", "/api/modules/chat/settings", `"4"`, profiles(profile("Sora", "sora"), profile("Mizuki", "mizuki")), 200)
+	do("PUT", "/api/modules/chat/settings", `"5"`, profiles(profile("Mizuki", "mizuki")), 200)
+	// Restoring a revision of the old name is the same change.
+	refused("POST", "/api/modules/chat/settings/revisions/2/restore", `"6"`, "", "Luna for Mizuki")
+
+	key := func(path, list string) any {
+		t.Helper()
+		_, body := do("GET", path, "", "", 200)
+		var out struct {
+			Schema struct {
+				Properties map[string]map[string]any `json:"properties"`
+			} `json:"schema"`
+		}
+		if err := json.Unmarshal([]byte(body), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Schema.Properties[list]["x-key"]
+	}
+	for _, c := range [][3]string{
+		{"/api/modules/chat/settings", "profiles", "name"},
+		{"/api/system/accounts/settings", "telegram", "account"},
+		{"/api/system/accounts/settings", "qq", "account"},
+	} {
+		if got := key(c[0], c[1]); got != c[2] {
+			t.Errorf("%s: %s has x-key %v, want %s", c[0], c[1], got, c[2])
+		}
+	}
+	if got := key("/api/modules/chat/settings", "people"); got != nil {
+		t.Errorf("chat's people have x-key %v", got)
 	}
 }
 
