@@ -24,6 +24,8 @@ Requests to the decision service send what the asking module puts in their state
 
 The media module sends the images, animations (as frames), and videos of every chat on its `describe` list to the providers of its steps, whether or not an agent ever answers there, under the terms above: on Gemini's free tier, Google may use them to improve its products. Its database keeps the descriptions, with the text on pictures and what videos say, until the media goes unseen for 30 days, and its `media.described` records keep them in the event log.
 
+Stickers operators keep with `/sticker` are stored as the pictures themselves in the media module's database, with the ID of the operator who kept each, until removed. They are shared by every chat: a picture kept from one group may be sent by an agent in another, so keep only pictures that may be seen wherever the bot is.
+
 The notes in the chat module's `people` list go to the agents' model service with every request their person appears in, and an agent may repeat a note in the chat. A note follows its person into every chat agents answer them in, groups included: write it as something anyone there may read.
 
 ## Management plane access
