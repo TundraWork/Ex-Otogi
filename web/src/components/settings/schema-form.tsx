@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { sibling } from "@/lib/llm";
 import { cn } from "@/lib/utils";
 import { EnumSelect } from "./enum-select";
-import { ModelNote, ModelPicker, ProviderNote, ProviderPicker, ThinkingSelect } from "./llm-pickers";
+import { ModelNote, ModelPicker, ProviderNote, ProviderPicker, ThinkingNote, ThinkingSelect } from "./llm-pickers";
 import {
   blank,
   entrySchema,
@@ -192,7 +192,7 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
   }
   // A switch is always one way or the other: nothing about it is required.
   const row = { doc, error, required: required && kind !== "boolean" };
-  const noted = ["secret", "llm-provider", "llm-model"].includes(s.format ?? "");
+  const noted = ["secret", "llm-provider", "llm-model", "llm-thinking"].includes(s.format ?? "");
   return (
     <form.Field name={name}>
       {(field: AnyFieldApi) => (
@@ -207,8 +207,12 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
               <SecretNote value={field.state.value} />
             ) : s.format === "llm-provider" ? (
               <ProviderNote value={field.state.value} />
+            ) : s.format === "llm-model" ? (
+              <ModelNote value={field.state.value} provider={beside.provider} />
             ) : (
-              s.format === "llm-model" && <ModelNote value={field.state.value} provider={beside.provider} />
+              s.format === "llm-thinking" && (
+                <ThinkingNote value={field.state.value} provider={beside.provider} model={beside.model} />
+              )
             )
           }
           labels={!s.items?.enum}

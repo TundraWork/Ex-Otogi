@@ -7,8 +7,9 @@ export type EnumSelectProps = {
   onBlur?: () => void;
   value: string;
   onChange: (value: string) => void;
-  /** items are the choices, each shown as its label, in the list and once chosen. */
-  items: { value: string; label: ReactNode }[];
+  /** items are the choices, each shown as its label in the list and, once
+   * chosen, as its chosen label when it has one, else its label. */
+  items: { value: string; label: ReactNode; chosen?: ReactNode }[];
   /** none labels the choice of nothing, "", when there is one. */
   none?: ReactNode;
   /** placeholder stands for a value no item has. */
@@ -30,7 +31,9 @@ export function EnumSelect({ labelling: a, onBlur, value, onChange, items, none,
       <SelectTrigger {...a} onBlur={onBlur}>
         <SelectValue>
           {(chosen: string) =>
-            all.find((i) => i.value === chosen)?.label ?? <span className="text-muted-foreground">{placeholder}</span>
+            ((item) => item && (item.chosen ?? item.label))(all.find((i) => i.value === chosen)) ?? (
+              <span className="text-muted-foreground">{placeholder}</span>
+            )
           }
         </SelectValue>
       </SelectTrigger>

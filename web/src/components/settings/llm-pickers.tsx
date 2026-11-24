@@ -245,8 +245,10 @@ export function ModelNote({ value, provider: name }: { value: unknown; provider:
   }
 }
 
-/** ThinkingSelect chooses a thinking level, marking those the model beside
- * it does not accept when its list says which it does. */
+/** ThinkingSelect chooses a thinking level, marking in the list those the
+ * model beside it does not accept when its list says which it does. The
+ * chosen one shows as itself: ThinkingNote says, under the field, when the
+ * model does not list it. */
 export function ThinkingSelect({
   provider: name,
   model,
@@ -262,6 +264,7 @@ export function ThinkingSelect({
         return note
           ? {
               ...item,
+              chosen: item.label,
               label: (
                 <span className="flex min-w-0 items-center gap-3">
                   <span className="min-w-0 flex-1 truncate">{item.label}</span>
@@ -273,4 +276,13 @@ export function ThinkingSelect({
       })}
     />
   );
+}
+
+/** ThinkingNote says when the model beside a thinking field does not list
+ * the level chosen. */
+export function ThinkingNote({ value, provider: name, model }: { value: unknown; provider: unknown; model: unknown }) {
+  const { data: providers } = useProviders();
+  const m = providers?.find((p) => p.name === name)?.models.find((x) => x.id === model);
+  const note = typeof value === "string" && value ? thinkingNote(value, m) : undefined;
+  return note ? <span className="text-warning-foreground">{note}.</span> : null;
 }
