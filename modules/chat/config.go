@@ -68,9 +68,9 @@ type ProfileConfig struct {
 	Label         string       `json:"label,omitempty" doc:"When set, starts each reply in bold."`
 	Keywords      []string     `json:"keywords" minItems:"1" doc:"A message starting with one of them triggers the agent; so does replying to it. In a group, with judge.wake on, they only tell the judgment the agent's names: it decides whether such a message is talking to the agent, and when it fails, the keyword triggers the agent as without it."`
 	Mention       bool         `json:"mention,omitempty" doc:"A message mentioning the bot account triggers the agent too. A reply to a message the account sent for another module, such as a card or a reminder, does not, though Telegram and QQ count it as a mention. When several agents in a chat set it, the first answers."`
-	Provider      string       `json:"provider" minLength:"1" doc:"A language model provider set in the panel under Language models: gemini, or the name of an OpenAI-compatible service such as deepseek."`
-	Model         string       `json:"model" minLength:"1" doc:"The provider's model ID."`
-	Thinking      string       `json:"thinking,omitempty" enum:"minimal,low,medium,high" doc:"How much the model thinks before answering; unset is the model's default."`
+	Provider      string       `json:"provider" minLength:"1" format:"llm-provider" doc:"A language model provider set in the panel under Language models: gemini, or the name of an OpenAI-compatible service such as deepseek."`
+	Model         string       `json:"model" minLength:"1" format:"llm-model" doc:"The provider's model ID."`
+	Thinking      string       `json:"thinking,omitempty" enum:"minimal,low,medium,high" format:"llm-thinking" doc:"How much the model thinks before answering; unset is the model's default."`
 	MaxOutput     int          `json:"max_output,omitempty" minimum:"1" doc:"The most tokens a reply may have; unset is the model's default."`
 	Temperature   *float64     `json:"temperature,omitempty" minimum:"0" maximum:"2" doc:"Sampling temperature, 0 to 2; unset is the model's default (1 for Gemini). Higher is livelier, lower more predictable."`
 	System        string       `json:"system,omitempty" format:"markdown" doc:"The system prompt: who the agent is and how it talks, in Markdown."`

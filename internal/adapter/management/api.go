@@ -14,6 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/TundraWork/Ex-Otogi/pkg/llm"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -130,6 +131,7 @@ func caller(ctx context.Context) string {
 // problem turns an error from the runtime into an RFC 9457 response.
 func problem(err error) error {
 	var stale *StaleRevisionError
+	var upstream *UpstreamError
 	switch {
 	case errors.As(err, &stale):
 		return huma.Error412PreconditionFailed(err.Error())
@@ -137,6 +139,8 @@ func problem(err error) error {
 		return huma.Error404NotFound(err.Error())
 	case errors.Is(err, ErrInUse):
 		return huma.Error409Conflict(err.Error())
+	case errors.As(err, &upstream):
+		return huma.Error502BadGateway(err.Error())
 	case errors.Is(err, otogi.ErrInvalid):
 		if details, fields := settingDetails(err); fields {
 			return huma.Error422UnprocessableEntity(err.Error(), details...)
@@ -304,6 +308,35 @@ type System interface {
 	Settings
 	// Sections lists the sections, in the order the panel shows them.
 	Sections(ctx context.Context) ([]Section, error)
+	// Providers lists the language model providers the llm section sets,
+	// by name, each with the models last fetched from it.
+	Providers(ctx context.Context) ([]LLMProvider, error)
+	// FetchModels asks a provider for its models now, saves the list in
+	// place of the last one, and returns the provider with it; by is who
+	// asked. The fetch is recorded as llm.models, failed or not. The error
+	// wraps ErrNotFound for a provider not set, and is an *UpstreamError
+	// when the provider's own answer was a failure, which leaves the last
+	// list.
+	FetchModels(ctx context.Context, name, by string) (LLMProvider, error)
+}
+
+// UpstreamError is a failure of a service the runtime called for the
+// request, such as a language model provider: the API answers 502 with
+// its text.
+type UpstreamError struct{ Err error }
+
+func (e *UpstreamError) Error() string { return e.Err.Error() }
+
+func (e *UpstreamError) Unwrap() error { return e.Err }
+
+// LLMProvider is a language model provider the llm section sets, with the
+// models last fetched from it.
+type LLMProvider struct {
+	Name      string      `json:"name" doc:"The name modules use for it."`
+	Kind      string      `json:"kind" enum:"gemini,openai" doc:"gemini, or openai for a service that speaks the OpenAI Chat Completions API."`
+	FetchedAt time.Time   `json:"fetched_at,omitzero" doc:"When its models were last fetched; absent when never."`
+	FetchedBy string      `json:"fetched_by,omitempty" doc:"Who fetched them."`
+	Models    []llm.Model `json:"models" nullable:"false" doc:"The models last fetched, in the provider's order: only the ID is always known. Empty when never fetched."`
 }
 
 // Section is a group of settings outside modules, such as the language
@@ -359,6 +392,27 @@ func registerSystem(api huma.API, system System) {
 		},
 		) (*revisionOutput, error) {
 			return h.restore(ctx, in.Section, in.Revision, in.IfMatch)
+		})
+	huma.Register(api, huma.Operation{OperationID: "list-llm-providers", Method: http.MethodGet, Path: "/api/system/llm/providers", Summary: "The language model providers, with the models last fetched from each",
+		Description: "The providers the llm section sets now. Lists are fetched only by POST …/models; a provider removed from the section, or renamed, loses its list.", Tags: []string{"System"}},
+		func(ctx context.Context, _ *struct{}) (*struct{ Body []LLMProvider }, error) {
+			all, err := system.Providers(ctx)
+			if err != nil {
+				return nil, problem(err)
+			}
+			return &struct{ Body []LLMProvider }{append([]LLMProvider{}, all...)}, nil
+		})
+	huma.Register(api, huma.Operation{OperationID: "fetch-llm-models", Method: http.MethodPost, Path: "/api/system/llm/providers/{name}/models", Summary: "Fetch a provider's models now",
+		Description: "Asks the provider for its models that generate content, saves the list in place of the last one, and returns it. When the provider's answer is a failure, the answer is 502 with its reason, and the last list stays. Recorded as llm.models, with the list or the failure, never the key.", Tags: []string{"System"}},
+		func(ctx context.Context, in *struct {
+			Name string `path:"name" doc:"The provider's name, such as gemini."`
+		},
+		) (*struct{ Body LLMProvider }, error) {
+			p, err := system.FetchModels(ctx, in.Name, caller(ctx))
+			if err != nil {
+				return nil, problem(err)
+			}
+			return &struct{ Body LLMProvider }{p}, nil
 		})
 }
 

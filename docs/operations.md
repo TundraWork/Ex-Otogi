@@ -40,7 +40,7 @@ One `otogi` process plus its data directory on one host, run under a supervisor 
 <data>/
   eventlog.sqlite                 # event log, and the directory of chats seen
   panel.key                       # the key that seals the control panel's session cookies
-  modules.sqlite                  # module key/value state and timers, settings, secrets set in the panel
+  modules.sqlite                  # module key/value state and timers, settings, secrets set in the panel, model lists fetched
   modules/<id>.sqlite             # a module's private database, if it uses one
   telegram/<account>/session.json # gotd session (login)
   telegram/<account>/state.sqlite # inbox, update state, send records

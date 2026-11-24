@@ -159,6 +159,9 @@ func (s *moduleSettings) save(ctx context.Context, id otogi.ModuleID, base int64
 	if err := s.store.AddSettings(ctx, r); err != nil {
 		return modulestore.SettingsRevision{}, err
 	}
+	if id == llmSection {
+		s.forgetModels(ctx)
+	}
 	s.reconfigured(ctx, r, restarted)
 	return r, nil
 }

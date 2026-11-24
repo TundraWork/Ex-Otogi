@@ -80,6 +80,8 @@ export function SettingsCard({
     }
     // The secrets list says whose settings refer to each.
     void queryClient.invalidateQueries({ queryKey: ["secrets"] });
+    // A provider removed from the language model settings loses its model list.
+    void queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
     return next;
   };
   if (properties(root).length > 0) {

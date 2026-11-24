@@ -49,10 +49,13 @@ export function SectionPage({
   page,
   about,
   review,
+  children,
 }: {
   page: (typeof sectionPages)[number];
   about: ReactNode;
   review?: Review;
+  /** children follow the settings card. */
+  children?: ReactNode;
 }) {
   const applies = "applies" in page ? page.applies : undefined;
   return (
@@ -62,6 +65,7 @@ export function SectionPage({
         <Suspense fallback={<Skeleton className="h-96 w-full rounded-2xl" />}>
           <SettingsCard of={{ section: page.section }} effect={page.effect} applies={applies} review={review} />
         </Suspense>
+        {children}
       </div>
     </SettingsPage>
   );

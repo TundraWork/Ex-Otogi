@@ -16,9 +16,9 @@ type Config struct {
 
 // Step is one model that describes media.
 type Step struct {
-	Provider string `json:"provider" minLength:"1" doc:"A language model provider set in the panel under Language models, such as gemini. Use only providers whose model sees images and video: one that drops them without saying so, as deepseek-v4-pro does with images, gets descriptions made up."`
-	Model    string `json:"model" minLength:"1" doc:"The provider's model ID, for example gemini-3.5-flash-lite."`
-	Thinking string `json:"thinking,omitempty" enum:"minimal,low,medium,high" doc:"The thinking level; empty is the model's default. minimal is enough to describe media."`
+	Provider string `json:"provider" minLength:"1" format:"llm-provider" doc:"A language model provider set in the panel under Language models, such as gemini. Use only providers whose model sees images and video: one that drops them without saying so, as deepseek-v4-pro does with images, gets descriptions made up."`
+	Model    string `json:"model" minLength:"1" format:"llm-model" doc:"The provider's model ID, for example gemini-3.5-flash-lite."`
+	Thinking string `json:"thinking,omitempty" enum:"minimal,low,medium,high" format:"llm-thinking" doc:"The thinking level; empty is the model's default. minimal is enough to describe media."`
 }
 
 // defaultLanguage is the language of descriptions when none is set.

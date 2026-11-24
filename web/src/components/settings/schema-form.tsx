@@ -1,13 +1,15 @@
-import { type AnyFieldApi, getBy, type ReactFormExtendedApi } from "@tanstack/react-form";
+import { type AnyFieldApi, getBy, type ReactFormExtendedApi, useStore } from "@tanstack/react-form";
 import { Check, ChevronRight, CircleAlert, Plus, Trash2, X } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { sibling } from "@/lib/llm";
 import { cn } from "@/lib/utils";
+import { EnumSelect } from "./enum-select";
+import { ModelNote, ModelPicker, ProviderNote, ProviderPicker, ThinkingSelect } from "./llm-pickers";
 import {
   blank,
   entrySchema,
@@ -145,6 +147,7 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
     )
     .map((p) => p.message)
     .join("; ");
+  const beside = useBeside(form, name, s.format);
   if (kind === "object") {
     return (
       <form.Field name={name}>
@@ -189,6 +192,7 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
   }
   // A switch is always one way or the other: nothing about it is required.
   const row = { doc, error, required: required && kind !== "boolean" };
+  const noted = ["secret", "llm-provider", "llm-model"].includes(s.format ?? "");
   return (
     <form.Field name={name}>
       {(field: AnyFieldApi) => (
@@ -196,8 +200,17 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
           id={id}
           title={title}
           {...row}
-          // A secret's row says who set the one chosen, and when.
-          note={s.format === "secret" && <SecretNote value={field.state.value} />}
+          // A secret's row says who set the one chosen, and when; a
+          // provider's or a model's, how it stands against what is set.
+          note={
+            s.format === "secret" ? (
+              <SecretNote value={field.state.value} />
+            ) : s.format === "llm-provider" ? (
+              <ProviderNote value={field.state.value} />
+            ) : (
+              s.format === "llm-model" && <ModelNote value={field.state.value} provider={beside.provider} />
+            )
+          }
           labels={!s.items?.enum}
           block={kind === "array" || s.format === "markdown"}
           inline={kind === "boolean"}
@@ -207,12 +220,27 @@ function SchemaField({ schema, name, title, required }: FieldProps) {
             value={field.state.value}
             onChange={field.handleChange}
             onBlur={field.handleBlur}
-            labelling={labelling(id, { ...row, note: s.format === "secret" })}
+            labelling={labelling(id, { ...row, note: noted })}
+            beside={beside}
           />
         </Row>
       )}
     </form.Field>
   );
+}
+
+/** Beside is what a field of a language model format reads from the fields
+ * beside it: an llm-model field the provider, an llm-thinking field the
+ * provider and the model (see lib/llm). */
+type Beside = { provider?: unknown; model?: unknown };
+
+function useBeside(form: SettingsForm, name: string, format?: string): Beside {
+  const llm = format?.startsWith("llm-") && format !== "llm-provider";
+  const provider = useStore(form.store, (s) => (llm ? getBy(s.values, sibling(name, "provider")) : undefined));
+  const model = useStore(form.store, (s) =>
+    format === "llm-thinking" ? getBy(s.values, sibling(name, "model")) : undefined,
+  );
+  return { provider, model };
 }
 
 function Row({
@@ -300,12 +328,14 @@ function Control({
   onChange,
   onBlur,
   labelling: a,
+  beside,
 }: {
   schema: JSONSchema;
   value: unknown;
   onChange: (value: unknown) => void;
   onBlur?: () => void;
   labelling: Labelling;
+  beside?: Beside;
 }) {
   const kind = kindOf(schema);
   if (kind === "boolean") {
@@ -334,28 +364,18 @@ function Control({
   if (schema.enum) {
     // A choice keeps its type: an integer's choices are saved as numbers.
     const choices = schema.enum;
-    const items = [
-      { value: "", label: schema.default === undefined ? "Default" : `Default (${schema.default})` },
-      ...choices.map((v) => ({ value: String(v), label: String(v) })),
-    ];
-    return (
-      <Select
-        items={items}
-        value={value === undefined ? "" : String(value)}
-        onValueChange={(v) => onChange(choices.find((c) => String(c) === v))}
-      >
-        <SelectTrigger {...a} onBlur={onBlur}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectPopup>
-          {items.map((item) => (
-            <SelectItem key={item.value} value={item.value}>
-              {item.label}
-            </SelectItem>
-          ))}
-        </SelectPopup>
-      </Select>
-    );
+    const props = {
+      labelling: a,
+      onBlur,
+      value: value === undefined ? "" : String(value),
+      onChange: (v: string) => onChange(choices.find((c) => String(c) === v)),
+      items: choices.map((v) => ({ value: String(v), label: String(v) })),
+      none: schema.default === undefined ? "Default" : `Default (${schema.default})`,
+    };
+    if (schema.format === "llm-thinking") {
+      return <ThinkingSelect {...props} provider={beside?.provider} model={beside?.model} />;
+    }
+    return <EnumSelect {...props} />;
   }
   if (kind === "integer" || kind === "number") {
     return (
@@ -392,6 +412,12 @@ function Control({
   }
   if (schema.format === "secret") {
     return <SecretPicker value={text} onChange={onChange} onBlur={onBlur} labelling={a} />;
+  }
+  if (schema.format === "llm-provider") {
+    return <ProviderPicker value={text} onChange={onChange} onBlur={onBlur} labelling={a} />;
+  }
+  if (schema.format === "llm-model") {
+    return <ModelPicker value={text} provider={beside?.provider} onChange={onChange} onBlur={onBlur} labelling={a} />;
   }
   const mono = schema.format === "duration";
   return (

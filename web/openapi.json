@@ -677,6 +677,45 @@
         ],
         "type": "object"
       },
+      "LLMProvider": {
+        "additionalProperties": false,
+        "properties": {
+          "fetched_at": {
+            "description": "When its models were last fetched; absent when never.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "fetched_by": {
+            "description": "Who fetched them.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "gemini, or openai for a service that speaks the OpenAI Chat Completions API.",
+            "enum": [
+              "gemini",
+              "openai"
+            ],
+            "type": "string"
+          },
+          "models": {
+            "description": "The models last fetched, in the provider's order: only the ID is always known. Empty when never fetched.",
+            "items": {
+              "$ref": "#/components/schemas/Model"
+            },
+            "type": "array"
+          },
+          "name": {
+            "description": "The name modules use for it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "models"
+        ],
+        "type": "object"
+      },
       "List-chat-messagesResponse": {
         "additionalProperties": false,
         "properties": {
@@ -896,6 +935,51 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "Model": {
+        "additionalProperties": false,
+        "properties": {
+          "context_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "input_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "thinking_levels": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
         "type": "object"
       },
       "Module": {
@@ -3273,6 +3357,88 @@
           }
         },
         "summary": "The sections of settings outside modules",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/api/system/llm/providers": {
+      "get": {
+        "description": "The providers the llm section sets now. Lists are fetched only by POST …/models; a provider removed from the section, or renamed, loses its list.",
+        "operationId": "list-llm-providers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LLMProvider"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The language model providers, with the models last fetched from each",
+        "tags": [
+          "System"
+        ]
+      }
+    },
+    "/api/system/llm/providers/{name}/models": {
+      "post": {
+        "description": "Asks the provider for its models that generate content, saves the list in place of the last one, and returns it. When the provider's answer is a failure, the answer is 502 with its reason, and the last list stays. Recorded as llm.models, with the list or the failure, never the key.",
+        "operationId": "fetch-llm-models",
+        "parameters": [
+          {
+            "description": "The provider's name, such as gemini.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The provider's name, such as gemini.",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LLMProvider"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Fetch a provider's models now",
         "tags": [
           "System"
         ]

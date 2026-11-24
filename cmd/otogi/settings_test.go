@@ -207,6 +207,40 @@ func TestSettingsSchemas(t *testing.T) {
 	}
 }
 
+// The panel offers a provider's models for a field of format llm-model, and
+// marks its thinking levels for one of llm-thinking, by the provider the
+// field named provider beside it names: every such field has one.
+func TestModelFieldsHaveTheirProviderBeside(t *testing.T) {
+	var models int
+	for id, k := range moduleKinds {
+		doc, err := k.schemaDocument()
+		if err != nil {
+			t.Fatal(err)
+		}
+		objects := []map[string]any{doc}
+		defs, _ := doc["$defs"].(map[string]any)
+		for _, def := range defs {
+			objects = append(objects, def.(map[string]any))
+		}
+		for _, o := range objects {
+			props, _ := o["properties"].(map[string]any)
+			for name, p := range props {
+				format := p.(map[string]any)["format"]
+				if format != "llm-model" && format != "llm-thinking" {
+					continue
+				}
+				models++
+				if provider, _ := props["provider"].(map[string]any); provider["format"] != "llm-provider" {
+					t.Errorf("%s: %s, of format %s, has no provider field of format llm-provider beside it", id, name, format)
+				}
+			}
+		}
+	}
+	if models != 6 { // chat, media, twitter: a model and its thinking each
+		t.Errorf("%d fields of format llm-model or llm-thinking, want 6", models)
+	}
+}
+
 // The card modules draw with the content safety module's settings: they need it
 // running, it cannot be turned off under them, and changing it rebuilds
 // them with it.

@@ -12,9 +12,9 @@ import (
 
 // Translate configures the translated cards.
 type Translate struct {
-	Provider string `json:"provider" minLength:"1" doc:"A language model provider set in the panel under Language models, such as gemini."`
-	Model    string `json:"model" minLength:"1" doc:"The provider's model ID."`
-	Thinking string `json:"thinking,omitempty" enum:"minimal,low,medium,high" doc:"How much the model thinks before answering; unset is the model's default."`
+	Provider string `json:"provider" minLength:"1" format:"llm-provider" doc:"A language model provider set in the panel under Language models, such as gemini."`
+	Model    string `json:"model" minLength:"1" format:"llm-model" doc:"The provider's model ID."`
+	Thinking string `json:"thinking,omitempty" enum:"minimal,low,medium,high" format:"llm-thinking" doc:"How much the model thinks before answering; unset is the model's default."`
 }
 
 // translator asks a language model what language a text is in and, unless

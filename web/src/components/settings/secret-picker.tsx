@@ -68,7 +68,7 @@ export function SecretPicker({
             }}
           </SelectValue>
         </SelectTrigger>
-        <SelectPopup>
+        <SelectPopup aria-labelledby={a["aria-labelledby"]}>
           {!a["aria-required"] && <SelectItem value="">None</SelectItem>}
           {known.map((s) => (
             <SelectItem key={s.name} value={s.name}>

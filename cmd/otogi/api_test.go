@@ -25,8 +25,13 @@ import (
 // checks the status of the response.
 func apiHarness(t *testing.T, log *slog.Logger) (*kernel.Kernel, func(method, path, ifMatch, body string, wantCode int) (http.Header, string)) {
 	t.Helper()
+	return apiHarnessIn(t, t.TempDir(), log)
+}
+
+// apiHarnessIn is apiHarness with its data in dir, to start again on.
+func apiHarnessIn(t *testing.T, dir string, log *slog.Logger) (*kernel.Kernel, func(method, path, ifMatch, body string, wantCode int) (http.Header, string)) {
+	t.Helper()
 	ctx := context.Background()
-	dir := t.TempDir()
 	storage, err := modulestore.Open(ctx, dir)
 	if err != nil {
 		t.Fatal(err)

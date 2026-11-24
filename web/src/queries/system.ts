@@ -43,3 +43,16 @@ export async function untilBack(startedAt: string): Promise<void> {
     }
   }
 }
+
+/** llmProvidersQuery lists the configured language model providers, each
+ * with the models last fetched from it. */
+export const llmProvidersQuery = queryOptions({
+  queryKey: ["llm-providers"],
+  queryFn: async () => (await data(api.GET("/api/system/llm/providers"))) ?? [],
+});
+
+/** fetchModels asks the bot to fetch a provider's models now; it answers
+ * with the provider and its new list, or fails with the provider's reason. */
+export function fetchModels(name: string) {
+  return data(api.POST("/api/system/llm/providers/{name}/models", { params: { path: { name } } }));
+}

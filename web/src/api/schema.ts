@@ -436,6 +436,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/llm/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The language model providers, with the models last fetched from each
+         * @description The providers the llm section sets now. Lists are fetched only by POST …/models; a provider removed from the section, or renamed, loses its list.
+         */
+        get: operations["list-llm-providers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/system/llm/providers/{name}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch a provider's models now
+         * @description Asks the provider for its models that generate content, saves the list in place of the last one, and returns it. When the provider's answer is a failure, the answer is 502 with its reason, and the last list stays. Recorded as llm.models, with the list or the failure, never the key.
+         */
+        post: operations["fetch-llm-models"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/startup": {
         parameters: {
             query?: never;
@@ -792,6 +832,24 @@ export interface components {
             /** Format: int64 */
             workers: number;
         };
+        LLMProvider: {
+            /**
+             * Format: date-time
+             * @description When its models were last fetched; absent when never.
+             */
+            fetched_at?: string;
+            /** @description Who fetched them. */
+            fetched_by?: string;
+            /**
+             * @description gemini, or openai for a service that speaks the OpenAI Chat Completions API.
+             * @enum {string}
+             */
+            kind: "gemini" | "openai";
+            /** @description The models last fetched, in the provider's order: only the ID is always known. Empty when never fetched. */
+            models: components["schemas"]["Model"][];
+            /** @description The name modules use for it. */
+            name: string;
+        };
         "List-chat-messagesResponse": {
             messages: components["schemas"]["ChatMessage"][] | null;
             more: boolean;
@@ -845,6 +903,18 @@ export interface components {
             parts?: components["schemas"]["Part"][] | null;
             relations?: components["schemas"]["Relation"][] | null;
             roots?: string[] | null;
+        };
+        Model: {
+            /** Format: int64 */
+            context_tokens?: number;
+            display_name?: string;
+            id: string;
+            input_modalities?: string[] | null;
+            /** Format: int64 */
+            input_tokens?: number;
+            /** Format: int64 */
+            output_tokens?: number;
+            thinking_levels?: string[] | null;
         };
         Module: {
             allowlists: components["schemas"]["Allowlist"][];
@@ -2073,6 +2143,67 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Section"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "list-llm-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMProvider"][] | null;
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    "fetch-llm-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The provider's name, such as gemini. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LLMProvider"];
                 };
             };
             /** @description Error */

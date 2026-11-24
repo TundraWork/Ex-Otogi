@@ -94,6 +94,7 @@ export function SelectPopup({
   alignItemWithTrigger = true,
   anchor,
   portalProps,
+  "aria-labelledby": labelledBy,
   ...props
 }: SelectPrimitive.Popup.Props & {
   portalProps?: SelectPrimitive.Portal.Props;
@@ -129,6 +130,7 @@ export function SelectPopup({
           </SelectPrimitive.ScrollUpArrow>
           <div className="relative h-full min-w-(--anchor-width) rounded-lg border bg-popover bg-clip-padding shadow-lg/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)]">
             <SelectPrimitive.List
+              aria-labelledby={labelledBy}
               className={cn("max-h-(--available-height) overflow-y-auto p-1", className)}
               data-slot="select-list"
             >

@@ -36,6 +36,43 @@ type Provider interface {
 	Generate(ctx context.Context, req Request, partial func(otogi.Message) error) (Response, error)
 }
 
+// ModelLister is a Provider that can list the models it offers. Not every
+// provider can: a proxy may not serve the list, so callers check for it.
+type ModelLister interface {
+	// ListModels asks the provider, now, for the models it offers that
+	// generate content, every page of the list, in the provider's order.
+	// It records nothing: the caller knows who asked and records the
+	// listing.
+	//
+	// Errors wrap otogi.ErrInvalid when the provider refuses the request,
+	// such as for a wrong key or an endpoint with no list, and
+	// otogi.ErrUnavailable for outages; their text carries the HTTP status
+	// and the provider's own message.
+	ListModels(ctx context.Context) ([]Model, error)
+}
+
+// Model is a model a provider offers, as its list describes it. Only the ID
+// is always known; every other field is empty when the list does not say.
+type Model struct {
+	// ID is what Request.Model takes, for example "gemini-3.5-flash".
+	ID string `json:"id"`
+	// DisplayName is the provider's name for it, for people.
+	DisplayName string `json:"display_name,omitempty"`
+	// InputTokens is the most tokens a request may have.
+	InputTokens int `json:"input_tokens,omitempty"`
+	// OutputTokens is the most tokens a reply may have.
+	OutputTokens int `json:"output_tokens,omitempty"`
+	// ContextTokens is the most tokens a request and its reply may have
+	// together, for a provider that gives that instead of InputTokens.
+	ContextTokens int `json:"context_tokens,omitempty"`
+	// InputModalities are the kinds of input it takes, such as "text" and
+	// "image", as the provider names them.
+	InputModalities []string `json:"input_modalities,omitempty"`
+	// ThinkingLevels are the thinking levels it accepts, as the provider
+	// names them; a Request.Thinking not among them is likely refused.
+	ThinkingLevels []string `json:"thinking_levels,omitempty"`
+}
+
 // Request is one model turn.
 type Request struct {
 	// Model is the provider's model ID, for example "gemini-3.8-flash".
