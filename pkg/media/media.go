@@ -40,6 +40,10 @@ type Description struct {
 	// Text is the text on it, or what a video says and its captions,
 	// verbatim; empty when there is none.
 	Text string
+	// Sticker is the number of the kept sticker the media is, 0 when it is
+	// not one. Summary is then the sticker's text: the operator's note, else
+	// the summary it was kept with.
+	Sticker int
 }
 
 var (

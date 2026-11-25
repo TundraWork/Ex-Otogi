@@ -114,11 +114,15 @@ func (m *Module) undescribed(ctx context.Context, from otogi.Destination, md oto
 
 // descriptionText writes a description in brackets: [sticker: a cat eating
 // watermelon], [screenshot: a post Text: "..."], [video 0:12: a song Said:
-// "..."]. With limit above 0, the text goes on one line, cut to limit
-// characters.
+// "..."]; a kept sticker as its number, [sticker 3: ...], whatever its kind,
+// so an agent can send it back. With limit above 0, the text goes on one
+// line, cut to limit characters.
 func descriptionText(md otogi.Media, d mediasvc.Description, limit int) string {
 	head, label := string(d.Kind), "Text"
-	if d.Kind == mediasvc.KindVideo {
+	switch {
+	case d.Sticker != 0:
+		head = fmt.Sprintf("sticker %d", d.Sticker)
+	case d.Kind == mediasvc.KindVideo:
 		label = "Said"
 		if md.Duration > 0 {
 			s := int(md.Duration.Round(time.Second) / time.Second)

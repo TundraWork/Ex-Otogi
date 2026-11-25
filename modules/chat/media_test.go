@@ -108,6 +108,19 @@ func TestDescriptionsInTheTranscript(t *testing.T) {
 	}
 }
 
+// A kept sticker reads as its number in the recent messages, so the agent
+// can send it back.
+func TestKeptStickerInTheChat(t *testing.T) {
+	d := newDescriber()
+	d.kept["eku"] = mediasvc.Description{Kind: mediasvc.KindMeme, Summary: "Eku喵喵叫", Sticker: 3}
+	h := newHarnessWith(t, map[string]any{mediasvc.Service: d}, mediaProfile(false))
+	h.mustHandle(h.message("Bob", "", withParts("", photo("eku"))))
+	h.mustHandle(h.message("Alice", "otogi, what is that?"))
+	if text := lastUserText(h.llm["otogi"].requests[0]); !strings.Contains(text, "Bob: [sticker 3: Eku喵喵叫]") {
+		t.Fatalf("request:\n%s", text)
+	}
+}
+
 func TestWithoutMediaNoDescriptions(t *testing.T) {
 	d := newDescriber()
 	h := newHarnessWith(t, map[string]any{mediasvc.Service: d}, ProfileConfig{Name: "otogi", Keywords: []string{"otogi"}, Provider: "otogi", Model: "m"})
@@ -248,6 +261,9 @@ func TestDescriptionText(t *testing.T) {
 		{d: mediasvc.Description{Kind: mediasvc.KindMeme, Summary: "s", Text: long}, limit: describedText, want: `[meme: s Text: "` + strings.Repeat("字", 300) + `…"]`},
 		{md: otogi.Media{Duration: 72 * time.Second}, d: mediasvc.Description{Kind: mediasvc.KindVideo, Summary: "a song", Text: "la la"}, limit: describedText, want: `[video 1:12: a song Said: "la la"]`},
 		{d: mediasvc.Description{Kind: mediasvc.KindVideo, Summary: "a song"}, want: "[video: a song]"},
+		// A kept sticker reads as its number, whatever its kind.
+		{d: mediasvc.Description{Kind: mediasvc.KindMeme, Summary: "Eku喵喵叫", Sticker: 3}, limit: describedText, want: "[sticker 3: Eku喵喵叫]"},
+		{d: mediasvc.Description{Kind: mediasvc.KindScreenshot, Summary: "s", Text: "哈哈", Sticker: 3}, limit: describedText, want: `[sticker 3: s Text: "哈哈"]`},
 	} {
 		if got := descriptionText(c.md, c.d, c.limit); got != c.want {
 			t.Errorf("descriptionText = %q, want %q", got, c.want)

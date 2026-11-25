@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
 	"embed"
 	"encoding/hex"
@@ -184,14 +185,16 @@ func (st sticker) text() string {
 	return st.Summary
 }
 
-// addSticker keeps st, added by by at now, and returns its number. When a
-// sticker with st's digest is kept already, as when a message is delivered
-// again, it returns that one's number and existed.
+// addSticker keeps st, added by by at now, with the MD5 of its bytes, and
+// returns its number. When a sticker with st's digest is kept already, as
+// when a message is delivered again, it returns that one's number and
+// existed.
 func (s *store) addSticker(ctx context.Context, st sticker, by string, now time.Time) (id int, existed bool, err error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO stickers (sha256, media_type, bytes, kind, summary, note, added_by, added_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	sum := md5.Sum(st.Bytes)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO stickers (sha256, md5, media_type, bytes, kind, summary, note, added_by, added_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (sha256) DO NOTHING`,
-		st.SHA256, st.MediaType, st.Bytes, string(st.Kind), st.Summary, st.Note, by, now.UnixMilli())
+		st.SHA256, sum[:], st.MediaType, st.Bytes, string(st.Kind), st.Summary, st.Note, by, now.UnixMilli())
 	if err != nil {
 		return 0, false, fmt.Errorf("media store: keep sticker: %w", err)
 	}
@@ -207,6 +210,32 @@ func (s *store) addSticker(ctx context.Context, st sticker, by string, now time.
 		err = errors.New("media store: keep sticker: neither inserted nor kept")
 	}
 	return id, true, err
+}
+
+// stickerQueries find a kept sticker by a key's digest, by algorithm.
+var stickerQueries = map[string]string{
+	"sha256": `SELECT id, kind, summary, note FROM stickers WHERE sha256 = ?`,
+	"md5":    `SELECT id, kind, summary, note FROM stickers WHERE md5 = ?`,
+}
+
+// stickerByKey returns the kept sticker whose SHA-256 or MD5 is k, without
+// its bytes; a key of another algorithm finds none.
+func (s *store) stickerByKey(ctx context.Context, k key) (sticker, bool, error) {
+	query, ok := stickerQueries[k.Algorithm]
+	if !ok {
+		return sticker{}, false, nil
+	}
+	var st sticker
+	var kind string
+	err := s.db.QueryRowContext(ctx, query, k.Digest).Scan(&st.ID, &kind, &st.Summary, &st.Note)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sticker{}, false, nil
+	}
+	if err != nil {
+		return sticker{}, false, fmt.Errorf("media store: read sticker: %w", err)
+	}
+	st.Kind = contract.Kind(kind)
+	return st, true, nil
 }
 
 // stickerByDigest returns the number of the sticker with digest sum.

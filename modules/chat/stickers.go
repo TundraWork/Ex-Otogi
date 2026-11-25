@@ -91,7 +91,7 @@ func (s *stickerPick) text() string {
 func (s *stickerPick) tool() llm.Tool {
 	return llm.NewEndingTool(llm.Function{
 		Name:        stickerTool,
-		Description: "Send a sticker by its number: one listed before the message, or one someone names. It goes as a message of its own after what you wrote. This ends your reply: write anything you want to say before calling it. At most one per reply.",
+		Description: "Send a sticker by its number: one listed before the message, one shown as [sticker N: ...] in the chat, or one someone names. It goes as a message of its own after what you wrote. This ends your reply: write anything you want to say before calling it. At most one per reply.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"number":{"type":"integer","description":"the sticker's number"}},"required":["number"]}`),
 	}, func(_ context.Context, _ otogi.Event, args json.RawMessage) (any, error) {
 		var in struct {

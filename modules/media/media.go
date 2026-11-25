@@ -178,7 +178,7 @@ func (m *Module) handleOne(ctx context.Context, e otogi.Event, inv otogi.Invocat
 		return nil
 	}
 	if k.Algorithm != "" {
-		if d, ok, err := m.kept(ctx, k); err != nil || ok {
+		if d, ok, err := m.kept(ctx, chat, k); err != nil || ok {
 			res = result{d: d, err: err}
 			return err
 		}
@@ -201,7 +201,7 @@ func (m *Module) handleOne(ctx context.Context, e otogi.Event, inv otogi.Invocat
 		if err := m.store.putSource(ctx, src, k, m.now()); err != nil {
 			return err
 		}
-		if d, ok, err := m.kept(ctx, k); err != nil || ok {
+		if d, ok, err := m.kept(ctx, chat, k); err != nil || ok {
 			res = result{d: d, err: err}
 			return err
 		}
@@ -231,13 +231,43 @@ func (m *Module) handleOne(ctx context.Context, e otogi.Event, inv otogi.Invocat
 	return nil
 }
 
-// kept returns the description under k, marking it seen.
-func (m *Module) kept(ctx context.Context, k key) (contract.Description, bool, error) {
-	d, ok, err := m.store.get(ctx, k)
-	if err != nil || !ok {
+// kept returns what is kept of the media under k, seen in chat from: the
+// sticker it is, recorded as described from the sticker since no model was
+// asked, or else its description; either way its description is marked
+// seen.
+func (m *Module) kept(ctx context.Context, from string, k key) (contract.Description, bool, error) {
+	d, ok, err := m.stickerOf(ctx, k)
+	if err != nil {
+		return d, false, err
+	}
+	if ok {
+		m.host.Record(ctx, otogi.Record{Kind: "media.described", Outcome: "ok", Payload: map[string]any{
+			"from": from, "key": k.String(), "sticker": d.Sticker, "kind": d.Kind, "summary": d.Summary, "text": d.Text}})
+	} else if d, ok, err = m.store.get(ctx, k); err != nil || !ok {
 		return d, ok, err
 	}
 	return d, true, m.store.seen(ctx, k, m.now())
+}
+
+// stickerOf returns the kept sticker under k as a description: its number
+// and its text, which is read each time, so a note applies at once, with the
+// kind and text of the media's description while there is one, else the kind
+// it was kept with. A sticker with neither a note nor a summary is none here:
+// it is described like any picture, and known once it has a note.
+func (m *Module) stickerOf(ctx context.Context, k key) (contract.Description, bool, error) {
+	st, ok, err := m.store.stickerByKey(ctx, k)
+	if err != nil || !ok || st.text() == "" {
+		return contract.Description{}, false, err
+	}
+	d := contract.Description{Kind: st.Kind, Summary: st.text(), Sticker: st.ID}
+	described, ok, err := m.store.get(ctx, k)
+	if err != nil {
+		return contract.Description{}, false, err
+	}
+	if ok {
+		d.Kind, d.Text = described.Kind, described.Text
+	}
+	return d, true, nil
 }
 
 // Describe returns the description of md, waiting until ctx ends for
@@ -276,6 +306,9 @@ func (m *Module) Lookup(ctx context.Context, from otogi.Destination, md otogi.Me
 		if k, ok, err = m.store.source(ctx, src); err != nil || !ok {
 			return contract.Description{}, false, err
 		}
+	}
+	if d, ok, err := m.stickerOf(ctx, k); err != nil || ok {
+		return d, ok, err
 	}
 	return m.store.get(ctx, k)
 }
