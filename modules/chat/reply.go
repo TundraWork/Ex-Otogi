@@ -437,6 +437,14 @@ func (m *Module) contextText(ctx context.Context, a ask, path []storedTurn, inBa
 			inThread[s] = true
 		}
 	}
+	// The transcript keeps the platform's times and until is the host's: read
+	// up to the messages to answer at least, so a host clock behind the
+	// platform's does not drop the lines just before them.
+	for _, msg := range a.msgs {
+		if msg.OccurredAt.After(until) {
+			until = msg.OccurredAt
+		}
+	}
 	lines, err := m.store.recent(ctx, e.Destination(), until.Add(time.Millisecond), p.context+len(inThread))
 	if err != nil {
 		return "", nil, err

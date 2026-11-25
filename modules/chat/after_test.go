@@ -90,6 +90,24 @@ func TestAReplySentWhileMessagesWaitedIsSeen(t *testing.T) {
 	}
 }
 
+// The transcript keeps the platform's times, which may run ahead of the
+// host's clock: the lines just before the message to answer are still in the
+// recent chat.
+func TestRecentChatWithThePlatformAheadOfTheHost(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	call := h.message("Alice", "otogi which way then")
+	bob := h.message("Bob", "the bridge is closed today", func(e *otogi.Event) { e.OccurredAt = call.OccurredAt.Add(-time.Second) })
+	h.mustHandle(bob)
+	h.mu.Lock()
+	h.now = call.OccurredAt.Add(-3 * time.Second) // the host's clock, behind the platform's
+	h.mu.Unlock()
+	h.mustHandle(call)
+	if got := lastUserText(h.llm["otogi"].requests[0]); !strings.Contains(got, "Bob: the bridge is closed today") {
+		t.Fatalf("user turn %q", got)
+	}
+}
+
 // What the chat says while the agent waits to chime in, and the agent goes on
 // waiting, is seen when it speaks, after the message it speaks up on.
 func TestChimeSeesWhatCameDuringTheWait(t *testing.T) {
