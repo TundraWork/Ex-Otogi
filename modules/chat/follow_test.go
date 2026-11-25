@@ -122,6 +122,88 @@ func TestFollowShare(t *testing.T) {
 	}
 }
 
+// The share is of the conversation the message is in: follow-ups and
+// members' messages before half an hour of quiet do not count.
+func TestFollowShareIsOfTheConversation(t *testing.T) {
+	d := &decider{follow: map[string]float64{"a1": 0.1}} // nothing follows up yet
+	h := newJudged(t, d, followProfile("luna", 0, 0.5))
+	h.mustHandle(h.message("Bob", "b"))
+	for i := range 4 {
+		h.replayAgent(t, "luna", "follow", "earlier", i)
+	}
+	h.mustHandle(h.message("Bob", "bb"))
+	h.now = h.now.Add(31 * time.Minute)
+	h.mustHandle(h.message("Alice", "a"))
+	h.replayAgent(t, "luna", "follow", "now", 4)
+	// Now: luna 1, Alice 2, share 0.5, the threshold as set. With the
+	// earlier conversation, luna 5 and Bob 2 would make it 2.5, and 0.62.
+	d.follow["a1"] = 0.55
+	h.mustHandle(h.message("Alice", "aa"))
+	j, _ := lastReply(h)["judged"].(*judgment)
+	if len(h.llm["luna"].requests) != 1 || j == nil || *j.Share != 0.5 || j.Threshold != 0.5 {
+		t.Fatalf("replies %d, judged %+v", len(h.llm["luna"].requests), j)
+	}
+}
+
+// A batch in which someone called the agent is no follow-up, though it
+// opened with one: it takes the trigger and judgment of the message that
+// called it, its turn is kept as called for, so the share leaves it out,
+// and the agent is not told that nobody named it.
+func TestABatchWithACallIsNoFollowUp(t *testing.T) {
+	d := &decider{answer: func(id string, req decision.Request) (float64, bool) {
+		text := asked(id, req)
+		switch {
+		case strings.HasPrefix(id, "done."):
+			if text == "and then" {
+				return 0.05, true // not finished: the batch waits
+			}
+			return 0.95, true
+		case strings.HasPrefix(id, "wake."):
+			if strings.HasPrefix(text, "luna,") {
+				return 0.9, true
+			}
+			return 0.1, true
+		case strings.HasPrefix(id, "follow."):
+			return 0.9, true
+		}
+		return 0, false
+	}}
+	p := followProfile("luna", 0.7, 0.5)
+	p.Judge.Wait = &WaitConfig{Min: otogi.Duration(50 * time.Millisecond), Max: otogi.Duration(3 * time.Second)}
+	h := newJudged(t, d, p)
+	h.replayAgent(t, "luna", "follow", "the train was late", 1)
+	followUp := h.message("Alice", "and then")
+	errc := make(chan error, 1)
+	go func() { errc <- h.handle(followUp) }()
+	eventually(t, "the follow-up to open a batch", func() bool {
+		h.m.mu.Lock()
+		defer h.m.mu.Unlock()
+		for _, w := range h.m.waits {
+			if w.open != nil {
+				return true
+			}
+		}
+		return false
+	})
+	h.mustHandle(h.message("Bob", "luna, were you on it too?"))
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if n := h.llm["luna"].count(); n != 1 {
+		t.Fatalf("%d replies, want 1", n)
+	}
+	rec := lastReply(h)
+	if b := batchOf(t, rec); !slices.Equal(b["messages"].([]string), []string{"m2", "m3"}) || rec["trigger"] != "decision" || rec["judged"].(*judgment).Score != 0.9 {
+		t.Fatalf("record %+v", rec)
+	}
+	if got := lastUserText(h.llm["luna"].requests[0]); strings.Contains(got, followNote) {
+		t.Fatalf("a batch with a call was told nobody named the agent: %q", got)
+	}
+	if cause := turnCause(t, h, "agent-1"); cause != "decision" {
+		t.Fatalf("the reply's turn says %q, want decision", cause)
+	}
+}
+
 // turnCause is what made the agent answer with the message it sent as source.
 func turnCause(t *testing.T, h *harness, source string) string {
 	t.Helper()
