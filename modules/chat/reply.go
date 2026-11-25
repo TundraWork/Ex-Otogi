@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -80,7 +81,7 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 	var recent string
 	if p.context > 0 {
 		var inRecent []sender
-		if recent, inRecent, err = m.contextText(ctx, e, p, path, inBatch); err != nil {
+		if recent, inRecent, err = m.contextText(ctx, a, path, inBatch, started); err != nil {
 			return "", err
 		}
 		named = append(inRecent, named...)
@@ -420,10 +421,15 @@ func (m *Module) mediaPart(ctx context.Context, inv otogi.Invocation, from otogi
 	return otogi.Message{Roots: []otogi.PartID{"m"}, Parts: []otogi.Part{{ID: "m", Kind: otogi.PartMedia, Media: &media}}}
 }
 
-// contextText is the chat's recent messages before e, leaving out those
-// already in the thread or in the turn (inBatch), and the people who sent
-// them, oldest first.
-func (m *Module) contextText(ctx context.Context, e otogi.Event, p *profile, path []storedTurn, inBatch map[string]bool) (string, []sender, error) {
+// contextText is the chat's recent messages up to until, when the reply
+// starts, leaving out those already in the thread or in the turn (inBatch),
+// and the people who sent them, oldest first. Those sent after the last
+// message to answer come under a heading of their own, since they mostly
+// share its minute: the agent's reply to an earlier message, or what the
+// chat said while the agent waited. They lead the turn like the rest, which
+// still ends with the messages to answer.
+func (m *Module) contextText(ctx context.Context, a ask, path []storedTurn, inBatch map[string]bool, until time.Time) (string, []sender, error) {
+	p, e := a.p, a.msgs[0]
 	inThread := maps.Clone(inBatch)
 	for _, t := range path {
 		inThread[t.SourceID] = true
@@ -431,11 +437,7 @@ func (m *Module) contextText(ctx context.Context, e otogi.Event, p *profile, pat
 			inThread[s] = true
 		}
 	}
-	before := e.OccurredAt
-	if before.IsZero() {
-		before = m.now()
-	}
-	lines, err := m.store.recent(ctx, e.Destination(), before.Add(time.Millisecond), p.context+len(inThread))
+	lines, err := m.store.recent(ctx, e.Destination(), until.Add(time.Millisecond), p.context+len(inThread))
 	if err != nil {
 		return "", nil, err
 	}
@@ -443,10 +445,9 @@ func (m *Module) contextText(ctx context.Context, e otogi.Event, p *profile, pat
 	if len(lines) > p.context {
 		lines = lines[len(lines)-p.context:]
 	}
-	if len(lines) == 0 {
-		return "", nil, nil
-	}
-	var kept []string
+	// After the last message to answer: where the turn ends (askContent).
+	answered := cmp.Or(a.msgs[len(a.msgs)-1].OccurredAt, until)
+	var before, after []string
 	var named []sender
 	for _, l := range lines {
 		who, _, shown, err := m.said(ctx, e.Destination(), l)
@@ -457,9 +458,25 @@ func (m *Module) contextText(ctx context.Context, e otogi.Event, p *profile, pat
 			named = append(named, sender{l.ActorID, l.ActorName})
 		}
 		text := m.lineText(ctx, e.Destination(), shown, p.Media != nil)
-		kept = append(kept, fmt.Sprintf("[%s] %s: %s", l.At.In(time.Local).Format("15:04"), who, text))
+		row := fmt.Sprintf("[%s] %s: %s", l.At.In(time.Local).Format("15:04"), who, text)
+		if l.At.After(answered) {
+			after = append(after, row)
+		} else {
+			before = append(before, row)
+		}
 	}
-	return "Recent messages in this chat, oldest first, for context:\n" + strings.Join(kept, "\n"), named, nil
+	var parts []string
+	if len(before) > 0 {
+		parts = append(parts, "Recent messages in this chat, oldest first, for context:\n"+strings.Join(before, "\n"))
+	}
+	if len(after) > 0 {
+		heading := "Sent after the message to answer:"
+		if len(a.msgs) > 1 {
+			heading = "Sent after the messages to answer:"
+		}
+		parts = append(parts, heading+"\n"+strings.Join(after, "\n"))
+	}
+	return strings.Join(parts, "\n\n"), named, nil
 }
 
 // system is the profile's prompt and what the agent needs to know about

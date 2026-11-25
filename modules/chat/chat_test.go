@@ -75,12 +75,13 @@ func (s *stream) Close(_ context.Context, msg otogi.Message) ([]otogi.EventRef, 
 }
 
 // echo hands the message a reply sent back to the module as the platform
-// does: the account's message, as it was sent.
-func (h *harness) echo(s *stream) {
+// does: the account's message, as it was sent, at mods' time or else a
+// minute after the last message.
+func (h *harness) echo(s *stream, mods ...func(*otogi.Event)) {
 	h.t.Helper()
-	h.mustHandle(h.message("Me", "", func(e *otogi.Event) {
+	h.mustHandle(h.message("Me", "", append([]func(*otogi.Event){func(e *otogi.Event) {
 		e.SourceID, e.Direction, e.Message = s.ref.SourceEvent, otogi.DirectionOutgoing, s.final
-	}))
+	}}, mods...)...))
 }
 
 type invocation struct {
