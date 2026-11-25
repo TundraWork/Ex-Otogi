@@ -423,7 +423,9 @@ func (m *Module) run(ctx context.Context, inv otogi.Invocation, b *batch) error 
 	// next messages open a batch of their own; once it closed, this does
 	// nothing.
 	defer m.drop(b)
+	m.mu.Lock() // messages joining b append to its entries under m.mu
 	chat := b.entries[0].e.ChatKey()
+	m.mu.Unlock()
 	if b.after != nil {
 		select {
 		case <-b.after:
