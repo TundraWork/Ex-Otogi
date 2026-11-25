@@ -152,6 +152,8 @@ type submitter struct {
 	mu     sync.Mutex
 	events []otogi.Event
 	got    chan otogi.Event
+	hold   bool                  // keep done callbacks for complete
+	held   []func(otogi.Outcome) // in submission order
 }
 
 func newSubmitter() *submitter { return &submitter{got: make(chan otogi.Event, 64)} }
@@ -159,10 +161,24 @@ func newSubmitter() *submitter { return &submitter{got: make(chan otogi.Event, 6
 func (s *submitter) Submit(_ context.Context, event otogi.Event, done func(otogi.Outcome)) error {
 	s.mu.Lock()
 	s.events = append(s.events, event)
+	hold := s.hold
+	if hold {
+		s.held = append(s.held, done)
+	}
 	s.mu.Unlock()
 	s.got <- event
-	done(otogi.Outcome{EventID: event.ID})
+	if !hold {
+		done(otogi.Outcome{EventID: event.ID})
+	}
 	return nil
+}
+
+// complete finishes the i-th held event.
+func (s *submitter) complete(i int) {
+	s.mu.Lock()
+	done := s.held[i]
+	s.mu.Unlock()
+	done(otogi.Outcome{})
 }
 
 func (s *submitter) next(t *testing.T) otogi.Event {

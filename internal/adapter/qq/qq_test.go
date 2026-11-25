@@ -3,6 +3,7 @@ package qq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -163,5 +164,62 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Drain waits for the events already in the kernel, so their rows are
+// marked done before the database closes.
+func TestDrainWaitsForSubmittedEvents(t *testing.T) {
+	f := newFakeQQ(t)
+	k, rec := newSubmitter(), &recorder{}
+	k.hold = true
+	d := newDriver(f, t.TempDir(), k, rec)
+	var p *peer
+	startDriver(t, d, func() {
+		p = f.next()
+		p.hello()
+		p.dispatch(1, "READY", "", `{"session_id":"S1","user":{"id":"B1","username":"Otogi"}}`)
+	})
+	p.dispatch(2, "C2C_MESSAGE_CREATE", "C2C_MESSAGE_CREATE:e1", c2c)
+	k.next(t)
+	drained := make(chan error, 1)
+	go func() { drained <- d.Drain(context.Background()) }()
+	select {
+	case err := <-drained:
+		t.Fatalf("Drain returned with an event in the kernel: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	k.complete(0)
+	select {
+	case err := <-drained:
+		if err != nil {
+			t.Fatalf("Drain = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Drain did not return once the event was done")
+	}
+	if s := d.Status(context.Background()); s.PendingInbox != 0 {
+		t.Fatalf("pending inbox = %d, want the row marked done", s.PendingInbox)
+	}
+}
+
+func TestDrainReturnsWhenContextEnds(t *testing.T) {
+	f := newFakeQQ(t)
+	k, rec := newSubmitter(), &recorder{}
+	k.hold = true
+	d := newDriver(f, t.TempDir(), k, rec)
+	var p *peer
+	startDriver(t, d, func() {
+		p = f.next()
+		p.hello()
+		p.dispatch(1, "READY", "", `{"session_id":"S1","user":{"id":"B1","username":"Otogi"}}`)
+	})
+	p.dispatch(2, "C2C_MESSAGE_CREATE", "C2C_MESSAGE_CREATE:e1", c2c)
+	k.next(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := d.Drain(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), ": 1:") {
+		t.Fatalf("Drain = %v, want the deadline and 1 event unfinished", err)
 	}
 }

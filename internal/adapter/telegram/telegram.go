@@ -79,6 +79,7 @@ type Driver struct {
 	effects   *effects
 	cancel    context.CancelFunc
 	drain     context.CancelFunc
+	disp      *dispatcher // set with drain; see Drain
 	drained   chan struct{}
 	readyCh   chan struct{}
 	readyOnce sync.Once
@@ -198,16 +199,16 @@ func (d *Driver) connected(ctx context.Context, c client, store *telegramstore.S
 
 	g, ctx := errgroup.WithContext(ctx)
 	dispatchCtx, stopDispatch := context.WithCancel(ctx)
-	d.mu.Lock()
-	d.drain = stopDispatch
-	d.mu.Unlock()
 	g.Go(guarded("update manager", func() error {
 		return manager.Run(ctx, c.API(), self.ID, updates.AuthOptions{OnStart: func(context.Context) { d.markReady() }})
 	}))
+	disp := &dispatcher{store: store, mapper: m, kernel: d.cfg.Kernel, wake: wake, poll: time.Second, log: d.log, now: time.Now, record: d.record, pending: map[int64]*rowProgress{}}
+	d.mu.Lock()
+	d.drain, d.disp = stopDispatch, disp
+	d.mu.Unlock()
 	g.Go(guarded("dispatcher", func() error {
 		defer close(d.drained)
-		dispatcher := &dispatcher{store: store, mapper: m, kernel: d.cfg.Kernel, wake: wake, poll: time.Second, log: d.log, now: time.Now, record: d.record, pending: map[int64]*rowProgress{}}
-		return dispatcher.run(dispatchCtx)
+		return disp.run(dispatchCtx)
 	}))
 	g.Go(guarded("pruner", func() error { return prune(ctx, store, d.log) }))
 	g.Go(func() error {
@@ -331,11 +332,13 @@ func (d *Driver) Err() error {
 	return d.err
 }
 
-// Drain stops dispatching new inbox rows to the kernel; updates are still
-// persisted. Rows left undispatched are processed on the next start.
+// Drain stops dispatching new inbox rows to the kernel, and waits until the
+// events already submitted are done, or ctx ends; updates are still
+// persisted. Rows left undispatched, or whose events were not done in time,
+// are processed on the next start.
 func (d *Driver) Drain(ctx context.Context) error {
 	d.mu.Lock()
-	drain := d.drain
+	drain, disp := d.drain, d.disp
 	d.mu.Unlock()
 	if drain == nil {
 		return nil
@@ -343,12 +346,12 @@ func (d *Driver) Drain(ctx context.Context) error {
 	drain()
 	select {
 	case <-d.drained:
-		return nil
 	case <-d.done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	return disp.settle(ctx)
 }
 
 // Stop disconnects and waits for the driver to finish, or ctx to end.

@@ -2,7 +2,9 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ type dispatchHarness struct {
 	store  *telegramstore.Store
 	kernel *submitter
 	wake   chan struct{}
+	disp   *dispatcher // the one run started last
 }
 
 func newDispatchHarness(t *testing.T) *dispatchHarness {
@@ -38,6 +41,7 @@ func (h *dispatchHarness) run(t *testing.T) func() {
 		mapper:  mapper.New(mapper.Config{Platform: Platform, Account: "main"}),
 		pending: map[int64]*rowProgress{},
 	}
+	h.disp = d
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- d.run(ctx) }()
@@ -173,5 +177,60 @@ func TestEventsCarryNames(t *testing.T) {
 	}
 	if e := h.kernel.next(t); e.Actor.Name != "Haru" || !e.Actor.Bot {
 		t.Fatalf("bot's message actor %+v", e.Actor)
+	}
+}
+
+// A row of a deletion of two known messages is two events: settle returns
+// once both are done, not when the first is.
+func TestSettleWaitsForSubmittedEvents(t *testing.T) {
+	h := newDispatchHarness(t)
+	h.kernel.auto = true
+	h.insert(t, "a", &tg.UpdateNewMessage{Message: newMessage(10, &tg.PeerUser{UserID: 2}, "hi"), Pts: 1, PtsCount: 1})
+	h.insert(t, "b", &tg.UpdateNewMessage{Message: newMessage(11, &tg.PeerChat{ChatID: 3}, "yo"), Pts: 2, PtsCount: 1})
+	stop := h.run(t)
+	h.kernel.next(t)
+	h.kernel.next(t)
+	eventually(t, "messages done", func() bool { return pendingCount(t, h.store) == 0 })
+	stop()
+
+	h.kernel.auto = false
+	h.insert(t, "c", &tg.UpdateDeleteMessages{Messages: []int{10, 11}, Pts: 3, PtsCount: 2})
+	stop = h.run(t)
+	h.kernel.next(t)
+	h.kernel.next(t)
+	stop() // dispatching ends; the two events are still in the kernel
+	settled := make(chan error, 1)
+	go func() { settled <- h.disp.settle(context.Background()) }()
+	h.kernel.complete(2, otogi.Outcome{})
+	select {
+	case err := <-settled:
+		t.Fatalf("settle returned with an event unfinished: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	h.kernel.complete(3, otogi.Outcome{})
+	select {
+	case err := <-settled:
+		if err != nil {
+			t.Fatalf("settle = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("settle did not return once every event was done")
+	}
+	if pendingCount(t, h.store) != 0 {
+		t.Fatal("row not marked done")
+	}
+}
+
+func TestSettleReturnsWhenContextEnds(t *testing.T) {
+	h := newDispatchHarness(t)
+	h.insert(t, "a", &tg.UpdateNewMessage{Message: newMessage(10, &tg.PeerUser{UserID: 2}, "hi"), Pts: 1, PtsCount: 1})
+	stop := h.run(t)
+	h.kernel.next(t)
+	stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := h.disp.settle(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), ": 1:") {
+		t.Fatalf("settle = %v, want the deadline and 1 event unfinished", err)
 	}
 }

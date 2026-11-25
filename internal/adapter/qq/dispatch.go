@@ -42,6 +42,10 @@ type dispatcher struct {
 
 	mu     sync.Mutex
 	failed error // first error from a done callback, surfaced by run
+	// unfinished counts the events submitted whose done callback has not
+	// run; idle is closed each time it drops to zero. See settle.
+	unfinished int
+	idle       chan struct{}
 }
 
 // run dispatches rows until ctx ends, the kernel stops admitting events, or
@@ -111,7 +115,14 @@ func (d *dispatcher) dispatch(ctx context.Context, row qqstore.InboxRow) (bool, 
 			return false, err
 		}
 	}
+	d.mu.Lock()
+	if d.unfinished == 0 {
+		d.idle = make(chan struct{})
+	}
+	d.unfinished++
+	d.mu.Unlock()
 	if err := d.kernel.Submit(ctx, event, func(o otogi.Outcome) { d.finish(row.ID, o) }); err != nil {
+		d.ended()
 		// Events are validated above, so the kernel is shutting down or ctx
 		// ended. The row stays pending for the next start.
 		d.log.Info("qq: event not admitted; row left pending", "row", row.ID, "event", event.ID, "error", err)
@@ -137,6 +148,7 @@ func (d *dispatcher) acknowledge(ctx context.Context, f frame) {
 
 // finish runs on a kernel goroutine when a row's event completes.
 func (d *dispatcher) finish(rowID int64, outcome otogi.Outcome) {
+	defer d.ended() // after the row is marked, so settle returns only then
 	if outcome.Err != nil && outcome.DroppedBy == "" {
 		return // the kernel stopped first; replay on next start
 	}
@@ -150,6 +162,36 @@ func (d *dispatcher) finish(rowID int64, outcome otogi.Outcome) {
 			d.failed = fmt.Errorf("qq: mark inbox row %d done: %w", rowID, err)
 		}
 		d.mu.Unlock()
+	}
+}
+
+// ended counts an event out of the kernel.
+func (d *dispatcher) ended() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.unfinished--
+	if d.unfinished == 0 {
+		close(d.idle)
+	}
+}
+
+// settle waits until every event submitted to the kernel is done, so its row
+// is marked while the database is open, or until ctx ends.
+func (d *dispatcher) settle(ctx context.Context) error {
+	d.mu.Lock()
+	idle := d.idle
+	if d.unfinished == 0 {
+		d.mu.Unlock()
+		return nil
+	}
+	d.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return fmt.Errorf("qq: events still in the kernel: %d: %w", d.unfinished, ctx.Err())
 	}
 }
 

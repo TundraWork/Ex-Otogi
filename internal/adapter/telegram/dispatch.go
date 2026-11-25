@@ -52,6 +52,10 @@ type dispatcher struct {
 	mu      sync.Mutex
 	pending map[int64]*rowProgress
 	failed  error // first error from a done callback, surfaced by run
+	// unfinished counts the events submitted whose done callback has not
+	// run; idle is closed each time it drops to zero. See settle.
+	unfinished int
+	idle       chan struct{}
 }
 
 type rowProgress struct {
@@ -110,6 +114,7 @@ func (d *dispatcher) dispatch(ctx context.Context, row telegramstore.InboxRow) (
 	}
 	d.mu.Lock()
 	d.pending[row.ID] = &rowProgress{remaining: len(events)}
+	d.started(len(events))
 	d.mu.Unlock()
 	for i, event := range events {
 		event.ID = inboxEventID(row.ID, i)
@@ -118,7 +123,13 @@ func (d *dispatcher) dispatch(ctx context.Context, row telegramstore.InboxRow) (
 			// or ctx ended. The row stays pending for the next start.
 			d.log.Info("telegram: event not admitted; row left pending", "row", row.ID, "event", event.ID, "error", err)
 			d.mu.Lock()
-			d.pending[row.ID].abandoned = true
+			progress, never := d.pending[row.ID], len(events)-i
+			progress.abandoned = true
+			progress.remaining -= never
+			if progress.remaining == 0 {
+				delete(d.pending, row.ID)
+			}
+			d.ended(never)
 			d.mu.Unlock()
 			return false, nil
 		}
@@ -199,6 +210,11 @@ func (d *dispatcher) finish(rowID int64, outcome otogi.Outcome) {
 		delete(d.pending, rowID)
 	}
 	d.mu.Unlock()
+	defer func() { // after the row is marked, so settle returns only then
+		d.mu.Lock()
+		d.ended(1)
+		d.mu.Unlock()
+	}()
 	if !last || abandoned {
 		return
 	}
@@ -212,6 +228,42 @@ func (d *dispatcher) finish(rowID int64, outcome otogi.Outcome) {
 			d.failed = fmt.Errorf("telegram: mark inbox row %d done: %w", rowID, err)
 		}
 		d.mu.Unlock()
+	}
+}
+
+// started and ended count events into and out of the kernel; the caller
+// holds d.mu.
+func (d *dispatcher) started(n int) {
+	if d.unfinished == 0 {
+		d.idle = make(chan struct{})
+	}
+	d.unfinished += n
+}
+
+func (d *dispatcher) ended(n int) {
+	d.unfinished -= n
+	if d.unfinished == 0 && d.idle != nil {
+		close(d.idle)
+	}
+}
+
+// settle waits until every event submitted to the kernel is done, so its row
+// is marked while the database is open, or until ctx ends.
+func (d *dispatcher) settle(ctx context.Context) error {
+	d.mu.Lock()
+	idle := d.idle
+	if d.unfinished == 0 {
+		d.mu.Unlock()
+		return nil
+	}
+	d.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return fmt.Errorf("telegram: events still in the kernel: %d: %w", d.unfinished, ctx.Err())
 	}
 }
 
