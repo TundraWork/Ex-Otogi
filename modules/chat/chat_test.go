@@ -52,11 +52,12 @@ func answer(text string) llm.Response {
 	return llm.Response{Turn: llm.Turn{Role: llm.RoleModel, Content: otogi.TextMessage(text), Native: &llm.Native{Provider: "fake", Data: []byte(`"` + text + `"`)}}, Markdown: text, Finish: llm.FinishStop}
 }
 
-// stream keeps what a reply showed.
+// stream keeps what a reply showed, and the message it sent.
 type stream struct {
 	h       *harness
 	updates []string
 	final   otogi.Message
+	ref     otogi.EventRef
 }
 
 func (s *stream) Update(_ context.Context, msg otogi.Message) error {
@@ -69,7 +70,17 @@ func (s *stream) Close(_ context.Context, msg otogi.Message) ([]otogi.EventRef, 
 	defer s.h.mu.Unlock()
 	s.final = msg
 	s.h.sent++
-	return []otogi.EventRef{{Platform: "telegram", Account: "main", Conversation: "chat:1", SourceEvent: otogi.SourceEventID(fmt.Sprintf("agent-%d", s.h.sent))}}, nil
+	s.ref = otogi.EventRef{Platform: "telegram", Account: "main", Conversation: "chat:1", SourceEvent: otogi.SourceEventID(fmt.Sprintf("agent-%d", s.h.sent))}
+	return []otogi.EventRef{s.ref}, nil
+}
+
+// echo hands the message a reply sent back to the module as the platform
+// does: the account's message, as it was sent.
+func (h *harness) echo(s *stream) {
+	h.t.Helper()
+	h.mustHandle(h.message("Me", "", func(e *otogi.Event) {
+		e.SourceID, e.Direction, e.Message = s.ref.SourceEvent, otogi.DirectionOutgoing, s.final
+	}))
 }
 
 type invocation struct {

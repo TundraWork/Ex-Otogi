@@ -166,6 +166,9 @@ type profile struct {
 	waitMin, waitMax time.Duration
 }
 
+// title is what chats know the agent by: its label, or its name.
+func (p *profile) title() string { return cmp.Or(p.Label, p.Name) }
+
 // toolsList names the allowlist of the chats where agents get a module's
 // tools. Profile lists are named as their profiles, which may not start
 // so.

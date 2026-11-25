@@ -246,12 +246,14 @@ func (m *Module) askContent(ctx context.Context, inv otogi.Invocation, a ask, un
 			add(msg)
 			continue
 		}
-		who := l.ActorName + " (this account)"
+		who, _, shown, err := m.said(ctx, to, l)
+		if err != nil {
+			return otogi.Message{}, nil, nil, err
+		}
 		if !l.Outgoing {
-			who = m.nameOf(to.Platform, l.ActorID, l.ActorName)
 			named = append(named, sender{l.ActorID, l.ActorName})
 		}
-		content = llm.Join(content, otogi.TextMessage(who+": "+m.lineText(ctx, to, l, a.p.Media != nil)))
+		content = llm.Join(content, otogi.TextMessage(who+": "+m.lineText(ctx, to, shown, a.p.Media != nil)))
 		inBatch[l.SourceID] = true
 	}
 	for _, msg := range a.msgs { // not in the transcript's span, which should not happen
@@ -335,10 +337,13 @@ func (m *Module) userContent(ctx context.Context, e otogi.Event, inv otogi.Invoc
 		return m.mediaPart(ctx, inv, e.Destination(), media)
 	}
 	if target, ok := replyTarget(e.Message); ok && quote {
-		if quoted, found, err := m.store.message(ctx, e.Destination(), string(target.SourceEvent)); err == nil && found && (quoted.Text != "" || len(quoted.Media) > 0) {
-			who := quoted.ActorName
+		quoted, found, err := m.store.message(ctx, e.Destination(), string(target.SourceEvent))
+		var who string
+		if err == nil && found {
+			who, _, quoted, err = m.said(ctx, e.Destination(), quoted)
+		}
+		if err == nil && found && (quoted.Text != "" || len(quoted.Media) > 0) {
 			if !quoted.Outgoing {
-				who = m.nameOf(e.Platform, quoted.ActorID, quoted.ActorName)
 				named = append(named, sender{quoted.ActorID, quoted.ActorName})
 			}
 			if quoted.Sticker != "" { // an agent's sticker reads as what it shows
@@ -444,13 +449,15 @@ func (m *Module) contextText(ctx context.Context, e otogi.Event, p *profile, pat
 	var kept []string
 	var named []sender
 	for _, l := range lines {
-		name := l.ActorName + " (this account)"
+		who, _, shown, err := m.said(ctx, e.Destination(), l)
+		if err != nil {
+			return "", nil, err
+		}
 		if !l.Outgoing {
-			name = m.nameOf(e.Platform, l.ActorID, l.ActorName)
 			named = append(named, sender{l.ActorID, l.ActorName})
 		}
-		text := m.lineText(ctx, e.Destination(), l, p.Media != nil)
-		kept = append(kept, fmt.Sprintf("[%s] %s: %s", l.At.In(time.Local).Format("15:04"), name, text))
+		text := m.lineText(ctx, e.Destination(), shown, p.Media != nil)
+		kept = append(kept, fmt.Sprintf("[%s] %s: %s", l.At.In(time.Local).Format("15:04"), who, text))
 	}
 	return "Recent messages in this chat, oldest first, for context:\n" + strings.Join(kept, "\n"), named, nil
 }
@@ -477,20 +484,26 @@ func (m *Module) system(p *profile, e otogi.Event) string {
 	}
 	return strings.TrimSpace(p.System) + "\n\n" + fmt.Sprintf(
 		"You are %s, talking in %s on %s. It is %s. People address you by starting a message with your name, by mentioning you, or by replying to you. "+
-			"In group chats each message starts with its sender's name. You speak through a shared account: chat lines marked (this account) were sent by you or by another agent or feature of this bot. "+
+			"In group chats each message starts with its sender's name. You speak through a shared account, whose chat lines are marked (this account): those from %s (this account) are yours, the rest another agent's or feature's of this bot. "+
 			"Write in Markdown.%s",
-		p.Name, where, e.Platform, m.now().In(time.Local).Format("Monday, 2 January 2006, 15:04 MST"), about)
+		p.Name, where, e.Platform, m.now().In(time.Local).Format("Monday, 2 January 2006, 15:04 MST"), p.title(), about)
 }
 
 // present is a reply as the chat shows it: after the profile's label, as a
 // reply to the message it answers.
 func present(p *profile, e otogi.Event, msg otogi.Message) otogi.Message {
 	if p.Label != "" {
-		label := otogi.TextMessage(p.Label)
-		label.Parts[0].Annotations = []otogi.Annotation{{Offset: 0, Length: len(p.Label), Kind: otogi.AnnotationBold}}
-		msg = joinLine(label, msg)
+		msg = joinLine(label(p), msg)
 	}
 	msg.Relations = []otogi.Relation{{Kind: otogi.RelationReply, Target: e.Ref()}}
+	return msg
+}
+
+// label is the profile's label as a reply shows it, on a line of its own
+// before the reply's text.
+func label(p *profile) otogi.Message {
+	msg := otogi.TextMessage(p.Label)
+	msg.Parts[0].Annotations = []otogi.Annotation{{Offset: 0, Length: len(p.Label), Kind: otogi.AnnotationBold}}
 	return msg
 }
 

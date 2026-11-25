@@ -6,7 +6,6 @@
 package chat
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -71,7 +70,7 @@ func (m *Module) Descriptor() otogi.ModuleDescriptor {
 	var requires []string
 	var lists []otogi.AllowlistSpec
 	for _, p := range m.profiles {
-		title := cmp.Or(p.Label, p.Name)
+		title := p.title()
 		lists = append(lists, otogi.AllowlistSpec{Name: p.Name, Title: title, Description: title + " answers here."})
 	}
 	for _, t := range m.toolModules {

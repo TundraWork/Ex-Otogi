@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/decision"
+	"github.com/TundraWork/Ex-Otogi/pkg/markdown"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -591,7 +593,7 @@ func (m *Module) judgeState(ctx context.Context, es []otogi.Event, agents []*pro
 	state.Chat = groupChat
 	ids := agentIDs(agents)
 	for _, p := range agents {
-		state.Agents = append(state.Agents, judgeAgent{ID: ids[p], Name: cmp.Or(p.Label, p.Name), Names: p.keywords, Rules: p.rules})
+		state.Agents = append(state.Agents, judgeAgent{ID: ids[p], Name: p.title(), Names: p.keywords, Rules: p.rules})
 	}
 	msgIDs := map[string]string{}
 	people := map[string]string{}
@@ -599,12 +601,13 @@ func (m *Module) judgeState(ctx context.Context, es []otogi.Event, agents []*pro
 		msgIDs[l.SourceID] = fmt.Sprintf("m%d", i+1)
 	}
 	for _, l := range lines {
-		jl := judgeLine{ID: msgIDs[l.SourceID], Text: m.lineText(ctx, to, l, described)}
+		_, agent, shown, err := m.said(ctx, to, l)
+		if err != nil {
+			return judgeState{}, nil, err
+		}
+		jl := judgeLine{ID: msgIDs[l.SourceID], Text: m.lineText(ctx, to, shown, described), From: m.lineFrom(to, l, agent, ids, people)}
 		if !judged[l.SourceID] {
 			jl.Text = cut(jl.Text)
-		}
-		if jl.From, err = m.lineFrom(ctx, to, l, ids, people); err != nil {
-			return judgeState{}, nil, err
 		}
 		if jl.ReplyTo, jl.ReplyingTo, err = m.replyOf(ctx, to, l, msgIDs, described); err != nil {
 			return judgeState{}, nil, err
@@ -631,33 +634,56 @@ func (m *Module) replyOf(ctx context.Context, to otogi.Destination, l line, msgI
 	if err != nil || !found {
 		return "", "", err
 	}
-	who := quoted.ActorName
-	if !quoted.Outgoing {
-		who = m.nameOf(to.Platform, quoted.ActorID, quoted.ActorName)
+	who, _, quoted, err := m.said(ctx, to, quoted)
+	if err != nil {
+		return "", "", err
 	}
 	return "", who + ": " + cut(m.lineText(ctx, to, quoted, described)), nil
 }
 
-// lineFrom names a message's sender: a person as uN and their name, an
-// agent's message as its number and name, another message of the account
-// as "this account".
-func (m *Module) lineFrom(ctx context.Context, to otogi.Destination, l line, agents map[*profile]string, people map[string]string) (string, error) {
+// lineFrom names a message's sender for judgments: a person as uN and their
+// name, the message of an agent, which said finds, as its number and title,
+// another message of the account as "this account".
+func (m *Module) lineFrom(to otogi.Destination, l line, agent *profile, agents map[*profile]string, people map[string]string) string {
 	if !l.Outgoing {
 		id, ok := people[l.ActorID]
 		if !ok {
 			id = fmt.Sprintf("u%d", len(people)+1)
 			people[l.ActorID] = id
 		}
-		return id + " " + m.nameOf(to.Platform, l.ActorID, l.ActorName), nil
+		return id + " " + m.nameOf(to.Platform, l.ActorID, l.ActorName)
 	}
-	p, err := m.lineAgent(ctx, to, l)
-	if err != nil || p == nil {
-		return "this account", err
+	if agent == nil {
+		return "this account"
 	}
-	if id, ok := agents[p]; ok {
-		return id + " " + cmp.Or(p.Label, p.Name), nil
+	if id, ok := agents[agent]; ok {
+		return id + " " + agent.title()
 	}
-	return cmp.Or(p.Label, p.Name), nil
+	return agent.title()
+}
+
+// said is a transcript line as prompts show it: who sent it, the agent that
+// did, if one did, and the line without the label the agent's reply showed
+// first. A person is named as nameOf names them; an agent, by its title with
+// "(this account)"; another message of the account, by the account's name
+// with "(this account)". Every prompt that shows the chat goes through it.
+func (m *Module) said(ctx context.Context, to otogi.Destination, l line) (who string, agent *profile, shown line, err error) {
+	if !l.Outgoing {
+		return m.nameOf(to.Platform, l.ActorID, l.ActorName), nil, l, nil
+	}
+	if agent, err = m.lineAgent(ctx, to, l); err != nil {
+		return "", nil, line{}, err
+	}
+	if agent == nil {
+		return l.ActorName + " (this account)", nil, l, nil
+	}
+	if agent.Label != "" {
+		// The transcript keeps the label as transcriptLine formats what
+		// present sent. Lines sent under an earlier label keep that one.
+		shown := label(agent).Parts[0]
+		l.Text = strings.TrimPrefix(l.Text, markdown.Format(shown.Text, shown.Annotations)+"\n")
+	}
+	return agent.title() + " (this account)", agent, l, nil
 }
 
 // lineAgent is the agent that sent a message of the account, or nil: a
