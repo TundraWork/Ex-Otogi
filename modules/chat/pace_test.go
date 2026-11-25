@@ -19,19 +19,20 @@ func TestRhythm(t *testing.T) {
 		lines   []line
 		replied []time.Time
 		want    time.Duration
+		own     bool
 	}{
-		"their own run":              {[]line{by("a", 0), by("a", 4), by("a", 10), by("a", 12)}, nil, 4 * time.Second},
-		"no faster than the floor":   {[]line{by("a", 0), by("a", 1), by("a", 2)}, nil, rhythmFloor},
-		"someone else's run":         {[]line{by("b", 0), by("b", 8), by("b", 14), by("a", 20)}, nil, 7 * time.Second},
-		"no runs at all":             {[]line{by("a", 0), by("b", 5), by("a", 10)}, nil, rhythmDefault},
-		"a minute apart is no run":   {[]line{by("a", 0), by("a", 70)}, nil, rhythmDefault},
-		"the agent in between":       {[]line{by("a", 0), agent(2), by("a", 4)}, nil, rhythmDefault},
-		"a back-and-forth is no run": {[]line{by("a", 0), by("b", 30), by("a", 61)}, nil, rhythmDefault},
-		"a reply started in between": {[]line{by("a", 0), by("a", 4), by("a", 30)}, []time.Time{at(6)}, 4 * time.Second},
-		"a reply started before":     {[]line{by("a", 10), by("a", 14)}, []time.Time{at(10)}, 4 * time.Second},
+		"their own run":              {[]line{by("a", 0), by("a", 4), by("a", 10), by("a", 12)}, nil, 4 * time.Second, true},
+		"no faster than the floor":   {[]line{by("a", 0), by("a", 1), by("a", 2)}, nil, rhythmFloor, true},
+		"someone else's run":         {[]line{by("b", 0), by("b", 8), by("b", 14), by("a", 20)}, nil, 7 * time.Second, false},
+		"no runs at all":             {[]line{by("a", 0), by("b", 5), by("a", 10)}, nil, rhythmDefault, false},
+		"a minute apart is no run":   {[]line{by("a", 0), by("a", 70)}, nil, rhythmDefault, false},
+		"the agent in between":       {[]line{by("a", 0), agent(2), by("a", 4)}, nil, rhythmDefault, false},
+		"a back-and-forth is no run": {[]line{by("a", 0), by("b", 30), by("a", 61)}, nil, rhythmDefault, false},
+		"a reply started in between": {[]line{by("a", 0), by("a", 4), by("a", 30)}, []time.Time{at(6)}, 4 * time.Second, true},
+		"a reply started before":     {[]line{by("a", 10), by("a", 14)}, []time.Time{at(10)}, 4 * time.Second, true},
 	} {
-		if got := rhythm(c.lines, c.replied, "a"); got != c.want {
-			t.Errorf("%s: rhythm %v, want %v", name, got, c.want)
+		if got, own := rhythm(c.lines, c.replied, "a"); got != c.want || own != c.own {
+			t.Errorf("%s: rhythm %v, own %v; want %v, %v", name, got, own, c.want, c.own)
 		}
 	}
 }
@@ -50,10 +51,10 @@ func TestRhythmOfTheTestGroup(t *testing.T) {
 		lines = append(lines, line{ActorID: "user:mihari", At: at(sec)})
 	}
 	replied := []time.Time{at(41), at(68)}
-	if got := rhythm(lines[:3], replied[:1], "user:mihari"); got != 7*time.Second {
+	if got, _ := rhythm(lines[:3], replied[:1], "user:mihari"); got != 7*time.Second {
 		t.Errorf("rhythm at the third message %v, want 7s", got)
 	}
-	got := rhythm(lines, replied, "user:mihari")
+	got, _ := rhythm(lines, replied, "user:mihari")
 	if got != 4500*time.Millisecond {
 		t.Fatalf("rhythm at the last message %v, want 4.5s", got)
 	}
@@ -79,6 +80,26 @@ func TestWaitFor(t *testing.T) {
 		"a score out of range is 1": {1.5, true, least},
 	} {
 		if got := waitFor(least, c.done, c.known, r); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// After a follow-up, someone with a run of their own is waited for at least
+// two of their rhythms; anyone else as after any message.
+func TestFollowUpWait(t *testing.T) {
+	t.Parallel()
+	r := 4 * time.Second
+	for name, c := range map[string]struct {
+		wait time.Duration
+		own  bool
+		want time.Duration
+	}{
+		"a run of their own":    {2 * time.Second, true, 8 * time.Second},
+		"a wait already longer": {10 * time.Second, true, 10 * time.Second},
+		"no run of their own":   {2 * time.Second, false, 2 * time.Second},
+	} {
+		if got := followUpWait(c.wait, r, c.own); got != c.want {
 			t.Errorf("%s: %v, want %v", name, got, c.want)
 		}
 	}

@@ -2,7 +2,7 @@
 // agent profile answers in the chats on its allowlist when a message starts
 // with one of its keywords, mentions the account, or replies to a message it
 // sent; an agent judged by the decision service also answers group messages
-// judged to be addressed to it.
+// judged to be addressed to it, or to carry on an exchange it is in.
 package chat
 
 import (
@@ -143,10 +143,11 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 }
 
 // judged reports whether any agent has the decision service judge messages:
-// whether they address it, or whether their senders have finished.
+// whether they address it or carry on its exchange, or whether their senders
+// have finished.
 func (m *Module) judged() bool {
 	for _, p := range m.profiles {
-		if p.wake > 0 || p.waitMax > 0 {
+		if p.wake > 0 || p.follow > 0 || p.waitMax > 0 {
 			return true
 		}
 	}
@@ -206,15 +207,11 @@ func (m *Module) Handle(ctx context.Context, e otogi.Event, inv otogi.Invocation
 	if err != nil || v.p == nil {
 		return err
 	}
-	trigger = "decision"
-	if v.j == nil {
-		trigger = "keyword" // the judgment failed; the message starts with p's name
-	}
 	if !waits(v.p, e) {
 		release()
-		return m.answer(ctx, inv, ask{p: v.p, msgs: []otogi.Event{e}, trigger: trigger, j: v.j}, until)
+		return m.answer(ctx, inv, ask{p: v.p, msgs: []otogi.Event{e}, trigger: v.trigger, j: v.j}, until)
 	}
-	return m.join(ctx, inv, v.p, entry{e: e, at: at, trigger: trigger, j: v.j}, v.done, v.doneKnown, release)
+	return m.join(ctx, inv, v.p, entry{e: e, at: at, trigger: v.trigger, j: v.j}, v.done, v.doneKnown, release)
 }
 
 // answer has an agent answer at once.
@@ -227,11 +224,11 @@ func (m *Module) answer(ctx context.Context, inv otogi.Invocation, a ask, until 
 // it and answers it; release ends en's being judged, once it is in (the
 // caller defers it too, for when join ends before).
 func (m *Module) join(ctx context.Context, inv otogi.Invocation, p *profile, en entry, done float64, known bool, release func()) error {
-	r, err := m.rhythmOf(ctx, en.e)
+	r, own, err := m.rhythmOf(ctx, en.e)
 	if err != nil {
 		return err
 	}
-	b := m.enter(p, en, done, known, r)
+	b := m.enter(p, en, done, known, r, own)
 	release()
 	if b == nil {
 		return nil
@@ -287,7 +284,7 @@ func (m *Module) route(ctx context.Context, e otogi.Event) (*profile, int64, str
 	}
 	mentioned, elsewhere := e.Mentioned, false
 	if target, ok := replyTarget(e.Message); ok {
-		turn, name, found, err := m.store.agentTurn(ctx, target)
+		turn, name, _, found, err := m.store.agentTurn(ctx, target)
 		if err != nil {
 			return nil, 0, "", false, err
 		}

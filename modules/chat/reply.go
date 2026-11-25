@@ -16,6 +16,11 @@ import (
 // cleanupTimeout bounds finishing a reply after its context ended.
 const cleanupTimeout = 30 * time.Second
 
+// followNote tells the model why it speaks on a follow-up. It goes with the
+// messages, not the system prompt: on Eku, a "keep it short" left only in
+// the system prompt let replies grow from 31 to 60 characters on average.
+const followNote = "(Nobody named you: someone is carrying on the exchange with you. Keep it short.)"
+
 // ask is what an agent answers: a message, or the batch of messages to it
 // it waited for (see batch), in the order they arrived.
 type ask struct {
@@ -81,6 +86,9 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 	}
 	if len(lead) > 0 {
 		sent.Content = llm.Join(otogi.TextMessage(strings.Join(lead, "\n\n")), user.Content)
+	}
+	if a.trigger == "follow" {
+		sent.Content = llm.Join(sent.Content, otogi.TextMessage(followNote))
 	}
 	req := llm.Request{Model: p.Model, System: m.system(p, e), Thinking: p.Thinking, MaxOutput: p.MaxOutput, Temperature: p.Temperature, Tools: p.builtins}
 	for _, t := range path {
@@ -164,7 +172,7 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 		for _, t := range out.Turns {
 			turns = append(turns, storedTurn{Turn: t})
 		}
-		ids, storeErr = m.store.thread(cleanup, p.Name, e.Destination(), a.parent, turns, messages, m.now())
+		ids, storeErr = m.store.thread(cleanup, p.Name, a.trigger, e.Destination(), a.parent, turns, messages, m.now())
 	}
 	err = errors.Join(runErr, closeErr, stickerErr, storeErr)
 	m.record(cleanup, a, ids, out, refs, sticker, err, m.now().Sub(started), "")

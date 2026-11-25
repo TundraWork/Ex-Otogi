@@ -227,16 +227,17 @@ func (m *Module) awaitJudging(ctx context.Context, chat string, due time.Time) b
 }
 
 // rhythmOf is how fast e's sender types, from the chat's recent messages and
-// agents' replies there.
-func (m *Module) rhythmOf(ctx context.Context, e otogi.Event) (time.Duration, error) {
+// agents' replies there, and whether that is their own rhythm.
+func (m *Module) rhythmOf(ctx context.Context, e otogi.Event) (time.Duration, bool, error) {
 	lines, err := m.store.recent(ctx, e.Destination(), m.now().Add(time.Millisecond), rhythmLines)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	m.mu.Lock()
 	replied := slices.Clone(m.replied[e.ChatKey()])
 	m.mu.Unlock()
-	return rhythm(lines, replied, string(e.Actor.ID)), nil
+	r, own := rhythm(lines, replied, string(e.Actor.ID))
+	return r, own, nil
 }
 
 // startedReplying notes that an agent started a reply in e's chat at at, for
@@ -257,10 +258,14 @@ func (m *Module) startedReplying(e otogi.Event, at time.Time) {
 // enter puts en, a message to en.p's agent, into the agent's batch in its
 // chat, and returns the batch when en opened it: the caller then runs it.
 // done and known are how sure it is that the sender has finished; r is
-// their rhythm.
-func (m *Module) enter(p *profile, en entry, done float64, known bool, r time.Duration) *batch {
+// their rhythm, and own whether it is theirs.
+func (m *Module) enter(p *profile, en entry, done float64, known bool, r time.Duration, own bool) *batch {
 	key := p.Name + "\x00" + en.e.ChatKey()
-	due := en.at.Add(waitFor(p.waitMin, done, known, r))
+	wait := waitFor(p.waitMin, done, known, r)
+	if en.trigger == "follow" {
+		wait = followUpWait(wait, r, own)
+	}
+	due := en.at.Add(wait)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w := m.waits[key]
@@ -411,10 +416,16 @@ func (m *Module) answerBatch(ctx context.Context, inv otogi.Invocation, p *profi
 	return m.respond(ctx, inv, askOf(p, entries, info), until)
 }
 
-// askOf is what p answers in a batch of entries: the first's thread,
-// trigger, and judgment.
+// askOf is what p answers in a batch of entries: the first's thread, and the
+// trigger and judgment of the first that called the agent, or of the first
+// when all only carried on its exchange. A batch in which anyone called it
+// was asked for, and is no follow-up.
 func askOf(p *profile, entries []entry, info *batchInfo) ask {
-	a := ask{p: p, parent: entries[0].parent, trigger: entries[0].trigger, j: entries[0].j, batch: info}
+	lead := entries[0]
+	if i := slices.IndexFunc(entries, func(en entry) bool { return en.trigger != "follow" }); i >= 0 {
+		lead = entries[i]
+	}
+	a := ask{p: p, parent: entries[0].parent, trigger: lead.trigger, j: lead.j, batch: info}
 	for _, en := range entries {
 		a.msgs = append(a.msgs, en.e)
 	}

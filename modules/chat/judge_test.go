@@ -15,13 +15,15 @@ import (
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
-// decider answers every question with its score, by the agent it asks
-// about (a1, a2, …), and keeps the requests. answer, when set, answers a
-// question first (ok false leaves it to scores); before, when set, runs
-// before a request is answered, and may block it.
+// decider answers every wake question with its score and every follow
+// question with its follow score, by the agent it asks about (a1, a2, …),
+// and keeps the requests. answer, when set, answers a question first (ok
+// false leaves it to the scores); before, when set, runs before a request is
+// answered, and may block it.
 type decider struct {
 	mu       sync.Mutex
 	scores   map[string]float64
+	follow   map[string]float64
 	answer   func(id string, req decision.Request) (float64, bool)
 	before   func(req decision.Request)
 	err      error
@@ -48,6 +50,11 @@ func (d *decider) Decide(_ context.Context, req decision.Request) (decision.Answ
 		}
 		for agent, s := range d.scores {
 			if strings.HasPrefix(id, "wake."+agent+".") {
+				out[id] = s
+			}
+		}
+		for agent, s := range d.follow {
+			if strings.HasPrefix(id, "follow."+agent+".") {
 				out[id] = s
 			}
 		}

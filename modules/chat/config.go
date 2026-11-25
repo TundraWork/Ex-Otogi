@@ -91,9 +91,10 @@ type MediaConfig struct {
 // JudgeConfig has the decision service judge group messages for an agent.
 // Each block turns one judgment on.
 type JudgeConfig struct {
-	Rules string      `json:"rules,omitempty" format:"text" doc:"What else counts, or does not, as talking to the agent: for example that its name is also a product people discuss."`
-	Wake  *WakeConfig `json:"wake,omitempty" doc:"Answer group messages addressed to the agent that no trigger caught, such as its name in the middle of a sentence."`
-	Wait  *WaitConfig `json:"wait,omitempty" doc:"In groups, wait until the sender has finished, and answer what was said to the agent meanwhile together. A wait holds one of the process's workers, at most one per agent and group."`
+	Rules  string        `json:"rules,omitempty" format:"text" doc:"What else counts, or does not, as talking to the agent: for example that its name is also a product people discuss."`
+	Wake   *WakeConfig   `json:"wake,omitempty" doc:"Answer group messages addressed to the agent that no trigger caught, such as its name in the middle of a sentence."`
+	Follow *FollowConfig `json:"follow,omitempty" doc:"Keep up an exchange the agent is in: a group message carrying on what the agent said in the last ten messages is answered, though nobody names it. Reactions that need no reply are not."`
+	Wait   *WaitConfig   `json:"wait,omitempty" doc:"In groups, wait until the sender has finished, and answer what was said to the agent meanwhile together. A wait holds one of the process's workers, at most one per agent and group."`
 }
 
 // WaitConfig configures waiting for the sender to finish before answering.
@@ -114,8 +115,18 @@ type WakeConfig struct {
 	Threshold float64 `json:"threshold,omitempty" minimum:"0" maximum:"1" default:"0.7" doc:"How sure the judgment must be that a message is addressed to the agent. When several agents pass, the surest answers."`
 }
 
-// defaultWake is the wake threshold of a wake block that sets none.
-const defaultWake = 0.7
+// FollowConfig configures answering messages judged to carry on an exchange
+// with the agent.
+type FollowConfig struct {
+	Threshold float64 `json:"threshold,omitempty" minimum:"0" maximum:"1" default:"0.6" doc:"How sure the judgment must be that a message carries on the exchange with the agent. Where the agent has followed up more than 1.3 times as often as the middle member of the conversation has spoken, it rises by 0.1 per time more, up to 0.8; replies the agent was called for do not count."`
+}
+
+const (
+	// defaultWake is the wake threshold of a wake block that sets none.
+	defaultWake = 0.7
+	// defaultFollow is the follow threshold of a follow block that sets none.
+	defaultFollow = 0.6
+)
 
 // profile is a validated agent.
 type profile struct {
@@ -125,6 +136,7 @@ type profile struct {
 	builtins []llm.ToolSpec
 	provider llm.Provider
 	wake     float64 // how sure a judgment must be to wake it; 0 when it is not judged
+	follow   float64 // how sure a judgment must be that a message carries on its exchange; 0 when not judged
 	rules    string  // what else counts as talking to it, for judgments
 	// waitMin and waitMax bound how long it waits in groups for the sender
 	// to finish; waitMax is 0 when it does not wait.
@@ -249,6 +261,9 @@ func (c *Config) profiles(providers func(string) (llm.Provider, error)) ([]*prof
 			p.rules = strings.TrimSpace(pc.Judge.Rules)
 			if pc.Judge.Wake != nil {
 				p.wake = cmp.Or(pc.Judge.Wake.Threshold, defaultWake)
+			}
+			if pc.Judge.Follow != nil {
+				p.follow = cmp.Or(pc.Judge.Follow.Threshold, defaultFollow)
 			}
 			if w := pc.Judge.Wait; w != nil {
 				p.waitMin, p.waitMax = cmp.Or(time.Duration(w.Min), defaultWaitMin), cmp.Or(time.Duration(w.Max), defaultWaitMax)

@@ -130,18 +130,19 @@ func (s *store) lines(ctx context.Context, query string, args ...any) ([]line, e
 	return out, nil
 }
 
-// agentTurn finds the turn an agent message answers from, and its profile.
-func (s *store) agentTurn(ctx context.Context, ref otogi.EventRef) (id int64, profile string, ok bool, err error) {
-	err = s.db.QueryRowContext(ctx, `SELECT t.id, t.profile FROM sent s JOIN turns t ON t.id = s.turn
+// agentTurn finds the turn an agent message answers from, its profile, and
+// what made the agent answer (empty for turns from before it was kept).
+func (s *store) agentTurn(ctx context.Context, ref otogi.EventRef) (id int64, profile, cause string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT t.id, t.profile, t.cause FROM sent s JOIN turns t ON t.id = s.turn
 		WHERE s.platform = ? AND s.account = ? AND s.conversation = ? AND s.source_id = ?`,
-		ref.Platform, ref.Account, ref.Conversation, ref.SourceEvent).Scan(&id, &profile)
+		ref.Platform, ref.Account, ref.Conversation, ref.SourceEvent).Scan(&id, &profile, &cause)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, "", false, nil
+		return 0, "", "", false, nil
 	}
 	if err != nil {
-		return 0, "", false, fmt.Errorf("chat store: find agent message: %w", err)
+		return 0, "", "", false, fmt.Errorf("chat store: find agent message: %w", err)
 	}
-	return id, profile, true, nil
+	return id, profile, cause, true, nil
 }
 
 // storedTurn is a thread turn with what the transcript knows it by.
@@ -198,9 +199,9 @@ type sentMessage struct {
 }
 
 // thread adds turns after parent (0 starts a thread) and maps the agent's
-// sent messages to the last one, in one transaction. It returns the new
-// turns' IDs.
-func (s *store) thread(ctx context.Context, profile string, to otogi.Destination, parent int64, turns []storedTurn, sent []sentMessage, now time.Time) ([]int64, error) {
+// sent messages to the last one, in one transaction. cause is what made the
+// agent answer. It returns the new turns' IDs.
+func (s *store) thread(ctx context.Context, profile, cause string, to otogi.Destination, parent int64, turns []storedTurn, sent []sentMessage, now time.Time) ([]int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("chat store: %w", err)
@@ -216,8 +217,8 @@ func (s *store) thread(ctx context.Context, profile string, to otogi.Destination
 		if parent != 0 {
 			p = parent
 		}
-		res, err := tx.ExecContext(ctx, "INSERT INTO turns (profile, platform, account, conversation, parent, turn, source_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			profile, to.Platform, to.Account, to.Conversation, p, string(raw), t.SourceID, now.UnixMilli())
+		res, err := tx.ExecContext(ctx, "INSERT INTO turns (profile, platform, account, conversation, parent, turn, source_id, created_at, cause) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			profile, to.Platform, to.Account, to.Conversation, p, string(raw), t.SourceID, now.UnixMilli(), cause)
 		if err != nil {
 			return nil, fmt.Errorf("chat store: add turn: %w", err)
 		}

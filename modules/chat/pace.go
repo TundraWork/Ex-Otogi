@@ -20,19 +20,26 @@ const (
 	// unfinishedPace: a message its sender has not finished waits up to
 	// this many rhythms more, the less sure it is finished the longer.
 	unfinishedPace = 1.5
+	// runPace: after a follow-up, someone who sends runs of lines is waited
+	// for at least this many of their rhythms. Each of their lines can look
+	// finished, and waiting by that alone followed up on nearly every one:
+	// replaying a member telling a story in a dozen lines, the agent followed
+	// up 10 times in six minutes; with this, 7 times, each once they had
+	// stopped (11-20). Eku, too, kept it to follow-ups: a message calling the
+	// agent is answered once its sender has finished (EXO-2, section 4).
+	runPace = 2
 )
 
 // rhythm is how fast who types: the median of the last gaps between their
 // consecutive messages, with nobody else's in between, the agent's included,
-// and under rhythmGap apart. Without any run of theirs it is others';
-// without any, rhythmDefault. A back-and-forth is no rhythm: it is waiting
-// for an answer, and once made 61.5 seconds a line on Eku (11-20). So a gap
-// in which an agent started replying is none either: replied is when agents
-// of the chat started replies. Their messages in lines do not
-// tell it, as one asked while the reply is written comes before it, and QQ
-// groups do not deliver them at all. lines is the chat's recent messages,
-// oldest first.
-func rhythm(lines []line, replied []time.Time, who string) time.Duration {
+// and under rhythmGap apart; own reports that it is theirs. Without any run
+// of theirs it is others'; without any, rhythmDefault. A back-and-forth is
+// no rhythm: it is waiting for an answer, and once made 61.5 seconds a line
+// on Eku (11-20). So a gap in which an agent started replying is none
+// either: replied is when agents of the chat started replies. Their messages
+// in lines do not tell it, as one asked while the reply is written comes
+// before it. lines is the chat's recent messages, oldest first.
+func rhythm(lines []line, replied []time.Time, who string) (r time.Duration, own bool) {
 	if len(lines) > rhythmLines {
 		lines = lines[len(lines)-rhythmLines:]
 	}
@@ -51,11 +58,11 @@ func rhythm(lines []line, replied []time.Time, who string) time.Duration {
 	}
 	switch {
 	case len(mine) > 0:
-		return max(rhythmFloor, median(mine, 5))
+		return max(rhythmFloor, median(mine, 5)), true
 	case len(all) > 0:
-		return max(rhythmFloor, median(all, 10))
+		return max(rhythmFloor, median(all, 10)), false
 	}
-	return rhythmDefault
+	return rhythmDefault, false
 }
 
 // repliedBetween reports whether a reply in replied started after from and
@@ -86,4 +93,14 @@ func waitFor(least time.Duration, done float64, known bool, r time.Duration) tim
 		unfinished = 1 - min(1, max(0, done))
 	}
 	return least + time.Duration(unfinished*unfinishedPace*float64(r))
+}
+
+// followUpWait is how long to wait after a follow-up whose sender would be
+// waited for wait: from someone with a run of their own to go by, at least
+// runPace of their rhythms r.
+func followUpWait(wait, r time.Duration, own bool) time.Duration {
+	if !own {
+		return wait
+	}
+	return max(wait, time.Duration(runPace*float64(r)))
 }

@@ -371,7 +371,7 @@ func TestEndings(t *testing.T) {
 			if got := h.streams[0].final.PlainText(); got != c.want {
 				t.Fatalf("reply %q, want %q", got, c.want)
 			}
-			_, _, found, _ := h.m.store.agentTurn(context.Background(), otogi.EventRef{Platform: "telegram", Account: "main", Conversation: "chat:1", SourceEvent: "agent-1"})
+			_, _, _, found, _ := h.m.store.agentTurn(context.Background(), otogi.EventRef{Platform: "telegram", Account: "main", Conversation: "chat:1", SourceEvent: "agent-1"})
 			if found != c.store {
 				t.Fatalf("thread stored %v, want %v", found, c.store)
 			}
