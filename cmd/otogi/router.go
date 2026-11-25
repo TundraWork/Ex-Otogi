@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
@@ -19,10 +20,27 @@ type driverHandle interface {
 }
 
 // router sends effects, streams, and media fetches to the driver of their
-// (platform, account).
-type router map[destination]driverHandle
+// (platform, account). Accounts are set and removed while it routes.
+type router struct {
+	mu sync.RWMutex
+	to map[destination]driverHandle
+}
 
-func (r router) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {
+func newRouter() *router { return &router{to: map[destination]driverHandle{}} }
+
+func (r *router) set(to destination, d driverHandle) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.to[to] = d
+}
+
+func (r *router) remove(to destination) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.to, to)
+}
+
+func (r *router) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, error) {
 	to := destination{e.Ref.Platform, e.Ref.Account}
 	if e.Kind == otogi.EffectSend {
 		to = destination{e.To.Platform, e.To.Account}
@@ -35,7 +53,7 @@ func (r router) Apply(ctx context.Context, e otogi.Effect) (otogi.EventRef, erro
 }
 
 // OpenStream starts a stream on the destination's driver, if it can stream.
-func (r router) OpenStream(ctx context.Context, e otogi.Effect) (otogi.DriverStream, error) {
+func (r *router) OpenStream(ctx context.Context, e otogi.Effect) (otogi.DriverStream, error) {
 	d, err := r.driver(destination{e.To.Platform, e.To.Account})
 	if err != nil {
 		return nil, err
@@ -47,7 +65,7 @@ func (r router) OpenStream(ctx context.Context, e otogi.Effect) (otogi.DriverStr
 	return streamer.OpenStream(ctx, e)
 }
 
-func (r router) FetchMedia(ctx context.Context, from otogi.Destination, src otogi.MediaSource) ([]byte, error) {
+func (r *router) FetchMedia(ctx context.Context, from otogi.Destination, src otogi.MediaSource) ([]byte, error) {
 	d, err := r.driver(destination{from.Platform, from.Account})
 	if err != nil {
 		return nil, err
@@ -55,8 +73,12 @@ func (r router) FetchMedia(ctx context.Context, from otogi.Destination, src otog
 	return d.FetchMedia(ctx, from, src)
 }
 
-func (r router) driver(to destination) (driverHandle, error) {
-	d, ok := r[to]
+// driver returns the destination's driver; the lock is not held while it
+// is called, which can take long.
+func (r *router) driver(to destination) (driverHandle, error) {
+	r.mu.RLock()
+	d, ok := r.to[to]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("no driver for platform %q account %q: %w", to.platform, to.account, otogi.ErrUnavailable)
 	}

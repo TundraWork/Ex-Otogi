@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,21 +74,23 @@ func (h *signalHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.Handler.Handle(ctx, r)
 }
 
-type fakeDriver struct{ applied, fetched int }
+type fakeDriver struct{ applied, fetched atomic.Int64 }
 
 func (d *fakeDriver) Apply(context.Context, otogi.Effect) (otogi.EventRef, error) {
-	d.applied++
+	d.applied.Add(1)
 	return otogi.EventRef{}, nil
 }
 
 func (d *fakeDriver) FetchMedia(context.Context, otogi.Destination, otogi.MediaSource) ([]byte, error) {
-	d.fetched++
+	d.fetched.Add(1)
 	return nil, nil
 }
 
 func TestRouterRoutesByPlatformAndAccount(t *testing.T) {
 	main, other := &fakeDriver{}, &fakeDriver{}
-	r := router{{"telegram", "main"}: main, {"telegram", "other"}: other}
+	r := newRouter()
+	r.set(destination{"telegram", "main"}, main)
+	r.set(destination{"telegram", "other"}, other)
 	ctx := context.Background()
 	if _, err := r.Apply(ctx, otogi.Effect{Kind: otogi.EffectSend, To: otogi.Destination{Platform: "telegram", Account: "main"}}); err != nil {
 		t.Fatal(err)
@@ -99,11 +102,35 @@ func TestRouterRoutesByPlatformAndAccount(t *testing.T) {
 	if _, err := r.FetchMedia(ctx, otogi.Destination{Platform: "telegram", Account: "main"}, otogi.MediaSource{}); err != nil {
 		t.Fatal(err)
 	}
-	if main.applied != 1 || other.applied != 1 || main.fetched != 1 {
-		t.Fatalf("main = %+v, other = %+v", main, other)
+	if main.applied.Load() != 1 || other.applied.Load() != 1 || main.fetched.Load() != 1 {
+		t.Fatalf("main applied %d fetched %d, other applied %d", main.applied.Load(), main.fetched.Load(), other.applied.Load())
 	}
 	if _, err := r.Apply(ctx, otogi.Effect{Kind: otogi.EffectSend, To: otogi.Destination{Platform: "discord", Account: "main"}}); !errors.Is(err, otogi.ErrUnavailable) {
 		t.Fatalf("unknown destination = %v", err)
+	}
+}
+
+// Accounts come and go while effects are routed: no race, and an account
+// removed is no longer routed to.
+func TestRouterChangesWhileRouting(t *testing.T) {
+	r, d := newRouter(), &fakeDriver{}
+	to := destination{"qq", "bot"}
+	send := otogi.Effect{Kind: otogi.EffectSend, To: otogi.Destination{Platform: "qq", Account: "bot"}}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for range 200 {
+			r.set(to, d)
+			r.remove(to)
+		}
+	})
+	wg.Go(func() {
+		for range 200 {
+			_, _ = r.Apply(context.Background(), send)
+		}
+	})
+	wg.Wait()
+	if _, err := r.Apply(context.Background(), send); !errors.Is(err, otogi.ErrUnavailable) {
+		t.Fatalf("removed account = %v, want ErrUnavailable", err)
 	}
 }
 

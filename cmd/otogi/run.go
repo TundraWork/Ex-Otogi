@@ -107,7 +107,7 @@ func run(ctx context.Context, cfg Config, newLog func(format string) *slog.Logge
 		stopPruning()
 		background.Wait()
 	}()
-	routes := router{}
+	routes := newRouter()
 	kernelConfig := kernel.Config{
 		Workers: limits.Workers, MaxInFlight: limits.MaxInFlight, HandlerTimeout: time.Duration(limits.HandlerTimeout),
 		Recorder: events, Storage: storage,
@@ -127,7 +127,7 @@ func run(ctx context.Context, cfg Config, newLog func(format string) *slog.Logge
 			SessionPath: a.Session, DatabasePath: a.Database, UploadThreads: a.UploadThreads,
 			Kernel: k, Logger: log, Recorder: events,
 		})
-		routes[destination{telegram.Platform, otogi.AccountID(a.Account)}] = d
+		routes.set(destination{telegram.Platform, otogi.AccountID(a.Account)}, d)
 		drivers = append(drivers, d)
 		statuses = append(statuses, func(ctx context.Context) management.DriverStatus {
 			s := d.Status(ctx)
@@ -142,7 +142,7 @@ func run(ctx context.Context, cfg Config, newLog func(format string) *slog.Logge
 			AccountKey: a.Account, AppID: a.AppID, AppSecret: a.AppSecret, DatabasePath: a.Database,
 			Kernel: k, Logger: log, Recorder: events,
 		})
-		routes[destination{qq.Platform, otogi.AccountID(a.Account)}] = d
+		routes.set(destination{qq.Platform, otogi.AccountID(a.Account)}, d)
 		drivers = append(drivers, d)
 		statuses = append(statuses, func(ctx context.Context) management.DriverStatus {
 			s := d.Status(ctx)
