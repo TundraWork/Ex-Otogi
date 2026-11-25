@@ -1,11 +1,11 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { type ReactNode, Suspense } from "react";
 import { PendingRestart } from "@/components/pending-restart";
 import { Tile } from "@/components/tile";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { sectionPages, settingsPages } from "@/lib/settings";
-import { type Review, SettingsCard } from "./settings-card";
+import { addingOf, type Review, SettingsCard, type SettingsSearch } from "./settings-card";
 
 /** SettingsPage is a page under Settings: its heading, as the Settings list
  * names it, what the page is about, and an action beside them. */
@@ -61,12 +61,22 @@ export function SectionPage({
   children?: ReactNode;
 }) {
   const applies = "applies" in page ? page.applies : undefined;
+  // Each section's route takes settingsSearch.
+  const search = useSearch({ strict: false }) as SettingsSearch;
+  const navigate = useNavigate();
   return (
     <SettingsPage page={page} about={about}>
       <div className="mt-6 flex max-w-4xl flex-col gap-4">
         {applies && <PendingRestart />}
         <Suspense fallback={<Skeleton className="h-96 w-full rounded-2xl" />}>
-          <SettingsCard of={{ section: page.section }} effect={page.effect} applies={applies} review={review} />
+          <SettingsCard
+            of={{ section: page.section }}
+            effect={page.effect}
+            applies={applies}
+            review={review}
+            adding={addingOf(search)}
+            onAdded={() => void navigate({ to: ".", search: {}, replace: true, resetScroll: false })}
+          />
         </Suspense>
         {children}
       </div>

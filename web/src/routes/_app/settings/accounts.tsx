@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Notice } from "@/components/notice";
+import { settingsSearch } from "@/components/settings/settings-card";
 import { SectionPage } from "@/components/settings/settings-page";
 import { added } from "@/lib/accounts";
 import { accountsPage } from "@/lib/settings";
@@ -8,6 +9,7 @@ import { settingsQuery } from "@/queries/modules";
 const mono = "font-mono text-[13px]";
 
 export const Route = createFileRoute("/_app/settings/accounts")({
+  validateSearch: settingsSearch,
   loader: ({ context }) => void context.queryClient.prefetchQuery(settingsQuery({ section: accountsPage.section })),
   head: () => ({ meta: [{ title: "Accounts · otogi" }] }),
   component: () => (

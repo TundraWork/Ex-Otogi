@@ -1,9 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { settingsSearch } from "@/components/settings/settings-card";
 import { SectionPage } from "@/components/settings/settings-page";
 import { processPage } from "@/lib/settings";
 import { settingsQuery } from "@/queries/modules";
 
 export const Route = createFileRoute("/_app/settings/process")({
+  validateSearch: settingsSearch,
   loader: ({ context }) => void context.queryClient.prefetchQuery(settingsQuery({ section: processPage.section })),
   head: () => ({ meta: [{ title: "Process · otogi" }] }),
   component: () => (

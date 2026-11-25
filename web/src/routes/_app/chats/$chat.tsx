@@ -1,13 +1,23 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { format, isToday, isYesterday } from "date-fns";
-import { ArrowDown, ArrowLeft, Copy, ExternalLink, Pencil, ScrollText, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowLeft, Copy, ExternalLink, Pencil, ScrollText, UserCog, X } from "lucide-react";
+import { type ReactElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, api, data, type Schemas } from "@/api/client";
 import { Ago } from "@/components/ago";
 import { LoadError } from "@/components/load-error";
 import { NotFound } from "@/components/route-states";
+import { listed, type PeopleList, peopleLists } from "@/components/settings/people-lists";
+import { type JSONSchema, label } from "@/components/settings/schema";
+import type { SettingsSearch } from "@/components/settings/settings-card";
 import { outcomeTone, StatusDot } from "@/components/status-dot";
 import { Tile } from "@/components/tile";
 import { Button } from "@/components/ui/button";
@@ -20,15 +30,17 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Menu, MenuLinkItem, MenuPopup, MenuTrigger } from "@/components/ui/menu";
 import { Sheet, SheetHeader, SheetPanel, SheetPopup, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { toastManager } from "@/components/ui/toast";
 import { chatKind, chatName } from "@/lib/chats";
 import { listMeta, moduleMeta, moduleState, platformMeta } from "@/lib/meta";
+import { sectionPages } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { chatQuery, messagesQuery } from "@/queries/chats";
-import { modulesQuery } from "@/queries/modules";
+import { modulesQuery, type Subject, settingsQuery } from "@/queries/modules";
 
 export const Route = createFileRoute("/_app/chats/$chat")({
   loader: async ({ context, params }) => {
@@ -569,8 +581,45 @@ function About({ chat }: { chat: Schemas["ChatOutputBody"] }) {
   );
 }
 
-/** People lists who has been seen sending messages here, recent first. */
+/** Place is a list naming people in a module's or a section's settings, and
+ * a link to its page that adds a person to it. */
+type Place = { title: string; list: PeopleList; settings: unknown; link: (person: string) => ReactElement };
+
+/** usePlaces are the lists naming people in the settings of every module and
+ * section, as their schemas have them (see people-lists). */
+function usePlaces(): Place[] {
+  const { data: modules = [] } = useQuery(modulesQuery);
+  const subjects = [
+    ...modules.map((m) => ({
+      of: { module: m.id } as Subject,
+      title: moduleMeta(m.id).title,
+      link: (search: SettingsSearch) => <Link to="/modules/$module" params={{ module: m.id }} search={search} />,
+    })),
+    ...sectionPages.map((p) => ({
+      of: { section: p.section } as Subject,
+      title: p.title,
+      link: (search: SettingsSearch) => <Link to={p.to} search={search} />,
+    })),
+  ];
+  const found = useQueries({ queries: subjects.map((s) => settingsQuery(s.of)) });
+  return subjects.flatMap((s, i) => {
+    const current = found[i]?.data;
+    if (!current) return [];
+    return peopleLists(current.schema as JSONSchema).map((list) => ({
+      title: `${s.title} · ${label(list.key)}`,
+      list,
+      settings: current.settings,
+      link: (person: string) => s.link({ person, list: list.key }),
+    }));
+  });
+}
+
+/** People lists who has been seen sending messages here, recent first, and
+ * the lists naming people in the settings each is on, with the name the
+ * list's item gives them. Each can be added to such a list, or found in it,
+ * on its settings page. */
 function People({ platform, people }: { platform: string; people: Schemas["Person"][] }) {
+  const places = usePlaces();
   if (people.length === 0) return null;
   return (
     <>
@@ -579,6 +628,8 @@ function People({ platform, people }: { platform: string; people: Schemas["Perso
         {people.map((p) => {
           // The ID as settings and /whoami write it.
           const id = `${platform}:${p.actor}`;
+          const on = places.map((place) => ({ place, at: listed(place.list, place.settings, id) }));
+          const listedOn = on.filter((o) => o.at);
           return (
             <li key={p.actor} className="flex items-center gap-2.5 py-2">
               <span className="grid size-7 flex-none place-items-center rounded-full bg-linear-to-b from-neutral-100 to-neutral-200 font-semibold text-neutral-600 text-xs shadow-[inset_0_0_0_1px_--theme(--color-black/5%)]">
@@ -589,11 +640,39 @@ function People({ platform, people }: { platform: string; people: Schemas["Perso
                 <span className="block truncate font-mono text-muted-foreground text-xs" title={id}>
                   {id}
                 </span>
+                {listedOn.length > 0 && (
+                  <span className="block text-muted-foreground text-xs">
+                    {listedOn.map((o) => (o.at?.name ? `${o.place.title}: ${o.at.name}` : o.place.title)).join(", ")}
+                  </span>
+                )}
               </span>
               <span className="text-right text-muted-foreground text-xs tabular">
                 {p.messages}
                 <Ago at={p.last_seen} className="block" />
               </span>
+              {on.length > 0 && (
+                <Menu>
+                  <MenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-muted-foreground"
+                        aria-label={`Set up ${p.name || id}`}
+                      />
+                    }
+                  >
+                    <UserCog />
+                  </MenuTrigger>
+                  <MenuPopup align="end">
+                    {on.map(({ place, at }) => (
+                      <MenuLinkItem key={place.title} render={place.link(id)}>
+                        {at ? `Edit in ${place.title}` : `Add to ${place.title}`}
+                      </MenuLinkItem>
+                    ))}
+                  </MenuPopup>
+                </Menu>
+              )}
               <Button
                 variant="ghost"
                 size="icon-sm"

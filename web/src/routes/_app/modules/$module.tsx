@@ -9,7 +9,7 @@ import { Card, CardHeader, CardInset, rows } from "@/components/card";
 import { LoadError } from "@/components/load-error";
 import { Notice } from "@/components/notice";
 import { NotFound } from "@/components/route-states";
-import { SettingsCard } from "@/components/settings/settings-card";
+import { addingOf, SettingsCard, settingsSearch } from "@/components/settings/settings-card";
 import { outcomeTone, StatusDot } from "@/components/status-dot";
 import { Tile } from "@/components/tile";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ export const Route = createFileRoute("/_app/modules/$module")({
     if (!modules.some((m) => m.id === params.module)) throw notFound();
     void context.queryClient.prefetchQuery(settingsQuery({ module: params.module }));
   },
+  validateSearch: settingsSearch,
   head: ({ params }) => ({ meta: [{ title: `${moduleMeta(params.module).title} · otogi` }] }),
   component: ModulePage,
   notFoundComponent: NoSuchModule,
@@ -45,6 +46,8 @@ function NoSuchModule() {
 
 function ModulePage() {
   const { module: id } = Route.useParams();
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
   const { data: modules } = useSuspenseQuery(modulesQuery);
   const m = modules.find((x) => x.id === id) as Schemas["Module"];
   const meta = moduleMeta(id);
@@ -75,7 +78,11 @@ function ModulePage() {
       )}
       <div className="mt-6 grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
         <Suspense fallback={<Skeleton className="h-96 w-full rounded-2xl" />}>
-          <SettingsCard of={{ module: id }} />
+          <SettingsCard
+            of={{ module: id }}
+            adding={addingOf(search)}
+            onAdded={() => void navigate({ search: {}, replace: true, resetScroll: false })}
+          />
         </Suspense>
         <div className="flex flex-col gap-4">
           {m.allowlists.map((l, i) => (

@@ -4,6 +4,7 @@ import { useBlocker } from "@tanstack/react-router";
 import { format, formatDistanceToNowStrict } from "date-fns";
 import { History, RotateCcw } from "lucide-react";
 import { type ReactNode, useEffect, useEffectEvent, useId, useMemo, useState } from "react";
+import { z } from "zod";
 import { ApiError, type Schemas } from "@/api/client";
 import { Card, CardHeader } from "@/components/card";
 import { Notice } from "@/components/notice";
@@ -37,6 +38,7 @@ import {
   settingsQuery,
   subjectKey,
 } from "@/queries/modules";
+import { peopleLists, personField, withPerson } from "./people-lists";
 import {
   type Change,
   changes,
@@ -49,6 +51,20 @@ import {
   validate,
 } from "./schema";
 import { controlId, SchemaFields, SettingsContext, type SettingsForm, useReveal } from "./schema-form";
+
+/** settingsSearch is what a settings page's address may carry: a person to
+ * add to one of its lists naming people, as a chat's page sends them (see
+ * people-lists). */
+export const settingsSearch = z.object({ person: z.string().optional(), list: z.string().optional() });
+
+export type SettingsSearch = z.infer<typeof settingsSearch>;
+
+/** Adding is a person to add to the list of settings whose field is list. */
+export type Adding = { person: string; list: string };
+
+/** addingOf is the person a settings page's address carries, if any. */
+export const addingOf = (s: SettingsSearch): Adding | undefined =>
+  s.person !== undefined || s.list !== undefined ? { person: s.person ?? "", list: s.list ?? "" } : undefined;
 
 type Current = Schemas["SettingsOutputBody"];
 type Revision = Schemas["Revision"];
@@ -68,14 +84,20 @@ type How = {
   review?: Review;
 };
 
+/** Add is a person a settings page was sent to add (see Adding), and what
+ * the page does once the form has them: it drops them from its address. */
+type Add = { adding?: Adding; onAdded?: () => void };
+
 /** SettingsCard edits the settings of a module or of a section: Save reviews
  * what changes, then saves it as a new revision, which the bot applies at
  * once, or at its next start. */
 export function SettingsCard({
   of,
   effect = "the bot swaps in the module with them at once",
+  adding,
+  onAdded,
   ...how
-}: { of: Subject } & How) {
+}: { of: Subject } & How & Add) {
   const queryClient = useQueryClient();
   const { data: current } = useSuspenseQuery(settingsQuery(of));
   const root = current.schema as JSONSchema;
@@ -96,7 +118,18 @@ export function SettingsCard({
   };
   if (properties(root).length > 0) {
     // Each module has its own form; a new revision of one does not remount it.
-    return <SettingsEditor key={current.module} of={of} effect={effect} {...how} current={current} keep={keep} />;
+    return (
+      <SettingsEditor
+        key={current.module}
+        of={of}
+        effect={effect}
+        {...how}
+        current={current}
+        keep={keep}
+        adding={adding}
+        onAdded={onAdded}
+      />
+    );
   }
   return (
     <Card>
@@ -138,12 +171,15 @@ function SettingsEditor({
   review: reviewed,
   current: fetched,
   keep,
+  adding,
+  onAdded,
 }: {
   of: Subject;
   effect: string;
   current: Current;
   keep: (saved: Revision) => Current;
-} & How) {
+} & How &
+  Add) {
   const queryClient = useQueryClient();
   const root = fetched.schema as JSONSchema;
   const id = useId();
@@ -192,6 +228,63 @@ function SettingsEditor({
   useEffect(() => {
     if (stale && (untouched || !dirty)) follow();
   }, [stale, untouched, dirty]);
+
+  // A person sent here joins their list as an edit not yet saved, as Add
+  // would add them, after any edits already made; one there already is only
+  // shown. The form's own value says which, so doing it twice adds them once.
+  const [shown, setShown] = useState<string>();
+  const add = useEffectEvent((to: Adding) => {
+    const list = peopleLists(root).find((l) => l.key === to.list);
+    if (list && to.person) {
+      const now = getBy(form.state.values, list.key) as unknown[] | undefined;
+      const { items, at, added } = withPerson(list, now, to.person);
+      const path = `${list.key}[${at}]`;
+      if (added) {
+        form.setFieldValue(list.key, items);
+        if (list.person) view.add(path);
+      }
+      const next = personField(list);
+      const field = !list.person ? list.key : next ? `${path}.${next}` : path;
+      reveal(field);
+      setShown(field);
+    }
+    onAdded?.();
+  });
+  const [person, list] = [adding?.person, adding?.list];
+  useEffect(() => {
+    if (person !== undefined && list !== undefined) add({ person, list });
+  }, [person, list]);
+  // The page is still settling as it opens: fields grow as their choices
+  // come, and items open. For a moment the field shown keeps in view, while
+  // it has the focus, until the reader scrolls or types themselves. The
+  // moment is about twice what the page took to stop growing on the test
+  // deployment, reached over an SSH tunnel: within 800 ms. Choices coming
+  // later than that, over a slower connection, can still push the field out.
+  useEffect(() => {
+    if (!shown) return;
+    const since = performance.now();
+    let frame = 0;
+    const keep = () => {
+      const control = document.getElementById(controlId(id, shown));
+      if (control && document.activeElement === control) {
+        const r = control.getBoundingClientRect();
+        if (r.top < 0 || r.bottom > window.innerHeight) control.scrollIntoView({ block: "center" });
+      }
+      if (performance.now() - since < 1500) frame = requestAnimationFrame(keep);
+      else setShown(undefined);
+    };
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      setShown(undefined);
+    };
+    frame = requestAnimationFrame(keep);
+    const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    for (const e of events) window.addEventListener(e, stop, { once: true, passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const e of events) window.removeEventListener(e, stop);
+    };
+  }, [shown, id]);
 
   const save = useMutation({
     // The review dialog shows why a save failed.
