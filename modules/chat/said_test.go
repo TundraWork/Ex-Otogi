@@ -125,6 +125,22 @@ func TestAgentLinesInABatch(t *testing.T) {
 	}
 }
 
+// own_format leaves how the agent writes to its own prompt: the system
+// prompt says nothing of the format, and what the model writes is still read
+// as Markdown, or, with plain_text, sent as it is.
+func TestOwnFormat(t *testing.T) {
+	t.Parallel()
+	for _, plain := range []bool{false, true} {
+		h := newHarness(t, ProfileConfig{Name: "otogi", Keywords: []string{"otogi"}, Provider: "otogi", Model: "m", System: "Talk like a friend.", OwnFormat: true, PlainText: plain})
+		h.m.operators = func() []string { return []string{"telegram:user:Boss"} }
+		h.mustHandle(h.message("Alice", "otogi hi"))
+		req := h.llm["otogi"].requests[0]
+		if req.Plain != plain || strings.Contains(req.System, "Markdown") || strings.Contains(req.System, "plain text") || !strings.Contains(req.System, "of this bot. A name followed by") {
+			t.Fatalf("plain_text %v: plain %v, system %q", plain, req.Plain, req.System)
+		}
+	}
+}
+
 // An agent that writes plain text is asked for it, and its reply goes out as
 // the model wrote it, with no formatting: the label is not bold, and the
 // sources are written out. Back from the platform, the line reads without

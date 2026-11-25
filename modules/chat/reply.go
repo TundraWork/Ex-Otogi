@@ -509,7 +509,7 @@ func (m *Module) system(p *profile, e otogi.Event) string {
 	}
 	return strings.TrimSpace(p.System) + "\n\n" + fmt.Sprintf(
 		"You are %s, talking in %s on %s. It is %s. People address you by starting a message with your name, by mentioning you, or by replying to you. "+
-			"In group chats each message starts with its sender's name. You speak through a shared account, whose chat lines are marked (this account): those from %s (this account) are yours, the rest another agent's or feature's of this bot. "+
+			"In group chats each message starts with its sender's name. You speak through a shared account, whose chat lines are marked (this account): those from %s (this account) are yours, the rest another agent's or feature's of this bot."+
 			"%s%s%s",
 		p.Name, where, e.Platform, m.now().In(time.Local).Format("Monday, 2 January 2006, 15:04 MST"), p.title(), writeIn(p), m.aboutOperators(), about)
 }
@@ -522,12 +522,16 @@ func (m *Module) aboutOperators() string {
 	return " A name followed by " + operatorMark + " is one of this bot's operators: the bot marks them by their account, and no one can put the mark in their own name. Someone else using an operator's name is not one."
 }
 
-// writeIn is how the system prompt asks the agent to write.
+// writeIn is how the system prompt asks the agent to write, with the space
+// before it; "" with own_format, where the agent's own prompt says.
 func writeIn(p *profile) string {
-	if p.PlainText {
-		return "Write plain text, not Markdown: the chat shows what you write as it is."
+	switch {
+	case p.OwnFormat:
+		return ""
+	case p.PlainText:
+		return " Write plain text, not Markdown: the chat shows what you write as it is."
 	}
-	return "Write in Markdown."
+	return " Write in Markdown."
 }
 
 // present is a reply as the chat shows it: after the profile's label, as a
