@@ -207,22 +207,33 @@ func newHarnessConfig(t *testing.T, services map[string]any, c Config) *harness 
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.m.now = func() time.Time { return h.now }
+	h.m.now = h.clock
 	if err := h.m.Start(context.Background(), h.host); err != nil {
 		t.Fatal(err)
 	}
 	return h
 }
 
+// clock is the module's now: the harness's, which messages move on while
+// handlers may be reading it.
+func (h *harness) clock() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.now
+}
+
 // message is a new incoming group message from actor.
 func (h *harness) message(actor, text string, mods ...func(*otogi.Event)) otogi.Event {
+	h.mu.Lock()
 	h.seq++
 	h.now = h.now.Add(time.Minute)
+	seq, now := h.seq, h.now
+	h.mu.Unlock()
 	e := otogi.Event{
-		ID: otogi.EventID(fmt.Sprintf("e%d", h.seq)), Platform: "telegram", Account: "main",
+		ID: otogi.EventID(fmt.Sprintf("e%d", seq)), Platform: "telegram", Account: "main",
 		Conversation: otogi.Conversation{ID: "chat:1", Kind: otogi.ConversationGroup, Title: "Friends"},
-		SourceID:     otogi.SourceEventID(fmt.Sprintf("m%d", h.seq)), Actor: otogi.Actor{ID: otogi.ActorID("user:" + actor), Name: actor},
-		Action: otogi.ActionMessageCreated, Direction: otogi.DirectionIncoming, OccurredAt: h.now, Message: otogi.TextMessage(text),
+		SourceID:     otogi.SourceEventID(fmt.Sprintf("m%d", seq)), Actor: otogi.Actor{ID: otogi.ActorID("user:" + actor), Name: actor},
+		Action: otogi.ActionMessageCreated, Direction: otogi.DirectionIncoming, OccurredAt: now, Message: otogi.TextMessage(text),
 	}
 	for _, mod := range mods {
 		mod(&e)
@@ -507,7 +518,7 @@ func TestToolsPerChat(t *testing.T) {
 		d.Allowlists[1] != (otogi.AllowlistSpec{Name: "tools:fun", Title: "fun tools", Description: "Agents may use the fun module's tools here.", About: "fun"}) {
 		t.Fatalf("requires %v, allowlists %+v", d.Requires, d.Allowlists)
 	}
-	h.m.now = func() time.Time { return h.now }
+	h.m.now = h.clock
 	if err := h.m.Start(context.Background(), h.host); err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +575,7 @@ func TestWordsBeforeToolsGoOutFirst(t *testing.T) {
 	if h.m, err = New(Config{Tools: []string{"fun"}, Profiles: []ProfileConfig{{Name: "otogi", Keywords: []string{"otogi"}, Provider: "otogi", Model: "m"}}}, func(string) (llm.Provider, error) { return p, nil }); err != nil {
 		t.Fatal(err)
 	}
-	h.m.now = func() time.Time { return h.now }
+	h.m.now = h.clock
 	if err := h.m.Start(context.Background(), h.host); err != nil {
 		t.Fatal(err)
 	}

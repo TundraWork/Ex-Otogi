@@ -270,7 +270,7 @@ func TestStickerAfterOtherTools(t *testing.T) {
 	if h.m, err = New(Config{Tools: []string{"fun"}, Profiles: []ProfileConfig{stickerProfile()}}, func(string) (llm.Provider, error) { return p, nil }); err != nil {
 		t.Fatal(err)
 	}
-	h.m.now = func() time.Time { return h.now }
+	h.m.now = h.clock
 	if err := h.m.Start(context.Background(), h.host); err != nil {
 		t.Fatal(err)
 	}
