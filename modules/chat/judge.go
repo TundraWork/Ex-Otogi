@@ -679,9 +679,15 @@ func (m *Module) said(ctx context.Context, to otogi.Destination, l line) (who st
 	}
 	if agent.Label != "" {
 		// The transcript keeps the label as transcriptLine formats what
-		// present sent. Lines sent under an earlier label keep that one.
-		shown := label(agent).Parts[0]
-		l.Text = strings.TrimPrefix(l.Text, markdown.Format(shown.Text, shown.Annotations)+"\n")
+		// present sent: on a line of its own before the text, or alone
+		// when the reply had only media. Lines sent under an earlier label
+		// keep that one.
+		lp := label(agent).Parts[0]
+		kept := markdown.Format(lp.Text, lp.Annotations)
+		if l.Text == kept {
+			l.Text = ""
+		}
+		l.Text = strings.TrimPrefix(l.Text, kept+"\n")
 	}
 	return agent.title() + " (this account)", agent, l, nil
 }

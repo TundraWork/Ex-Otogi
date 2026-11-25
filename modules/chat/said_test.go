@@ -47,6 +47,22 @@ func TestAgentLinesReadAsTheirAgent(t *testing.T) {
 	}
 }
 
+// A reply that showed only media is kept as the label alone and the media,
+// and reads without the label too.
+func TestAgentLineOfMediaOnly(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	call := h.message("Alice", "otogi draw a cat")
+	h.mustHandle(call)
+	said := h.streams[0]
+	said.final = present(h.m.byName["otogi"], call, otogi.Message{Roots: []otogi.PartID{"cat"}, Parts: []otogi.Part{photo("cat")}})
+	h.echo(said)
+	h.mustHandle(h.message("Bob", "otogi nice"))
+	if got := lastUserText(h.llm["otogi"].requests[1]); !strings.Contains(got, "Otogi (this account): [photo]") || strings.Contains(got, "**") {
+		t.Fatalf("recent messages %q", got)
+	}
+}
+
 // A judgment reads an agent's line by the agent's number and title, without
 // the label its reply showed first, and so does a quote of one that has left
 // the history.
