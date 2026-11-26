@@ -81,7 +81,7 @@ func hasTool(req llm.Request, name string) bool {
 	return false
 }
 
-// An agent with media.stickers gets the list before the turn and
+// An agent with media.stickers gets the list after its system prompt, and
 // send_sticker; a call ends the reply, and the sticker follows the words as
 // a message of its own, in the sticker slot, replying to the message,
 // without the agent's label.
@@ -98,8 +98,11 @@ func TestStickerFollowsTheReply(t *testing.T) {
 	if len(p.requests) != 1 || !hasTool(p.requests[0], stickerTool) {
 		t.Fatalf("requests %d, tools %+v", len(p.requests), p.requests[0].Tools)
 	}
-	if got := lastUserText(p.requests[0]); !strings.HasPrefix(got, "Stickers you can send with send_sticker:\n1. a cat waving\n3. a dog\n\n") {
-		t.Fatalf("turn %q", got)
+	if got := p.requests[0].System; !strings.HasPrefix(got, "Stickers you can send with send_sticker:\n1. a cat waving\n3. a dog\n\nYou are otogi") {
+		t.Fatalf("system %q", got)
+	}
+	if got := lastUserText(p.requests[0]); strings.Contains(got, "Stickers you can send") {
+		t.Fatalf("the list is in the turn too: %q", got)
 	}
 	if len(h.streams) != 1 || h.streams[0].final.PlainText() != "Otogi\nHere." {
 		t.Fatalf("streams %d", len(h.streams))
@@ -208,13 +211,13 @@ func TestStickerFailures(t *testing.T) {
 func TestNoStickers(t *testing.T) {
 	h := newHarnessWith(t, map[string]any{mediasvc.Service: newDescriber()}, mediaProfile(false))
 	h.mustHandle(h.message("Alice", "otogi hi"))
-	if req := h.llm["otogi"].requests[0]; hasTool(req, stickerTool) || strings.Contains(lastUserText(req), "Stickers") {
+	if req := h.llm["otogi"].requests[0]; hasTool(req, stickerTool) || strings.Contains(req.System+lastUserText(req), "Stickers you can send") {
 		t.Fatalf("an agent without stickers got them: %+v", req.Tools)
 	}
 
 	h = newStickerHarness(t, &stickerBox{})
 	h.mustHandle(h.message("Alice", "otogi hi"))
-	if req := h.llm["otogi"].requests[0]; hasTool(req, stickerTool) || strings.Contains(lastUserText(req), "Stickers") {
+	if req := h.llm["otogi"].requests[0]; hasTool(req, stickerTool) || strings.Contains(req.System+lastUserText(req), "Stickers you can send") {
 		t.Fatalf("an empty list was offered: %+v", req.Tools)
 	}
 
@@ -223,7 +226,7 @@ func TestNoStickers(t *testing.T) {
 	p.Media.Stickers = []int{4, 5}
 	h = newHarnessWith(t, map[string]any{mediasvc.Service: newDescriber(), mediasvc.StickersService: newStickerBox()}, p)
 	h.mustHandle(h.message("Alice", "otogi hi"))
-	if req := h.llm["otogi"].requests[0]; hasTool(req, stickerTool) || strings.Contains(lastUserText(req), "Stickers") {
+	if req := h.llm["otogi"].requests[0]; hasTool(req, stickerTool) || strings.Contains(req.System+lastUserText(req), "Stickers you can send") {
 		t.Fatalf("an agent whose stickers are all gone got them: %+v", req.Tools)
 	}
 }
@@ -242,8 +245,8 @@ func TestStickersAreTheAgents(t *testing.T) {
 	l.responses = []llm.Response{picks("This one.", 3)}
 	h.mustHandle(h.message("Alice", "otogi send number 3"))
 
-	if got := lastUserText(l.requests[0]); !strings.HasPrefix(got, "Stickers you can send with send_sticker:\n5. a frog\n1. a cat waving\n\n") {
-		t.Fatalf("turn %q", got)
+	if got := l.requests[0].System; !strings.HasPrefix(got, "Stickers you can send with send_sticker:\n5. a frog\n1. a cat waving\n\nYou are") {
+		t.Fatalf("system %q", got)
 	}
 	if len(h.sends) != 1 || string(h.sends[0].msg.Parts[0].Media.Source.Inline) != "GIF89a 3" {
 		t.Fatalf("sends %+v", h.sends)
@@ -280,5 +283,89 @@ func TestStickerAfterOtherTools(t *testing.T) {
 	}
 	if _, payload := lastReplyRecord(t, h); len(payload["messages"].([]otogi.EventRef)) != 3 {
 		t.Fatalf("messages %v", payload["messages"])
+	}
+}
+
+// packBox keeps stickers in packs: 1 and 3 in cats, 3 and 4 in dogs, 5 in
+// none.
+func packBox() *stickerBox {
+	return &stickerBox{list: []mediasvc.Sticker{
+		{ID: 1, Kind: mediasvc.KindSticker, Text: "a cat", Packs: []string{"cats"}},
+		{ID: 3, Kind: mediasvc.KindSticker, Text: "a cat and a dog", Packs: []string{"cats", "dogs"}},
+		{ID: 4, Kind: mediasvc.KindSticker, Text: "a dog", Packs: []string{"dogs"}},
+		{ID: 5, Kind: mediasvc.KindMeme, Text: "a frog"},
+	}}
+}
+
+// Packs give an agent their stickers after its own, in its order of packs
+// and each pack's by number, each sticker once; a pack not there gives
+// none. A sticker put in a pack is in the list of the next reply.
+func TestStickerPacksGiveStickers(t *testing.T) {
+	box := packBox()
+	p := stickerProfile()
+	p.Media.Stickers = []int{4}
+	p.Media.Packs = []string{"gone", "dogs", "cats"}
+	h := newHarnessWith(t, map[string]any{mediasvc.Service: newDescriber(), mediasvc.StickersService: box}, p)
+	l := h.llm["otogi"]
+	h.mustHandle(h.message("Alice", "otogi hi"))
+	if got := l.requests[0].System; !strings.HasPrefix(got, "Stickers you can send with send_sticker:\n4. a dog\n3. a cat and a dog\n1. a cat\n\nYou are") {
+		t.Fatalf("system %q", got)
+	}
+	box.list = append(box.list, mediasvc.Sticker{ID: 6, Text: "a puppy", Packs: []string{"dogs"}})
+	h.mustHandle(h.message("Alice", "otogi again"))
+	if got := l.requests[1].System; !strings.HasPrefix(got, "Stickers you can send with send_sticker:\n4. a dog\n3. a cat and a dog\n6. a puppy\n1. a cat\n\nYou are") {
+		t.Fatalf("system after a sticker went in dogs %q", got)
+	}
+
+	// Packs alone give stickers, and send_sticker with them.
+	p = stickerProfile()
+	p.Media.Stickers, p.Media.Packs = nil, []string{"cats"}
+	h = newHarnessWith(t, map[string]any{mediasvc.Service: newDescriber(), mediasvc.StickersService: packBox()}, p)
+	h.mustHandle(h.message("Alice", "otogi hi"))
+	if req := h.llm["otogi"].requests[0]; !hasTool(req, stickerTool) || !strings.HasPrefix(req.System, "Stickers you can send with send_sticker:\n1. a cat\n3. a cat and a dog\n\n") {
+		t.Fatalf("packs alone: tools %+v, system %q", req.Tools, req.System)
+	}
+}
+
+// max_stickers bounds the list, those first in it kept, and chat.reply
+// says how many were left out; a list within it records nothing of it.
+func TestMaxStickers(t *testing.T) {
+	p := stickerProfile()
+	p.Media.Stickers, p.Media.Packs, p.Media.MaxStickers = []int{5}, []string{"cats", "dogs"}, ptr(2)
+	h := newHarnessWith(t, map[string]any{mediasvc.Service: newDescriber(), mediasvc.StickersService: packBox()}, p)
+	l := h.llm["otogi"]
+	h.mustHandle(h.message("Alice", "otogi hi"))
+	if got := l.requests[0].System; !strings.HasPrefix(got, "Stickers you can send with send_sticker:\n5. a frog\n1. a cat\n\nYou are") {
+		t.Fatalf("system %q", got)
+	}
+	if _, payload := lastReplyRecord(t, h); payload["stickers_hidden"] != 2 {
+		t.Fatalf("stickers_hidden = %v, want 2 (3 and 4)", payload["stickers_hidden"])
+	}
+
+	p.Media.MaxStickers = ptr(4)
+	h = newHarnessWith(t, map[string]any{mediasvc.Service: newDescriber(), mediasvc.StickersService: packBox()}, p)
+	h.mustHandle(h.message("Alice", "otogi hi"))
+	if _, payload := lastReplyRecord(t, h); payload["stickers_hidden"] != nil {
+		t.Fatalf("a list within max_stickers recorded stickers_hidden %v", payload["stickers_hidden"])
+	}
+}
+
+// The list sits between the persona and what changes with the chat and the
+// minute, so what comes before it is the same in every chat and request.
+func TestStickerListIsCachedWithThePersona(t *testing.T) {
+	p := stickerProfile()
+	p.System = "You are a cheerful cat."
+	h := newHarnessWith(t, map[string]any{mediasvc.Service: newDescriber(), mediasvc.StickersService: newStickerBox()}, p)
+	l := h.llm["otogi"]
+	h.mustHandle(h.message("Alice", "otogi hi"))
+	h.mustHandle(h.message("Bob", "otogi hello", func(e *otogi.Event) { e.Conversation.Title, e.Conversation.Members = "Another", 99 }))
+	const prefix = "You are a cheerful cat.\n\nStickers you can send with send_sticker:\n1. a cat waving\n3. a dog\n\nYou are otogi, talking in "
+	for i, req := range l.requests {
+		if !strings.HasPrefix(req.System, prefix) {
+			t.Fatalf("request %d system %q", i, req.System)
+		}
+	}
+	if l.requests[0].System == l.requests[1].System {
+		t.Fatal("both chats got the same system prompt; the test is not telling chats apart")
 	}
 }

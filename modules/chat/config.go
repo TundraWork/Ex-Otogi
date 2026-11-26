@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/TundraWork/Ex-Otogi/pkg/llm"
+	mediasvc "github.com/TundraWork/Ex-Otogi/pkg/media"
 	"github.com/TundraWork/Ex-Otogi/pkg/otogi"
 )
 
@@ -105,9 +107,12 @@ type NotesConfig struct {
 
 // MediaConfig has an agent read the media module's descriptions.
 type MediaConfig struct {
-	AsText   bool           `json:"as_text,omitempty" doc:"Give the model descriptions instead of the current and the quoted message's media, for a model that sees images poorly or not at all. Media left undescribed is named by its kind, not shown."`
-	Stickers []int          `json:"stickers,omitempty" doc:"Stickers, by /sticker list number, it may send with send_sticker after its reply, one at most; empty gives none. The list goes past the cached part, at full price each reply. A kept sticker named by number can be sent too. Verified on QQ only."`
-	Examine  *ExamineConfig `json:"examine,omitempty" doc:"Give the agent examine_media, to ask a question of its own about a picture, animation, or video in the chat, which the descriptions it is shown then name by ID (#2ce7ad), or about a kept sticker by its number: the media module's models answer from the media itself. The original is the one the media module keeps (its pictures), else fetched again, which fails once the platform's link expired, on QQ in about an hour. Judgments and the memory are shown no IDs."`
+	AsText   bool     `json:"as_text,omitempty" doc:"Give the model descriptions instead of the current and the quoted message's media, for a model that sees images poorly or not at all. Media left undescribed is named by its kind, not shown."`
+	Stickers []int    `json:"stickers,omitempty" format:"sticker" doc:"Stickers, by number, it may send with send_sticker after its reply, one at most. With packs, these come first in its list. A kept sticker named by number can be sent too. Verified on QQ only."`
+	Packs    []string `json:"packs,omitempty" format:"sticker-pack" doc:"Sticker packs, by ID, whose stickers it may send, each pack's by number after stickers; a sticker put in a pack is in its list from the next reply on. A pack not there is skipped."`
+	// MaxStickers bounds the list an agent is shown before each reply.
+	MaxStickers *int           `json:"max_stickers,omitempty" minimum:"1" default:"50" doc:"The most stickers its list shows: past it, those first in it, stickers before packs, and chat.reply records how many were left out (stickers_hidden). The list is about fifty characters a sticker, in the cached part of the request after the system prompt, paid in full once after each change to it."`
+	Examine     *ExamineConfig `json:"examine,omitempty" doc:"Give the agent examine_media, to ask a question of its own about a picture, animation, or video in the chat, which the descriptions it is shown then name by ID (#2ce7ad), or about a kept sticker by its number: the media module's models answer from the media itself. The original is the one the media module keeps (its pictures), else fetched again, which fails once the platform's link expired, on QQ in about an hour. Judgments and the memory are shown no IDs."`
 }
 
 // ExamineConfig gives an agent examine_media.
@@ -117,6 +122,13 @@ type ExamineConfig struct {
 
 // defaultExamineTimeout bounds one look an examine block leaves unbounded.
 const defaultExamineTimeout = time.Minute
+
+// defaultMaxStickers is the most stickers an agent's list shows unless set:
+// fifty lines, about two thousand characters. Eku's list on dsh was 27.
+const defaultMaxStickers = 50
+
+// packID is what a sticker pack's ID matches, as the media module checks.
+var packID = regexp.MustCompile(mediasvc.PackIDPattern)
 
 // JudgeConfig has the decision service judge group messages for an agent.
 // Each block turns one judgment on.
@@ -210,6 +222,7 @@ type profile struct {
 	// to finish; waitMax is 0 when it does not wait.
 	waitMin, waitMax time.Duration
 	examine          time.Duration // the longest one look with examine_media may take; 0 when it has none
+	maxStickers      int           // the most stickers the agent's list shows
 	sources          bool          // whether a grounded reply ends with its sources
 }
 
@@ -352,6 +365,17 @@ func (c *Config) profiles(providers func(string) (llm.Provider, error)) ([]*prof
 			for j, n := range pc.Media.Stickers {
 				if n <= 0 {
 					refuse(fmt.Sprintf(".media.stickers[%d]", j), fmt.Errorf("%d: want a sticker's number, as /sticker list shows it", n))
+				}
+			}
+			for j, id := range pc.Media.Packs {
+				if !packID.MatchString(id) {
+					refuse(fmt.Sprintf(".media.packs[%d]", j), fmt.Errorf("%q: want a sticker pack's ID: lowercase letters, digits, and hyphens, starting with a letter or digit, at most 32", id))
+				}
+			}
+			p.maxStickers = defaultMaxStickers
+			if n := pc.Media.MaxStickers; n != nil {
+				if p.maxStickers = *n; p.maxStickers < 1 {
+					refuse(".media.max_stickers", errors.New("must be at least 1"))
 				}
 			}
 			if pc.Media.Examine != nil {

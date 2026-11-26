@@ -24,7 +24,7 @@ const stickerSlot = "sticker"
 // sendsStickers reports whether any agent sends stickers.
 func (m *Module) sendsStickers() bool {
 	for _, p := range m.profiles {
-		if p.Media != nil && len(p.Media.Stickers) > 0 {
+		if p.Media != nil && (len(p.Media.Stickers) > 0 || len(p.Media.Packs) > 0) {
 			return true
 		}
 	}
@@ -38,15 +38,18 @@ type stickerPick struct {
 	kept   []mediasvc.Sticker // every kept sticker: what it may send by number
 	picked *mediasvc.Sticker
 	listed bool // whether the picked sticker is on the agent's list
+	hidden int  // how many more the agent is given than its list shows
 }
 
 // stickersFor is the stickers p is shown in this reply, or nil when it is
-// given none or none of its numbers is kept any more: then the reply has no
-// list and no send_sticker. Its numbers are taken in its order, once each,
-// skipping those no longer kept. A failure to list the kept stickers is
-// logged, and the reply goes on without.
+// given none or none of them is kept any more: then the reply has no list
+// and no send_sticker. Its stickers come first, in its order, then its
+// packs', in its order and each pack's by number; each once, those no
+// longer kept skipped, and those past its max_stickers left out, counted
+// as hidden. A failure to list the kept stickers is logged, and the reply
+// goes on without.
 func (m *Module) stickersFor(ctx context.Context, p *profile) *stickerPick {
-	if p.Media == nil || len(p.Media.Stickers) == 0 {
+	if p.Media == nil || (len(p.Media.Stickers) == 0 && len(p.Media.Packs) == 0) {
 		return nil
 	}
 	kept, err := m.stickers.List(ctx)
@@ -60,21 +63,36 @@ func (m *Module) stickersFor(ctx context.Context, p *profile) *stickerPick {
 	}
 	var list []mediasvc.Sticker
 	seen := map[int]bool{}
-	for _, n := range p.Media.Stickers {
-		st, ok := byID[n]
-		if !ok || seen[n] {
-			continue
+	add := func(st mediasvc.Sticker) {
+		if !seen[st.ID] {
+			seen[st.ID] = true
+			list = append(list, st)
 		}
-		seen[n] = true
-		list = append(list, st)
+	}
+	for _, n := range p.Media.Stickers {
+		if st, ok := byID[n]; ok {
+			add(st)
+		}
+	}
+	for _, pack := range p.Media.Packs {
+		for _, st := range kept { // by number
+			if slices.Contains(st.Packs, pack) {
+				add(st)
+			}
+		}
 	}
 	if len(list) == 0 {
 		return nil
 	}
-	return &stickerPick{list: list, kept: kept}
+	pick := &stickerPick{list: list, kept: kept}
+	if len(list) > p.maxStickers {
+		pick.list, pick.hidden = list[:p.maxStickers], len(list)-p.maxStickers
+	}
+	return pick
 }
 
-// text is the list as it leads the turn, one sticker a line, by number.
+// text is the list as the system prompt has it, one sticker a line, by
+// number.
 func (s *stickerPick) text() string {
 	lines := []string{"Stickers you can send with " + stickerTool + ":"}
 	for _, st := range s.list {
@@ -91,7 +109,7 @@ func (s *stickerPick) text() string {
 func (s *stickerPick) tool() llm.Tool {
 	return llm.NewEndingTool(llm.Function{
 		Name:        stickerTool,
-		Description: "Send a sticker by its number: one listed before the message, one shown as [sticker N: ...] in the chat, or one someone names. It goes as a message of its own after what you wrote. This ends your reply: write anything you want to say before calling it. At most one per reply.",
+		Description: "Send a sticker by its number: one from your list of stickers, one shown as [sticker N: ...] in the chat, or one someone names. It goes as a message of its own after what you wrote. This ends your reply: write anything you want to say before calling it. At most one per reply.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"number":{"type":"integer","description":"the sticker's number"}},"required":["number"]}`),
 	}, func(_ context.Context, _ otogi.Event, args json.RawMessage) (any, error) {
 		var in struct {
