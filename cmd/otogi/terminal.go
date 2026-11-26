@@ -27,12 +27,16 @@ func (t *terminal) Code(ctx context.Context) (string, error) {
 	return t.prompt(ctx, "Login code: ")
 }
 
-func (t *terminal) Password(ctx context.Context) (string, error) {
+func (t *terminal) Password(ctx context.Context, hint string) (string, error) {
+	question := "Two-step verification password: "
+	if hint != "" {
+		question = "Two-step verification password (hint: " + hint + "): "
+	}
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
-		return t.prompt(ctx, "Two-step verification password: ")
+		return t.prompt(ctx, question)
 	}
-	if _, err := fmt.Fprint(t.out, "Two-step verification password: "); err != nil {
+	if _, err := fmt.Fprint(t.out, question); err != nil {
 		return "", fmt.Errorf("prompt: %w", err)
 	}
 	password, err := term.ReadPassword(fd)
@@ -41,6 +45,14 @@ func (t *terminal) Password(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("read password: %w", err)
 	}
 	return string(password), nil
+}
+
+// Refused says what Telegram refused, before the question is asked again.
+func (t *terminal) Refused(err error) error {
+	if _, werr := fmt.Fprintln(t.out, err); werr != nil {
+		return fmt.Errorf("prompt: %w", werr)
+	}
+	return nil
 }
 
 func (t *terminal) prompt(ctx context.Context, question string) (string, error) {

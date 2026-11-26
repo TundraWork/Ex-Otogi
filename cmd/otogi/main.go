@@ -137,7 +137,8 @@ func login(ctx context.Context, s *moduleSettings, cfg Config, account string) e
 	}
 	for _, a := range accounts {
 		if a.Account == account {
-			who, err := telegram.Login(ctx, telegram.SessionConfig{AppID: a.AppID, AppHash: a.AppHash, SessionPath: a.Session}, newTerminal())
+			session := telegram.SessionConfig{AppID: a.AppID, AppHash: a.AppHash, SessionPath: a.Session}
+			who, err := logIn(ctx, telegramSteps(), session, newTerminal())
 			if err != nil {
 				return err
 			}
