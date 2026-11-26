@@ -7,11 +7,14 @@ import {
   inView,
   matches,
   mib,
+  moved,
   next,
   noPack,
   onlyIn,
   packIDProblem,
+  seenNote,
   sentQuery,
+  shownTo,
   size,
   usage,
 } from "./stickers.ts";
@@ -133,4 +136,41 @@ test("a pack's stickers in no other pack are counted", () => {
   const stickers = [{ packs: ["eku"] }, { packs: ["cats", "eku"] }, { packs: [] }, { packs: ["eku"] }];
   assert.equal(onlyIn(stickers, "eku"), 2);
   assert.equal(onlyIn(stickers, "cats"), 0);
+});
+
+test("a chosen item moves one place earlier or later, and not past either end", () => {
+  assert.deepEqual(moved([1, 2, 3], 1, -1), [2, 1, 3]);
+  assert.deepEqual(moved([1, 2, 3], 1, 1), [1, 3, 2]);
+  assert.deepEqual(moved([1, 2, 3], 0, -1), [1, 2, 3]);
+  assert.deepEqual(moved([1, 2, 3], 2, 1), [1, 2, 3]);
+  assert.deepEqual(moved([1, 2, 3], 5, 1), [1, 2, 3]);
+});
+
+test("an agent's list counts its stickers, then its packs', once each, only those it can see", () => {
+  const kept = [
+    { id: 1, text: "wave" },
+    { id: 2, text: "cry" },
+    { id: 3, text: "" },
+    { id: 4, text: "laugh" },
+    { id: 5, text: "nod" },
+  ];
+  const packs = [
+    { id: "eku", stickers: [2, 3, 4] },
+    { id: "misc", stickers: [4, 5] },
+  ];
+  // 1 and 2 named; eku adds 4 (2 is there, 3 has no text); misc adds 5; 9 is not kept; gone is not there.
+  assert.deepEqual(shownTo([1, 2, 9], ["eku", "misc", "gone"], 50, kept, packs), { given: 4, seen: 4 });
+  assert.deepEqual(shownTo([1, 2, 9], ["eku", "misc"], 3, kept, packs), { given: 4, seen: 3 });
+  assert.deepEqual(shownTo(undefined, ["misc"], 50, kept, packs), { given: 2, seen: 2 });
+  assert.deepEqual(shownTo(undefined, undefined, 50, kept, packs), { given: 0, seen: 0 });
+});
+
+test("the line under the pickers says how many the agent sees, and when only the first", () => {
+  assert.deepEqual(seenNote("艾可", 31, 50), { text: "艾可 sees 31 stickers.", over: false });
+  assert.deepEqual(seenNote("艾可", 1, 50), { text: "艾可 sees 1 sticker.", over: false });
+  assert.deepEqual(seenNote("艾可", 0, 50), { text: "艾可 sees no stickers.", over: false });
+  assert.deepEqual(seenNote("艾可", 62, 50), {
+    text: "艾可 is given 62 stickers and sees the first 50: single stickers first, then packs in order.",
+    over: true,
+  });
 });

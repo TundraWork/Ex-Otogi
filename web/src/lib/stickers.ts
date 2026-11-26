@@ -125,3 +125,58 @@ export function packIDProblem(id: string, taken: string[]): string {
 export function onlyIn(stickers: { packs: string[] }[], pack: string): number {
   return stickers.filter((s) => s.packs.length === 1 && s.packs[0] === pack).length;
 }
+
+/** moved is list with its item at i moved one place earlier (step -1) or
+ * later (step 1); the list as it was when that would leave it. */
+export function moved<T>(list: readonly T[], i: number, step: -1 | 1): T[] {
+  const out = [...list];
+  const j = i + step;
+  if (i < 0 || i >= out.length || j < 0 || j >= out.length) {
+    return out;
+  }
+  [out[i], out[j]] = [out[j] as T, out[i] as T];
+  return out;
+}
+
+/** shownTo counts an agent's list as chat builds it from the agent's
+ * settings: the stickers named, then each pack's, in the order of the
+ * packs, each once, leaving out those no longer kept, packs no longer there,
+ * and stickers with no text, which agents are not shown. given is how many
+ * that is; seen, how many of them the agent sees: the first max. */
+export function shownTo(
+  stickers: unknown,
+  packs: unknown,
+  max: number,
+  kept: { id: number; text: string }[],
+  all: Pack[],
+): { given: number; seen: number } {
+  const shown = new Set(kept.filter((s) => s.text).map((s) => s.id));
+  const members = new Map(all.map((p) => [p.id, p.stickers]));
+  const list = new Set<number>();
+  for (const id of Array.isArray(stickers) ? stickers : []) {
+    if (typeof id === "number" && shown.has(id)) {
+      list.add(id);
+    }
+  }
+  for (const pack of Array.isArray(packs) ? packs : []) {
+    for (const id of (typeof pack === "string" && members.get(pack)) || []) {
+      if (shown.has(id)) {
+        list.add(id);
+      }
+    }
+  }
+  return { given: list.size, seen: Math.min(list.size, max) };
+}
+
+/** seenNote is the line under an agent's sticker pickers: how many it sees,
+ * and, past max, that it sees only the first; over says it is past. */
+export function seenNote(agent: string, given: number, max: number): { text: string; over: boolean } {
+  const n = (k: number) => `${k} ${k === 1 ? "sticker" : "stickers"}`;
+  if (given > max) {
+    return {
+      text: `${agent} is given ${n(given)} and sees the first ${max}: single stickers first, then packs in order.`,
+      over: true,
+    };
+  }
+  return { text: given === 0 ? `${agent} sees no stickers.` : `${agent} sees ${n(given)}.`, over: false };
+}

@@ -127,6 +127,19 @@ export function entrySchema(s: JSONSchema): JSONSchema {
   return typeof s.additionalProperties === "object" ? s.additionalProperties : {};
 }
 
+/** schemaAt is the schema of the field at a path in the settings, such as
+ * profiles[0].media.max_stickers, or undefined when there is none. */
+export function schemaAt(root: JSONSchema, path: string): JSONSchema | undefined {
+  let s: JSONSchema | undefined = root;
+  for (const part of path.match(/[^.[\]]+/g) ?? []) {
+    if (!s) return undefined;
+    const at: JSONSchema = resolve(root, s);
+    const entry = typeof at.additionalProperties === "object" ? at.additionalProperties : undefined;
+    s = at.items && /^\d+$/.test(part) ? at.items : (at.properties?.[part] ?? entry);
+  }
+  return s && resolve(root, s);
+}
+
 /** check validates one value against its schema, as the server will. */
 export function check(s: JSONSchema, value: unknown, required: boolean): string | undefined {
   const empty = value === undefined || value === null || value === "";

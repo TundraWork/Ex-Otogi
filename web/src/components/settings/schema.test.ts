@@ -12,6 +12,7 @@ import {
   pathLabel,
   placeholder,
   removedFrom,
+  schemaAt,
   swapped,
   validate,
 } from "./schema.ts";
@@ -233,4 +234,12 @@ test("placeholder is the default, filled in from the fields beside it where it d
   // Until what it depends on is set, it has none.
   assert.equal(placeholder(session, { account: "" }, false), "");
   assert.equal(placeholder({ type: "string", "x-placeholder": "{server}" }, {}, false), "");
+});
+
+test("schemaAt follows a path through lists, references, and maps", () => {
+  assert.deepEqual(schemaAt(root, "profiles[1].context"), { type: "integer", minimum: 0 });
+  assert.deepEqual(schemaAt(root, "judge.rules"), { type: "string" });
+  assert.deepEqual(schemaAt(root, "headers.accept"), { type: "string" });
+  assert.equal(schemaAt(root, "profiles[0].nothing"), undefined);
+  assert.equal(schemaAt(root, "profiles[0].context.more"), undefined);
 });

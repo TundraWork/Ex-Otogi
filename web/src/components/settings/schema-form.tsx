@@ -29,9 +29,11 @@ import {
   properties,
   removedFrom,
   resolve,
+  schemaAt,
   swapped,
 } from "./schema";
 import { SecretNote, SecretPicker } from "./secret-picker";
+import { StickerField, StickersSeen } from "./sticker-pickers";
 
 // biome-ignore lint/suspicious/noExplicitAny: settings are any module's, shaped by the schema at runtime
 export type SettingsForm = ReactFormExtendedApi<any, any, any, any, any, any, any, any, any, any, any, any>;
@@ -217,6 +219,7 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
   const noted =
     locked ||
     s.items?.format === "tool-module" ||
+    s.items?.format === "sticker-pack" ||
     ["secret", "llm-provider", "llm-model", "llm-thinking", "actor"].includes(s.format ?? "");
   return (
     <form.Field name={name}>
@@ -241,6 +244,13 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
               <ActorNote value={field.state.value} />
             ) : s.items?.format === "tool-module" ? (
               <ToolModulesNote value={field.state.value} />
+            ) : s.items?.format === "sticker-pack" && beside.stickers ? (
+              <StickersSeen
+                agent={String(beside.stickers.label || beside.stickers.name || "The agent")}
+                stickers={beside.stickers.stickers}
+                packs={field.state.value}
+                max={Number(beside.stickers.max ?? schemaAt(root, sibling(name, "max_stickers"))?.default ?? 0)}
+              />
             ) : s.format === "llm-model" ? (
               <ModelNote value={field.state.value} provider={beside.provider} />
             ) : (
@@ -250,7 +260,7 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
             )
           }
           // A group of chips has no one control the title could label.
-          labels={!s.items?.enum && s.items?.format !== "tool-module"}
+          labels={!s.items?.enum && !["tool-module", "sticker", "sticker-pack"].includes(s.items?.format ?? "")}
           block={kind === "array" || s.format === "markdown" || s.format === "text"}
           inline={kind === "boolean"}
         >
@@ -272,7 +282,11 @@ function SchemaField({ schema, name, title, required, locked }: FieldProps & { l
 /** Beside is what a field reads from the fields beside it: an llm-model
  * field the provider, an llm-thinking field the provider and the model (see
  * lib/llm), and one with an x-placeholder all of them, its siblings. */
-type Beside = { provider?: unknown; model?: unknown; siblings?: unknown };
+type Beside = { provider?: unknown; model?: unknown; siblings?: unknown; stickers?: StickerSiblings };
+
+/** StickerSiblings is what the line under a media.packs field reads: the
+ * stickers beside it, its max_stickers, and the agent's name and label. */
+type StickerSiblings = { stickers: unknown; max: unknown; name: unknown; label: unknown };
 
 function useBeside(form: SettingsForm, name: string, schema: JSONSchema): Beside {
   const format = schema.format;
@@ -285,7 +299,20 @@ function useBeside(form: SettingsForm, name: string, schema: JSONSchema): Beside
   const siblings = useStore(form.store, (s) =>
     schema["x-placeholder"] ? (parent ? getBy(s.values, parent) : s.values) : undefined,
   );
-  return { provider, model, siblings };
+  // An agent's media is profiles[i].media: its name and label are two up.
+  const packs = schema.items?.format === "sticker-pack";
+  const agent = name.replace(/\.?[^.[\]]+\.[^.[\]]+$/, "");
+  const stickers = useStore(form.store, (s) =>
+    packs
+      ? {
+          stickers: getBy(s.values, sibling(name, "stickers")),
+          max: getBy(s.values, sibling(name, "max_stickers")),
+          name: getBy(s.values, `${agent}.name`),
+          label: getBy(s.values, `${agent}.label`),
+        }
+      : undefined,
+  );
+  return { provider, model, siblings, stickers };
 }
 
 function Row({
@@ -419,6 +446,25 @@ function Control({
     // An unset list shows what it is by default. When that is something, a
     // list emptied is a list of nothing; otherwise an optional one is unset.
     const unset = (schema.default ?? []) as unknown[];
+    const tags = (
+      <Tags
+        labelling={a}
+        numeric={["integer", "number"].includes(kindOf(item))}
+        value={(value as unknown[] | undefined) ?? unset}
+        onChange={(v) => onChange(v.length || unset.length || a["aria-required"] ? v : undefined)}
+      />
+    );
+    if (item.format === "sticker" || item.format === "sticker-pack") {
+      return (
+        <StickerField
+          packs={item.format === "sticker-pack"}
+          labelling={a}
+          value={value}
+          onChange={onChange}
+          fallback={tags}
+        />
+      );
+    }
     if (item.format === "actor") {
       return (
         <ActorTags
@@ -428,14 +474,7 @@ function Control({
         />
       );
     }
-    return (
-      <Tags
-        labelling={a}
-        numeric={["integer", "number"].includes(kindOf(item))}
-        value={(value as unknown[] | undefined) ?? unset}
-        onChange={(v) => onChange(v.length || unset.length || a["aria-required"] ? v : undefined)}
-      />
-    );
+    return tags;
   }
   if (schema.enum) {
     // A choice keeps its type: an integer's choices are saved as numbers.
