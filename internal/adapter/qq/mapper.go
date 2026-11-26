@@ -217,8 +217,12 @@ func (m *mapper) learnNames(ctx context.Context, msg message, actor string) erro
 }
 
 // faceSticker is the face type of a sticker, whose picture comes as an
-// attachment of the same message.
-const faceSticker = "6"
+// attachment of the same message; faceMarket, of a market face, a sticker
+// from QQ's store that comes as its name alone, with no picture or ID.
+const (
+	faceSticker = "6"
+	faceMarket  = "4"
+)
 
 // face is the name a QQ face carries in its ext, base64 JSON whose text names
 // it, such as "[进攻]"; a sticker's is empty. A face whose name cannot be
@@ -240,8 +244,10 @@ var tagToken = regexp.MustCompile(`<@!?([^>\s]+)>|<faceType=(\d+),faceId="([^"]*
 // content builds the message: text with mentions and faces as annotations,
 // then the attachments, and a reply relation when it quotes another message.
 // A face is its name, marked as an emoji whose target is qq:face:<type>, with
-// :<id> when it has one; a sticker's face leaves nothing, and its picture,
-// which comes as an attachment, is a sticker.
+// :<id> when it has one; a market face (type 4), a sticker QQ gives only the
+// name of, is marked as a sticker sent without its picture; a sticker's face
+// leaves nothing, and its picture, which comes as an attachment, is a
+// sticker.
 func (m *mapper) content(ctx context.Context, msg message, e *otogi.Event) (otogi.Message, error) {
 	var text otogi.RichText
 	content, sticker := msg.Content, false
@@ -260,7 +266,11 @@ func (m *mapper) content(ctx context.Context, msg message, e *otogi.Event) (otog
 				if id != "" {
 					target += ":" + id
 				}
-				text.Mark(otogi.AnnotationEmoji, target, func() { text.Write(name) })
+				mark := otogi.AnnotationEmoji
+				if kind == faceMarket {
+					mark = otogi.AnnotationSticker
+				}
+				text.Mark(mark, target, func() { text.Write(name) })
 			}
 			continue
 		}

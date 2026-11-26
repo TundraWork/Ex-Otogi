@@ -199,8 +199,9 @@ func TestMapLearnsNames(t *testing.T) {
 // sticker.
 func TestMapFaces(t *testing.T) {
 	m := testMapper(t)
-	// A store sticker's face (type 4) has a name and no ID; a built-in face
-	// (type 3) has both; a face whose name cannot be read is [表情].
+	// A market face (type 4), a store sticker, has a name and no ID, and is a
+	// sticker sent without its picture; a built-in face (type 3) has both and
+	// is an emoji; a face whose name cannot be read is [表情].
 	e := mapOne(t, m, "GROUP_MESSAGE_CREATE", `{"id":"g1","group_openid":"G1","author":{"member_openid":"M1"},
 		"content":"冲<faceType=4,faceId=\"\",ext=\"eyJ0ZXh0IjoiW+i/m+aUu10ifQ==\">！<faceType=3,faceId=\"5\",ext=\"eyJ0ZXh0IjoiW+a1geazql0ifQ==\"><faceType=3,faceId=\"9\",ext=\"!\">"}`)
 	p := e.Message.Parts[0]
@@ -208,7 +209,7 @@ func TestMapFaces(t *testing.T) {
 		t.Fatalf("text = %q", p.Text)
 	}
 	want := []otogi.Annotation{
-		{Offset: 3, Length: 8, Kind: otogi.AnnotationEmoji, Target: "qq:face:4"},
+		{Offset: 3, Length: 8, Kind: otogi.AnnotationSticker, Target: "qq:face:4"},
 		{Offset: 14, Length: 8, Kind: otogi.AnnotationEmoji, Target: "qq:face:3:5"},
 		{Offset: 22, Length: 8, Kind: otogi.AnnotationEmoji, Target: "qq:face:3:9"},
 	}

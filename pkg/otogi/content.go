@@ -37,6 +37,10 @@ const (
 	AnnotationEmail AnnotationKind = "email"
 	// AnnotationEmoji marks a custom emoji; Target holds its platform ID.
 	AnnotationEmoji AnnotationKind = "emoji"
+	// AnnotationSticker marks the name of a sticker sent without its
+	// picture, such as a QQ market face: the platform gave only the name.
+	// Target holds its platform ID, if it has one.
+	AnnotationSticker AnnotationKind = "sticker"
 	// AnnotationTimestamp marks a formatted date or time.
 	AnnotationTimestamp AnnotationKind = "timestamp"
 )

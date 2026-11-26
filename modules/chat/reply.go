@@ -436,6 +436,7 @@ func (m *Module) userContent(ctx context.Context, e otogi.Event, inv otogi.Invoc
 			if i == 0 {
 				body, annotations = withoutLeadingMention(e, body, annotations)
 			}
+			body, annotations = nameOnly(body, annotations)
 			text := otogi.RichText{}
 			text.Write(prefix)
 			text.Append(body, annotations)

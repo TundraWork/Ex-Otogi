@@ -370,7 +370,7 @@ func transcriptLine(e otogi.Event) line {
 	for _, p := range e.Message.Parts {
 		switch {
 		case p.Kind == otogi.PartText:
-			texts = append(texts, markdown.Format(p.Text, p.Annotations))
+			texts = append(texts, markdown.Format(nameOnly(p.Text, p.Annotations)))
 		case p.Media != nil:
 			media := *p.Media
 			media.Source.Inline = nil
