@@ -11,6 +11,7 @@ import { Notice } from "@/components/notice";
 import { NotFound } from "@/components/route-states";
 import { addingOf, SettingsCard, settingsSearch } from "@/components/settings/settings-card";
 import { outcomeTone, StatusDot } from "@/components/status-dot";
+import { StickersCard } from "@/components/stickers-card";
 import { Tile } from "@/components/tile";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -97,6 +98,11 @@ function ModulePage() {
           <Activity module={m} />
         </div>
       </div>
+      {id === "media" && (
+        <div className="mt-4">
+          <StickersCard />
+        </div>
+      )}
     </div>
   );
 }
