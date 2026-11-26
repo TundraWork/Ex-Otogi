@@ -9,11 +9,12 @@ import {
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { format, isToday, isYesterday } from "date-fns";
-import { ArrowDown, ArrowLeft, Copy, ExternalLink, Pencil, ScrollText, UserCog, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, Copy, Pencil, ScrollText, UserCog } from "lucide-react";
 import { type ReactElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, api, data, type Schemas } from "@/api/client";
 import { Ago } from "@/components/ago";
 import { LoadError } from "@/components/load-error";
+import { Picture } from "@/components/picture";
 import { NotFound } from "@/components/route-states";
 import { listed, type PeopleList, peopleLists } from "@/components/settings/people-lists";
 import { type JSONSchema, label } from "@/components/settings/schema";
@@ -21,14 +22,7 @@ import type { SettingsSearch } from "@/components/settings/settings-card";
 import { outcomeTone, StatusDot } from "@/components/status-dot";
 import { Tile } from "@/components/tile";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogBackdrop,
-  DialogClose,
-  DialogPortal,
-  DialogPrimitive,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { Dialog, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Menu, MenuLinkItem, MenuPopup, MenuTrigger } from "@/components/ui/menu";
 import { Sheet, SheetHeader, SheetPanel, SheetPopup, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -401,35 +395,6 @@ function MediaPart({ chat, message, part }: { chat: string; message: number; par
       </DialogTrigger>
       <Picture src={src} />
     </Dialog>
-  );
-}
-
-/** Picture shows an image over the page, as large as the window allows;
- * Escape, the close button, or a click beside it closes it. */
-function Picture({ src }: { src: string }) {
-  return (
-    <DialogPortal>
-      <DialogBackdrop className="bg-black/80 backdrop-blur-none" />
-      <DialogPrimitive.Viewport className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-10">
-        <DialogPrimitive.Popup className="relative flex max-h-full max-w-full flex-col items-center gap-3 outline-none transition-[scale,opacity] duration-200 data-ending-style:scale-98 data-ending-style:opacity-0 data-starting-style:scale-98 data-starting-style:opacity-0">
-          <DialogPrimitive.Title className="sr-only">Picture</DialogPrimitive.Title>
-          <img src={src} alt="" className="min-h-0 max-w-full flex-1 rounded-lg object-contain shadow-2xl" />
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              render={<a href={src} target="_blank" rel="noreferrer" />}
-              className="bg-background/90"
-            >
-              <ExternalLink /> Open original
-            </Button>
-            <DialogClose render={<Button variant="outline" size="sm" className="bg-background/90" />}>
-              <X /> Close
-            </DialogClose>
-          </div>
-        </DialogPrimitive.Popup>
-      </DialogPrimitive.Viewport>
-    </DialogPortal>
   );
 }
 
