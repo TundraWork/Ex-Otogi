@@ -37,8 +37,9 @@ type stickerPick struct {
 	list   []mediasvc.Sticker // the agent's, in its order: the list it is shown
 	kept   []mediasvc.Sticker // every kept sticker: what it may send by number
 	picked *mediasvc.Sticker
-	listed bool // whether the picked sticker is on the agent's list
-	hidden int  // how many more the agent is given than its list shows
+	listed bool  // whether the picked sticker is on the agent's list
+	hidden int   // how many more the agent is given than its list shows
+	taken  *bool // shared with resend_media: whether the reply sends a picture or sticker already
 }
 
 // stickersFor is the stickers p is shown in this reply, or nil when it is
@@ -84,7 +85,7 @@ func (m *Module) stickersFor(ctx context.Context, p *profile) *stickerPick {
 	if len(list) == 0 {
 		return nil
 	}
-	pick := &stickerPick{list: list, kept: kept}
+	pick := &stickerPick{list: list, kept: kept, taken: new(bool)}
 	if len(list) > p.maxStickers {
 		pick.list, pick.hidden = list[:p.maxStickers], len(list)-p.maxStickers
 	}
@@ -103,13 +104,14 @@ func (s *stickerPick) text() string {
 
 // tool is send_sticker: it only notes the sticker picked, and ends the
 // reply. It takes any kept sticker's number, listed or not, so a sticker
-// someone names can be sent. A second pick in the same reply is refused
-// without an error, so the reply still ends; a number no sticker has is an
-// error the model sees, and it may answer again.
+// someone names can be sent. A second pick in the same reply, a sticker or
+// a picture sent again, is refused without an error, so the reply still
+// ends; a number no sticker has is an error the model sees, and it may
+// answer again.
 func (s *stickerPick) tool() llm.Tool {
 	return llm.NewEndingTool(llm.Function{
 		Name:        stickerTool,
-		Description: "Send a sticker by its number: one from your list of stickers, one shown as [sticker N: ...] in the chat, or one someone names. It goes as a message of its own after what you wrote. This ends your reply: write anything you want to say before calling it. At most one per reply.",
+		Description: "Send a sticker by its number: one from your list of stickers, one shown as [sticker N: ...] in the chat, or one someone names. It goes as a message of its own after what you wrote. This ends your reply: write anything you want to say before calling it. One picture or sticker per reply.",
 		Parameters:  json.RawMessage(`{"type":"object","properties":{"number":{"type":"integer","description":"the sticker's number"}},"required":["number"]}`),
 	}, func(_ context.Context, _ otogi.Event, args json.RawMessage) (any, error) {
 		var in struct {
@@ -118,12 +120,12 @@ func (s *stickerPick) tool() llm.Tool {
 		if err := json.Unmarshal(args, &in); err != nil {
 			return nil, fmt.Errorf("want {\"number\": <a sticker's number>}: %w", err)
 		}
-		if s.picked != nil {
-			return map[string]any{"sent": false, "reason": "one sticker per reply"}, nil
+		if *s.taken {
+			return onePerReply, nil
 		}
 		for _, st := range s.kept {
 			if st.ID == in.Number {
-				s.picked = &st
+				s.picked, *s.taken = &st, true
 				s.listed = slices.ContainsFunc(s.list, func(l mediasvc.Sticker) bool { return l.ID == st.ID })
 				return map[string]bool{"sent": true}, nil
 			}
@@ -171,7 +173,7 @@ func (m *Module) lineText(ctx context.Context, to otogi.Destination, l line, des
 // described when p reads descriptions, with their IDs when p has
 // examine_media.
 func (m *Module) shownLine(ctx context.Context, to otogi.Destination, l line, p *profile) string {
-	return m.lineWith(ctx, to, l, p.Media != nil, p.examine > 0)
+	return m.lineWith(ctx, to, l, p.Media != nil, p.ids())
 }
 
 // lineWith is lineText, the descriptions showing their media's IDs with ids.

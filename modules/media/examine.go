@@ -41,18 +41,12 @@ func (m *Module) Examine(ctx context.Context, from otogi.Destination, md otogi.M
 			origin = "sticker"
 		}
 	} else {
-		if k.Algorithm == "" {
-			var ok bool
-			var err error
-			if k, ok, err = m.store.source(ctx, src); err != nil || !ok {
-				return "", cmp.Or(err, contract.ErrNotKept)
-			}
+		var mediaType string
+		var err error
+		if k, mediaType, data, err = m.keptOriginal(ctx, chat, k, src); err != nil {
+			return "", err
 		}
-		mediaType, kept, ok, err := m.store.original(ctx, k, chat)
-		if err != nil || !ok {
-			return "", cmp.Or(err, contract.ErrNotKept)
-		}
-		data, origin, md.MediaType = kept, "kept", mediaType
+		origin, md.MediaType = "kept", mediaType
 	}
 	if int64(len(data)) > m.largest {
 		return "", contract.ErrNotDescribed
@@ -62,6 +56,41 @@ func (m *Module) Examine(ctx context.Context, from otogi.Destination, md otogi.M
 		return "", fmt.Errorf("%w: %w", contract.ErrNotDescribed, err)
 	}
 	return m.examine(ctx, chat, k, p, question, origin, len(data))
+}
+
+// Original returns md as the module keeps it from from; see
+// contract.Describer.
+func (m *Module) Original(ctx context.Context, from otogi.Destination, md otogi.Media) (otogi.Media, error) {
+	chat := chatKey(from)
+	if !m.host.Allowed(describeList, chat) {
+		return otogi.Media{}, contract.ErrNotAllowed
+	}
+	k, src := mediaKey(md)
+	_, mediaType, data, err := m.keptOriginal(ctx, chat, k, src)
+	if err != nil {
+		return otogi.Media{}, err
+	}
+	md.MediaType, md.ByteSize = mediaType, int64(len(data))
+	md.Source = otogi.MediaSource{Kind: otogi.MediaSourceInline, Inline: data}
+	return md, nil
+}
+
+// keptOriginal is the original the module keeps of the media k, or src when k is
+// unknown, from chat: its key, type, and bytes. It fails with
+// contract.ErrNotKept when there is none.
+func (m *Module) keptOriginal(ctx context.Context, chat string, k key, src string) (key, string, []byte, error) {
+	if k.Algorithm == "" {
+		var ok bool
+		var err error
+		if k, ok, err = m.store.source(ctx, src); err != nil || !ok {
+			return k, "", nil, cmp.Or(err, contract.ErrNotKept)
+		}
+	}
+	mediaType, data, ok, err := m.store.original(ctx, k, chat)
+	if err != nil || !ok {
+		return k, "", nil, cmp.Or(err, contract.ErrNotKept)
+	}
+	return k, mediaType, data, nil
 }
 
 // examine tries the steps in order until one answers question about p,

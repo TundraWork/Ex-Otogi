@@ -113,6 +113,7 @@ type MediaConfig struct {
 	// MaxStickers bounds the list an agent is shown before each reply.
 	MaxStickers *int           `json:"max_stickers,omitempty" minimum:"1" default:"50" doc:"The most stickers its list shows: past it, those first in it, stickers before packs, and chat.reply records how many were left out (stickers_hidden). The list is about fifty characters a sticker, in the cached part of the request after the system prompt, paid in full once after each change to it."`
 	Examine     *ExamineConfig `json:"examine,omitempty" doc:"Give the agent examine_media, to ask a question of its own about a picture, animation, or video in the chat, which the descriptions it is shown then name by ID (#2ce7ad), or about a kept sticker by its number: the media module's models answer from the media itself. The original is the one the media module keeps (its pictures), else fetched again, which fails once the platform's link expired, on QQ in about an hour. Judgments and the memory are shown no IDs."`
+	Resend      bool           `json:"resend,omitempty" doc:"Give the agent resend_media, to send a picture or animation of this chat again, by the ID its description shows (#2ce7ad), as a message of its own after its reply, when someone asks for it: one picture or sticker a reply. Only what the reply was shown can be sent, and only in its chat. The original is the media module's when it keeps it (its pictures), else fetched again, which fails once the platform's link expired, on QQ in about an hour. Videos and kept stickers are not resent."`
 }
 
 // ExamineConfig gives an agent examine_media.
@@ -222,12 +223,17 @@ type profile struct {
 	// to finish; waitMax is 0 when it does not wait.
 	waitMin, waitMax time.Duration
 	examine          time.Duration // the longest one look with examine_media may take; 0 when it has none
+	resend           bool          // whether it may send a picture of the chat again with resend_media
 	maxStickers      int           // the most stickers the agent's list shows
 	sources          bool          // whether a grounded reply ends with its sources
 }
 
 // title is what chats know the agent by: its label, or its name.
 func (p *profile) title() string { return cmp.Or(p.Label, p.Name) }
+
+// ids reports whether the descriptions p is shown name their media by ID,
+// for examine_media and resend_media.
+func (p *profile) ids() bool { return p.examine > 0 || p.resend }
 
 // toolsList names the allowlist of the chats where agents get a module's
 // tools. Profile lists are named as their profiles, which may not start
@@ -383,6 +389,7 @@ func (c *Config) profiles(providers func(string) (llm.Provider, error)) ([]*prof
 					refuse(".media.examine.timeout", errors.New("must not be negative"))
 				}
 			}
+			p.resend = pc.Media.Resend
 		}
 		if pc.Judge != nil {
 			p.rules = strings.TrimSpace(pc.Judge.Rules)

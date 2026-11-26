@@ -71,6 +71,19 @@ func (d *describer) Examine(ctx context.Context, _ otogi.Destination, md otogi.M
 	return name + ": " + question, nil
 }
 
+// Original gives back media whose original is kept, as "kept bytes of
+// <name>"; the rest is not kept.
+func (d *describer) Original(_ context.Context, _ otogi.Destination, md otogi.Media) (otogi.Media, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	name := string(md.Source.Locator.Data)
+	if !d.originals[name] {
+		return otogi.Media{}, mediasvc.ErrNotKept
+	}
+	md.Source = otogi.MediaSource{Kind: otogi.MediaSourceInline, Inline: []byte("kept bytes of " + name)}
+	return md, nil
+}
+
 func (d *describer) Describe(ctx context.Context, _ otogi.Destination, md otogi.Media) (mediasvc.Description, error) {
 	d.mu.Lock()
 	name := string(md.Source.Locator.Data)

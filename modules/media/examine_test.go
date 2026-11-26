@@ -153,6 +153,42 @@ func TestOriginalsBelongToTheirChats(t *testing.T) {
 	}
 }
 
+// Original gives back what is kept of a picture, with its bytes and type,
+// only to the chats it was seen in; without pictures, or for a chat off the
+// describe list, there is none.
+func TestOriginal(t *testing.T) {
+	h := keeping(t, 1, 512)
+	h.host.allowed["qq:group-2"] = true
+	h.steps[0].answers = []answer{says(picture)}
+	data := pngOf(t, color.White)
+	img := h.image("https://qq/a", data)
+	if err := h.handle(img); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.m.Original(context.Background(), from, img)
+	if err != nil || got.Source.Kind != otogi.MediaSourceInline || string(got.Source.Inline) != string(data) ||
+		got.MediaType != "image/png" || got.ByteSize != int64(len(data)) || got.Role != img.Role {
+		t.Fatalf("Original = %+v, %v", got, err)
+	}
+	other := otogi.Destination{Platform: "qq", Account: "bot", Conversation: "group-2"}
+	if _, err := h.m.Original(context.Background(), other, img); !errors.Is(err, contract.ErrNotKept) {
+		t.Fatalf("Original from another chat = %v, want ErrNotKept", err)
+	}
+	off := otogi.Destination{Platform: "qq", Account: "bot", Conversation: "group-9"}
+	if _, err := h.m.Original(context.Background(), off, img); !errors.Is(err, contract.ErrNotAllowed) {
+		t.Fatalf("Original off the describe list = %v, want ErrNotAllowed", err)
+	}
+	plain := newHarness(t, 1)
+	plain.steps[0].answers = []answer{says(picture)}
+	img = plain.image("https://qq/a", data)
+	if err := plain.handle(img); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plain.m.Original(context.Background(), from, img); !errors.Is(err, contract.ErrNotKept) {
+		t.Fatalf("Original without pictures = %v, want ErrNotKept", err)
+	}
+}
+
 // Media given with its bytes is examined as given: fetched again, or a kept
 // sticker's picture, which the record tells apart. A chat off the describe
 // list, or media that is not a picture or video, is refused.

@@ -83,6 +83,11 @@ type Describer interface {
 	// as Describe does, and with otogi.ErrUnavailable when every model
 	// failed.
 	Examine(ctx context.Context, from otogi.Destination, m otogi.Media, question string) (string, error)
+	// Original returns m as the module keeps it from from: its bytes
+	// inline, and its type as told by them. It fails with ErrNotAllowed
+	// for a chat not on the describe list, and with ErrNotKept when the
+	// module keeps no original of m seen in that chat.
+	Original(ctx context.Context, from otogi.Destination, m otogi.Media) (otogi.Media, error)
 }
 
 // StickersService is the name the media module provides Stickers under.

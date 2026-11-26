@@ -38,11 +38,12 @@ type ask struct {
 	msgs    []otogi.Event
 	parent  int64 // the turn the first continues, 0 for a new thread
 	trigger string
-	j       *judgment   // the judgment that woke p for the first, if one did
-	batch   *batchInfo  // nil when p did not wait
-	lookup  *briefed    // what the request before the reply said of looking things up; nil when not asked yet
-	stale   *staleCheck // what the check before the reply went out said; nil when it asked nothing
-	hidden  int         // how many stickers the agent is given past its list
+	j       *judgment    // the judgment that woke p for the first, if one did
+	batch   *batchInfo   // nil when p did not wait
+	lookup  *briefed     // what the request before the reply said of looking things up; nil when not asked yet
+	stale   *staleCheck  // what the check before the reply went out said; nil when it asked nothing
+	hidden  int          // how many stickers the agent is given past its list
+	resent  *sentPicture // the picture of the chat the reply sent again; nil when it sent none
 }
 
 // batchInfo is what a reply's record says of its batch.
@@ -127,15 +128,24 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 	}
 	req.Turns = append(req.Turns, sent)
 	tools := m.toolsIn(e.ChatKey())
+	// A reply sends one picture or sticker at most, whichever it picks first.
+	taken := false
 	if picks != nil {
+		picks.taken = &taken
 		tools[stickerTool] = picks.tool()
 	}
 	var silent silence
 	if p.Silent {
 		tools[silentTool] = silent.tool()
 	}
+	look := &looker{m: m, a: a, inv: inv, path: path, until: started}
 	if p.examine > 0 {
-		tools[examineTool] = (&looker{m: m, a: a, inv: inv, path: path, until: started}).tool()
+		tools[examineTool] = look.tool()
+	}
+	var resend *resender
+	if p.resend {
+		resend = &resender{look: look, taken: &taken}
+		tools[resendTool] = resend.tool()
 	}
 
 	// The reply is at most two messages, each a stream of its own: "reply",
@@ -190,7 +200,10 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 	if picks != nil && picks.picked != nil {
 		sticker = &sentSticker{ID: picks.picked.ID, Text: picks.picked.Text, Listed: picks.listed}
 	}
-	sends := sticker != nil && runErr == nil
+	if resend != nil && resend.picked != nil {
+		a.resent = &sentPicture{ID: resend.id}
+	}
+	sends := (sticker != nil || a.resent != nil) && runErr == nil
 	held := errors.Is(runErr, errStale)
 	// The agent replied nothing: it called stay_silent, said nothing, and
 	// picked no sticker.
@@ -201,8 +214,11 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 		final = ending(out, said || sends, runErr, p, notes)
 		if !said && (len(final.Parts) > 0 || sends) {
 			draft := final.PlainText()
-			if sends {
+			switch {
+			case sends && sticker != nil:
 				draft = strings.TrimSpace(draft + "\n[sticker: " + sticker.Text + "]")
+			case sends:
+				draft = strings.TrimSpace(draft + "\n[picture #" + a.resent.ID + "]")
 			}
 			held = !passes(cleanup, draft)
 		}
@@ -246,13 +262,22 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 		messages = append(messages, sentMessage{Ref: ref})
 	}
 	var stickerErr error
-	if sends {
+	switch {
+	case sends && sticker != nil:
 		var ref otogi.EventRef
 		ref, stickerErr = m.sendSticker(cleanup, last, inv, *picks.picked, quote)
 		if stickerErr == nil {
 			sticker.Ref = string(ref.SourceEvent)
 			refs = append(refs, ref)
 			messages = append(messages, sentMessage{Ref: ref, Sticker: sticker.Text})
+		}
+	case sends:
+		var ref otogi.EventRef
+		ref, stickerErr = m.sendPicture(cleanup, last, inv, *resend.picked, quote)
+		if stickerErr == nil {
+			a.resent.Ref = string(ref.SourceEvent)
+			refs = append(refs, ref)
+			messages = append(messages, sentMessage{Ref: ref})
 		}
 	}
 	var ids []int64
@@ -397,7 +422,7 @@ func (m *Module) userContent(ctx context.Context, e otogi.Event, inv otogi.Invoc
 	asText := p.Media != nil && p.Media.AsText
 	shown := func(media otogi.Media) otogi.Message {
 		if asText {
-			return m.describedPart(ctx, e.Destination(), media, until, p.examine > 0)
+			return m.describedPart(ctx, e.Destination(), media, until, p.ids())
 		}
 		return m.mediaPart(ctx, inv, e.Destination(), media)
 	}
@@ -417,7 +442,7 @@ func (m *Module) userContent(ctx context.Context, e otogi.Event, inv otogi.Invoc
 			msg = llm.Join(msg, otogi.TextMessage("Replying to "+who+":\n"+quoted.Text))
 			for _, media := range quoted.Media {
 				if asText {
-					msg = llm.Join(msg, m.keptPart(ctx, e.Destination(), media, p.examine > 0))
+					msg = llm.Join(msg, m.keptPart(ctx, e.Destination(), media, p.ids()))
 				} else {
 					msg = llm.Join(msg, m.mediaPart(ctx, inv, e.Destination(), media))
 				}
@@ -821,6 +846,9 @@ func (m *Module) record(ctx context.Context, a ask, ids []int64, out llm.RunResu
 	}
 	if sticker != nil {
 		payload["sticker"] = sticker
+	}
+	if a.resent != nil {
+		payload["resent"] = a.resent
 	}
 	if a.hidden > 0 {
 		payload["stickers_hidden"] = a.hidden
