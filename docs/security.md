@@ -27,6 +27,8 @@ The media module sends the images, animations (as frames), and videos of every c
 
 Stickers operators keep with `/sticker` are stored as the pictures themselves in the media module's database, with the ID of the operator who kept each, until removed. They are shared by every chat: a picture kept from one group may be sent by an agent in another, so keep only pictures that may be seen wherever the bot is.
 
+A chat agent with `memory` sends the messages of its chats, with the names of their senders, to its memory model's service, and keeps what that model notes, people's lasting circumstances among it, in the chat module's database past `retention`, until it fades or is removed (see operations). The model is told to delete what someone asks the agent to forget; only removing it from the database is sure. Each time the agent recalls something, the chat's whole memory goes to the memory model's service again, and what it picks into the agent's reply as the tool's result, so something people said there, a request of the agent among it, can come back long after; that is no new kind of risk, as the recent chat goes there too.
+
 The notes in the chat module's `people` list go to the agents' model service with every request their person appears in, and an agent may repeat a note in the chat. A note follows its person into every chat agents answer them in, groups included: write it as something anyone there may read.
 
 ## Management plane access

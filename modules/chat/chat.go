@@ -99,7 +99,8 @@ func (m *Module) Descriptor() otogi.ModuleDescriptor {
 	}
 }
 
-// Start opens the database and schedules pruning.
+// Start opens the database and schedules pruning, and the memory job when
+// an agent keeps a memory.
 func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 	db, err := host.Database(ctx)
 	if err != nil {
@@ -138,6 +139,11 @@ func (m *Module) Start(ctx context.Context, host otogi.Host) error {
 	if m.sendsStickers() || m.examines() {
 		if m.stickers, err = otogi.Lookup[mediasvc.Stickers](host, mediasvc.StickersService); err != nil {
 			return fmt.Errorf("media stickers: %w", err)
+		}
+	}
+	if m.keepsMemory() {
+		if err := host.Schedule("memory", memoryEvery, m.remember); err != nil {
+			return err
 		}
 	}
 	return host.Schedule("prune", "@every 1h", m.prune)

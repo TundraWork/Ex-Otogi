@@ -307,8 +307,8 @@ func TestModelFieldsHaveTheirProviderBeside(t *testing.T) {
 			}
 		}
 	}
-	if models != 6 { // chat, media, twitter: a model and its thinking each
-		t.Errorf("%d fields of format llm-model or llm-thinking, want 6", models)
+	if models != 8 { // chat's agents and their memory, media, twitter: a model and its thinking each
+		t.Errorf("%d fields of format llm-model or llm-thinking, want 8", models)
 	}
 }
 

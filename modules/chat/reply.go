@@ -114,6 +114,15 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 	if note := p.note(a.trigger); note != "" {
 		sent.Content = llm.Join(sent.Content, otogi.TextMessage(note))
 	}
+	var recall *recaller
+	if p.memory != nil {
+		if recall, err = m.recallerFor(ctx, p, e.Destination()); err != nil {
+			return "", err
+		}
+		if recall != nil {
+			sent.Content = llm.Join(sent.Content, otogi.TextMessage(recall.note()))
+		}
+	}
 	if a.lookup == nil && p.lookup > 0 {
 		if _, a.lookup, err = m.briefEvents(ctx, p, a.msgs, func(int) bool { return false }, ""); err != nil {
 			return "", err
@@ -147,6 +156,9 @@ func (m *Module) respond(ctx context.Context, inv otogi.Invocation, a ask, until
 	if p.resend {
 		resend = &resender{look: look, taken: &taken}
 		tools[resendTool] = resend.tool()
+	}
+	if recall != nil {
+		tools[recallTool] = recall.tool()
 	}
 
 	// The reply is at most two messages, each a stream of its own: "reply",

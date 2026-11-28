@@ -31,4 +31,4 @@ Design specs and plans of milestones are kept locally under `docs/superpowers/`,
 
 A design change updates every affected document in the same change and removes rules it makes obsolete. When two documents conflict, fix the documents rather than picking the convenient reading. Keep documents short: state the decision and its reason, not boilerplate.
 
-Not yet designed: long-term memory, control-panel UX, and multi-node operation (out of scope unless a single node demonstrably cannot do the job).
+Not yet designed: control-panel UX and multi-node operation (out of scope unless a single node demonstrably cannot do the job).

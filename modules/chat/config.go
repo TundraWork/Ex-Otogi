@@ -68,29 +68,30 @@ func (c *Config) people() (map[string]person, error) {
 
 // ProfileConfig configures one agent.
 type ProfileConfig struct {
-	Name          string       `json:"name" minLength:"1" doc:"Identifies the agent and names its allowlist. Its threads are stored under it, so it cannot be changed once saved. To replace a profile, add the other in one save and remove it in another."`
-	Label         string       `json:"label,omitempty" doc:"When set, starts each reply in bold."`
-	Keywords      []string     `json:"keywords" minItems:"1" doc:"A message starting with one, or a reply to the agent, triggers it. In a group with judge.wake on, they name the agent for the judgment, which decides whether the message talks to it; when the judgment fails, the keyword triggers it."`
-	Mention       bool         `json:"mention,omitempty" doc:"A message mentioning the bot account triggers the agent too; a reply to a card or reminder the account sent for another module does not, though Telegram and QQ count it as one. Of several agents in a chat that set it, the first answers."`
-	Provider      string       `json:"provider" minLength:"1" format:"llm-provider" doc:"A language model provider set in the panel under Language models: gemini, or the name of an OpenAI-compatible service such as deepseek."`
-	Model         string       `json:"model" minLength:"1" format:"llm-model" doc:"The provider's model ID."`
-	Thinking      string       `json:"thinking,omitempty" enum:"minimal,low,medium,high" format:"llm-thinking" doc:"How much the model thinks before answering; unset is the model's default."`
-	MaxOutput     int          `json:"max_output,omitempty" minimum:"1" doc:"The most tokens a reply may have; unset is the model's default."`
-	Temperature   *float64     `json:"temperature,omitempty" minimum:"0" maximum:"2" doc:"Sampling temperature, 0 to 2; unset is the model's default (1 for Gemini). Higher is livelier, lower more predictable."`
-	System        string       `json:"system,omitempty" format:"markdown" doc:"The system prompt: who the agent is and how it talks, in Markdown."`
-	PlainText     bool         `json:"plain_text,omitempty" doc:"Replies are plain text: the agent is not asked for Markdown, and what the model writes is sent as it is, unformatted, the label too. In QQ private chats a streamed reply is still shown as Markdown."`
-	Quote         string       `json:"quote,omitempty" enum:"always,never,when_interrupted" default:"always" doc:"Whether a reply quotes the message it answers: always; never; or when_interrupted, only when the chat said something else after that message before the reply started. A sticker after the reply does the same."`
-	Sources       *bool        `json:"sources,omitempty" default:"true" doc:"End a reply that cites pages, after a web search, with a line linking them: Sources: title, …. Off, the reply ends with what the model wrote; chat.reply still records the pages."`
-	FailureNotes  string       `json:"failure_notes,omitempty" enum:"everywhere,direct_chats" default:"everywhere" doc:"Where a reply says how it failed or that it has no answer (Sorry, I couldn't reply…, Cut short…, I can't answer that…, I have nothing to add.): everywhere; or direct_chats, so that in groups and channels a failed reply sends only what it wrote, or nothing. chat.reply records why either way."`
-	OwnFormat     bool         `json:"own_format,omitempty" doc:"The system prompt does not say how to format a reply, leaving it to the agent's own: it asks neither for Markdown nor, with plain text, for plain text. What the model writes is still read as Markdown unless plain text is on."`
-	Context       *int         `json:"context,omitempty" minimum:"0" default:"30" doc:"How many recent chat messages the agent sees; 0 for none."`
-	MaxTurns      int          `json:"max_turns,omitempty" minimum:"1" default:"40" doc:"How many turns of a thread are sent, newest kept."`
-	Tools         []string     `json:"tools,omitempty" enum:"web_search,url_context,code_execution" doc:"Built-in tools the agent uses everywhere: web_search, the provider's search (cited Google Search on Gemini, multi-step on DeepSeek); url_context reads linked pages (Gemini, DeepSeek); code_execution runs code (Gemini). Module tools: Tools, below."`
-	MaxToolRounds int          `json:"max_tool_rounds,omitempty" minimum:"1" default:"8" doc:"The most rounds of tool calls in one reply."`
-	Judge         *JudgeConfig `json:"judge,omitempty" doc:"Has the decision service judge, in groups, the messages no keyword, reply, or mention triggers. Needs the decision module."`
-	Media         *MediaConfig `json:"media,omitempty" doc:"Use the media module's descriptions: in the recent messages, the quoted message, and the wake judgment, and, with as_text, in place of the current message's media. Needs the media module, with the agent's chats on its describe list."`
-	Notes         *NotesConfig `json:"notes,omitempty" doc:"A note ending each turn the model answers, by what started the turn, in that request only. A follow-up and a chime have one by default; other turns none."`
-	Silent        bool         `json:"silent,omitempty" doc:"The agent may end any turn without replying: it has a tool, stay_silent, to send nothing. When to, or not to, is for its prompt and notes to say: with nothing saying so, the model decides on every turn, when called too."`
+	Name          string        `json:"name" minLength:"1" doc:"Identifies the agent and names its allowlist. Its threads are stored under it, so it cannot be changed once saved. To replace a profile, add the other in one save and remove it in another."`
+	Label         string        `json:"label,omitempty" doc:"When set, starts each reply in bold."`
+	Keywords      []string      `json:"keywords" minItems:"1" doc:"A message starting with one, or a reply to the agent, triggers it. In a group with judge.wake on, they name the agent for the judgment, which decides whether the message talks to it; when the judgment fails, the keyword triggers it."`
+	Mention       bool          `json:"mention,omitempty" doc:"A message mentioning the bot account triggers the agent too; a reply to a card or reminder the account sent for another module does not, though Telegram and QQ count it as one. Of several agents in a chat that set it, the first answers."`
+	Provider      string        `json:"provider" minLength:"1" format:"llm-provider" doc:"A language model provider set in the panel under Language models: gemini, or the name of an OpenAI-compatible service such as deepseek."`
+	Model         string        `json:"model" minLength:"1" format:"llm-model" doc:"The provider's model ID."`
+	Thinking      string        `json:"thinking,omitempty" enum:"minimal,low,medium,high" format:"llm-thinking" doc:"How much the model thinks before answering; unset is the model's default."`
+	MaxOutput     int           `json:"max_output,omitempty" minimum:"1" doc:"The most tokens a reply may have; unset is the model's default."`
+	Temperature   *float64      `json:"temperature,omitempty" minimum:"0" maximum:"2" doc:"Sampling temperature, 0 to 2; unset is the model's default (1 for Gemini). Higher is livelier, lower more predictable."`
+	System        string        `json:"system,omitempty" format:"markdown" doc:"The system prompt: who the agent is and how it talks, in Markdown."`
+	PlainText     bool          `json:"plain_text,omitempty" doc:"Replies are plain text: the agent is not asked for Markdown, and what the model writes is sent as it is, unformatted, the label too. In QQ private chats a streamed reply is still shown as Markdown."`
+	Quote         string        `json:"quote,omitempty" enum:"always,never,when_interrupted" default:"always" doc:"Whether a reply quotes the message it answers: always; never; or when_interrupted, only when the chat said something else after that message before the reply started. A sticker after the reply does the same."`
+	Sources       *bool         `json:"sources,omitempty" default:"true" doc:"End a reply that cites pages, after a web search, with a line linking them: Sources: title, …. Off, the reply ends with what the model wrote; chat.reply still records the pages."`
+	FailureNotes  string        `json:"failure_notes,omitempty" enum:"everywhere,direct_chats" default:"everywhere" doc:"Where a reply says how it failed or that it has no answer (Sorry, I couldn't reply…, Cut short…, I can't answer that…, I have nothing to add.): everywhere; or direct_chats, so that in groups and channels a failed reply sends only what it wrote, or nothing. chat.reply records why either way."`
+	OwnFormat     bool          `json:"own_format,omitempty" doc:"The system prompt does not say how to format a reply, leaving it to the agent's own: it asks neither for Markdown nor, with plain text, for plain text. What the model writes is still read as Markdown unless plain text is on."`
+	Context       *int          `json:"context,omitempty" minimum:"0" default:"30" doc:"How many recent chat messages the agent sees; 0 for none."`
+	MaxTurns      int           `json:"max_turns,omitempty" minimum:"1" default:"40" doc:"How many turns of a thread are sent, newest kept."`
+	Tools         []string      `json:"tools,omitempty" enum:"web_search,url_context,code_execution" doc:"Built-in tools the agent uses everywhere: web_search, the provider's search (cited Google Search on Gemini, multi-step on DeepSeek); url_context reads linked pages (Gemini, DeepSeek); code_execution runs code (Gemini). Module tools: Tools, below."`
+	MaxToolRounds int           `json:"max_tool_rounds,omitempty" minimum:"1" default:"8" doc:"The most rounds of tool calls in one reply."`
+	Judge         *JudgeConfig  `json:"judge,omitempty" doc:"Has the decision service judge, in groups, the messages no keyword, reply, or mention triggers. Needs the decision module."`
+	Media         *MediaConfig  `json:"media,omitempty" doc:"Use the media module's descriptions: in the recent messages, the quoted message, and the wake judgment, and, with as_text, in place of the current message's media. Needs the media module, with the agent's chats on its describe list."`
+	Notes         *NotesConfig  `json:"notes,omitempty" doc:"A note ending each turn the model answers, by what started the turn, in that request only. A follow-up and a chime have one by default; other turns none."`
+	Silent        bool          `json:"silent,omitempty" doc:"The agent may end any turn without replying: it has a tool, stay_silent, to send nothing. When to, or not to, is for its prompt and notes to say: with nothing saying so, the model decides on every turn, when called too."`
+	Memory        *MemoryConfig `json:"memory,omitempty" doc:"Keep a memory of each chat on the agent's allowlist: messages it no longer sees are taken into it in batches by a model, each thing noted fading by its kind unless brought up again or recalled, and forgotten once faded. The agent reads it only by asking, with recall_memory, for what it wants to recall. Kept past the retention, until forgotten or removed from the database."`
 }
 
 // NotesConfig is the note ending a turn, by what started it: the triggers
@@ -103,6 +104,27 @@ type NotesConfig struct {
 	Decision string  `json:"decision,omitempty" doc:"A group message the judgment found addressed to the agent (judge.wake)."`
 	Follow   *string `json:"follow,omitempty" default:"(Nobody named you: someone is carrying on the exchange with you. Keep it short.)" doc:"A follow-up (judge.follow)."`
 	Chime    *string `json:"chime,omitempty" default:"(Nobody asked you; you chose to join in. Keep it short.)" doc:"Speaking up unasked (judge.chime)."`
+}
+
+// MemoryConfig has an agent keep a memory of each chat it serves.
+type MemoryConfig struct {
+	Provider string `json:"provider,omitempty" format:"llm-provider" doc:"The provider of the model that takes messages into the memory and picks what the agent recalls; unset is the agent's own."`
+	Model    string `json:"model,omitempty" format:"llm-model" doc:"That model; unset is the agent's own. Required with provider. A cheap, fast one does."`
+	Thinking string `json:"thinking,omitempty" enum:"minimal,low,medium,high" format:"llm-thinking" doc:"How much that model thinks; unset is minimal."`
+	Batch    int    `json:"batch,omitempty" minimum:"20" default:"100" doc:"How many messages out of the agent's sight are taken into its memory at once. Messages about to be pruned are taken however few."`
+}
+
+// The memory settings a memory block leaves unset.
+const (
+	defaultMemoryThinking = "minimal"
+	defaultMemoryBatch    = 100
+)
+
+// memoryOf is a validated memory block.
+type memoryOf struct {
+	provider        llm.Provider
+	model, thinking string
+	batch           int
 }
 
 // MediaConfig has an agent read the media module's descriptions.
@@ -226,6 +248,7 @@ type profile struct {
 	resend           bool          // whether it may send a picture of the chat again with resend_media
 	maxStickers      int           // the most stickers the agent's list shows
 	sources          bool          // whether a grounded reply ends with its sources
+	memory           *memoryOf     // nil when it keeps no memory
 }
 
 // title is what chats know the agent by: its label, or its name.
@@ -439,6 +462,27 @@ func (c *Config) profiles(providers func(string) (llm.Provider, error)) ([]*prof
 			refuse(".provider", err)
 		}
 		p.provider = provider
+		if mc := pc.Memory; mc != nil {
+			mem := &memoryOf{provider: provider, model: pc.Model, thinking: cmp.Or(mc.Thinking, defaultMemoryThinking), batch: cmp.Or(mc.Batch, defaultMemoryBatch)}
+			switch {
+			case mc.Provider != "" && mc.Model == "":
+				refuse(".memory.model", errors.New("required with provider"))
+			case mc.Provider != "":
+				mem.model = mc.Model
+				if mem.provider, err = providers(mc.Provider); err != nil {
+					refuse(".memory.provider", err)
+				}
+			case mc.Model != "":
+				mem.model = mc.Model
+			}
+			if !slices.Contains([]string{"minimal", "low", "medium", "high"}, mem.thinking) {
+				refuse(".memory.thinking", fmt.Errorf("%q: want minimal, low, medium, or high", mc.Thinking))
+			}
+			if mem.batch < 20 {
+				refuse(".memory.batch", fmt.Errorf("%d: want at least 20", mc.Batch))
+			}
+			p.memory = mem
+		}
 		out = append(out, p)
 	}
 	return out, errors.Join(errs...)

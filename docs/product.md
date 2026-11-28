@@ -36,4 +36,4 @@ Telegram is the first platform, running as a **user account** over MTProto (gotd
 - a multi-tenant hosted service;
 - uninterrupted service during host failure;
 - compatibility with the `master` implementation;
-- long-term memory and control-panel UX, until each has its own design.
+- control-panel UX, until it has its own design.

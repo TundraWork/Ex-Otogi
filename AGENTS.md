@@ -74,4 +74,4 @@ Do not ask the user for facts available from the repository or toolchain. Stop f
 - `docs/standards.md`: external references
 - `docs/runbooks/`: concrete operator procedures
 
-Long-term memory and control-panel UX need their own approved designs.
+Control-panel UX needs its own approved design.
